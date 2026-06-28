@@ -36,8 +36,15 @@ where = ["."]
 include = ["cli*", "utils*", "tools*"]
 exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*"]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
     "slow: end-to-end tests that invoke ptbp / hotcent / DFTB+ (skip with `pytest -m 'not slow'`)",
 ]

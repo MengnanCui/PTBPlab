@@ -8,7 +8,6 @@ import ase
 import numpy as np
 from ase import Atoms
 
-np.random.seed(66)
 import random
 from pathlib import Path
 from time import perf_counter
@@ -58,6 +57,12 @@ hp = hotpy()
 
 ptbp_args = build_default_arg_parser()
 print("PTBP args: ", ptbp_args)
+
+# Honour --seed for reproducibility. Seed numpy + stdlib random here (after
+# parsing) so the value actually takes effect; the skopt / PSO optimisers
+# read ptbp_args.seed via the Loss class for their own random_state.
+np.random.seed(ptbp_args.seed)
+random.seed(ptbp_args.seed)
 
 # Define the OptimizationScheme
 # (1) Elementary system 
@@ -243,8 +248,22 @@ Boltzmann factor: {bolt_f.tolist()}
             best_folder = path / ptbp_args.results_dir / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
             backup_dir  = path / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
 
-            os.system(f"cp -r {best_folder} {backup_dir}")
-            os.system("tar -zcvf results.tgz results && rm -r results")
+            # Back up the best-evaluation folder and pack the results dir.
+            # Use shutil/tarfile instead of os.system so this works on any OS,
+            # tolerates spaces in paths, and never silently deletes results
+            # when the copy/pack step fails.
+            import shutil
+            import tarfile
+            if best_folder.exists():
+                shutil.copytree(best_folder, backup_dir, dirs_exist_ok=True)
+            else:
+                print(f"[warn] best folder {best_folder} not found; skipping backup copy")
+
+            results_dir = path / ptbp_args.results_dir
+            if results_dir.exists():
+                with tarfile.open(path / 'results.tgz', 'w:gz') as _tar:
+                    _tar.add(results_dir, arcname=results_dir.name)
+                shutil.rmtree(results_dir)
 
 
         # Optimize the Repulsion part!
@@ -441,13 +460,24 @@ if ptbp_args.skf_generator is not None:
             # r0_list = list(ptbp_args.confinement_r0)
             # p_list = list(args.confinement_p)
             confinement_parameters = ptbp_args.confinement_parameters
+            assert confinement_parameters is not None, (
+                "--known_parameters personal requires --confinement_parameters "
+                "(r0_w r0_d p per element, i.e. 3 * N_symbols values).")
             r0_dict = {symbol: [confinement_parameters[3*i], confinement_parameters[3*i+1]] for i, symbol in enumerate(symbol_list)}
             p_dict = {symbol: confinement_parameters[3*i+2] for i, symbol in enumerate(symbol_list)}
 
-            # Get c_rep for repulsion if exist
+            # Get c_rep for repulsion. The downstream physrep call expects
+            # `sigma_rep_list` and `kxc_list` (one entry per element). When no
+            # --repulsive_parameters were given, fall back to the PTBP
+            # convention (sigma_rep=0.6, kxc=0.0) so full/rep modes still run.
             if ptbp_args.repulsive_parameters is not None:
-                sigma_rep_list = ptbp_args.repulsive_parameters[0::2]
-                sigma_kxc_list = ptbp_args.repulsive_parameters[1::2]
+                sigma_rep_list = list(ptbp_args.repulsive_parameters[0::2])
+                kxc_list = list(ptbp_args.repulsive_parameters[1::2])
+            else:
+                sigma_rep_list = [0.6 for _ in symbol_list]
+                kxc_list = [0.0 for _ in symbol_list]
+                print("[personal] no --repulsive_parameters given; defaulting "
+                      "to sigma_rep=0.6, kxc=0.0 per element.")
 
             superposition = 'density'
 

@@ -1311,7 +1311,7 @@ class Loss():
 
         dims, _lo, _hi, cost_fn = self._bo_dimensions_and_cost(cov_radius)
         opt = Optimizer(dimensions=dims, base_estimator='GP', acq_func='EI',
-                        random_state=123)
+                        random_state=getattr(self.args_input, 'seed', 123))
 
         ctx = mp.get_context('fork')
 
@@ -1429,8 +1429,8 @@ class Loss():
                             x0=x0,
                             y0=y0,
                             callback=[checkpoint_saver],
-                            random_state=123)
-            
+                            random_state=getattr(self.args_input, 'seed', 123))
+
         elif self.args_input.optimization_option.lower() == 'bandstructure':
             r0_lower, r0_upper = 2.1, 7.0 * cov_radius
             p_lower, p_upper = 1.01, 11.0
@@ -1451,7 +1451,7 @@ class Loss():
                             x0=x0,
                             y0=y0,
                             callback=[checkpoint_saver],
-                            random_state=self.args_input.random_state)
+                            random_state=getattr(self.args_input, 'seed', 123))
 
         
         return res
