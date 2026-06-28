@@ -1,0 +1,99 @@
+Options = {
+  TotalChargeDensity = Yes
+  TotalChargeDifference = Yes
+  ChargeDensity = Yes
+  RealComponent = Yes
+  PlottedSpins = {
+1 -1
+  }
+  PlottedLevels = 4
+  NrOfPoints = {
+50 50 50
+  }
+  NrOfCachedGrids = -1
+  Verbose = Yes
+  Identity = 1599923071
+  TotalAtomicDensity = No
+  ChargeDifference = No
+  ImagComponent = No
+  PlottedRegion = {
+    Origin = {
+ -3.3000000000000007 -4.8513395225900968 -4.8423637510783974
+    }
+    Box = {
+ 6.6000000000000014 0.0000000000000000 0.0000000000000000
+ 0.0000000000000000 7.9821462895960060 0.0000000000000000
+ 0.0000000000000000 0.0000000000000000 9.6847275021506398
+    }
+  }
+  ShiftGrid = Yes
+  RepeatBox = {
+ 1 1 1
+  }
+  BinaryAccessTypes = {
+ "stream"
+  }
+}
+DetailedXml = "detailed.xml"
+EigenvecBin = "eigenvec.bin"
+Basis = {
+  Resolution = 0.01
+  H = {
+    AtomicNumber = 1
+    Orbital = {
+      AngularMomentum = 0
+      Occupation = 1.000000
+      Cutoff = 3.3
+      Exponents = {
+1.03917759
+      }
+      Coefficients = {
+2.70849745E+00
+2.23417193E-01
+-5.73574780E-01
+8.47861670E-02
+      }
+    }
+  }
+  O = {
+    AtomicNumber = 8
+    Orbital = {
+      AngularMomentum = 0
+      Occupation = 2.000000
+      Cutoff = 3.1
+      Exponents = {
+9.25951365  0.75503385
+      }
+      Coefficients = {
+1.53741449E+01
+5.06789038E+01
+7.47892085E+01
+2.39030586E+02
+-4.62130608E+00
+3.07301780E+00
+-6.54737051E-01
+4.39984068E-02
+      }
+    }
+    Orbital = {
+      AngularMomentum = 1
+      Occupation = 4.000000
+      Cutoff = 3.3
+      Exponents = {
+12.87310040  2.68380566
+      }
+      Coefficients = {
+2.74031641E+00
+3.37378037E+00
+7.10060075E+01
+-1.49113076E+02
+1.46418273E+01
+-7.93946129E+00
+8.04202064E+00
+-1.54690199E+00
+      }
+    }
+  }
+}
+InputVersion = 3
+GroundState = Yes

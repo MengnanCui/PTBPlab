@@ -1,0 +1,10 @@
+cd xtb_0 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_1 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_2 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_3 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_4 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_5 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_6 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_7 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_8 ; python  calc_dftb.py tmp.train.xyz >> output
+cd xtb_9 ; python  calc_dftb.py tmp.train.xyz >> output

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ptbp"
+version = "0.2.0"
+description = "Density functional Tight-binding theory Parameterization (PTBP)."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "ase>=3.22",
+    "scikit-optimize>=0.10",
+    "scipy",
+    "numpy",
+    "matplotlib",
+    "sympy",
+    "pandas",
+    "pyswarms",
+    "pyyaml",
+    "textual",
+]
+
+# pylibxc, hotcent, dftbplus are NOT on PyPI — install via conda-forge
+# (see README.md "Installation & Notes").
+
+[project.scripts]
+ptbp = "parameterize:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = ["parameterize"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*", "utils*", "tools*"]
+exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: end-to-end tests that invoke ptbp / hotcent / DFTB+ (skip with `pytest -m 'not slow'`)",
+]
+addopts = "-ra"

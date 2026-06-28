@@ -1,0 +1,15 @@
+# Example 6 — YAML config for a reproducible run
+# Equivalent to:
+#   ptbp optimize ../../dft/dft.xyz --mode dataset --optimizer pso \
+#                 --n-particles 4 --n-calls 12 --output ./run
+mode: dataset
+dataset: ../../dft/dft.xyz
+output: ./run
+optimizer: pso
+n_particles: 4
+n_calls: 12
+parameters: [r0_w, r0_d, sigma_rep]
+xc: GGA_X_PBE+GGA_C_PBE
+kpt_density: 5.0
+superposition: density
+# E0s omitted — auto-fitted on first run + cached at <ref_dir>/E0s_dft.json.
