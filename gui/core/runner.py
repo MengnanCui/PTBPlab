@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
+
+from gui.core.logging_setup import get_logger, strip_ansi
+
+_log = get_logger()
 
 # Files a finished PTBP run drops into its run folder; listed in the log footer.
 ARTIFACT_NAMES = (
@@ -37,33 +42,42 @@ def make_log_path(log_dir: str | Path) -> Path:
     return d / f"gui_run_{ts}.log"
 
 
+_RULE = "─" * 72
+
+
 def _header(argv: Sequence[str], cwd: Path) -> str:
     return (
-        "=" * 70 + "\n"
-        f"PTBP GUI run\n"
-        f"  started : {datetime.utcnow().isoformat()}Z\n"
-        f"  cwd     : {cwd}\n"
-        f"  command : {' '.join(argv)}\n"
-        + "=" * 70 + "\n\n"
+        f"┌{_RULE}\n"
+        f"│ PTBP GUI run\n"
+        f"│   started : {datetime.utcnow().isoformat(timespec='seconds')}Z\n"
+        f"│   cwd     : {cwd}\n"
+        f"│   command : {' '.join(argv)}\n"
+        f"└{_RULE}\n\n"
     )
 
 
-def _artifact_manifest(cwd: Path) -> str:
-    lines = ["\n" + "=" * 70, "Artifacts:"]
+def _footer(returncode: int, duration_s: float, cwd: Path) -> str:
+    status = "ok" if returncode == 0 else f"FAILED (code {returncode})"
+    lines = [
+        "",
+        f"┌{_RULE}",
+        f"│ process exited with code {returncode}  —  {status}",
+        f"│   duration : {duration_s:.1f}s",
+        "│ Artifacts:",
+    ]
     found = False
     for name in ARTIFACT_NAMES:
         p = cwd / name
         if p.exists():
             found = True
-            lines.append(f"  - {p}")
-    # Also point at nested run folders created by `ptbp optimize --output`.
+            lines.append(f"│   - {name}")
     for run_dir in sorted(cwd.glob("run_*")):
         if run_dir.is_dir():
             found = True
-            lines.append(f"  - {run_dir}/ (run folder)")
+            lines.append(f"│   - {run_dir.name}/ (run folder)")
     if not found:
-        lines.append("  (none found)")
-    lines.append("=" * 70 + "\n")
+        lines.append("│   (none found)")
+    lines.append(f"└{_RULE}\n")
     return "\n".join(lines)
 
 
@@ -99,6 +113,8 @@ class JobRunner:
         on_exit: Optional[Callable[[int], None]],
     ) -> int:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
+        _log.info("run started: %s", " ".join(self.argv))
         with open(self.log_path, "w", encoding="utf-8") as log:
             log.write(_header(self.argv, self.cwd))
             log.flush()
@@ -113,27 +129,30 @@ class JobRunner:
                     bufsize=1,
                 )
             except (OSError, ValueError) as e:
-                msg = f"[runner] failed to start {self.argv[0]!r}: {e}\n"
-                log.write(msg)
-                if on_line:
-                    on_line(msg.rstrip("\n"))
+                msg = f"failed to start {self.argv[0]!r}: {e}"
+                log.write(msg + "\n")
+                log.write(_footer(127, time.perf_counter() - started, self.cwd))
+                _log.error(msg)
                 self.returncode = 127
+                if on_line:
+                    on_line(msg)
                 if on_exit:
                     on_exit(127)
                 return 127
 
             assert self._proc.stdout is not None
-            for line in self._proc.stdout:
-                log.write(line)
+            for raw in self._proc.stdout:
+                line = strip_ansi(raw.rstrip("\n"))
+                log.write(line + "\n")
                 log.flush()
                 if on_line:
-                    on_line(line.rstrip("\n"))
+                    on_line(line)
             self._proc.wait()
             self.returncode = self._proc.returncode
-            log.write(f"\n[runner] process exited with code {self.returncode}\n")
-            log.write(_artifact_manifest(self.cwd))
+            log.write(_footer(self.returncode, time.perf_counter() - started, self.cwd))
             log.flush()
 
+        _log.info("run finished (code %s) — log: %s", self.returncode, self.log_path)
         if on_exit:
             on_exit(self.returncode)
         return self.returncode

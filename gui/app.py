@@ -30,6 +30,12 @@ class PtbpGuiApp(ctk.CTk):
         super().__init__()
         theme.apply()
 
+        # Clean logging + mute customtkinter's benign redraw-race tracebacks.
+        from gui.core.logging_setup import (configure_logging,
+                                            install_tk_exception_handler)
+        self.log = configure_logging()
+        install_tk_exception_handler(self, self.log)
+
         self.title("PTBP — DFTB Parameterization Studio")
         self.geometry("1160x760")
         self.minsize(940, 620)

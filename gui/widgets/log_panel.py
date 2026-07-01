@@ -6,6 +6,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from gui import theme
+from gui.core.logging_setup import strip_ansi
 
 
 class LogPanel(ctk.CTkFrame):
@@ -22,9 +23,10 @@ class LogPanel(ctk.CTkFrame):
 
     def append(self, line: str):
         """Append a line. Safe to call from any thread via `.after`."""
+        clean = strip_ansi(line)
         def _do():
             self.textbox.configure(state="normal")
-            self.textbox.insert("end", line + "\n")
+            self.textbox.insert("end", clean + "\n")
             self.textbox.see("end")
             self.textbox.configure(state="disabled")
         try:
@@ -44,6 +46,6 @@ class LogPanel(ctk.CTkFrame):
             self.append(f"(no such file: {p})")
             return
         self.textbox.configure(state="normal")
-        self.textbox.insert("end", p.read_text(errors="replace"))
+        self.textbox.insert("end", strip_ansi(p.read_text(errors="replace")))
         self.textbox.see("end")
         self.textbox.configure(state="disabled")
