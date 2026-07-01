@@ -38,6 +38,7 @@ class SetupState:
     parameters: List[str] = field(default_factory=lambda: ['r0_w', 'r0_d', 'sigma_rep'])
     multi_element: List[str] = field(default_factory=list)
     superposition: str = 'density'
+    seed: Optional[int] = None            # random seed; None → run.py default (123)
 
     # ----- gen flow -----
     gen_symbols: List[str] = field(default_factory=list)
@@ -70,6 +71,8 @@ def assemble_optimize_yaml(state: SetupState) -> dict:
         out['dataset'] = str(state.dataset_path)
     if state.n_calls is not None:
         out['n_calls'] = state.n_calls
+    if state.seed is not None:
+        out['seed'] = state.seed
     if state.multi_element:
         out['multi_element'] = list(state.multi_element)
 

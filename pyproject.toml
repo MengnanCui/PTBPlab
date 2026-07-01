@@ -33,10 +33,13 @@ py-modules = ["parameterize"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*", "utils*", "tools*"]
+include = ["cli*", "utils*", "tools*", "gui*"]
 exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*"]
 
 [project.optional-dependencies]
+gui = [
+    "customtkinter",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
