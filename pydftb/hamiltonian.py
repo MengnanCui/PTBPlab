@@ -146,3 +146,26 @@ def fold(pb: PairBlocks, values: np.ndarray, norb: int, kpt: np.ndarray | None,
     if diag is not None:
         m[np.diag_indices(norb)] += diag
     return m
+
+
+def shift_index(pb: PairBlocks):
+    """Unique lattice translations T and, for each matrix element, its T index."""
+    shifts, inv = np.unique(pb.shift, axis=0, return_inverse=True)
+    return shifts, inv.ravel()[pb.pair_of]
+
+
+def fold_all(pb: PairBlocks, values: np.ndarray, norb: int, kpts: np.ndarray,
+             diag: np.ndarray | None = None) -> np.ndarray:
+    """Bloch matrices for all k at once: M(k) = sum_T M(T) exp(2 pi i k.T).
+
+    Elements are first summed into one small real-space matrix per
+    translation T, then folded with a single (nk x nT) @ (nT x N^2) product.
+    """
+    shifts, t_of = shift_index(pb)
+    mt = np.zeros((len(shifts), norb, norb))
+    np.add.at(mt, (t_of, pb.rows, pb.cols), values)
+    phase = np.exp(2j * np.pi * (kpts @ shifts.T))                 # (nk, nT)
+    m = (phase @ mt.reshape(len(shifts), -1)).reshape(len(kpts), norb, norb)
+    if diag is not None:
+        m[:, np.arange(norb), np.arange(norb)] += diag
+    return m

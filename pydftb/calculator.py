@@ -8,13 +8,12 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-import scipy.linalg as sla
 
 from .coulomb import Coulomb
 from .constants import KB_HARTREE
-from .hamiltonian import Basis, build_pairs, fold, onsite_energies
+from .hamiltonian import Basis, build_pairs, fold, fold_all, onsite_energies, shift_index
 from .mixer import AndersonMixer
-from .occupations import fill
+from .solvers import SOLVERS
 from .skf import SKSet
 
 
@@ -45,6 +44,7 @@ class DFTB:
     kpts : (nk,3), (nk,)  k-points in fractional reciprocal coords and weights
                           (weights normalised to 1).  ``None`` => Gamma.
     temperature : float   Electronic temperature (K) for Fermi smearing.
+    solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py).
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
@@ -103,8 +103,12 @@ class DFTB:
         else:
             kpts, kw = np.zeros((1, 3)), np.ones(1)
         gamma_only = len(kpts) == 1 and not np.any(kpts[0])
-        h0k = [fold(pb, pb.h, norb, None if gamma_only else k, eps0) for k in kpts]
-        sk_ = [fold(pb, pb.s, norb, None if gamma_only else k, np.ones(norb)) for k in kpts]
+        if gamma_only:
+            h0k = [fold(pb, pb.h, norb, None, eps0)]
+            sk_ = [fold(pb, pb.s, norb, None, np.ones(norb))]
+        else:
+            h0k = fold_all(pb, pb.h, norb, kpts, eps0)
+            sk_ = fold_all(pb, pb.s, norb, kpts, np.ones(norb))
         t["build"] = time.perf_counter() - t0
 
         coul = None
@@ -114,9 +118,14 @@ class DFTB:
                            cell if periodic else None, pbc if periodic else None)
             t["gamma"] = time.perf_counter() - t1
 
+        solver = self.solver if not isinstance(self.solver, str) else SOLVERS[self.solver]()
+        h0 = np.array(h0k)
+        smat = np.array(sk_)
+        t1 = time.perf_counter()
+        solver.prepare(smat)
+        t_diag = time.perf_counter() - t1
         mixer = AndersonMixer(self.mixing)
         q_in = q0.copy() if q_init is None else np.asarray(q_init, float).copy()
-        t_diag = 0.0
         converged = not self.scc
         nit = 0
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
@@ -125,19 +134,12 @@ class DFTB:
             else:
                 v_site = np.zeros(len(q0))
             v_orb = v_site[site_of_orb]
+            h = h0 + 0.5 * smat * (v_orb[:, None] + v_orb[None, :])
             t1 = time.perf_counter()
-            evals, evecs = [], []
-            for h0, s in zip(h0k, sk_):
-                h = h0 + 0.5 * s * (v_orb[:, None] + v_orb[None, :])
-                e, c = sla.eigh(h, s, driver="gvd")
-                evals.append(e)
-                evecs.append(c)
+            rho, wdm, evals, mu, ts = solver.solve(h, kw, nelec, self.kt, need_w=False)
             t_diag += time.perf_counter() - t1
-            occ, mu, ts = fill(evals, kw, nelec, self.kt)
-            q_orb = np.zeros(norb)
-            for w, f, c, s in zip(kw, occ, evecs, sk_):
-                cf = c * f[None, :]
-                q_orb += w * np.real(np.sum(np.conj(cf) * (s @ c), axis=1))
+            # Mulliken: q_mu = sum_k w_k Re (rho_k S_k)_{mu mu}
+            q_orb = np.einsum("k,kij,kji->i", kw, rho, smat).real
             q_out = np.bincount(site_of_orb, q_orb, minlength=len(q0))
             if not self.scc:
                 break
@@ -148,46 +150,50 @@ class DFTB:
                 converged = True
                 break
             q_in = mixer.mix(q_in, q_out)
+        if forces:
+            # W is only needed once, for the final density
+            t1 = time.perf_counter()
+            rho, wdm, evals, mu, ts = solver.solve(h, kw, nelec, self.kt, need_w=True)
+            t_diag += time.perf_counter() - t1
         t["diag"] = t_diag
         t["scc_iter"] = nit
 
         # ---------------- energies ----------------
-        e_band = 0.0
-        rho, wdm = [], []
-        for w, f, c, e, h0 in zip(kw, occ, evecs, evals, h0k):
-            cf = c * f[None, :]
-            r = cf @ np.conj(c).T
-            rho.append(r)
-            e_band += w * np.real(np.sum(r * h0.T))  # Tr(rho H0)
-            if forces:
-                wdm.append((cf * e[None, :]) @ np.conj(c).T)
+        e_band = float(np.einsum("k,kij,kji->", kw, rho, h0).real)   # Tr(rho H0)
         dq = q_out - q0
         e_scc = coul.energy_shift(dq)[0] if self.scc else 0.0
         e_rep, rep_grad = self._repulsive(species, pos, cell, pbc, forces)
         energy = e_band + e_scc + e_rep
         q_atom = np.bincount(site_atom, q_out, minlength=len(species))
-        res = DFTBResult(energy, energy - ts, e_band, e_scc, e_rep, ts, mu, q_atom, evals,
-                         n_scc=nit, converged=converged)
+        res = DFTBResult(energy, energy - ts, e_band, e_scc, e_rep, ts, mu, q_atom,
+                         None if evals is None else list(evals), n_scc=nit, converged=converged)
 
         # ---------------- forces ----------------
         if forces:
             t1 = time.perf_counter()
             grad = rep_grad.copy()
-            # real-space density / energy-weighted density at pair elements
-            phase = np.exp(2j * np.pi * (pb.shift @ kpts.T))[pb.pair_of]  # (nelem, nk)
-            p_e = np.zeros(len(pb.rows))
-            w_e = np.zeros(len(pb.rows))
-            for ik, (w, r, wd) in enumerate(zip(kw, rho, wdm)):
-                p_e += w * np.real(r[pb.cols, pb.rows] * phase[:, ik])
-                w_e += w * np.real(wd[pb.cols, pb.rows] * phase[:, ik])
+            # real-space (energy-weighted) density at the pair elements:
+            # P_e = Re sum_k w_k rho_k[nu, mu] exp(2 pi i k.T)
+            if gamma_only:
+                p_e = rho[0][pb.cols, pb.rows].real
+                w_e = wdm[0][pb.cols, pb.rows].real
+            else:
+                # group by translation T: R_T = sum_k w_k e^{2 pi i k.T} rho_k  (nT GEMM)
+                shifts, t_of = shift_index(pb)
+                ph = (np.exp(2j * np.pi * (kpts @ shifts.T)) * kw[:, None]).T   # (nT, nk)
+                n2 = norb * norb
+                r_t = (ph @ rho.reshape(len(kw), n2)).reshape(-1, norb, norb)
+                w_t = (ph @ wdm.reshape(len(kw), n2)).reshape(-1, norb, norb)
+                p_e = r_t[t_of, pb.cols, pb.rows].real
+                w_e = w_t[t_of, pb.cols, pb.rows].real
             vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
-            coef_h = p_e
             coef_s = p_e * vsum - w_e
-            ge = coef_h[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
-            gp = np.zeros((len(pb.i), 3))
-            np.add.at(gp, pb.pair_of, ge)
-            np.add.at(grad, pb.j, gp)
-            np.add.at(grad, pb.i, -gp)
+            ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
+            gp = np.stack([np.bincount(pb.pair_of, ge[:, k], minlength=len(pb.i))
+                           for k in range(3)], axis=1)
+            for k in range(3):
+                grad[:, k] += np.bincount(pb.j, gp[:, k], minlength=len(pos))
+                grad[:, k] -= np.bincount(pb.i, gp[:, k], minlength=len(pos))
             if self.scc:
                 gs = coul.gradient(q_in - q0)
                 np.add.at(grad, site_atom, gs)

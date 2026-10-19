@@ -33,7 +33,7 @@ py-modules = ["parameterize"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*", "utils*", "tools*"]
+include = ["cli*", "utils*", "tools*", "pydftb*"]
 exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*"]
 
 [tool.pytest.ini_options]
