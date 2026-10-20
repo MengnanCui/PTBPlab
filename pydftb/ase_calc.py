@@ -1,58 +1,129 @@
-"""ASE calculator wrapper: drop-in replacement for ase.calculators.dftb.Dftb
-in workflows that only need energies, forces and charges."""
+"""ASE calculator: drop-in replacement for ``ase.calculators.dftb.Dftb``
+in workflows that need energies, forces, charges and eigenvalues.
+
+Unit handling mirrors what ASE + DFTB+ do, so results can be compared
+directly: positions go Angstrom -> Bohr with DFTB+'s constant; energies and
+forces come back with ASE's constants (``ase.units``), exactly as
+``ase.calculators.dftb.Dftb`` converts DFTB+ output.
+"""
 from __future__ import annotations
 
 import numpy as np
+from ase import units
 from ase.calculators.calculator import Calculator, all_changes, kptdensity2monkhorstpack
 
 from .calculator import DFTB
-from .constants import BOHR, HARTREE
+from .constants import BOHR
 from .kpoints import monkhorst_pack, reduce_time_reversal
-from .skf import SKSet
+from .params import ParamSet
 
 
 class PyDFTB(Calculator):
     """
     Parameters
     ----------
-    skdir : directory containing ``A-B.skf`` files
-    max_l : {"C": 1, "H": 0, ...} maximal angular momentum per element
-    kpts  : (n1, n2, n3) Monkhorst-Pack grid, or a k-point density (float)
-    temperature : electronic temperature (K), Fermi smearing
+    skdir : directory with ``A-B.skf`` (or ``.skf.gz``) files.
+    max_l : optional {label: l}; default is the ASE/PTBP rule (highest occupied
+            shell in the homonuclear SKF).
+    kpts  : None (Gamma), (n1, n2, n3) Monkhorst-Pack grid, a k-point density
+            (float, ASE ``kptdensity2monkhorstpack``), or explicit
+            ``{"kpts": (nk,3) fractional, "weights": (nk,)}``.
+    time_reversal : reduce k and -k (DFTB+ does this for SupercellFolding).
+    smearing : ("fermi", T) | ("gaussian", T) | ("mp", T, order); T in K.
+               Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
+    repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
+    threads : limit BLAS/OpenMP threads during the calculation (None = leave as is).
+    labels : optional type labels per atom (several parameter sets per element);
+             default: chemical symbols.
+    Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
+    ``solver``, ``shell_resolved``, ``fd_delta``) are passed to :class:`pydftb.DFTB`.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges"]
 
-    def __init__(self, skdir, max_l, kpts=None, temperature=0.0, scc=True,
-                 scc_tol=1e-6, shell_resolved=False, solver="batched", **kwargs):
+    def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool = True,
+                 smearing=None, temperature: float | None = None, scc: bool = True,
+                 scc_tol: float = 1e-6, max_scc: int = 200, mixer: str = "broyden",
+                 mixing: float = 0.2, repulsive: str = "skf", solver: str = "batched",
+                 shell_resolved: bool = False, threads: int | None = None, labels=None,
+                 fd_delta: float | None = None, **kwargs):
         super().__init__(**kwargs)
-        self.skdir, self.max_l = skdir, dict(max_l)
+        self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
-        self.opts = dict(scc=scc, temperature=temperature, scc_tol=scc_tol, solver=solver)
-        self.shell_resolved = shell_resolved
-        self._sk = None
+        self.time_reversal = time_reversal
+        if smearing is None:
+            smearing = ("fermi", 0.0 if temperature is None else temperature)
+        self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
+                                mixing=mixing, repulsive=repulsive, solver=solver,
+                                smearing=smearing, fd_delta=fd_delta)
+        self.threads = threads
+        self.labels = None if labels is None else list(labels)
+        self.raw = None          # last pydftb.DFTBResult (atomic units)
 
-    def _skset(self, symbols):
-        el = sorted(set(symbols))
-        if self._sk is None or not set(el) <= set(self._sk.elements):
-            self._sk = SKSet(self.skdir, el, {e: self.max_l[e] for e in el},
-                             shell_resolved=self.shell_resolved)
-        return self._sk
+    # ------------------------------------------------------------------
+    def _kpoints(self, atoms):
+        spec = self.kpts_spec
+        if not atoms.pbc.any() or spec is None:
+            return None
+        if isinstance(spec, dict):
+            k, w = np.atleast_2d(spec["kpts"]), np.asarray(spec.get("weights", np.ones(len(spec["kpts"]))))
+        else:
+            grid = kptdensity2monkhorstpack(atoms, spec, even=False) if np.isscalar(spec) else spec
+            k, w = monkhorst_pack(tuple(int(n) for n in grid))
+        if self.time_reversal:
+            k, w = reduce_time_reversal(k, w)
+        return k, w / w.sum()
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
         a = self.atoms
-        sym = a.get_chemical_symbols()
-        periodic = a.pbc.any()
-        kpts = None
-        if periodic and self.kpts_spec is not None:
-            grid = (kptdensity2monkhorstpack(a, self.kpts_spec, even=False)
-                    if np.isscalar(self.kpts_spec) else self.kpts_spec)
-            kpts = reduce_time_reversal(*monkhorst_pack(grid))
-        calc = DFTB(self._skset(sym), kpts=kpts, **self.opts)
-        r = calc.calculate(sym, a.positions / BOHR, a.cell.array / BOHR if periodic else None,
-                           a.pbc if periodic else None, forces="forces" in properties)
-        self.results["energy"] = r.energy * HARTREE
-        self.results["free_energy"] = r.free_energy * HARTREE
-        self.results["charges"] = np.array([self._sk.occupation[s].sum() for s in sym]) - r.charges
+        labels = self.labels or a.get_chemical_symbols()
+        periodic = bool(a.pbc.any())
+        kpts = self._kpoints(a)
+        sk = self.params.skset(labels)
+        calc = DFTB(sk, kpts=kpts, charge=float(a.get_initial_charges().sum()), **self.engine_opts)
+        run = lambda: calc.calculate(labels, a.positions / BOHR,       # noqa: E731
+                                     a.cell.array / BOHR if periodic else None,
+                                     a.pbc if periodic else None,
+                                     forces="forces" in properties)
+        if self.threads is None:
+            r = run()
+        else:
+            from threadpoolctl import threadpool_limits
+            with threadpool_limits(self.threads):
+                r = run()
+        self.raw = r
+        self.results["energy"] = r.energy * units.Hartree
+        self.results["free_energy"] = r.free_energy * units.Hartree
+        q0 = np.array([sk.occupation[lab].sum() for lab in labels])
+        self.results["charges"] = q0 - r.charges
         if r.forces is not None:
-            self.results["forces"] = r.forces * HARTREE / BOHR
+            self.results["forces"] = r.forces * units.Hartree / units.Bohr
+
+    # ---- ASE accessors used by band-structure / DOS tools -------------
+    def _raw(self):
+        if self.raw is None:
+            self.get_potential_energy()
+        return self.raw
+
+    def get_number_of_spins(self):
+        return 1
+
+    def get_ibz_k_points(self):
+        r = self._raw()
+        return np.array(r.kpoints)
+
+    def get_k_point_weights(self):
+        return np.array(self._raw().kweights)
+
+    def get_eigenvalues(self, kpt=0, spin=0):
+        """Eigenvalues (eV) at k-point index ``kpt``."""
+        r = self._raw()
+        if r.eigenvalues is None:
+            raise RuntimeError("eigenvalues are not available with this solver")
+        return np.asarray(r.eigenvalues[kpt]) * units.Hartree
+
+    def get_occupation_numbers(self, kpt=0, spin=0):
+        return np.asarray(self._raw().occupations[kpt])
+
+    def get_fermi_level(self):
+        return self._raw().fermi * units.Hartree

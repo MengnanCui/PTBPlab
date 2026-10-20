@@ -19,13 +19,13 @@ from .backend import ops
 from .occupations import fill
 
 
-def _density(evals, evecs, kw, nelec, kt, need_w):
-    occ, mu, ts = fill(list(evals), kw, nelec, kt)
+def _density(evals, evecs, kw, nelec, smearing, need_w):
+    occ, mu, ts = fill(evals, kw, nelec, smearing)
     occ = np.array(occ)
     cf = evecs * occ[:, None, :]
     rho = cf @ np.conj(np.swapaxes(evecs, 1, 2))
     wdm = (cf * evals[:, None, :]) @ np.conj(np.swapaxes(evecs, 1, 2)) if need_w else None
-    return rho, wdm, evals, mu, ts
+    return rho, wdm, evals, mu, ts, occ
 
 
 class EighSolver:
@@ -34,13 +34,15 @@ class EighSolver:
     def prepare(self, s):
         self.s = s
 
-    def solve(self, h, kw, nelec, kt, need_w=True):
+    def solve(self, h, kw, nelec, smearing, need_w=True):
         ev, vec = [], []
         for hk, sk in zip(h, self.s):
             e, c = ops.eigh(hk, sk)
             ev.append(e)
             vec.append(c)
-        return _density(np.array(ev), np.array(vec), kw, nelec, kt, need_w)
+        *out, self.last_occupations = _density(np.array(ev), np.array(vec), kw, nelec,
+                                               smearing, need_w)
+        return tuple(out)
 
 
 class BatchedSolver:
@@ -53,10 +55,11 @@ class BatchedSolver:
         self.linv = ops.solve(l, eye)                       # L^-1
         self.linv_h = np.conj(np.swapaxes(self.linv, 1, 2))
 
-    def solve(self, h, kw, nelec, kt, need_w=True):
+    def solve(self, h, kw, nelec, smearing, need_w=True):
         hp = self.linv @ h @ self.linv_h
         e, c = ops.batched_eigh(hp)
-        return _density(e, self.linv_h @ c, kw, nelec, kt, need_w)
+        *out, self.last_occupations = _density(e, self.linv_h @ c, kw, nelec, smearing, need_w)
+        return tuple(out)
 
 
 def _gershgorin(h):
@@ -114,7 +117,7 @@ class SP2Solver:
         w, v = ops.eigh(s[0])
         self.z = (v / np.sqrt(w)) @ v.T
 
-    def solve(self, h, kw, nelec, kt, need_w=True):
+    def solve(self, h, kw, nelec, smearing, need_w=True):
         z = self.z
         hp = z @ h[0] @ z
         x, nit = sp2(hp, nelec / 2.0, self.dtype, self.refine)

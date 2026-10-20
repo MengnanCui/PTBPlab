@@ -15,15 +15,16 @@ The matching DFTB+ routines are listed in ``pydftb/docs/dftbplus_map.md``.
 from __future__ import annotations
 
 import time
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from .backend import ops
 from .coulomb import Coulomb
-from .constants import KB_HARTREE
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
-from .mixer import AndersonMixer
+from .mixer import make_mixer
+from .occupations import Smearing
 from .neighbors import neighbor_list
 from .solvers import SOLVERS
 from .skf import SKSet
@@ -54,6 +55,9 @@ class DFTBResult:
     q_shell: np.ndarray | None = None    # Mulliken populations per shell
     q_orbital: np.ndarray | None = None  # Mulliken populations per orbital
     occupations: list | None = None      # per k-point, incl. spin factor 2
+    scc_error: float = 0.0               # max |q_out - q_in| of the last iteration
+    kpoints: np.ndarray | None = None    # fractional k-points used
+    kweights: np.ndarray | None = None
 
     @property
     def e_total(self) -> float:
@@ -109,6 +113,7 @@ class _SCCState:
     ts: float
     n_iter: int
     converged: bool
+    error: float
 
 
 class DFTB:
@@ -120,27 +125,46 @@ class DFTB:
     scc : bool            Self-consistent charges.
     kpts : (nk,3), (nk,)  k-points in fractional reciprocal coords and weights
                           (weights normalised to 1).  ``None`` => Gamma.
-    temperature : float   Electronic temperature (K) for Fermi smearing.
+    temperature : float   Electronic temperature (K) for Fermi smearing
+                          (shortcut for ``smearing=("fermi", T)``).
+    smearing : spec       ("fermi", T) | ("gaussian", T) | ("mp", T, order) or
+                          an :class:`~pydftb.occupations.Smearing`.  T < 1e-8 Ha
+                          is raised to 1e-8 Ha like DFTB+.
+    mixer : str           "broyden" (DFTB+ default) or "pulay".
     solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py).
     repulsive : str       "skf" (spline, else polynomial), "polynomial"
                           (DFTB+ ``PolynomialRepulsive = Yes``) or "none".
+    warn_unconverged : bool  warn (but still return results, like DFTB+
+                          ``ConvergentSCCOnly = No``) if the SCC does not converge.
+    fd_delta : float      None (default): exact H0/S derivatives.  A step (Bohr)
+                          reproduces DFTB+'s finite-difference derivatives
+                          (current DFTB+ default 1.22e-4; ParserVersion < 5,
+                          e.g. via ASE: 1e-2).
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float = 0.2,
                  charge: float = 0.0, solver: str = "eigh", verbose: bool = False,
-                 repulsive: str = "skf"):
+                 repulsive: str = "skf", smearing=None, mixer: str = "broyden",
+                 warn_unconverged: bool = True, fd_delta: float | None = None):
         self.sk = sk
         self.scc = scc
         self.kpts = kpts
-        self.kt = temperature * KB_HARTREE
+        self.smearing = Smearing.from_spec(smearing if smearing is not None else ("fermi", temperature))
         self.scc_tol = scc_tol
         self.max_scc = max_scc
         self.mixing = mixing
+        self.mixer = mixer
         self.charge = charge
         self.solver = solver
         self.verbose = verbose
         self.repulsive = repulsive
+        self.warn_unconverged = warn_unconverged
+        self.fd_delta = fd_delta
+
+    @property
+    def kt(self) -> float:
+        return self.smearing.kt
 
     # ------------------------------------------------------------------
     def calculate(self, species, positions, cell=None, pbc=None, forces=True,
@@ -186,7 +210,8 @@ class DFTB:
             pbc = np.ones(3, bool) if pbc is None else np.asarray(pbc, bool)
         basis = Basis.build(species, sk)
         norb = basis.norb
-        pb = build_pairs(species, pos, cell, pbc, sk, basis, derivatives=forces)
+        pb = build_pairs(species, pos, cell, pbc, sk, basis, derivatives=forces,
+                         fd_delta=self.fd_delta)
         eps0 = onsite_energies(basis, sk)
         site_of_orb, site_atom, hub, q0 = self._sites(basis)
         periodic = cell is not None and np.any(pbc)
@@ -207,8 +232,8 @@ class DFTB:
         coul = None
         if self.scc:
             t1 = time.perf_counter()
-            coul = Coulomb(pos[site_atom], site_atom, hub,
-                           cell if periodic else None, pbc if periodic else None)
+            coul = Coulomb(pos, site_atom, hub, cell if periodic else None,
+                           pbc if periodic else None)
             timings["gamma"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, q0.sum() - self.charge, coul)
@@ -218,11 +243,16 @@ class DFTB:
         t1 = time.perf_counter()
         solver.prepare(st.smat)
         t_diag = time.perf_counter() - t1
-        mixer = AndersonMixer(self.mixing)
+        mixer = make_mixer(self.mixer, self.mixing)
         q0 = st.q0
-        q_in = q0.copy() if q_init is None else np.asarray(q_init, float).copy()
+        if q_init is not None:
+            q_in = np.asarray(q_init, float).copy()
+        else:
+            # DFTB+: neutral reference populations rescaled to the electron count
+            q_in = q0 * (st.nelec / q0.sum()) if q0.sum() > 0 else q0.copy()
         converged = not self.scc
         nit = 0
+        diff = 0.0
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
             if self.scc:
                 _, v_site = st.coulomb.energy_shift(q_in - q0)
@@ -231,7 +261,7 @@ class DFTB:
             v_orb = v_site[st.site_of_orb]
             h = st.h0 + 0.5 * st.smat * (v_orb[:, None] + v_orb[None, :])
             t1 = time.perf_counter()
-            rho, wdm, evals, mu, ts = solver.solve(h, st.kw, st.nelec, self.kt, need_w=False)
+            rho, wdm, evals, mu, ts = solver.solve(h, st.kw, st.nelec, self.smearing, need_w=False)
             t_diag += time.perf_counter() - t1
             # Mulliken: q_mu = sum_k w_k Re (rho_k S_k)_{mu mu}
             q_orb = np.einsum("k,kij,kji->i", st.kw, rho, st.smat).real
@@ -248,12 +278,17 @@ class DFTB:
         if forces:
             # W is only needed once, for the final density
             t1 = time.perf_counter()
-            rho, wdm, evals, mu, ts = solver.solve(h, st.kw, st.nelec, self.kt, need_w=True)
+            rho, wdm, evals, mu, ts = solver.solve(h, st.kw, st.nelec, self.smearing, need_w=True)
             t_diag += time.perf_counter() - t1
         timings["diag"] = t_diag
         timings["scc_iter"] = nit
+        if self.scc and not converged and self.warn_unconverged:
+            warnings.warn(f"SCC not converged after {nit} iterations "
+                          f"(max |dq| = {diff:.2e} > {self.scc_tol:.1e}); returning the last "
+                          "iteration's results", RuntimeWarning, stacklevel=3)
         occ = getattr(solver, "last_occupations", None)
-        return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit, converged)
+        return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
+                         converged, diff)
 
     def _energies(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         e_band = float(np.einsum("k,kij,kji->", st.kw, sc.rho, st.h0).real)   # Tr(rho H0)
@@ -263,10 +298,12 @@ class DFTB:
         energy = e_band + e_scc + e_rep
         q_atom = ops.segment_sum(sc.q_out, st.site_atom, len(st.species))
         q_shell = ops.segment_sum(sc.q_orb, st.basis.orb_shell, len(st.basis.shell_l))
+        occ = None if sc.occ is None else [np.asarray(o) for o in sc.occ]
         return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, sc.mu, q_atom,
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
-                          occupations=sc.occ)
+                          occupations=occ, scc_error=sc.error, kpoints=st.kpts,
+                          kweights=st.kw)
 
     def _gradient(self, st: _Setup, sc: _SCCState) -> np.ndarray:
         """dE/dR (n_atom, 3); forces are its negative."""
@@ -294,8 +331,7 @@ class DFTB:
         natom = len(st.pos)
         grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
         if self.scc:
-            gs = st.coulomb.gradient(sc.q_in - st.q0)
-            grad = ops.scatter_add(grad, st.site_atom, gs)
+            grad = grad + st.coulomb.gradient(sc.q_in - st.q0)    # already per atom
         return grad
 
     # ------------------------------------------------------------------

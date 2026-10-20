@@ -76,7 +76,8 @@ def _inputs(case: Case) -> dict:
     }
 
 
-def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh"):
+def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
+               fd_delta: float | None = None):
     """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set."""
     tmp = None
     if skdir is None and case.typed:
@@ -92,11 +93,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
         kpts = None
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
-        kind, temp = case.filling[0], case.filling[1]
-        if kind != "fermi":
-            raise NotImplementedError("smearing other than Fermi arrives in milestone M1")
-        calc = DFTB(sk, scc=case.scc, kpts=kpts, temperature=temp, scc_tol=1e-10, max_scc=500,
-                    solver=solver, repulsive=case.repulsive)
+        calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=1e-10,
+                    max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta)
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         return calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
                               np.ones(3, bool) if periodic else None)
@@ -156,24 +154,31 @@ def load(name: str) -> dict:
         return json.load(fh)
 
 
-def compare(doc: dict, solver: str = "eigh") -> dict:
-    """Run pydftb on a frozen case; return the deviations and pass/fail."""
+def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> dict:
+    """Run pydftb on a frozen case; return the deviations and pass/fail.
+
+    ``fd_delta`` = DFTB+'s finite-difference step (1.22e-4 by default in the
+    reference runs) makes pydftb reproduce DFTB+'s approximate forces.
+    """
     case = CASES_BY_NAME[doc["case"]]
     inp = doc["input"]
     t0 = time.perf_counter()
-    res = run_pydftb(case, inp, solver=solver)
+    res = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta)
     wall = time.perf_counter() - t0
     ref = doc["reference"]
     sk_q0 = _neutral_populations(case, inp)
     dev = {
         "energy": abs(res.energy - ref["energy"]),
         "free_energy": abs(res.free_energy - ref["free_energy"]),
+        "e_zero": abs(res.e_zero - ref["e_zero"]) if "e_zero" in ref else 0.0,
         "forces": float(np.abs(res.forces - np.array(ref["forces"])).max()),
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
     }
     tol = doc["tolerances"]
-    ok = all(dev[k] <= tol[k] for k in ("energy", "forces", "charges")) and dev["free_energy"] <= tol["energy"]
+    ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
+          and max(dev["free_energy"], dev["e_zero"]) <= tol["energy"])
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
+            "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
 
 

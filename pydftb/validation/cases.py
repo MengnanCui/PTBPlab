@@ -20,9 +20,13 @@ DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "data")
 SKF_SETS = {
     "ptbp_hcocu": os.path.join(DATA, "skf", "ptbp_hcocu"),
     "orbit": os.path.join(DATA, "skf", "orbit"),
+    "orbit_poly": os.path.join(DATA, "skf", "orbit_poly"),   # make_poly_set.py
 }
 REF_DIR = os.path.join(DATA, "ref")
 MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0}
+# DFTB+'s finite-difference H0/S derivative error at this water geometry is 1.2e-6 Ha/Bohr
+# (pydftb agrees with its own energy finite differences to 3e-9)
+TOL_DFTBP_FD = {"energy": 1e-6, "forces": 2e-6, "charges": 1e-6}
 
 
 @dataclass
@@ -111,9 +115,7 @@ def _li2h2():
 
 
 CASES = [
-    Case("h2o", _water, tol={"energy": 1e-6, "forces": 2e-6, "charges": 1e-6},
-         note="force tolerance 2e-6: DFTB+'s own finite-difference H0/S derivative error "
-              "is 1.2e-6 Ha/Bohr here (pydftb agrees with its energy finite differences to 3e-9)"),
+    Case("h2o", _water, tol=TOL_DFTBP_FD, note="force tolerance 2e-6, see TOL_DFTBP_FD"),
     Case("h2o_nonscc", _water, scc=False),
     Case("ch3oh", _meoh),
     Case("cu4co_300K", _cu4co, filling=("fermi", 300.0)),
@@ -129,5 +131,18 @@ CASES = [
          note="second parameter set (test/orbit), Li with s-only basis (ASE/PTBP max-l rule)"),
     Case("cu_fcc_k6_T0", _cu_fcc, kgrid=(6, 6, 6), filling=("fermi", 0.0),
          note="metal at T=0: DFTB+ uses Fermi filling at kT=1e-8 Ha"),
+    # --- smearing (milestone M1) ---
+    Case("cu_fcc_k6_mp1_3000K", _cu_fcc, kgrid=(6, 6, 6), filling=("mp", 3000.0, 1)),
+    Case("cu8_distorted_k355_mp2_2000K", _cu8, kgrid=(3, 5, 5), filling=("mp", 2000.0, 2),
+         note="the smearing PTBP intended (MP order 2, 2000 K)"),
+    Case("cu8_distorted_k355_gauss_1000K", _cu8, kgrid=(3, 5, 5), filling=("gaussian", 1000.0)),
+    Case("cu4co_mp2_1000K", _cu4co, filling=("mp", 1000.0, 2)),
+    Case("water_box_mp1_1000K", _water_box, filling=("mp", 1000.0, 1),
+         note="gapped system with MP smearing: Fermi level from DFTB+'s mid-gap search"),
+    Case("h2o_gauss_2000K", _water, filling=("gaussian", 2000.0), tol=TOL_DFTBP_FD,
+         note="force tolerance 2e-6, see TOL_DFTBP_FD"),
+    # --- repulsive variants (milestone M1) ---
+    Case("water_dimer_polyrep", _water_dimer, skf_set="orbit_poly", repulsive="polynomial",
+         note="non-zero polynomial repulsive, DFTB+ PolynomialRepulsive = SetForAll {Yes}"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

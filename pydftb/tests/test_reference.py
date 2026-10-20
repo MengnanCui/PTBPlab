@@ -6,6 +6,7 @@ The JSON files are produced by ``python -m pydftb.validation.refgen
 import glob
 import os
 
+import numpy as np
 import pytest
 
 from pydftb.validation import refgen
@@ -18,6 +19,20 @@ def test_against_dftbplus_reference(path):
     doc = refgen.load(os.path.basename(path)[:-5])
     r = refgen.compare(doc)
     assert r["ok"], f"{doc['case']}: deviations {r['dev']} exceed {doc['tolerances']}"
+    # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path
+    if r["n_scc_ref"] is not None:
+        assert abs(r["n_scc"] - r["n_scc_ref"]) <= 1, (r["n_scc"], r["n_scc_ref"])
+
+
+@pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep"])
+def test_dftbplus_finite_difference_emulation(name):
+    """With DFTB+'s finite-difference step pydftb reproduces DFTB+ forces exactly:
+    the ~1e-6 Ha/Bohr residual is DFTB+'s numerical derivative, not a pydftb error."""
+    doc = refgen.load(name)
+    exact = refgen.compare(doc)["dev"]["forces"]
+    fd = refgen.compare(doc, fd_delta=float(np.finfo(float).eps) ** 0.25)["dev"]["forces"]
+    assert fd < 1e-9
+    assert fd <= exact
 
 
 def test_reference_set_is_complete():

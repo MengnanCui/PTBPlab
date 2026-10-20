@@ -69,7 +69,14 @@ class PairBlocks:
 
 
 def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
-                derivatives: bool = False) -> PairBlocks:
+                derivatives: bool = False, fd_delta: float | None = None) -> PairBlocks:
+    """Real-space H0/S pair blocks (and their derivatives w.r.t. the bond vector).
+
+    Derivatives are exact (complex step) unless ``fd_delta`` is given; then
+    they are central finite differences with that step (Bohr), exactly like
+    DFTB+'s ``Differentiation = FiniteDiff { Delta = ... }`` (``nonscc.F90``),
+    which allows bit-level comparisons with DFTB+ forces.
+    """
     i, j, shift, vec, dist = neighbor_list(pos, cell, pbc, sk.cutoff)
     rows, cols, pidx, hv, sv, dhv, dsv = [], [], [], [], [], [], []
     spec = np.array(species)
@@ -99,11 +106,19 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                 dh = np.empty(hb.shape + (3,))
                 ds = np.empty(sb.shape + (3,))
                 for k in range(3):
-                    vc = v.astype(complex)
-                    vc[:, k] += 1j * COMPLEX_STEP
-                    hc, sc = blocks(vc)
-                    dh[..., k] = hc.imag / COMPLEX_STEP
-                    ds[..., k] = sc.imag / COMPLEX_STEP
+                    if fd_delta is None:
+                        vc = v.astype(complex)
+                        vc[:, k] += 1j * COMPLEX_STEP
+                        hc, sc = blocks(vc)
+                        dh[..., k] = hc.imag / COMPLEX_STEP
+                        ds[..., k] = sc.imag / COMPLEX_STEP
+                    else:
+                        vp, vm = v.copy(), v.copy()
+                        vp[:, k] += fd_delta
+                        vm[:, k] -= fd_delta
+                        (hp, sp_), (hm, sm) = blocks(vp), blocks(vm)
+                        dh[..., k] = (hp - hm) / (2.0 * fd_delta)
+                        ds[..., k] = (sp_ - sm) / (2.0 * fd_delta)
                 dhv.append(dh.reshape(-1, 3))
                 dsv.append(ds.reshape(-1, 3))
             r0 = basis.offsets[i[sel]]

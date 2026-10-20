@@ -1,0 +1,133 @@
+{
+ "schema": 1,
+ "case": "water_dimer_polyrep",
+ "note": "non-zero polynomial repulsive, DFTB+ PolynomialRepulsive = SetForAll {Yes}",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "orbit_poly",
+ "skf_sha256": {
+  "H-H.skf": "66d21cddf551b5eb2a8adebb5b8a49e1672a1b2d5e442af22433afa4cbb08e87",
+  "H-O.skf": "aa32b7329f5009a6b2886c8275a16055ddf2f0c5404ef4a8452954f573aee256",
+  "O-H.skf": "3967853df13be954212ec743209afa82b1ff0c38d4f23582b0de893e6efb29d3",
+  "O-O.skf": "cb0b624535fd0da4dc435b7fc65902dbd936db328d2e6cd9a20ee3e77f4cfcf5"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "polynomial",
+  "typed": null,
+  "scc_tol": 1e-10
+ },
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H",
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.06762102815201425,
+    -0.01863749482163331,
+    0.12057480654714338
+   ],
+   [
+    0.016300651319860315,
+    0.7316820788549705,
+    -0.47696437708376205
+   ],
+   [
+    -3.5615434317254514e-05,
+    -0.8334279722538168,
+    -0.43634067977346025
+   ],
+   [
+    0.32401994063678197,
+    0.07498284104132961,
+    3.012400069552171
+   ],
+   [
+    0.32021197496787007,
+    0.8527847433923341,
+    2.413243036853098
+   ],
+   [
+    0.24187034350036835,
+    -0.6410557875243245,
+    2.4279082362114814
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  }
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_srybc9ux/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  PolynomialRepulsive = SetForAll { Yes }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -6.6887965581,
+  "free_energy": -6.6887965581,
+  "e_zero": -6.6887965581,
+  "e_rep": 1.2364827577,
+  "e_scc": 0.0500050114,
+  "e_band": -7.9752843272,
+  "fermi": -0.0283800244372058,
+  "forces": [
+   [
+    0.0394392476456812,
+    0.0114487877094399,
+    0.383960681982856
+   ],
+   [
+    -0.0175139197508259,
+    0.234720297023352,
+    -0.201063445191208
+   ],
+   [
+    -0.0217766503547452,
+    -0.246226029007632,
+    -0.181334043921562
+   ],
+   [
+    0.0296479337460718,
+    -0.00475383184033076,
+    0.396153958300852
+   ],
+   [
+    -0.00202762917089905,
+    0.238222405524749,
+    -0.194659442878902
+   ],
+   [
+    -0.0277689821152829,
+    -0.233411629409578,
+    -0.203057708292036
+   ]
+  ],
+  "charges_net": [
+   -0.56367491575343,
+   0.288733098071882,
+   0.276344048059336,
+   -0.571287333999464,
+   0.271595067442319,
+   0.298290036179349
+  ],
+  "n_scc": 11
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}

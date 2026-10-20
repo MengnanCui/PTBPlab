@@ -14,6 +14,9 @@ Notes on matching DFTB+ exactly:
   derivatives agree with its own energy finite differences to ~3e-9.
 * Energies come from ``detailed.out`` (10 decimals), everything else from
   ``results.tag`` (full precision).
+* DFTB+'s default ``EwaldTolerance`` is 1e-9 (pydftb uses 1e-12): in a 24-atom
+  periodic water box this alone gives 1.3e-7 Ha; with ``EwaldTolerance = 1e-12``
+  the two codes agree to 1.6e-9 Ha.  References keep DFTB+'s default.
 """
 from __future__ import annotations
 
@@ -63,8 +66,8 @@ def filling_block(filling) -> str:
         return (f"MethfesselPaxton {{\n    Order = {int(filling[2])}\n"
                 f"    Temperature [K] = {temp}\n  }}")
     if kind == "gaussian":
-        # DFTB+ has no separate Gaussian keyword: it is Methfessel-Paxton order 0
-        return f"MethfesselPaxton {{\n    Order = 0\n    Temperature [K] = {temp}\n  }}"
+        # DFTB+ maps Gaussian to Methfessel-Paxton order 0 internally; "Order = 0" is rejected
+        return f"Gaussian {{\n    Temperature [K] = {temp}\n  }}"
     raise ValueError(f"unknown filling {filling!r}")
 
 
