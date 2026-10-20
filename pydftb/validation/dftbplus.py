@@ -9,9 +9,10 @@ Notes on matching DFTB+ exactly:
 * DFTB+ differentiates H0/S numerically.  Its default finite difference is
   used for the references: ``Differentiation = Richardson {}`` was tested and
   is *less* accurate for these tables (H2O force error 1.2e-5 vs 1.2e-6
-  Ha/Bohr), presumably because its larger steps cross the grid nodes where
-  the piecewise SK interpolation polynomial changes.  pydftb's complex-step
-  derivatives agree with its own energy finite differences to ~3e-9.
+  Ha/Bohr): the water's H-H distance lies 4e-6 Bohr from SK grid node 153,
+  and steps that cross a node mix two pieces of the piecewise interpolation
+  polynomial (the default step 1.22e-4 already does).  pydftb's exact
+  derivatives agree with its own energy finite differences to ~2e-9.
 * Energies come from ``detailed.out`` (10 decimals), everything else from
   ``results.tag`` (full precision).
 * DFTB+'s default ``EwaldTolerance`` is 1e-9 (pydftb uses 1e-12): in a 24-atom
@@ -69,6 +70,28 @@ def filling_block(filling) -> str:
         # DFTB+ maps Gaussian to Methfessel-Paxton order 0 internally; "Order = 0" is rejected
         return f"Gaussian {{\n    Temperature [K] = {temp}\n  }}"
     raise ValueError(f"unknown filling {filling!r}")
+
+
+def dftb3_block(opts, labels=None) -> str:
+    """HSD lines for pydftb's third_order / hubbard_derivs / h_damping options.
+
+    DFTB+ rejects HubbardDerivs entries for species that are not in the
+    structure, so only ``labels`` (if given) are written.
+    """
+    if not opts:
+        return ""
+    lines = []
+    order = opts.get("third_order")
+    if order:
+        lines.append("  ThirdOrderFull = Yes" if order == "full" else "  ThirdOrder = Yes")
+    if opts.get("hubbard_derivs"):
+        lines.append("  HubbardDerivs {")
+        lines += [f"    {k} = {' '.join(_f(x) for x in np.atleast_1d(v))}"
+                  for k, v in opts["hubbard_derivs"].items() if labels is None or k in labels]
+        lines.append("  }")
+    if opts.get("h_damping") is not None:
+        lines.append(f"  HCorrection = Damping {{ Exponent = {_f(opts['h_damping'])} }}")
+    return "\n".join(lines) + "\n"
 
 
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),

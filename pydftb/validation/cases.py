@@ -24,9 +24,13 @@ SKF_SETS = {
 }
 REF_DIR = os.path.join(DATA, "ref")
 MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0}
-# DFTB+'s finite-difference H0/S derivative error at this water geometry is 1.2e-6 Ha/Bohr
-# (pydftb agrees with its own energy finite differences to 3e-9)
+# DFTB+'s finite-difference H0/S derivative error at this water geometry is 1.2e-6 Ha/Bohr:
+# the H-H distance lies 4e-6 Bohr from SK grid node 153, inside DFTB+'s step of 1.22e-4
+# (pydftb's exact forces agree with its own energy finite differences to 2e-9 at h = 1e-6)
 TOL_DFTBP_FD = {"energy": 1e-6, "forces": 2e-6, "charges": 1e-6}
+# DFTB3: 3ob Hubbard derivatives (Ha/e) and its standard settings; Cu values are for testing only
+UD_3OB = {"H": -0.1857, "C": -0.1492, "O": -0.1575}
+DFTB3_3OB = {"third_order": "full", "hubbard_derivs": UD_3OB, "h_damping": 4.0}
 
 
 @dataclass
@@ -41,6 +45,7 @@ class Case:
     repulsive: str = "skf"
     labels: Callable[[Atoms], list] | None = None   # type labels (default: elements)
     typed: dict | None = None             # label -> base label for write_typed_copies
+    dftb3: dict | None = None             # third_order / hubbard_derivs / h_damping options
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
@@ -169,5 +174,24 @@ CASES = [
          tol={"energy": 1e-8, "forces": 1e-9, "charges": 1e-9, "stress": 2e-8},
          note="a neighbour shell is closer to a grid node than DFTB+'s finite-difference step, "
               "so DFTB+'s stress is off by 1.2e-8 (pydftb with fd_delta agrees to 1e-12)"),
+    # --- DFTB3 (milestone M2b) ---
+    Case("h2o_dftb3", _water, dftb3=DFTB3_3OB, tol=TOL_DFTBP_FD,
+         note="full third order + H-X damping (3ob settings); force tolerance see TOL_DFTBP_FD"),
+    Case("ch3oh_dftb3", _meoh, dftb3=DFTB3_3OB),
+    Case("water_dimer_dftb3_nodamp", _water_dimer,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_3OB}),
+    Case("water_dimer_hdamp", _water_dimer, dftb3={"h_damping": 4.0},
+         note="DFTB2 with the H-X damping of gamma only"),
+    Case("h2o_dftb3_onsite", _water, dftb3={"third_order": "onsite", "hubbard_derivs": UD_3OB},
+         tol=TOL_DFTBP_FD,
+         note="DFTB+ ThirdOrder (R = 0 terms only), which DFTB+ books under 'Energy SCC'"),
+    Case("cu4co_dftb3_shell", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         dftb3={"third_order": "full",
+                "hubbard_derivs": {"Cu": [-0.05, -0.03, -0.08], "C": [-0.1492, -0.12],
+                                   "O": [-0.1575, -0.14]}},
+         note="orbital-resolved SCC, one Ud per shell: on-site Gamma between shells of different U"),
+    Case("water_box_dftb3", _water_box, dftb3=DFTB3_3OB),
+    Case("cuo_chain_dftb3_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         dftb3={"third_order": "full", "hubbard_derivs": {"Cu": -0.05, "O": -0.1575}}),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

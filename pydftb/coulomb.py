@@ -25,6 +25,48 @@ EWALD_TOL = 1e-12
 SHORT_TOL = 1e-14
 # DFTB+ treats U_a, U_b as equal if |U_a - U_b| < MIN_HUB_DIFF; in tau = 3.2 U:
 SAME_TAU = 3.2 * MIN_HUB_DIFF
+# The closed form of S for tau_a != tau_b carries 1/(tau_a^2 - tau_b^2)^n terms that
+# cancel when tau_a ~ tau_b: at |U_a - U_b| = 1e-5 its relative error is 6e-4 (and 24
+# for dS/dtau_a, i.e. DFTB3).  Below this relative tau difference S is computed from
+# the Hermite-Genocchi integral instead (see _short_near).
+NEAR_TAU = 0.05
+_GL_X, _GL_W = np.polynomial.legendre.leggauss(12)
+_GL_S = 0.5 * (_GL_X + 1.0)                       # Gauss-Legendre nodes on [0, 1]
+_GL_W = 0.5 * _GL_W * _GL_S * (1.0 - _GL_S)       # ... and weights times s (1 - s)
+
+
+def _short_near(r, ta, tb, tau_derivs=False):
+    """S and dS/dr (with ``tau_derivs`` also dS/dtau_a, d2S/dtau_a dr) for any tau.
+
+    S is a divided difference, S = -A^2 B^2 E[A, A, B, B] with A = ta^2, B = tb^2 and
+    E(y) = exp(-sqrt(y) r) / (y r); by the Hermite-Genocchi formula
+
+        S = -A^2 B^2 int_0^1 s (1 - s) E'''(A + s (B - A)) ds,
+
+    which is free of the cancellations of the closed form.  With 12 Gauss points S and its
+    first derivatives agree with 60-digit mpmath values to < 4e-12 (relative) for
+    |tau_a - tau_b| < 10 % and r < 18 Bohr.
+    """
+    s = _GL_S[:, None]
+    w = _GL_W[:, None]
+    a2, b2 = ta * ta, tb * tb
+    q = np.sqrt(a2 + s * (b2 - a2))
+    x = q * r
+    e = np.exp(-x)
+    q8 = q ** 8
+    e3 = -e * (((x + 9.0) * x + 33.0) * x + 48.0) / (8.0 * r * q8)               # E'''
+    e3r = e * ((((x + 7.0) * x + 24.0) * x + 48.0) * x + 48.0) / (8.0 * r * r * q8)
+    pre = -a2 * a2 * b2 * b2
+    j, jr = (w * e3).sum(0), (w * e3r).sum(0)
+    if not tau_derivs:
+        return pre * j, pre * jr
+    q10 = q8 * q * q
+    e4 = e * ((((x + 14.0) * x + 87.0) * x + 279.0) * x + 384.0) / (16.0 * r * q10)  # E''''
+    e4r = -e * (((((x + 11.0) * x + 59.0) * x + 192.0) * x + 384.0) * x + 384.0) / (16.0 * r * r * q10)
+    w1 = w * (1.0 - s)
+    da = -2.0 * a2 * b2 * b2 * j + pre * (w1 * e4).sum(0)                       # dS/dA
+    dar = -2.0 * a2 * b2 * b2 * jr + pre * (w1 * e4r).sum(0)
+    return pre * j, pre * jr, 2.0 * ta * da, 2.0 * ta * dar
 
 
 def _short(r, ta, tb):
@@ -40,7 +82,10 @@ def _short(r, ta, tb):
         dp = -1.0 / x ** 2 + 3.0 * t * t / 16.0 + t ** 3 * x / 24.0
         s[same] = e * p
         ds[same] = e * (dp - t * p)
-    nd = ~same
+    near = ~same & (np.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
+    if near.any():
+        s[near], ds[near] = _short_near(r[near], ta[near], tb[near])
+    nd = ~same & ~near
     if nd.any():
         a, b, x = ta[nd], tb[nd], r[nd]
         val = np.zeros_like(x)
@@ -82,9 +127,12 @@ class Coulomb:
     atom_pos : (n_atom, 3) Bohr
     site_atom : (n_site,) atom index of every charge site
     hubbard : (n_site,) Hubbard U of every site
+    damped : (n_atom,) bool, atoms whose pairs get the H-X damping of DFTB+
+             ``HCorrection = Damping``: S -> S exp(-((U_a + U_b)/2)^damp_exp r^2)
     """
 
-    def __init__(self, atom_pos, site_atom, hubbard, cell=None, pbc=None):
+    def __init__(self, atom_pos, site_atom, hubbard, cell=None, pbc=None, damped=None,
+                 damp_exp: float = 0.0):
         self.pos = np.asarray(atom_pos, float)
         self.site_atom = np.asarray(site_atom)
         self.natom = len(self.pos)
@@ -93,6 +141,8 @@ class Coulomb:
         self.cell = None if cell is None else np.asarray(cell, float)
         self.pbc = np.zeros(3, bool) if pbc is None else np.asarray(pbc, bool)
         self.periodic = self.cell is not None and self.pbc.any()
+        self.damped = np.zeros(self.natom, bool) if damped is None else np.asarray(damped, bool)
+        self.damp_exp = float(damp_exp)
         if self.periodic and not self.pbc.all():
             raise NotImplementedError("Only 0D or 3D periodicity implemented")
         # sites of each atom, padded to a rectangular table (-1 = no site)
@@ -146,6 +196,19 @@ class Coulomb:
         self.sp_b = self.atom_sites[j[p], y]
         self.sp_d = d[p]
 
+    def _sp_short(self):
+        """S and dS/dr of every site pair, damped where an H-X pair asks for it."""
+        s, ds = _short(self.sp_d, self.tau[self.sp_a], self.tau[self.sp_b])
+        if self.damped.any():
+            i, j = self.nl[0], self.nl[1]
+            m = (self.damped[i] | self.damped[j])[self.sp_pair]
+            u = (self.tau[self.sp_a[m]] + self.tau[self.sp_b[m]]) / 6.4     # (U_a + U_b) / 2
+            r = self.sp_d[m]
+            h = np.exp(-u ** self.damp_exp * r * r)
+            ds[m] = ds[m] * h - 2.0 * r * u ** self.damp_exp * s[m] * h
+            s[m] = s[m] * h
+        return s, ds
+
     def _expand(self, mat_atoms):
         """Atom-level (n_atom, n_atom) matrix -> site-level."""
         return mat_atoms[np.ix_(self.site_atom, self.site_atom)]
@@ -153,7 +216,7 @@ class Coulomb:
     def _matrix(self):
         same_atom = self.site_atom[:, None] == self.site_atom[None, :]
         g = np.where(same_atom, _gamma0(self.tau[:, None], self.tau[None, :]), 0.0)
-        s, _ = _short(self.sp_d, self.tau[self.sp_a], self.tau[self.sp_b])
+        s, _ = self._sp_short()
         g = ops.scatter_add(g, (self.sp_a, self.sp_b), -s)
         if not self.periodic:
             diff = self.pos[None, :, :] - self.pos[:, None, :]
@@ -195,7 +258,7 @@ class Coulomb:
         i, j, _, vec, d = self.nl
         dq_atom = ops.segment_sum(dq, self.site_atom, self.natom)
         # short range: aggregate site pairs into dE/d(distance) per atom pair
-        _, ds = _short(self.sp_d, self.tau[self.sp_a], self.tau[self.sp_b])
+        _, ds = self._sp_short()
         dedr = ops.segment_sum(-dq[self.sp_a] * dq[self.sp_b] * ds, self.sp_pair, len(i))
         grad = np.zeros((self.natom, 3))
         w = None

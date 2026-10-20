@@ -37,6 +37,8 @@ DFTB+ 的 GPU 支持有限：MAGMA 只能单机，跨节点只有 ELPA-GPU。pyd
 
 pydftb 的目标是**平滑、带力、可做分子动力学、支持周期体系**的多套参数（M5、M8 阶段）。离散多类型的机制已在 M0 打好基础（`System` 的类型标签、`write_typed_copies`），并已与 DFTB+ 对照验证。
 
+这条路上有一个隐藏的坑：两套参数的 Hubbard U 只要相差 3e-6 到 1e-3，DFTB+ 的 γ 公式就会在数值上失效，DFTB3 下实测总能量错 0.5 eV，而且没有任何警告。pydftb 已在 M2b 改用数值稳定的积分形式（`reports/M2b-dftb3.md`）。
+
 ## 5. 与 PTBP 一体化
 
 参数生成（hotcent）、计算（pydftb）和拟合（PTBP）可以在同一个进程里完成，不再反复写文件、启动外部程序，为自动参数化铺路。

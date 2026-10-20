@@ -36,7 +36,8 @@ class PyDFTB(Calculator):
     labels : optional type labels per atom (several parameter sets per element);
              default: chemical symbols.
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
-    ``solver``, ``shell_resolved``, ``fd_delta``) are passed to :class:`pydftb.DFTB`.
+    ``solver``, ``shell_resolved``, ``fd_delta``, and for DFTB3 ``third_order``,
+    ``hubbard_derivs``, ``h_damping``) are passed to :class:`pydftb.DFTB`.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress"]
 
@@ -45,7 +46,8 @@ class PyDFTB(Calculator):
                  scc_tol: float = 1e-6, max_scc: int = 200, mixer: str = "broyden",
                  mixing: float = 0.2, repulsive: str = "skf", solver: str = "batched",
                  shell_resolved: bool = False, threads: int | None = None, labels=None,
-                 fd_delta: float | None = None, **kwargs):
+                 fd_delta: float | None = None, third_order: str | None = None,
+                 hubbard_derivs: dict | None = None, h_damping: float | None = None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -54,7 +56,8 @@ class PyDFTB(Calculator):
             smearing = ("fermi", 0.0 if temperature is None else temperature)
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
-                                smearing=smearing, fd_delta=fd_delta)
+                                smearing=smearing, fd_delta=fd_delta, third_order=third_order,
+                                hubbard_derivs=hubbard_derivs, h_damping=h_damping)
         self.threads = threads
         self.labels = None if labels is None else list(labels)
         self.raw = None          # last pydftb.DFTBResult (atomic units)

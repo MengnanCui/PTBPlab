@@ -28,6 +28,7 @@ from .occupations import Smearing
 from .neighbors import neighbor_list
 from .solvers import SOLVERS
 from .skf import SKSet
+from .thirdorder import ThirdOrder
 
 
 @dataclass
@@ -35,7 +36,7 @@ class DFTBResult:
     """Results in atomic units (Hartree, Bohr).
 
     Energy names follow DFTB+'s ``detailed.out``:
-    ``energy`` = "Total energy" (E_H0 + E_SCC + E_rep),
+    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_rep),
     ``free_energy`` = "Total Mermin free energy" (Total - TS),
     ``e_zero`` = "Extrapolated to 0" (Total - TS/2).
     """
@@ -56,6 +57,7 @@ class DFTBResult:
     q_orbital: np.ndarray | None = None  # Mulliken populations per orbital
     occupations: list | None = None      # per k-point, incl. spin factor 2
     scc_error: float = 0.0               # max |q_out - q_in| of the last iteration
+    e_3rd: float = 0.0                   # third-order (DFTB3) energy
     stress: np.ndarray | None = None     # (3, 3) Hartree/Bohr^3, DFTB+ sign convention
     kpoints: np.ndarray | None = None    # fractional k-points used
     kweights: np.ndarray | None = None
@@ -74,7 +76,8 @@ class DFTBResult:
 
     @property
     def terms(self) -> dict:
-        return {"H0": self.e_band, "SCC": self.e_scc, "repulsive": self.e_rep, "-TS": -self.ts}
+        return {"H0": self.e_band, "SCC": self.e_scc, "3rd": self.e_3rd, "repulsive": self.e_rep,
+                "-TS": -self.ts}
 
 
 @dataclass
@@ -96,6 +99,7 @@ class _Setup:
     q0: np.ndarray              # reference (neutral atom) populations per site
     nelec: float
     coulomb: Coulomb | None
+    third: ThirdOrder | None = None
 
 
 @dataclass
@@ -141,13 +145,31 @@ class DFTB:
                           reproduces DFTB+'s finite-difference derivatives
                           (current DFTB+ default 1.22e-4; ParserVersion < 5,
                           e.g. via ASE: 1e-2).
+    third_order : str     None (DFTB2), "full" (DFTB3, DFTB+ ``ThirdOrderFull``) or
+                          "onsite" (DFTB+ ``ThirdOrder``: R = 0 terms only).
+    hubbard_derivs : dict type label -> Hubbard derivative Ud (Hartree/e), or a
+                          list with one value per shell for orbital-resolved SCC
+                          (DFTB+ ``HubbardDerivs``).
+    h_damping : float     exponent zeta of the H-X damping of gamma (and Gamma),
+                          DFTB+ ``HCorrection = Damping { Exponent = zeta }``;
+                          damped are atoms lighter than 3.5 amu, as in DFTB+.
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float = 0.2,
                  charge: float = 0.0, solver: str = "eigh", verbose: bool = False,
                  repulsive: str = "skf", smearing=None, mixer: str = "broyden",
-                 warn_unconverged: bool = True, fd_delta: float | None = None):
+                 warn_unconverged: bool = True, fd_delta: float | None = None,
+                 third_order: str | None = None, hubbard_derivs: dict | None = None,
+                 h_damping: float | None = None):
+        if third_order not in (None, "full", "onsite"):
+            raise ValueError(f"third_order must be None, 'full' or 'onsite', not {third_order!r}")
+        if third_order and not scc:
+            raise ValueError("third_order needs SCC")
+        if third_order and hubbard_derivs is None:
+            raise ValueError("third_order needs hubbard_derivs")
+        if third_order == "onsite" and sk.shell_resolved:
+            raise ValueError("third_order='onsite' needs atom-resolved SCC (as in DFTB+)")
         self.sk = sk
         self.scc = scc
         self.kpts = kpts
@@ -162,6 +184,9 @@ class DFTB:
         self.repulsive = repulsive
         self.warn_unconverged = warn_unconverged
         self.fd_delta = fd_delta
+        self.third_order = third_order
+        self.hubbard_derivs = hubbard_derivs
+        self.h_damping = h_damping
 
     @property
     def kt(self) -> float:
@@ -245,14 +270,35 @@ class DFTB:
             h0 = fold_all(pb, pb.h, norb, kpts, eps0)
             smat = fold_all(pb, pb.s, norb, kpts, np.ones(norb))
         timings["build"] = time.perf_counter() - t0
-        coul = None
+        coul = third = None
         if self.scc:
             t1 = time.perf_counter()
+            damped = None
+            if self.h_damping is not None:
+                damped = np.array([sk.mass[lab] < 3.5 for lab in species])   # H, as in DFTB+
             coul = Coulomb(pos, site_atom, hub, cell if periodic else None,
-                           pbc if periodic else None)
+                           pbc if periodic else None, damped=damped,
+                           damp_exp=self.h_damping or 0.0)
+            if self.third_order:
+                third = ThirdOrder(coul, self._site_hubbard_derivs(basis),
+                                   onsite_only=self.third_order == "onsite")
             timings["gamma"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
-                      site_of_orb, site_atom, q0, q0.sum() - self.charge, coul)
+                      site_of_orb, site_atom, q0, q0.sum() - self.charge, coul, third)
+
+    def _site_hubbard_derivs(self, basis: Basis) -> np.ndarray:
+        """Ud of every charge site: one value per type, or per shell (orbital-resolved SCC)."""
+        missing = sorted(set(basis.species) - set(self.hubbard_derivs))
+        if missing:
+            raise ValueError(f"hubbard_derivs has no entry for {missing}")
+        ud = {lab: np.atleast_1d(np.asarray(v, float)) for lab, v in self.hubbard_derivs.items()}
+        if not self.sk.shell_resolved:
+            return np.array([ud[lab][0] for lab in basis.species])
+        out = []
+        for a, l in zip(basis.shell_atom, basis.shell_l):
+            v = ud[basis.species[a]]
+            out.append(v[0] if len(v) == 1 else v[self.sk.shells(basis.species[a]).index(l)])
+        return np.array(out)
 
     def _scc(self, st: _Setup, q_init, forces, timings) -> _SCCState:
         solver = self.solver if not isinstance(self.solver, str) else SOLVERS[self.solver]()
@@ -272,6 +318,8 @@ class DFTB:
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
             if self.scc:
                 _, v_site = st.coulomb.energy_shift(q_in - q0)
+                if st.third is not None:
+                    v_site = v_site + st.third.energy_shift(q_in - q0)[1]
             else:
                 v_site = np.zeros(len(q0))
             v_orb = v_site[st.site_of_orb]
@@ -310,8 +358,9 @@ class DFTB:
         e_band = float(np.einsum("k,kij,kji->", st.kw, sc.rho, st.h0).real)   # Tr(rho H0)
         dq = sc.q_out - st.q0
         e_scc = st.coulomb.energy_shift(dq)[0] if self.scc else 0.0
+        e_3rd = st.third.energy_shift(dq)[0] if st.third is not None else 0.0
         e_rep = self._repulsive_energy(st)
-        energy = e_band + e_scc + e_rep
+        energy = e_band + e_scc + e_3rd + e_rep
         q_atom = ops.segment_sum(sc.q_out, st.site_atom, len(st.species))
         q_shell = ops.segment_sum(sc.q_orb, st.basis.orb_shell, len(st.basis.shell_l))
         occ = None if sc.occ is None else [np.asarray(o) for o in sc.occ]
@@ -319,7 +368,7 @@ class DFTB:
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw)
+                          kweights=st.kw, e_3rd=e_3rd)
 
     def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
@@ -352,11 +401,16 @@ class DFTB:
         if self.scc:
             g_scc, w_scc = st.coulomb.gradient(sc.q_in - st.q0, virial=virial)
             grad = grad + g_scc                                    # already per atom
+        if st.third is not None:
+            g_3rd, w_3rd = st.third.gradient(sc.q_in - st.q0, virial=virial)
+            grad = grad + g_3rd
         if not virial:
             return grad, None
         w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
         if self.scc:
             w = w + w_scc
+        if st.third is not None:
+            w = w + w_3rd
         return grad, 0.5 * (w + w.T)
 
     # ------------------------------------------------------------------
