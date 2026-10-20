@@ -9,7 +9,7 @@
 | 原型 | SCC-DFTB 原型、加速实验、调研报告 | ✅ 完成 | `../RESEARCH.md` |
 | M0 | 底座整理：ops 分发层、`System`/`ParamSet`/`SCC` 接口、四段式计算、冻结的 DFTB+ 参考数据、文档骨架 | ✅ 完成 | `design/M0-foundation.md`，`reports/M0-foundation.md` |
 | M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | ✅ 完成（损失函数相对差 < 1e-7，DFTB 阶段快 1.8 倍） | `design/M1-ptbp-integration.md`，`reports/M1-ptbp-integration.md` |
-| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 下一步（应力的设计已完成） | `design/M2a-stress.md` |
+| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 进行中：M2a 应力 ✅（与 DFTB+ 差 ≤ 3e-9 Ha/Bohr³，顺带修正 SKF 表格末端）；下一步 DFTB3 | `design/M2a-stress.md`，`reports/M2a-stress.md` |
 | M3 | 计算策略推荐器 v1（CPU）+ 结构/k 点并行分发 + DFTB+ 配置顾问 | 计划 | — |
 | M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
@@ -27,11 +27,12 @@
 | | 力：精确导数（默认），或模拟 DFTB+ 的有限差分（`fd_delta`） | ✅ M1 |
 | | 轨道分辨 SCC | ✅ |
 | | s/p/d 轨道 | ✅ |
+| | SKF 表格末端和 1 Bohr 衰减尾巴（DFTB+ 只用表头行数的前 n−1 行） | ✅ M2a 修正 |
 | | f 轨道（扩展 SKF 格式） | ⬜ M2 |
 | | DFTB3、H–X 阻尼 | ⬜ M2 |
 | | xTB (GFN1/GFN2) | — 调用 `tblite` |
 | 周期体系 | k 点、时间反演约化、Ewald | ✅ |
-| | 应力、晶格优化 | ⬜ M2 |
+| | 应力（含 Ewald、排斥势、SCC 项）、ASE 晶格优化 | ✅ M2a |
 | 占据 | Fermi 展宽 | ✅ |
 | | Methfessel-Paxton、Gaussian 展宽（含 DFTB+ 的费米能级搜索与 TS 约定，另提供变分 TS） | ✅ M1 |
 | 混合器 | Pulay 型（Anderson） | ✅ |
@@ -44,7 +45,7 @@
 | 修正项 | 色散 D3/D4/UFF/SK | ⬜ M2 |
 | | DFTB+U、onsite 修正、长程校正 | ⬜ M6 |
 | | 溶剂、外场、QM/MM | ⬜ M6 |
-| 驱动 | 结构优化、MD（通过 ASE） | ⬜ M2（`ase_calc.PyDFTB` 已经可以给 ASE 优化器用） |
+| 驱动 | 结构优化、MD（通过 ASE） | ⬜ M2（`ase_calc.PyDFTB` 已经可以给 ASE 的原子和晶胞优化用；MD 待验证） |
 | | XL-BOMD | ⬜ M6 |
 | 激发态 | Casida | ⬜ M6 |
 | | 实时 TD、REKS、pp-RPA | — 按需 |

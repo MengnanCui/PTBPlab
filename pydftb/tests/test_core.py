@@ -33,6 +33,14 @@ def test_skf_interpolation_derivative():
     assert np.all(f.evaluate(np.array([f.cutoff + 0.1])) == 0.0)
 
 
+def test_skf_table_rows_like_dftbplus():
+    """Header ``0.02, 719`` with 719 rows: DFTB+ (type/oldskdata.F90) uses only 718,
+    which fixes where the table ends and its 1-Bohr tail starts."""
+    f = SKFile.read(os.path.join(SKDIR, "Li-Li.skf.gz"))
+    assert f.table.shape[0] == 718
+    assert f.cutoff == pytest.approx(718 * 0.02 + 1.0)
+
+
 def test_slater_koster_table_entries():
     """Rotation-based blocks reproduce textbook Slater-Koster expressions."""
     rng = np.random.default_rng(0)

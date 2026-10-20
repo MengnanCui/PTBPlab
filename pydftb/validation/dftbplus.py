@@ -177,6 +177,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
             res["ts"] = -res["ts"]          # detailed.out prints -TS
         res["fermi"] = float(np.atleast_1d(tag["fermi_level"])[0])
         res["forces"] = tag["forces"]
+        if "stress" in tag:
+            res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
         res["charges_net"] = tag["gross_atomic_charges"]
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")

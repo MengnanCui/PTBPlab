@@ -114,6 +114,20 @@ def _li2h2():
     return a
 
 
+def _li2_tail():
+    # 14.8 Bohr: inside the 1-Bohr tail DFTB+ appends after the last table row it uses
+    d = 14.8 * 0.529177249
+    return Atoms("Li2", positions=[[0, 0, 0], [0.3 * d, 0.2 * d, np.sqrt(0.87) * d]])
+
+
+def _li_bcc():
+    return bulk("Li", "bcc", a=3.50)     # every shell >= 4e-3 Bohr from a grid node
+
+
+def _li_bcc_node():
+    return bulk("Li", "bcc", a=3.45)     # the a*sqrt(2) shell is 4.3e-5 Bohr from grid node 461
+
+
 CASES = [
     Case("h2o", _water, tol=TOL_DFTBP_FD, note="force tolerance 2e-6, see TOL_DFTBP_FD"),
     Case("h2o_nonscc", _water, scc=False),
@@ -144,5 +158,16 @@ CASES = [
     # --- repulsive variants (milestone M1) ---
     Case("water_dimer_polyrep", _water_dimer, skf_set="orbit_poly", repulsive="polynomial",
          note="non-zero polynomial repulsive, DFTB+ PolynomialRepulsive = SetForAll {Yes}"),
+    # --- SK table end and stress (milestone M2a) ---
+    Case("li2_sk_tail", _li2_tail, skf_set="orbit",
+         tol={"energy": 1e-9, "forces": 1e-9, "charges": 1e-9},
+         note="Li-Li at 14.8 Bohr, in the 5th-order tail after the table: DFTB+ uses ngrid - 1 rows"),
+    Case("li_bcc_k666_1000K", _li_bcc, skf_set="orbit", kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         tol={"energy": 1e-8, "forces": 1e-9, "charges": 1e-9, "stress": 1e-10},
+         note="s-only metal; two neighbour shells lie in the SK table tail"),
+    Case("li_bcc_k666_node", _li_bcc_node, skf_set="orbit", kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         tol={"energy": 1e-8, "forces": 1e-9, "charges": 1e-9, "stress": 2e-8},
+         note="a neighbour shell is closer to a grid node than DFTB+'s finite-difference step, "
+              "so DFTB+'s stress is off by 1.2e-8 (pydftb with fd_delta agrees to 1e-12)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

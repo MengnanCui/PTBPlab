@@ -180,14 +180,25 @@ class Coulomb:
         v = self.gamma @ dq
         return 0.5 * dq @ v, v
 
-    def gradient(self, dq):
-        """dE_SCC/dR per **atom** (n_atom, 3) with E = 1/2 dq.gamma.dq (dq per site)."""
+    def gradient(self, dq, virial: bool = False):
+        """dE_SCC/dR per **atom** (n_atom, 3) with E = 1/2 dq.gamma.dq (dq per site).
+
+        With ``virial=True`` (periodic systems) the same pass also gives the
+        virial dE_SCC/d(strain) (3, 3) at fixed charges; otherwise it is None.
+        Pair terms: 1/2 sum over ordered atom pairs of dE/dr * r_a r_b / r.
+        Reciprocal Ewald: 1/2 sum_G f|S|^2 [-delta + 2 G G (1/(4 alpha^2) + 1/G^2)].
+        Background: + pi Q^2 / (2 V alpha^2) delta.  The Ewald alpha is held
+        fixed (the energy does not depend on it).
+        """
+        if virial and not self.periodic:
+            raise ValueError("the virial/stress needs a periodic system")
         i, j, _, vec, d = self.nl
         dq_atom = ops.segment_sum(dq, self.site_atom, self.natom)
         # short range: aggregate site pairs into dE/d(distance) per atom pair
         _, ds = _short(self.sp_d, self.tau[self.sp_a], self.tau[self.sp_b])
         dedr = ops.segment_sum(-dq[self.sp_a] * dq[self.sp_b] * ds, self.sp_pair, len(i))
         grad = np.zeros((self.natom, 3))
+        w = None
         if self.periodic:
             a = self.alpha
             m = d < self.rcut_ewald
@@ -200,6 +211,14 @@ class Coulomb:
             # E_rec = 1/2 sum_G f |S(G)|^2 ;  dE/dr_A = q_A sum_G f G (-sin cS + cos sS)
             coef = dq_atom[:, None] * (-sg * sc[None, :] + cg * ss[None, :]) * self.gfac[None, :]
             grad += coef @ self.gvec
+            if virial:
+                c = 0.5 * self.gfac * (sc * sc + ss * ss)            # 1/2 f |S(G)|^2
+                g2 = (self.gvec * self.gvec).sum(1)
+                w = 0.5 * np.einsum("p,pa,pb->ab", dedr / d, vec, vec)
+                w -= c.sum() * np.eye(3)
+                w += 2.0 * np.einsum("g,ga,gb->ab", c * (1.0 / (4 * a * a) + 1.0 / g2), self.gvec, self.gvec)
+                q = dq_atom.sum()
+                w += np.pi * q * q / (2.0 * self.vol * a * a) * np.eye(3)
         else:
             diff = self.pos[None, :, :] - self.pos[:, None, :]
             dist = np.sqrt((diff * diff).sum(-1))
@@ -208,5 +227,5 @@ class Coulomb:
             np.fill_diagonal(fac, 0.0)
             # dE/dr_A = -sum_B qA qB d(1/R)/dR * R_vec/R
             grad -= ((dq_atom[:, None] * dq_atom[None, :] * fac)[:, :, None] * diff).sum(1)
-        w = (dedr / d)[:, None] * vec
-        return ops.scatter_add(grad, i, -w)
+        g = (dedr / d)[:, None] * vec
+        return ops.scatter_add(grad, i, -g), w

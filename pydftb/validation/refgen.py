@@ -140,7 +140,7 @@ def regenerate(names=None, threads: int = 1):
             "hsd": ref["hsd"],
             "reference": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in ref.items()
                           if k in ("energy", "free_energy", "e_zero", "e_band", "e_scc", "e_rep",
-                                   "ts", "fermi", "forces", "charges_net", "n_scc")},
+                                   "ts", "fermi", "forces", "charges_net", "n_scc", "stress")},
             "tolerances": case.tol,
         }
         path = os.path.join(REF_DIR, f"{case.name}.json")
@@ -171,12 +171,15 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> d
         "energy": abs(res.energy - ref["energy"]),
         "free_energy": abs(res.free_energy - ref["free_energy"]),
         "e_zero": abs(res.e_zero - ref["e_zero"]) if "e_zero" in ref else 0.0,
+        "stress": (float(np.abs(res.stress - np.array(ref["stress"])).max())
+                   if ref.get("stress") is not None else 0.0),
         "forces": float(np.abs(res.forces - np.array(ref["forces"])).max()),
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
     }
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
-          and max(dev["free_energy"], dev["e_zero"]) <= tol["energy"])
+          and max(dev["free_energy"], dev["e_zero"]) <= tol["energy"]
+          and dev["stress"] <= tol.get("stress", 1e-7))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -193,7 +196,7 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
 def check(names=None, solver: str = "eigh") -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
-          f"{'nSCC py/ref':>11s} {'t_py':>6s}  ok")
+          f"{'|dsigma|':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
     for case in CASES:
         if names and case.name not in names:
             continue
@@ -206,8 +209,8 @@ def check(names=None, solver: str = "eigh") -> bool:
         d = r["dev"]
         all_ok &= r["ok"]
         print(f"{case.name:26s} {r['natoms']:4d} {d['energy']:9.1e} {d['forces']:12.1e} "
-              f"{d['charges']:9.1e} {r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  "
-              f"{'yes' if r['ok'] else 'NO'}")
+              f"{d['charges']:9.1e} {d['stress']:9.1e} {r['n_scc']:>5}/{str(r['n_scc_ref']):<5} "
+              f"{r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
     return all_ok
 
 

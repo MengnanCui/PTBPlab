@@ -38,7 +38,7 @@ class PyDFTB(Calculator):
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
     ``solver``, ``shell_resolved``, ``fd_delta``) are passed to :class:`pydftb.DFTB`.
     """
-    implemented_properties = ["energy", "free_energy", "forces", "charges"]
+    implemented_properties = ["energy", "free_energy", "forces", "charges", "stress"]
 
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool = True,
                  smearing=None, temperature: float | None = None, scc: bool = True,
@@ -81,10 +81,13 @@ class PyDFTB(Calculator):
         kpts = self._kpoints(a)
         sk = self.params.skset(labels)
         calc = DFTB(sk, kpts=kpts, charge=float(a.get_initial_charges().sum()), **self.engine_opts)
+        # As in DFTB+, periodic force runs also give the stress (about 1 % extra
+        # time), so ASE cell filters, which ask for forces and then stress, need one run.
+        want_forces = "forces" in properties or (periodic and "stress" in properties)
         run = lambda: calc.calculate(labels, a.positions / BOHR,       # noqa: E731
                                      a.cell.array / BOHR if periodic else None,
                                      a.pbc if periodic else None,
-                                     forces="forces" in properties)
+                                     forces=want_forces)
         if self.threads is None:
             r = run()
         else:
@@ -98,6 +101,9 @@ class PyDFTB(Calculator):
         self.results["charges"] = q0 - r.charges
         if r.forces is not None:
             self.results["forces"] = r.forces * units.Hartree / units.Bohr
+        if r.stress is not None:
+            # same conversion as ase.calculators.dftb.Dftb: -sigma_DFTB+, Voigt xx yy zz yz xz xy
+            self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
 
     # ---- ASE accessors used by band-structure / DOS tools -------------
     def _raw(self):

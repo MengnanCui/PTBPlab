@@ -56,6 +56,7 @@ class DFTBResult:
     q_orbital: np.ndarray | None = None  # Mulliken populations per orbital
     occupations: list | None = None      # per k-point, incl. spin factor 2
     scc_error: float = 0.0               # max |q_out - q_in| of the last iteration
+    stress: np.ndarray | None = None     # (3, 3) Hartree/Bohr^3, DFTB+ sign convention
     kpoints: np.ndarray | None = None    # fractional k-points used
     kweights: np.ndarray | None = None
 
@@ -168,16 +169,31 @@ class DFTB:
 
     # ------------------------------------------------------------------
     def calculate(self, species, positions, cell=None, pbc=None, forces=True,
-                  q_init=None) -> DFTBResult:
-        """Run a calculation. Positions/cell in Bohr."""
+                  q_init=None, stress: bool | None = None) -> DFTBResult:
+        """Run a calculation. Positions/cell in Bohr.
+
+        ``stress`` (default: with forces for periodic systems) adds the stress
+        tensor sigma = -(1/V) dE/d(strain), the sign convention of DFTB+.
+        """
         t0 = time.perf_counter()
         timings = {}
-        setup = self._setup(species, positions, cell, pbc, forces, timings)
-        state = self._scc(setup, q_init, forces, timings)
+        periodic = cell is not None and (pbc is None or np.any(pbc))
+        if stress is None:
+            stress = forces and periodic
+        if stress and not periodic:
+            raise ValueError("stress needs a periodic system")
+        need_derivs = forces or stress
+        setup = self._setup(species, positions, cell, pbc, need_derivs, timings)
+        state = self._scc(setup, q_init, need_derivs, timings)
         res = self._energies(setup, state)
-        if forces:
+        if need_derivs:
             t1 = time.perf_counter()
-            res.forces = -self._gradient(setup, state)
+            grad, virial = self._gradient(setup, state, virial=stress)
+            if forces:
+                res.forces = -grad
+            if stress:
+                vol = abs(np.linalg.det(setup.cell))
+                res.stress = -virial / vol
             timings["forces"] = time.perf_counter() - t1
         timings["total"] = time.perf_counter() - t0
         res.timings = timings
@@ -305,10 +321,13 @@ class DFTB:
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
                           kweights=st.kw)
 
-    def _gradient(self, st: _Setup, sc: _SCCState) -> np.ndarray:
-        """dE/dR (n_atom, 3); forces are its negative."""
+    def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
+        """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
+
+        Every pair term contributes (dE/d r_pair) (x) r_pair to the virial.
+        """
         pb = st.pairs
-        grad = self._repulsive_gradient(st)
+        grad, w_rep = self._repulsive_gradient(st)
         # real-space (energy-weighted) density at the pair elements:
         # P_e = Re sum_k w_k rho_k[nu, mu] exp(2 pi i k.T)
         if st.gamma_only:
@@ -331,8 +350,14 @@ class DFTB:
         natom = len(st.pos)
         grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
         if self.scc:
-            grad = grad + st.coulomb.gradient(sc.q_in - st.q0)    # already per atom
-        return grad
+            g_scc, w_scc = st.coulomb.gradient(sc.q_in - st.q0, virial=virial)
+            grad = grad + g_scc                                    # already per atom
+        if not virial:
+            return grad, None
+        w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
+        if self.scc:
+            w = w + w_scc
+        return grad, 0.5 * (w + w.T)
 
     # ------------------------------------------------------------------
     def _repulsive_pairs(self, st: _Setup):
@@ -362,13 +387,16 @@ class DFTB:
             e_tot += 0.5 * e.sum()       # ordered pairs: every bond counted twice
         return e_tot
 
-    def _repulsive_gradient(self, st: _Setup) -> np.ndarray:
+    def _repulsive_gradient(self, st: _Setup):
+        """Repulsive dE/dR (n_atom, 3) and virial (3, 3)."""
         grad = np.zeros_like(st.pos)
+        w = np.zeros((3, 3))
         nl, terms = self._repulsive_pairs(st)
         for m, rep in terms:
             i, j, _, vec, d = (x[m] for x in nl)
             _, de = rep(d)
-            g = (0.5 * de / d)[:, None] * vec
+            g = (0.5 * de / d)[:, None] * vec          # dE/d(vec) of each ordered pair
             grad = ops.scatter_add(grad, i, -g)
             grad = ops.scatter_add(grad, j, g)
-        return grad
+            w += g.T @ vec
+        return grad, w

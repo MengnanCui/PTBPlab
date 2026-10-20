@@ -5,7 +5,8 @@ Format reference: https://dftb.org/fileadmin/DFTB/public/misc/slakoformat.pdf
 Integral table columns (20):
     Hdd0 Hdd1 Hdd2 Hpd0 Hpd1 Hpp0 Hpp1 Hsd0 Hsp0 Hss0
     Sdd0 Sdd1 Sdd2 Spd0 Spd1 Spp0 Spp1 Ssd0 Ssp0 Sss0
-Row ``i`` (1-based) of the table is the integral at distance ``i * dr``.
+Row ``i`` (1-based) of the table is the integral at distance ``i * dr``;
+like DFTB+, only the first ``ngrid - 1`` rows of the header's count are used.
 
 Interpolation reproduces DFTB+'s default ``SlakoEqGrid`` (new scheme):
   * inside the grid: 8-point polynomial interpolation, 4 points to the right
@@ -215,10 +216,10 @@ class SKFile:
         poly = np.array(mass_line[1:9])
         rcut_poly = mass_line[9] if len(mass_line) > 9 else 0.0
         pos += 1
-        rows = []
-        for _ in range(ngrid):
-            rows.append(_expand_fortran(lines[pos]))
-            pos += 1
+        # DFTB+ (type/oldskdata.F90) reads only the first ngrid - 1 rows; using the
+        # last row too would move the end of the table and its tail by one step.
+        rows = [_expand_fortran(lines[pos + k]) for k in range(ngrid - 1)]
+        pos += ngrid - 1
         table = np.array(rows, dtype=float)[:, :20]
         rep = None
         rest = lines[pos:]

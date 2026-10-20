@@ -211,7 +211,7 @@
    "H": 0
   }
  },
- "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_1h30d5v7/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = MethfesselPaxton {\n    Order = 1\n    Temperature [K] = 1000.0\n  }\n  KPointsAndWeights = {\n    0.0 0.0 0.0 1.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_f1udx8s3/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = MethfesselPaxton {\n    Order = 1\n    Temperature [K] = 1000.0\n  }\n  KPointsAndWeights = {\n    0.0 0.0 0.0 1.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
  "reference": {
   "energy": -30.2776739374,
   "free_energy": -30.2776739374,
@@ -340,6 +340,23 @@
     -0.0466408128925755,
     -0.0971427880998795,
     -0.0106183580115751
+   ]
+  ],
+  "stress": [
+   [
+    0.00153613899629408,
+    -0.000611619687793138,
+    4.09669034143437e-05
+   ],
+   [
+    -0.000611619686795775,
+    0.00273807517691858,
+    0.000462321740587209
+   ],
+   [
+    4.09668985489038e-05,
+    0.000462321737359547,
+    0.00120992286764223
    ]
   ],
   "charges_net": [

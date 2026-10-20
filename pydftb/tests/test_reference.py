@@ -24,15 +24,17 @@ def test_against_dftbplus_reference(path):
         assert abs(r["n_scc"] - r["n_scc_ref"]) <= 1, (r["n_scc"], r["n_scc_ref"])
 
 
-@pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep"])
+@pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep", "li_bcc_k666_node"])
 def test_dftbplus_finite_difference_emulation(name):
-    """With DFTB+'s finite-difference step pydftb reproduces DFTB+ forces exactly:
-    the ~1e-6 Ha/Bohr residual is DFTB+'s numerical derivative, not a pydftb error."""
+    """With DFTB+'s finite-difference step pydftb reproduces DFTB+ forces and stress exactly:
+    the residual (~1e-6 Ha/Bohr for water, 1.2e-8 Ha/Bohr^3 for the Li stress) is DFTB+'s
+    numerical derivative, not a pydftb error."""
     doc = refgen.load(name)
-    exact = refgen.compare(doc)["dev"]["forces"]
-    fd = refgen.compare(doc, fd_delta=float(np.finfo(float).eps) ** 0.25)["dev"]["forces"]
-    assert fd < 1e-9
-    assert fd <= exact
+    exact = refgen.compare(doc)["dev"]
+    fd = refgen.compare(doc, fd_delta=float(np.finfo(float).eps) ** 0.25)["dev"]
+    for key in ("forces", "stress"):
+        assert fd[key] < 1e-9
+        assert fd[key] <= max(exact[key], 1e-12)
 
 
 def test_reference_set_is_complete():
