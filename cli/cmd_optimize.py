@@ -61,6 +61,21 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('--kpts', type=float, default=5.0, metavar='F',
                    dest='kpt_density',
                    help="DFTB+ k-point density. Default: 5.0.")
+    p.add_argument('--engine', default='dftbplus', choices=['dftbplus', 'pydftb'],
+                   help="DFTB engine: dftbplus (DFTB+ through ASE) or pydftb "
+                        "(in-process Python engine). Default: %(default)s.")
+    p.add_argument('--smearing', default='none', choices=['none', 'fermi', 'gaussian', 'mp'],
+                   help="Electronic smearing (both engines). 'none' = PTBP's historical "
+                        "behaviour, Fermi at T = 0. Default: %(default)s.")
+    p.add_argument('--smearing-temperature', type=float, default=2000.0, metavar='K',
+                   dest='smearing_temperature',
+                   help="Electronic temperature (K) when --smearing is set. Default: 2000.")
+    p.add_argument('--mp-order', type=int, default=2, metavar='N', dest='mp_order',
+                   help="Methfessel-Paxton order for --smearing mp. Default: 2.")
+    p.add_argument('--pydftb-forces', default='dftbplus', choices=['dftbplus', 'exact'],
+                   dest='pydftb_forces',
+                   help="pydftb derivatives: 'dftbplus' reproduces DFTB+'s finite "
+                        "differences (bit-level parity), 'exact' is exact. Default: %(default)s.")
     p.add_argument('--params', nargs='+', default=['r0_w', 'r0_d', 'sigma_rep'],
                    metavar='P', dest='parameters',
                    help="Parameters to optimise. Default: r0_w r0_d sigma_rep.")
@@ -194,6 +209,11 @@ def run(args: argparse.Namespace) -> int:
         '--optimizer', args.optimizer,
         '--n_particles', str(args.n_particles),
         '--checkpoint', args.checkpoint,
+        '--engine', args.engine,
+        '--smearing', args.smearing,
+        '--smearing_temperature', str(args.smearing_temperature),
+        '--mp_order', str(args.mp_order),
+        '--pydftb_forces', args.pydftb_forces,
     ]
     if args.n_calls is not None:
         legacy_argv += ['--n_calls', str(args.n_calls)]

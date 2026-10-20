@@ -38,6 +38,7 @@ class SetupState:
     parameters: List[str] = field(default_factory=lambda: ['r0_w', 'r0_d', 'sigma_rep'])
     multi_element: List[str] = field(default_factory=list)
     superposition: str = 'density'
+    engine: str = 'dftbplus'             # dftbplus / pydftb
 
     # ----- gen flow -----
     gen_symbols: List[str] = field(default_factory=list)
@@ -65,6 +66,7 @@ def assemble_optimize_yaml(state: SetupState) -> dict:
         'kpt_density':   state.kpt_density,
         'parameters':    list(state.parameters),
         'superposition': state.superposition,
+        'engine':        state.engine,
     }
     if state.dataset_path:
         out['dataset'] = str(state.dataset_path)

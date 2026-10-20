@@ -1,7 +1,8 @@
 {
- "dftb+_serial": 21.301334127000246,
- "dftb+_4proc": 5.570600278999791,
- "pydftb_serial": 21.498560023999744,
- "pydftb_4proc": 6.09345937199987,
- "max_dE_Ha": 1.6792999879555737e-08
+ "structures": 66,
+ "dftbplus_s": 186.7876528379993,
+ "pydftb_s": 104.24897711799986,
+ "max_dE_eV": 5.596932766138707e-07,
+ "max_dF_eV_per_A": 1.06227396733799e-05,
+ "settings": "PTBP path: PTBP k-grid (density 5.0), PolynomialRepulsive=Yes, SCCTolerance 1e-5, T=0, shell-resolved SCC, pydftb_forces=dftbplus"
 }

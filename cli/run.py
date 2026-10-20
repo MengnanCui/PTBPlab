@@ -59,6 +59,17 @@ hp = hotpy()
 ptbp_args = build_default_arg_parser()
 print("PTBP args: ", ptbp_args)
 
+# DFTB engine + electronic smearing for every calculation of this run
+# (module-level settings, inherited by the forked workers of parallel_bo).
+from utils.engines import configure as _configure_engine
+print("[engine]", _configure_engine(
+    engine=getattr(ptbp_args, 'engine', None),
+    smearing=getattr(ptbp_args, 'smearing', None),
+    smearing_temperature=getattr(ptbp_args, 'smearing_temperature', None),
+    mp_order=getattr(ptbp_args, 'mp_order', None),
+    pydftb_forces=getattr(ptbp_args, 'pydftb_forces', None),
+))
+
 # Define the OptimizationScheme
 # (1) Elementary system 
 # opt_elem = []

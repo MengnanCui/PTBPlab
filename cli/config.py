@@ -20,6 +20,11 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     multi_element:  # list[str]
     superposition:  # density / potential
     checkpoint:     # str
+    engine:         # dftbplus / pydftb
+    smearing:       # none / fermi / gaussian / mp
+    smearing_temperature:  # float, K
+    mp_order:       # int
+    pydftb_forces:  # dftbplus / exact
 """
 from __future__ import annotations
 
@@ -46,6 +51,11 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'multi_element': 'multi_element',
     'superposition': 'superposition',
     'checkpoint':    'checkpoint',
+    'engine':        'engine',
+    'smearing':      'smearing',
+    'smearing_temperature': 'smearing_temperature',
+    'mp_order':      'mp_order',
+    'pydftb_forces': 'pydftb_forces',
 }
 
 

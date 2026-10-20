@@ -182,6 +182,35 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=5.0,
     )
     parser.add_argument(
+        '--engine', help="DFTB engine: dftbplus (DFTB+ through ASE, default) or "
+                         "pydftb (in-process Python engine, see pydftb/README.md)",
+        choices=['dftbplus', 'pydftb'],
+        default='dftbplus',
+    )
+    parser.add_argument(
+        '--smearing', help="Electronic smearing for both engines. 'none' (default) "
+                           "reproduces PTBP's historical setting: DFTB+ ignored the "
+                           "2000 K Methfessel-Paxton keywords, i.e. Fermi at T = 0.",
+        choices=['none', 'fermi', 'gaussian', 'mp'],
+        default='none',
+    )
+    parser.add_argument(
+        '--smearing_temperature', help="Electronic temperature in K (if --smearing != none)",
+        type=float,
+        default=2000.0,
+    )
+    parser.add_argument(
+        '--mp_order', help="Methfessel-Paxton order (if --smearing mp)",
+        type=int,
+        default=2,
+    )
+    parser.add_argument(
+        '--pydftb_forces', help="pydftb force derivatives: 'dftbplus' (default) reproduces "
+                                "DFTB+'s 0.01 Bohr finite differences, 'exact' uses exact derivatives",
+        choices=['dftbplus', 'exact'],
+        default='dftbplus',
+    )
+    parser.add_argument(
         '--dft_file', help="The XYZ file that stores reference structure and info",
         type=str,
         default='dft.xyz',

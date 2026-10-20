@@ -34,6 +34,13 @@ class OptimizeStep6Advanced(Screen):
                 RadioButton("potential", id="sp-potential"),
                 id="sp-set",
             ),
+
+            Static("DFTB engine (pydftb = in-process Python engine, same results as DFTB+):"),
+            RadioSet(
+                RadioButton("dftbplus", id="eng-dftbplus"),
+                RadioButton("pydftb", id="eng-pydftb"),
+                id="eng-set",
+            ),
             Horizontal(
                 Button("Back", id="btn-back"),
                 Button("Next", id="btn-next", variant="primary"),
@@ -51,6 +58,8 @@ class OptimizeStep6Advanced(Screen):
         self.query_one('#multi', Input).value = ' '.join(s.multi_element)
         rs = self.query_one('#sp-set', RadioSet)
         rs._selected = 0 if s.superposition == 'density' else 1
+        es = self.query_one('#eng-set', RadioSet)
+        es._selected = 0 if s.engine == 'dftbplus' else 1
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-back":
@@ -73,6 +82,8 @@ class OptimizeStep6Advanced(Screen):
             s.multi_element = multi_raw.split() if multi_raw else []
             rs = self.query_one('#sp-set', RadioSet)
             s.superposition = 'density' if (rs.pressed_index <= 0) else 'potential'
+            es = self.query_one('#eng-set', RadioSet)
+            s.engine = 'dftbplus' if (es.pressed_index <= 0) else 'pydftb'
 
             from cli.tui.screens.optimize_step7_review import OptimizeStep7Review
             self.app.push_screen(OptimizeStep7Review())

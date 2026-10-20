@@ -191,10 +191,24 @@ def run_calculator(dft_data:Atoms, poly_rep:str, SCC:str, kpts_dens, bolt_f):
 
 
 
+class _CheckedDftb(Dftb):
+    """ASE Dftb that verifies, after each run, the electronic filling DFTB+
+    really used (read from its processed input dftb_pin.hsd)."""
+    expected_filling = None
+
+    def read_results(self):
+        super().read_results()
+        if self.expected_filling is not None:
+            from utils.engines import check_dftbplus_filling
+            check_dftbplus_filling(self.directory, self.expected_filling)
+
+
 def dftbplus_calculator(mole:Atoms, dftb_args:dict):
     '''
-    mole is atoms object
-    formula is the str name of molecules
+    ASE calculator for one DFTB calculation (kept name, now engine-aware).
+
+    Dispatches to DFTB+ (default) or pydftb according to `utils.engines`
+    (`ptbp optimize --engine ...`) or `dftb_args['engine']`.
     Parameters:
         type: 'band' or 'static' or 'opt_geometry'
         opt: Yes when slater file without repulsive pot
@@ -203,12 +217,32 @@ def dftbplus_calculator(mole:Atoms, dftb_args:dict):
         slater_p is the directory of slator-koster file
         kpts: (20, 20, 20)
     '''
+    from utils.engines import make_calculator
+    return make_calculator(mole, dftb_args)
+
+
+def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
+    '''
+    DFTB+ through ASE (the original implementation).
+
+    filling: None keeps the historical input. Note that its `Fermi`/`MethfesselPaxton`
+    blocks sit outside `Filling` and are ignored by DFTB+, i.e. T = 0 is used.
+    Otherwise a dict of ASE keywords for a correct `Filling` block
+    (see utils.engines.dftbplus_filling_kwargs), verified after the run.
+    '''
     # poly_rep = 'SetForAll {' + str(opt) + '}'
     calc_type, poly_rep, SCC, kpts, slater_p = dftb_args['calc_type'], dftb_args['poly_rep'], dftb_args['SCC'], dftb_args['kpts'], dftb_args['slater_p']
     formula = mole.get_chemical_formula()
-    
+
+    if filling is None:
+        # ONLY FOR SCC CONVERGENCE (historical keywords; ignored by DFTB+, see docstring)
+        smearing_kwargs = dict(Hamiltonian_Fermi_='', Hamiltonian_Fermi_Temperature=2000,
+                               Hamiltonian_MethfesselPaxton_='', Hamiltonian_MethfesselPaxton_Order=2)
+    else:
+        smearing_kwargs = dict(filling)
+
     if calc_type == 'static':
-        calc = Dftb(atoms=mole, label=str(formula), kpts=kpts,
+        calc = _CheckedDftb(atoms=mole, label=str(formula), kpts=kpts,
 
                     Hamiltonian_='DFTB',
                     Hamiltonian_SCC=SCC,
@@ -218,10 +252,7 @@ def dftbplus_calculator(mole:Atoms, dftb_args:dict):
                     Hamiltonian_ReadInitialCharges='No', # Static calculation
                     Hamiltonian_ForceEvaluation='dynamics',
 
-
-                    # ONLY FOR SCC CONVERGENCE
-                    Hamiltonian_Fermi_='', Hamiltonian_Fermi_Temperature=2000,
-                    Hamiltonian_MethfesselPaxton_='', Hamiltonian_MethfesselPaxton_Order=2,
+                    **smearing_kwargs,
                     Parallel_='', Parallel_Groups=1,
 
 
@@ -285,6 +316,9 @@ def dftbplus_calculator(mole:Atoms, dftb_args:dict):
     )
     else:
         raise ValueError('type must be band or static')
+    if filling is not None and isinstance(calc, _CheckedDftb):
+        from utils.engines import expected_filling
+        calc.expected_filling = expected_filling()
     return calc
 
 

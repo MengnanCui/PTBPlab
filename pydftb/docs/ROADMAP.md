@@ -8,8 +8,8 @@
 |---|---|---|---|
 | 原型 | SCC-DFTB 原型、加速实验、调研报告 | ✅ 完成 | `../RESEARCH.md` |
 | M0 | 底座整理：ops 分发层、`System`/`ParamSet`/`SCC` 接口、四段式计算、冻结的 DFTB+ 参考数据、文档骨架 | ✅ 完成 | `design/M0-foundation.md`，`reports/M0-foundation.md` |
-| M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | 进行中 | — |
-| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 计划 | — |
+| M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | ✅ 完成（损失函数相对差 < 1e-7，DFTB 阶段快 1.8 倍） | `design/M1-ptbp-integration.md`，`reports/M1-ptbp-integration.md` |
+| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 下一步（应力的设计已完成） | `design/M2a-stress.md` |
 | M3 | 计算策略推荐器 v1（CPU）+ 结构/k 点并行分发 + DFTB+ 配置顾问 | 计划 | — |
 | M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
@@ -24,6 +24,7 @@
 | 类别 | 功能 | 状态 |
 |---|---|---|
 | 哈密顿量 | 非 SCC / SCC (DFTB2) | ✅ |
+| | 力：精确导数（默认），或模拟 DFTB+ 的有限差分（`fd_delta`） | ✅ M1 |
 | | 轨道分辨 SCC | ✅ |
 | | s/p/d 轨道 | ✅ |
 | | f 轨道（扩展 SKF 格式） | ⬜ M2 |
@@ -32,11 +33,11 @@
 | 周期体系 | k 点、时间反演约化、Ewald | ✅ |
 | | 应力、晶格优化 | ⬜ M2 |
 | 占据 | Fermi 展宽 | ✅ |
-| | Methfessel-Paxton、Gaussian 展宽 | ⬜ M1 |
+| | Methfessel-Paxton、Gaussian 展宽（含 DFTB+ 的费米能级搜索与 TS 约定，另提供变分 TS） | ✅ M1 |
 | 混合器 | Pulay 型（Anderson） | ✅ |
-| | 改进 Broyden（DFTB+ 默认） | ⬜ M1 |
+| | 改进 Broyden（DFTB+ 默认；SCC 迭代轮数与 DFTB+ 完全一致） | ✅ M1 |
 | 排斥势 | 样条 | ✅ |
-| | 多项式 | ✅ 解析（M0 修复了系数错位）；与 DFTB+ 对照在 M1 |
+| | 多项式（`repulsive="polynomial"` = DFTB+ `PolynomialRepulsive`） | ✅ M1（M0 修复了系数错位） |
 | 多类型 | 同一元素多个类型标签（`Type2FileNames` 约定） | ✅（M0，已与 DFTB+ 对照） |
 | 自旋 | 共线自旋 | ⬜ M2 |
 | | 非共线自旋、自旋轨道耦合 | ⬜ M6 |

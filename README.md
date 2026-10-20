@@ -325,6 +325,36 @@ the same `.x / .fun / .x_iters / .func_vals` shape as skopt, so all the
 post-processing paths (convergence plot, best-folder copy, results.tgz)
 just work.
 
+### 4b. DFTB engine: DFTB+ or pydftb
+
+Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`.
+
+```bash
+ptbp optimize dft/dft.xyz --mode dataset --engine pydftb
+```
+
+What PTBP's DFTB+ runs actually compute is set by ASE's `ParserVersion = 1` input, which makes DFTB+ apply its legacy defaults. The pydftb engine reproduces these settings exactly:
+
+| Setting | Value actually used |
+|---|---|
+| SCC | **shell-resolved** (DFTB+ injects `OrbitalResolvedSCC = Yes` for old parser versions) |
+| Electronic filling | **Fermi at T = 0**: the historical `Fermi {2000 K}` / `MethfesselPaxton {Order 2}` keywords sit outside `Filling` and are silently ignored |
+| H0/S derivatives | finite differences with a 0.01 Bohr step (legacy default) |
+| Repulsive inside the loop | none (`PolynomialRepulsive = Yes` with zero coefficients; physrep adds it afterwards) |
+
+On `dft/dft.xyz` the two engines agree to about 1e-9 eV in energy and 3e-6 eV/Å in forces.
+
+Related options (also accepted as YAML keys):
+
+| Flag | Meaning |
+|---|---|
+| `--engine {dftbplus,pydftb}` | Engine to use (default `dftbplus`). |
+| `--smearing {none,fermi,gaussian,mp}` | Electronic smearing that really takes effect in both engines. `none` (default) keeps PTBP's historical behaviour (T = 0). For DFTB+, the `Filling` block is written correctly and the filling DFTB+ actually used is checked after every run. |
+| `--smearing-temperature K`, `--mp-order N` | Temperature (default 2000 K) and Methfessel-Paxton order (default 2). |
+| `--pydftb-forces {dftbplus,exact}` | `dftbplus` (default) reproduces DFTB+'s 0.01 Bohr finite-difference forces; `exact` uses exact derivatives. |
+
+To check the two engines against each other on your own dataset, run `python tools/engine_parity.py`, which evaluates the real loss at fixed parameter points.
+
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
 After every successful run PTBP snapshots the optimisation outcome to
