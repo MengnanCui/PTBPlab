@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.sparse as sp
 
+from .backend import ops
 from .skf import SKSet
 from .slako import bond_frames, rotation_blocks, sk_block
 from .neighbors import neighbor_list
@@ -163,7 +164,7 @@ def fold_all(pb: PairBlocks, values: np.ndarray, norb: int, kpts: np.ndarray,
     """
     shifts, t_of = shift_index(pb)
     mt = np.zeros((len(shifts), norb, norb))
-    np.add.at(mt, (t_of, pb.rows, pb.cols), values)
+    mt = ops.scatter_add(mt, (t_of, pb.rows, pb.cols), values)
     phase = np.exp(2j * np.pi * (kpts @ shifts.T))                 # (nk, nT)
     m = (phase @ mt.reshape(len(shifts), -1)).reshape(len(kpts), norb, norb)
     if diag is not None:

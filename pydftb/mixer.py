@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .backend import ops
+
 
 class AndersonMixer:
     def __init__(self, beta: float = 0.2, history: int = 8):
@@ -24,7 +26,7 @@ class AndersonMixer:
         dx = np.array([self.xs[k + 1] - self.xs[k] for k in range(len(self.xs) - 1)])
         a = df @ df.T
         a += 1e-12 * np.trace(a) * np.eye(len(a))
-        gam = np.linalg.solve(a, df @ f)
+        gam = ops.solve(a, df @ f)
         x_bar = q_in - gam @ dx
         f_bar = f - gam @ df
         return x_bar + self.beta * f_bar

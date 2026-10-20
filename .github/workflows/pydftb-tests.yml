@@ -1,0 +1,23 @@
+name: pydftb tests
+
+on:
+  push:
+    paths: ["pydftb/**", "pyproject.toml", ".github/workflows/pydftb-tests.yml"]
+  pull_request:
+    paths: ["pydftb/**", "pyproject.toml", ".github/workflows/pydftb-tests.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install minimal dependencies (no DFTB+, no hotcent)
+        run: pip install numpy scipy ase threadpoolctl pytest
+      - name: Run pydftb tests against the frozen DFTB+ references
+        run: PYTHONPATH=. pytest -q pydftb/tests -o addopts="-ra"

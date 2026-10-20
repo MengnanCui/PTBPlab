@@ -19,6 +19,19 @@ def image_range(cell: np.ndarray, pbc: np.ndarray, cutoff: float) -> np.ndarray:
     return n
 
 
+def pair_vectors(pos: np.ndarray, cell: np.ndarray | None, i: np.ndarray, j: np.ndarray,
+                 shift: np.ndarray) -> np.ndarray:
+    """Bond vectors r_j + shift.cell - r_i for an integer pair list.
+
+    Separating the (integer) topology from the geometry lets other backends
+    and strain/autodiff derivatives recompute vectors without a new search.
+    """
+    vec = pos[j] - pos[i]
+    if cell is not None:
+        vec = vec + shift @ cell
+    return vec
+
+
 def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     """All ordered pairs (i, j, shift) with |r_j + shift.cell - r_i| < cutoff.
 
@@ -45,7 +58,7 @@ def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     j = flat % natom
     s = flat // natom
     sh = shifts[s]
-    vec = img_pos[flat] - pos[i]
+    vec = pair_vectors(pos, cell, i, j, sh)
     dist = np.sqrt((vec * vec).sum(1))
     keep = dist > 1e-8
     order = np.lexsort((s[keep], j[keep], i[keep]))

@@ -19,7 +19,15 @@ dependencies = [
     "pyswarms",
     "pyyaml",
     "textual",
+    "threadpoolctl",
 ]
+
+[project.optional-dependencies]
+# pydftb extras (the core engine only needs numpy, scipy and ase)
+torch = ["torch>=2.5"]            # GPU / autodiff backend (milestone M4)
+dispersion = ["dftd4"]            # D4 dispersion (milestone M2)
+mpi = ["mpi4py"]                  # multi-node task farming (milestone M3)
+dev = ["pytest"]
 
 # pylibxc, hotcent, dftbplus are NOT on PyPI — install via conda-forge
 # (see README.md "Installation & Notes").
@@ -34,10 +42,10 @@ py-modules = ["parameterize"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cli*", "utils*", "tools*", "pydftb*"]
-exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*"]
+exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*", "pydftb.tests*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "pydftb/tests"]
 markers = [
     "slow: end-to-end tests that invoke ptbp / hotcent / DFTB+ (skip with `pytest -m 'not slow'`)",
 ]

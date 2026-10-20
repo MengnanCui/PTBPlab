@@ -1,9 +1,24 @@
-"""pydftb: a from-scratch, readable SCC-DFTB engine (research prototype).
+"""pydftb: a from-scratch, readable SCC-DFTB engine.
 
 Units: everything inside the engine is in atomic units (Bohr, Hartree).
-The ASE wrapper (``pydftb.ase_calc``) converts to/from eV and Angstrom.
-"""
-from .skf import SKFile, SKPair, SKSet
-from .calculator import DFTB, DFTBResult  # noqa: E402
+The ASE wrapper (``pydftb.ase_calc.PyDFTB``) converts to/from eV and Angstrom.
 
-__all__ = ["SKFile", "SKPair", "SKSet", "DFTB", "DFTBResult"]
+High-level (PySCF-style) entry points::
+
+    import pydftb
+    params = pydftb.ParamSet("path/to/skf")
+    mf = pydftb.SCC(pydftb.System.from_ase(atoms), params, kpts=(4, 4, 4))
+    e = mf.kernel(); f = mf.forces()
+
+Design notes, the DFTB+ source map and milestone reports live in
+``pydftb/docs/``.
+"""
+from .api import SCC, make_kpoints
+from .calculator import DFTB, DFTBResult
+from .params import ParamSet
+from .skf import SKFile, SKSet, max_l_from_skf
+from .system import System
+
+__all__ = ["SCC", "make_kpoints", "DFTB", "DFTBResult", "ParamSet", "SKFile", "SKSet",
+           "max_l_from_skf", "System"]
+__version__ = "0.1.0.dev0"

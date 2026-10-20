@@ -16,11 +16,14 @@ interpolating polynomial for every possible stencil is pre-computed once.
 """
 from __future__ import annotations
 
+import gzip
 import os
 import re
 from dataclasses import dataclass, field
 
 import numpy as np
+
+_READ_CACHE: dict = {}
 
 N_INTER = 8          # points used for polynomial interpolation
 N_RIGHT = 4          # points right of the evaluation point
@@ -34,6 +37,70 @@ SK_COLUMN = {
     (1, 1, 0): 5, (1, 1, 1): 6,
     (0, 2, 0): 7, (0, 1, 0): 8, (0, 0, 0): 9,
 }
+
+
+def _open_text(path: str):
+    """Open a (possibly gzip-compressed, ``.gz``) text file."""
+    return gzip.open(path, "rt") if path.endswith(".gz") else open(path)
+
+
+def _pair_from_filename(path: str) -> tuple[str, str]:
+    """``.../A-B.skf[.gz]`` -> ("A", "B")."""
+    name = os.path.basename(path)
+    for ext in (".gz", ".skf"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    a, b = name.split("-")[:2]
+    return a, b
+
+
+def max_l_from_skf(path: str) -> int | None:
+    """Highest angular momentum with non-zero occupation in a homonuclear SKF.
+
+    Same rule as ASE's ``read_max_angular_momentum`` (which PTBP relies on
+    through ``ase.calculators.dftb``): occupations fd, fp, fs are fields 7-9
+    of line 2 (simple format).  Returns None if all occupations are zero.
+    """
+    with _open_text(path) as fh:
+        first = fh.readline()
+        if first.lstrip().startswith("@"):
+            fh.readline()
+            lmax, pos = 3, 9
+        else:
+            lmax, pos = 2, 7
+        occ = _expand_fortran(fh.readline())[pos:pos + lmax + 1]
+    for f in occ:
+        if f > 0.0:
+            return lmax
+        lmax -= 1
+    return None
+
+
+def write_typed_copies(src_dir: str, dst_dir: str, base_of: dict[str, str],
+                       template: str = "{a}-{b}.skf") -> list[str]:
+    """Create SKF files for type labels that reuse existing parameters.
+
+    ``base_of`` maps every label to the label whose files it copies, e.g.
+    ``{"O": "O", "O2": "O", "H": "H"}``.  Files for all label pairs are
+    written to ``dst_dir``.  A pair of *different* labels built from the same
+    homonuclear file (``O-O2``) must be in heteronuclear format, i.e. without
+    the on-site line 2 (DFTB+ decides the format from the species, not the
+    element).  Returns the written paths.
+    """
+    os.makedirs(dst_dir, exist_ok=True)
+    written = []
+    for a, base_a in base_of.items():
+        for b, base_b in base_of.items():
+            src = os.path.join(src_dir, template.format(a=base_a, b=base_b))
+            with _open_text(src) as fh:
+                lines = fh.read().splitlines(keepends=True)
+            if base_a == base_b and a != b:
+                del lines[1]                      # homonuclear -> heteronuclear
+            dst = os.path.join(dst_dir, template.format(a=a, b=b).removesuffix(".gz"))
+            with open(dst, "w") as fh:
+                fh.writelines(lines)
+            written.append(dst)
+    return written
 
 
 def _expand_fortran(line: str) -> list[float]:
@@ -102,17 +169,35 @@ class SKFile:
     hubbard: np.ndarray | None = None  # Ud, Up, Us
     occupation: np.ndarray | None = None  # fd, fp, fs
     mass: float = 0.0
-    repulsive: Repulsive | None = None
+    repulsive: Repulsive | None = None       # spline if present, else polynomial
+    poly_repulsive: Repulsive | None = None  # polynomial part only (DFTB+ PolynomialRepulsive)
     _coef: np.ndarray | None = field(default=None, repr=False)
 
     @classmethod
+    def read_cached(cls, path: str, homo: bool | None = None) -> "SKFile":
+        """Like :meth:`read`, but re-uses a previous parse of an unchanged file.
+
+        The key includes modification time and size, so files that are
+        rewritten (e.g. by PTBP on every optimisation step) are re-read.
+        """
+        st = os.stat(path)
+        key = (os.path.abspath(path), st.st_mtime_ns, st.st_size, homo)
+        hit = _READ_CACHE.get(key)
+        if hit is None:
+            hit = cls.read(path, homo)
+            if len(_READ_CACHE) > 512:
+                _READ_CACHE.clear()
+            _READ_CACHE[key] = hit
+        return hit
+
+    @classmethod
     def read(cls, path: str, homo: bool | None = None) -> "SKFile":
-        with open(path) as fh:
+        with _open_text(path) as fh:
             lines = fh.read().splitlines()
         if lines[0].lstrip().startswith("@"):
             raise NotImplementedError("Extended SKF format (f-electrons) not supported yet")
         if homo is None:
-            a, b = os.path.basename(path).rsplit(".", 1)[0].split("-")[:2]
+            a, b = _pair_from_filename(path)
             homo = a == b
         head = _expand_fortran(lines[0])
         dr, ngrid = head[0], int(head[1])
@@ -124,9 +209,10 @@ class SKFile:
             hubbard = np.array(vals[4:7])
             occ = np.array(vals[7:10])
             pos = 2
+        # mass, c2..c9, rcut, d1..d10 (d's unused)
         mass_line = _expand_fortran(lines[pos])
         mass = mass_line[0]
-        poly = np.array(mass_line[2:10])
+        poly = np.array(mass_line[1:9])
         rcut_poly = mass_line[9] if len(mass_line) > 9 else 0.0
         pos += 1
         rows = []
@@ -140,10 +226,12 @@ class SKFile:
             if ln.strip().startswith("Spline"):
                 rep = _parse_spline(rest[i + 1:])
                 break
-        if rep is None and rcut_poly > 0.0:
-            rep = Repulsive(cutoff=rcut_poly, poly=poly)
+        poly_rep = Repulsive(cutoff=rcut_poly, poly=poly) if rcut_poly > 0.0 else None
+        if rep is None:
+            rep = poly_rep
         return cls(dr=dr, table=table, homo=homo, onsite=onsite, hubbard=hubbard,
-                   occupation=occ, mass=mass, repulsive=rep)
+                   occupation=occ, mass=mass, repulsive=rep,
+                   poly_repulsive=poly_rep)
 
     # ------------------------------------------------------------------
     @property
@@ -260,24 +348,38 @@ class SKPair:
 
 
 class SKSet:
-    """All Slater-Koster data needed for a set of elements."""
+    """All Slater-Koster data needed for a set of type labels.
 
-    def __init__(self, path: str, elements: list[str], max_l: dict[str, int],
+    ``elements`` are the type labels used in file names (normally element
+    symbols, but e.g. ``Li@el`` is allowed: then ``Li@el-O.skf`` is read).
+    ``max_l`` maps label -> highest angular momentum; labels missing from it
+    are filled with the ASE/PTBP rule (:func:`max_l_from_skf`).
+    ``template`` may end in ``.gz`` for compressed files.
+    """
+
+    def __init__(self, path: str, elements: list[str], max_l: dict[str, int] | None = None,
                  template: str = "{a}-{b}.skf", shell_resolved: bool = False,
                  hubbard_from: str = "s"):
-        self.elements = list(elements)
-        self.max_l = dict(max_l)
+        self.path = path
+        self.template = template
+        self.elements = list(dict.fromkeys(elements))
+        self.max_l = dict(max_l or {})
+        for a in self.elements:
+            if a not in self.max_l:
+                lmax = max_l_from_skf(self.file_name(a, a))
+                if lmax is None:
+                    raise ValueError(f"no occupied shell in {self.file_name(a, a)}; pass max_l")
+                self.max_l[a] = lmax
         self.files: dict[tuple[str, str], SKFile] = {}
-        for a in elements:
-            for b in elements:
-                self.files[(a, b)] = SKFile.read(os.path.join(path, template.format(a=a, b=b)),
-                                                 homo=(a == b))
+        for a in self.elements:
+            for b in self.elements:
+                self.files[(a, b)] = SKFile.read_cached(self.file_name(a, b), homo=(a == b))
         self.shell_resolved = shell_resolved
         self.onsite: dict[str, np.ndarray] = {}
         self.hubbard: dict[str, np.ndarray] = {}
         self.occupation: dict[str, np.ndarray] = {}
         self.mass: dict[str, float] = {}
-        for a in elements:
+        for a in self.elements:
             f = self.files[(a, a)]
             lmax = self.max_l[a]
             # SKF stores (d, p, s); we use shells ordered s, p, d
@@ -290,6 +392,9 @@ class SKSet:
             self.occupation[a] = f.occupation[::-1][: lmax + 1].copy()
             self.mass[a] = f.mass
 
+    def file_name(self, a: str, b: str) -> str:
+        return os.path.join(self.path, self.template.format(a=a, b=b))
+
     def shells(self, el: str) -> list[int]:
         return list(range(self.max_l[el] + 1))
 
@@ -300,5 +405,17 @@ class SKSet:
     def cutoff(self) -> float:
         return max(f.cutoff for f in self.files.values())
 
-    def repulsive(self, a: str, b: str) -> Repulsive | None:
-        return self.files[(a, b)].repulsive
+    def repulsive(self, a: str, b: str, mode: str = "skf") -> Repulsive | None:
+        """Pair repulsive for labels (a, b).
+
+        mode ``"skf"``: spline if the file has one, else the polynomial (default);
+        ``"polynomial"``: the polynomial only, like DFTB+ ``PolynomialRepulsive = Yes``;
+        ``"none"``: no repulsive energy.
+        """
+        if mode == "skf":
+            return self.files[(a, b)].repulsive
+        if mode == "polynomial":
+            return self.files[(a, b)].poly_repulsive
+        if mode == "none":
+            return None
+        raise ValueError(f"unknown repulsive mode {mode!r}")

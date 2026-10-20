@@ -13,7 +13,8 @@ level and the entropic term T*S.
 from __future__ import annotations
 
 import numpy as np
-import scipy.linalg as sla
+
+from .backend import ops
 
 from .occupations import fill
 
@@ -36,7 +37,7 @@ class EighSolver:
     def solve(self, h, kw, nelec, kt, need_w=True):
         ev, vec = [], []
         for hk, sk in zip(h, self.s):
-            e, c = sla.eigh(hk, sk, driver="gvd")
+            e, c = ops.eigh(hk, sk)
             ev.append(e)
             vec.append(c)
         return _density(np.array(ev), np.array(vec), kw, nelec, kt, need_w)
@@ -47,14 +48,14 @@ class BatchedSolver:
     name = "batched"
 
     def prepare(self, s):
-        l = np.linalg.cholesky(s)
+        l = ops.cholesky(s)
         eye = np.broadcast_to(np.eye(s.shape[-1], dtype=s.dtype), s.shape)
-        self.linv = np.linalg.solve(l, eye)                       # L^-1
+        self.linv = ops.solve(l, eye)                       # L^-1
         self.linv_h = np.conj(np.swapaxes(self.linv, 1, 2))
 
     def solve(self, h, kw, nelec, kt, need_w=True):
         hp = self.linv @ h @ self.linv_h
-        e, c = np.linalg.eigh(hp)
+        e, c = ops.batched_eigh(hp)
         return _density(e, self.linv_h @ c, kw, nelec, kt, need_w)
 
 
@@ -110,7 +111,7 @@ class SP2Solver:
         if s.shape[0] != 1 or np.iscomplexobj(s):
             raise ValueError("SP2 solver supports Gamma-point only")
         # Loewdin factor Z = S^-1/2 (in production: sparse Newton-Schulz)
-        w, v = np.linalg.eigh(s[0])
+        w, v = ops.eigh(s[0])
         self.z = (v / np.sqrt(w)) @ v.T
 
     def solve(self, h, kw, nelec, kt, need_w=True):

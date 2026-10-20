@@ -11,11 +11,14 @@ from __future__ import annotations
 import numpy as np
 from scipy.special import erfc
 
+from .backend import ops
+from .constants import MIN_HUB_DIFF
 from .neighbors import neighbor_list
 
 EWALD_TOL = 1e-12
 SHORT_TOL = 1e-14
-SAME_TAU = 1e-8
+# DFTB+ treats U_a, U_b as equal if |U_a - U_b| < MIN_HUB_DIFF; in tau = 3.2 U:
+SAME_TAU = 3.2 * MIN_HUB_DIFF
 
 
 def _short(r, ta, tb):
@@ -24,7 +27,7 @@ def _short(r, ta, tb):
     ds = np.zeros_like(r)
     same = np.abs(ta - tb) < SAME_TAU
     if same.any():
-        t, x = ta[same], r[same]
+        t, x = 0.5 * (ta[same] + tb[same]), r[same]
         e = np.exp(-t * x)
         p = 1.0 / x + 11.0 * t / 16.0 + 3.0 * t * t * x / 16.0 + t ** 3 * x * x / 48.0
         dp = -1.0 / x ** 2 + 3.0 * t * t / 16.0 + t ** 3 * x / 24.0
@@ -49,7 +52,9 @@ def _short(r, ta, tb):
 
 def _gamma0(ta, tb):
     """gamma at R = 0 (on-site, possibly two different shells)."""
-    return 0.5 * (ta * tb / (ta + tb) + (ta * tb) ** 2 / (ta + tb) ** 3)
+    general = 0.5 * (ta * tb / (ta + tb) + (ta * tb) ** 2 / (ta + tb) ** 3)
+    same = np.abs(ta - tb) < SAME_TAU
+    return np.where(same, (ta + tb) / 6.4, general)   # = (U_a + U_b) / 2
 
 
 def _short_cutoff(tau_min: float) -> float:
@@ -105,7 +110,7 @@ class Coulomb:
         ta, tb = self.tau[i], self.tau[j]
         s, _ = _short(d, ta, tb)
         # same-atom pairs with T = 0 are not in the neighbour list
-        np.add.at(g, (i, j), -s)
+        g = ops.scatter_add(g, (i, j), -s)
         diag = _gamma0(self.tau[:, None], self.tau[None, :])
         same_atom = self.atom[:, None] == self.atom[None, :]
         g[same_atom] += diag[same_atom]
@@ -118,7 +123,7 @@ class Coulomb:
         # Ewald 1/R lattice sum, excluding the T = 0 self term
         a = self.alpha
         m = d < self.rcut_ewald
-        np.add.at(g, (i[m], j[m]), erfc(a * d[m]) / d[m])
+        g = ops.scatter_add(g, (i[m], j[m]), erfc(a * d[m]) / d[m])
         cg = np.cos(self.pos @ self.gvec.T)
         sg = np.sin(self.pos @ self.gvec.T)
         g += (cg * self.gfac) @ cg.T + (sg * self.gfac) @ sg.T
@@ -151,7 +156,7 @@ class Coulomb:
             # dE/dr_A = -sum_B qA qB d(1/R)/dR * R_vec/R
             grad -= ((dq[:, None] * dq[None, :] * fac)[:, :, None] * diff).sum(1)
         w = (dq[i] * dq[j] * dg / d)[:, None] * vec
-        np.add.at(grad, i, -w)
+        grad = ops.scatter_add(grad, i, -w)
         if self.periodic:
             phase = self.pos @ self.gvec.T
             cg, sg = np.cos(phase), np.sin(phase)

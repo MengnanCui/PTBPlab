@@ -1,0 +1,112 @@
+{
+ "schema": 1,
+ "case": "li2h2_orbit",
+ "note": "second parameter set (test/orbit), Li with s-only basis (ASE/PTBP max-l rule)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "orbit",
+ "skf_sha256": {
+  "H-H.skf": "3e3fafe6e75523b0d693043b9c72b0d81d9be5231ea76fa3ea822a96627f69c8",
+  "H-Li.skf": "4799b9b4e12662c024c96a457d83fefb38ce97d2743ac40341924d19402b1777",
+  "H-O.skf": "7e314b63436f8c046f86cf696eb5644452b1c9bbc6263d886ef76b56efe874bd",
+  "Li-H.skf": "43b7c1f8746044e8b30ede7cf1fa98ccdbf59bd07decda0fd384a0b97c7548b5",
+  "Li-Li.skf": "6e6cbd2eb8e1173f10df93cc1cb24e5b4e927e9d3186ff51a5935af2a8722b86",
+  "O-H.skf": "55253ae92db1a6a3c508071544267592e20be798853cbab59af9b6e7d33d3028",
+  "O-O.skf": "f2412d7d1a09cc6993f43e2fc88904b3d04816fd0a337071b3a25b27a029226a"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "scc_tol": 1e-10
+ },
+ "input": {
+  "labels": [
+   "Li",
+   "Li",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.0018240943323963954,
+    0.021825654665442208,
+    -0.03893940618045093
+   ],
+   [
+    2.8722730093552613,
+    0.15407016851595673,
+    0.14819668606683084
+   ],
+   [
+    1.4345567233715983,
+    1.2440911256911227,
+    0.01589655278696802
+   ],
+   [
+    1.5195284219280187,
+    -1.1236685429466604,
+    0.2383272722107096
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Li": 0,
+   "H": 0
+  }
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_b43gzamm/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Li = \"s\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -0.9409408589,
+  "free_energy": -0.9409408589,
+  "e_zero": -0.9409408589,
+  "e_rep": 0.0009681915,
+  "e_scc": 0.0524747346,
+  "e_band": -0.9943837849,
+  "fermi": -0.0656468807535745,
+  "forces": [
+   [
+    0.00596120690099331,
+    -0.00111472934050927,
+    0.00109264934338189
+   ],
+   [
+    -0.00183695420910464,
+    -0.00175311588777857,
+    0.000448823323166904
+   ],
+   [
+    -0.00301814150501872,
+    0.0233626569057085,
+    -0.00276826580023594
+   ],
+   [
+    -0.00110611118686995,
+    -0.0204948116774207,
+    0.00122679313368715
+   ]
+  ],
+  "charges_net": [
+   0.578498844817196,
+   0.577505147924193,
+   -0.572819188030818,
+   -0.583184804710571
+  ],
+  "n_scc": 10
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}
