@@ -68,8 +68,10 @@ class SCC:
         return self.result
 
     def _site_populations(self):
-        """Restart charges from the previous run (per SCC site)."""
+        """Restart charges from the previous run (the vector the SCC loop mixes)."""
         r = self.result
+        if r.q_spin is not None:
+            return r.q_spin.ravel()
         return r.q_shell if self.params.shell_resolved else r.charges
 
     def kernel(self) -> float:

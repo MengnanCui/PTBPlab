@@ -95,7 +95,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=1e-10,
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
-                    **(case.dftb3 or {}))
+                    **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         return calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
                               np.ones(3, bool) if periodic else None)
@@ -115,7 +115,9 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                             np.array(inp["cell_angstrom"]) if periodic else None, skdir=skdir,
                             max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                             shell_resolved=case.shell_resolved, repulsive=case.repulsive,
-                            extra_ham=dftbplus.dftb3_block(case.dftb3, set(inp["labels"])),
+                            extra_ham=dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
+                            + dftbplus.spin_block(case.spin, set(inp["labels"]),
+                                                  case.shell_resolved),
                             threads=threads)
 
 
@@ -137,7 +139,8 @@ def regenerate(names=None, threads: int = 1):
             "skf_sha256": _skf_hashes(case),
             "settings": {"scc": case.scc, "filling": list(case.filling),
                          "shell_resolved": case.shell_resolved, "repulsive": case.repulsive,
-                         "typed": case.typed, "dftb3": case.dftb3, "scc_tol": 1e-10},
+                         "typed": case.typed, "dftb3": case.dftb3, "spin": case.spin,
+                         "scc_tol": 1e-10},
             "input": inp,
             "hsd": ref["hsd"],
             "reference": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in ref.items()

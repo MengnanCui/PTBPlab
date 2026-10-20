@@ -94,6 +94,28 @@ def dftb3_block(opts, labels=None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
+    """HSD for pydftb's spin options (unpaired_electrons, relax_total_spin, spin_constants).
+
+    One number per type means DFTB+ ``ShellResolvedSpin = No`` (only allowed, and then
+    written, with atom-resolved SCC); matrices are written row by row.
+    """
+    if not opts:
+        return ""
+    consts = {k: np.asarray(v, float) for k, v in opts["spin_constants"].items()
+              if labels is None or k in labels}
+    by_shell = shell_resolved_scc or any(v.size > 1 for v in consts.values())
+    lines = ["  SpinPolarisation = Colinear {",
+             f"    UnpairedElectrons = {_f(opts.get('unpaired_electrons', 0.0))}",
+             f"    RelaxTotalSpin = {'Yes' if opts.get('relax_total_spin') else 'No'}",
+             "  }", "  SpinConstants {"]
+    if not shell_resolved_scc:
+        lines.append(f"    ShellResolvedSpin = {'Yes' if by_shell else 'No'}")
+    lines += [f"    {k} = {' '.join(_f(x) for x in v.ravel())}" for k, v in consts.items()]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False) -> str:

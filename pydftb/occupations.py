@@ -164,7 +164,7 @@ def fill(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
     if nfill < np.finfo(float).eps:
         mu = ev.min() - 1000.0 * (kt + EPS_SINGLE)
         return [np.zeros(nlev) for _ in range(nk)], mu, 0.0
-    if nlev <= nfill:
+    if nlev * round(kw.sum()) <= nfill:       # all levels full; kw sums to 1 per spin channel
         mu = ev.max() + 1000.0 * (kt + EPS_SINGLE)
         f, ts, _ = _electron_fill(mu, ev, kw, sm, kt)
         return [spin_factor * fk for fk in f], mu, spin_factor * ts

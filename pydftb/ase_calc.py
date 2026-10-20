@@ -36,10 +36,13 @@ class PyDFTB(Calculator):
     labels : optional type labels per atom (several parameter sets per element);
              default: chemical symbols.
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
-    ``solver``, ``shell_resolved``, ``fd_delta``, and for DFTB3 ``third_order``,
-    ``hubbard_derivs``, ``h_damping``) are passed to :class:`pydftb.DFTB`.
+    ``solver``, ``shell_resolved``, ``fd_delta``, for DFTB3 ``third_order``,
+    ``hubbard_derivs``, ``h_damping``, and for collinear spin ``spin``,
+    ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``) are passed to
+    :class:`pydftb.DFTB`.
     """
-    implemented_properties = ["energy", "free_energy", "forces", "charges", "stress"]
+    implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
+                              "magmom", "magmoms"]
 
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool = True,
                  smearing=None, temperature: float | None = None, scc: bool = True,
@@ -47,7 +50,9 @@ class PyDFTB(Calculator):
                  mixing: float = 0.2, repulsive: str = "skf", solver: str = "batched",
                  shell_resolved: bool = False, threads: int | None = None, labels=None,
                  fd_delta: float | None = None, third_order: str | None = None,
-                 hubbard_derivs: dict | None = None, h_damping: float | None = None, **kwargs):
+                 hubbard_derivs: dict | None = None, h_damping: float | None = None,
+                 spin: bool = False, unpaired_electrons: float = 0.0,
+                 relax_total_spin: bool = False, spin_constants: dict | None = None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -57,7 +62,9 @@ class PyDFTB(Calculator):
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,
-                                hubbard_derivs=hubbard_derivs, h_damping=h_damping)
+                                hubbard_derivs=hubbard_derivs, h_damping=h_damping, spin=spin,
+                                unpaired_electrons=unpaired_electrons,
+                                relax_total_spin=relax_total_spin, spin_constants=spin_constants)
         self.threads = threads
         self.labels = None if labels is None else list(labels)
         self.raw = None          # last pydftb.DFTBResult (atomic units)
@@ -107,6 +114,9 @@ class PyDFTB(Calculator):
         if r.stress is not None:
             # same conversion as ase.calculators.dftb.Dftb: -sigma_DFTB+, Voigt xx yy zz yz xz xy
             self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
+        magmoms = np.zeros(len(a)) if r.magmoms is None else r.magmoms
+        self.results["magmoms"] = magmoms
+        self.results["magmom"] = float(magmoms.sum())
 
     # ---- ASE accessors used by band-structure / DOS tools -------------
     def _raw(self):
@@ -115,7 +125,11 @@ class PyDFTB(Calculator):
         return self.raw
 
     def get_number_of_spins(self):
-        return 1
+        return 1 if self._raw().fermi_spin is None else 2
+
+    def _index(self, kpt, spin):
+        """Position of (k-point, spin) in the eigenvalue list ([up k..., down k...])."""
+        return kpt + spin * len(self._raw().kweights)
 
     def get_ibz_k_points(self):
         r = self._raw()
@@ -125,14 +139,19 @@ class PyDFTB(Calculator):
         return np.array(self._raw().kweights)
 
     def get_eigenvalues(self, kpt=0, spin=0):
-        """Eigenvalues (eV) at k-point index ``kpt``."""
+        """Eigenvalues (eV) at k-point index ``kpt`` (and ``spin`` 0 = up, 1 = down)."""
         r = self._raw()
         if r.eigenvalues is None:
             raise RuntimeError("eigenvalues are not available with this solver")
-        return np.asarray(r.eigenvalues[kpt]) * units.Hartree
+        return np.asarray(r.eigenvalues[self._index(kpt, spin)]) * units.Hartree
 
     def get_occupation_numbers(self, kpt=0, spin=0):
-        return np.asarray(self._raw().occupations[kpt])
+        return np.asarray(self._raw().occupations[self._index(kpt, spin)])
 
     def get_fermi_level(self):
+        """Fermi level (eV); with two spin Fermi levels, that of spin up."""
         return self._raw().fermi * units.Hartree
+
+    def get_fermi_levels(self):
+        r = self._raw()
+        return np.array(r.fermi_spin if r.fermi_spin is not None else [r.fermi]) * units.Hartree

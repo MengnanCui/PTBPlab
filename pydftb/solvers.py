@@ -19,8 +19,8 @@ from .backend import ops
 from .occupations import fill
 
 
-def _density(evals, evecs, kw, nelec, smearing, need_w):
-    occ, mu, ts = fill(evals, kw, nelec, smearing)
+def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0):
+    occ, mu, ts = fill(evals, kw, nelec, smearing, spin_factor=spin_factor)
     occ = np.array(occ)
     cf = evecs * occ[:, None, :]
     rho = cf @ np.conj(np.swapaxes(evecs, 1, 2))
@@ -34,14 +34,17 @@ class EighSolver:
     def prepare(self, s):
         self.s = s
 
-    def solve(self, h, kw, nelec, smearing, need_w=True):
+    def eig(self, h):
+        """Eigenvalues and S-orthonormal eigenvectors for every k."""
         ev, vec = [], []
         for hk, sk in zip(h, self.s):
             e, c = ops.eigh(hk, sk)
             ev.append(e)
             vec.append(c)
-        *out, self.last_occupations = _density(np.array(ev), np.array(vec), kw, nelec,
-                                               smearing, need_w)
+        return np.array(ev), np.array(vec)
+
+    def solve(self, h, kw, nelec, smearing, need_w=True):
+        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w)
         return tuple(out)
 
 
@@ -55,10 +58,13 @@ class BatchedSolver:
         self.linv = ops.solve(l, eye)                       # L^-1
         self.linv_h = np.conj(np.swapaxes(self.linv, 1, 2))
 
+    def eig(self, h):
+        """Eigenvalues and S-orthonormal eigenvectors for every k."""
+        e, c = ops.batched_eigh(self.linv @ h @ self.linv_h)
+        return e, self.linv_h @ c
+
     def solve(self, h, kw, nelec, smearing, need_w=True):
-        hp = self.linv @ h @ self.linv_h
-        e, c = ops.batched_eigh(hp)
-        *out, self.last_occupations = _density(e, self.linv_h @ c, kw, nelec, smearing, need_w)
+        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w)
         return tuple(out)
 
 

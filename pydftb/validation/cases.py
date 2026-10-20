@@ -31,6 +31,9 @@ TOL_DFTBP_FD = {"energy": 1e-6, "forces": 2e-6, "charges": 1e-6}
 # DFTB3: 3ob Hubbard derivatives (Ha/e) and its standard settings; Cu values are for testing only
 UD_3OB = {"H": -0.1857, "C": -0.1492, "O": -0.1575}
 DFTB3_3OB = {"third_order": "full", "hubbard_derivs": UD_3OB, "h_damping": 4.0}
+# spin constants W (Ha): typical PBE values for H and O; Cu values are for testing only
+W_SPIN = {"H": -0.072, "O": [[-0.035, -0.030], [-0.030, -0.028]],
+          "Cu": [[-0.016, -0.012, -0.004], [-0.012, -0.040, -0.002], [-0.004, -0.002, -0.017]]}
 
 
 @dataclass
@@ -46,6 +49,7 @@ class Case:
     labels: Callable[[Atoms], list] | None = None   # type labels (default: elements)
     typed: dict | None = None             # label -> base label for write_typed_copies
     dftb3: dict | None = None             # third_order / hubbard_derivs / h_damping options
+    spin: dict | None = None              # unpaired_electrons / relax_total_spin / spin_constants
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
@@ -125,6 +129,14 @@ def _li2_tail():
     return Atoms("Li2", positions=[[0, 0, 0], [0.3 * d, 0.2 * d, np.sqrt(0.87) * d]])
 
 
+def _o2():
+    return Atoms("O2", positions=[[0, 0, 0], [0.05, 0.1, 1.21]])
+
+
+def _oh():
+    return Atoms("OH", positions=[[0, 0, 0], [0.1, 0.05, 0.97]])
+
+
 def _li_bcc():
     return bulk("Li", "bcc", a=3.50)     # every shell >= 4e-3 Bohr from a grid node
 
@@ -193,5 +205,22 @@ CASES = [
     Case("water_box_dftb3", _water_box, dftb3=DFTB3_3OB),
     Case("cuo_chain_dftb3_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
          dftb3={"third_order": "full", "hubbard_derivs": {"Cu": -0.05, "O": -0.1575}}),
+    # --- collinear spin (milestone M2c) ---
+    Case("o2_triplet", _o2, spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}},
+         note="one spin constant per type (DFTB+ ShellResolvedSpin = No)"),
+    Case("o2_triplet_wmatrix", _o2, spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}),
+    Case("o2_triplet_shell", _o2, shell_resolved=True,
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}),
+    # 300 K: at T = 0 the half-filled, degenerate pi level of the linear radical makes the
+    # last SCC steps wander at the 1e-9 level in DFTB+ (identical paths down to 4e-9)
+    Case("oh_radical", _oh, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}),
+    Case("o2_relaxed_spin", _o2, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 2, "relax_total_spin": True, "spin_constants": W_SPIN},
+         note="one Fermi level for both spins (DFTB+ RelaxTotalSpin)"),
+    Case("oh_radical_dftb3", _oh, filling=("fermi", 300.0), dftb3=DFTB3_3OB,
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}),
+    Case("cuo_chain_spin_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}
