@@ -185,7 +185,7 @@ python -m pydftb.validation.refgen --check          # 74 个单点参考</code><
       <ul>
         <li>M2 全部完成。下一阶段是 M3：计算策略推荐器、结构和 k 点的并行分发、DFTB+ 配置顾问。</li>
         <li>PTBP 的参数生成器支持 f 轨道（<code>utils/hotpy.py</code> 给 f 壳层赋在位能和 U，参数表加镧系元素）。<code>make_f_set.py</code> 已经示范了需要的 hotcent 调用。</li>
-        <li>待确认后修正：PTBP 损失函数的惩罚项一直用默认的共价半径 0.5 Bohr（见<a href="../index.html#issues">索引页的已知问题</a>）。</li>
+        <li>已修正（M3 之前）：PTBP 损失函数的惩罚项一直用默认的共价半径 0.5 Bohr（见<a href="../index.html#issues">索引页的已知问题</a>）。</li>
       </ul>
     </section>
   </main>

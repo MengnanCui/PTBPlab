@@ -41,7 +41,7 @@ from pathlib import Path
 import ase.io
 import utils.data as data 
 from utils.hotpy import hotpy
-from utils.loss import Loss 
+from utils.loss import Loss, penalty_radius
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
 hp = hotpy()
 
@@ -160,7 +160,7 @@ if ptbp_args.optimization_option is not None:
 
             # Get the atomic number of the system
             atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = data.get_elements_from_dataset(dft_input, opt_elem)
-            cov_radius = covalent_radii[atomic_numbers[-1]] / Bohr
+            cov_radius = penalty_radius(dft_input, opt_elem)
 
             print(f"""\n#=================Input=================#:
 Optimization target: {ptbp_args.optimization_option}
@@ -176,6 +176,7 @@ Boltzmann factor: {bolt_f.tolist()}
                         dft_input=dft_input,
                         bolt_f11=bolt_f11,
                         opt_elem=opt_elem, 
+                        cov_radius=cov_radius,
                         path=path)
 
             _result_pkl = path / 'result.pkl'
@@ -287,7 +288,7 @@ Boltzmann factor: {bolt_f.tolist()}
 
             # Get the atomic number of the system
             atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = data.get_elements_from_dataset(dft_input, opt_elem)
-            cov_radius = covalent_radii[atomic_numbers[-1]] / Bohr
+            cov_radius = penalty_radius(dft_input, opt_elem)
 
             print(f"""\n#=================Input=================#:
 Optimization target: {ptbp_args.optimization_option}
@@ -303,6 +304,7 @@ Boltzmann factor: {bolt_f.tolist()}
                         dft_input=dft_input,
                         bolt_f11=bolt_f11,
                         opt_elem=opt_elem, 
+                        cov_radius=cov_radius,
                         path=path)
 
             mu = loss.Loss_EnergyGeometry(r0_w_best, r0_d_best)
@@ -327,7 +329,7 @@ Boltzmann factor: {bolt_f.tolist()}
                 opt_elem = [x for x in ptbp_args.multi_element]
 
             atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = loss.get_elements_from_dataset(dft_input, opt_elem)
-            cov_radius = covalent_radii[atomic_numbers[-1]] / Bohr
+            cov_radius = penalty_radius(dft_input, opt_elem)
 
             bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
             
@@ -346,6 +348,7 @@ Boltzmann factor: {bolt_f.tolist()}
                         dft_input=dft_input,
                         bolt_f11=bolt_f11,
                         opt_elem=opt_elem, 
+                        cov_radius=cov_radius,
                         path=path)
 
             # Optimization

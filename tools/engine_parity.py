@@ -29,12 +29,10 @@ sys.path.insert(0, str(ROOT))
 
 def build_loss(dataset: Path, mode: str, workdir: Path, eos_points: int):
     import ase.io
-    from ase.data import covalent_radii
-    from ase.units import Bohr
 
     import utils.data as data
     from cli.arg_parser import build_default_arg_parser
-    from utils.loss import Loss
+    from utils.loss import Loss, penalty_radius
 
     argv = ["run.py", "--ref_dir", str(dataset.parent), "--dft_file", dataset.name,
             "--optimization_option", mode, "--parameters", "r0_w", "r0_d", "sigma_rep",
@@ -61,9 +59,9 @@ def build_loss(dataset: Path, mode: str, workdir: Path, eos_points: int):
         bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, "identical", 3000)
     else:
         bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, "boltzmann", 3000)
-    numbers, _, _, _ = data.get_elements_from_dataset(dft_input, [])
-    cov_radius = covalent_radii[numbers[-1]] / Bohr
-    loss = Loss(args_input=args, dft_input=dft_input, bolt_f11=bolt_f11, opt_elem=[], path=workdir)
+    cov_radius = penalty_radius(dft_input, [])
+    loss = Loss(args_input=args, dft_input=dft_input, bolt_f11=bolt_f11, opt_elem=[],
+                cov_radius=cov_radius, path=workdir)
     return loss, cov_radius
 
 

@@ -120,7 +120,9 @@ python -m pydftb.validation.make_f_set                     # 重新生成 f 轨�
       <h2>已知问题</h2>
       <ul>
         <li>PTBP 的 <code>--optimization_option bandstructure</code> 模式有多处错误，目前跑不通（与 pydftb 无关，另有任务）。</li>
-        <li>在已发表的 Cu 参数下，PTBP 的损失值异常大（M1 报告 3.3 节），两个引擎一致。M2f 中查到原因：<code>cli/run.py</code> 算出了元素的共价半径，但只用来设优化范围，没有传给 <code>Loss(...)</code>（<code>tools/engine_parity.py</code> 也一样），损失函数的惩罚项于是总用默认的 0.5 Bohr。Cu 的惩罚因子因此是 1.2e4，而不是约 6，优化会被推向最小的约束半径。仓库第一个提交里就是这样，与 pydftb 无关；修正会改变优化结果，待确认后另行修改。</li>
+        <li><strong>已修正（M3 之前）：</strong>PTBP 损失函数的惩罚项过去总用 0.5 Bohr 的共价半径（<code>cli/run.py</code> 算出了元素的半径，但没有传给 <code>Loss(...)</code>），Cu 的惩罚因子因此是 1.2e4 而不是 6.0。现在用被参数化元素的半径；参数表中已发表的 75 个元素的损失值都能用这个公式复现（相对差 ≤ 5e-5）。已发表的 Cu 参数下，dataset 模式的损失从 901629.83 变为 446.20，energygeometry 模式从 3837.92 变为 1.8993，两个引擎的相对差仍在 1e-8 以内。旧运行的损失值是另一个尺度：旧的 skopt 检查点在恢复时会被拒绝，可用 <code>tools/rescale_checkpoint.py</code> 精确换算。</li>
+        <li>energygeometry 模式在已发表的 Cu 参数下的损失为 1.90，论文中为 0.288：μ<sub>E</sub>、μ<sub>V</sub> 本身大约大 6.6 倍（0.510、0.120 对 0.0775、0.0182），与惩罚项无关，待查（可能与数据集、hotcent 版本或 E0 的设置有关）。</li>
+        <li>多元素模式（<code>--multi_element</code>）跑不通：命令行给的是元素符号，而 <code>data.get_elements_from_dataset</code>、<code>Loss.set_parameters</code> 要原子序数；参数表里也没有 <code>set_parameters</code> 要读的 <code>r_wave</code> 键。<code>cli/run.py</code> 只优化 <code>sigma_rep</code> 的分支调用 <code>Loss_EnergyGeometry</code> 的参数也不对。</li>
         <li><code>tools/physrep.py</code> 可能改编自 J. Margraf 的 physrep，上游许可未知；仓库整体为 MIT，需确认这个文件可以按 MIT 发布。</li>
       </ul>
     </section>

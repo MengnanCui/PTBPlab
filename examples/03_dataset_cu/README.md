@@ -1,8 +1,8 @@
 # Example 3 — dataset workflow on Cu with auto-fit E0s
 
 Same Cu dataset as example 2, but used as a flat dataset (no EOS
-slicing). Loss is `(1−c)·μ_E + c·μ_F` over per-structure formation
-energies. `--E0s` is intentionally omitted to demonstrate the auto-fit +
+slicing). Loss is `(0.9·μ_E + 0.1·μ_F)·P` over per-structure formation
+energies and forces, P being the confinement-radius penalty (see the main README). `--E0s` is intentionally omitted to demonstrate the auto-fit +
 on-disk cache flow.
 
 ```

@@ -227,7 +227,7 @@ python -m pydftb.validation.dynamics --check          # 对照表；MD 另算 DF
     <section id="next">
       <h2>八、下一步</h2>
       <p>M2g：f 轨道（扩展 SKF 格式，hotcent 生成的 Gd 参数）。</p>
-      <p>PTBP 损失函数的惩罚项一直用默认的共价半径 0.5 Bohr（第二节末；<a href="../index.html#issues">索引页的已知问题</a>）。修正会改变 PTBP 的优化结果，需要先确认再改。</p>
+      <p>PTBP 损失函数的惩罚项一直用默认的共价半径 0.5 Bohr（第二节末；<a href="../index.html#issues">索引页的已知问题</a>）。修正会改变 PTBP 的优化结果，需要先确认再改。<em>（已在 M3 之前修正。）</em></p>
       <p>另记一项可选的 PTBP 改进：生成 SKF 时提高 hotcent 的积分精度（或对表格做平滑），减小网格节点处的导数跳变（4.5）。它影响力的精度在 1e-4 Ha/Bohr 量级，远小于 DFTB 与 DFT 的力差，不急。</p>
     </section>
   </main>

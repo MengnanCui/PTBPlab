@@ -2,8 +2,9 @@
 
 Reproduces the original PTBP paper workflow on the bundled Cu dataset:
 6 phases × 11 EOS volumes = 66 reference structures. Loss is
-μ_E + μ_V + μ_B (energy / volume / bulk-modulus mismatch from the
-Birch-Murnaghan fit), Boltzmann-weighted across phases.
+(½μ_V + ½μ_E)·P: the volume and energy mismatch of the Birch-Murnaghan
+fit, Boltzmann-weighted across phases, times the confinement-radius
+penalty P (see the main README; μ_B, the bulk-modulus mismatch, is only logged).
 
 ```
 ./run.sh

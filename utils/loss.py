@@ -64,6 +64,36 @@ import utils.plot as plot
 
 
 
+# Version of the loss definition stored next to skopt checkpoints (checkpoint.pkl.meta.json).
+# 1: the penalty always used a covalent radius of 0.5 Bohr (the radius was never passed to
+#    Loss); 2: the radius of the element being parametrised, as for the published PTBP losses.
+LOSS_VERSION = 2
+
+
+def penalty_radius(dataset, opt_elem=()) -> float:
+    """Covalent radius (Bohr) of the element whose confinement radii are optimised.
+
+    ``opt_elem[0]`` (symbol or atomic number) in multi-element mode, otherwise the heaviest
+    element of the dataset; the BO bounds and seed use the same radius.  The published PTBP
+    losses (utils/parameters_set.py) equal (mu_V + mu_E)/2 * r0_penalty(r0_w, r0_d, radius)
+    with this radius for every element.
+    """
+    if len(opt_elem) > 0:
+        el = opt_elem[0]
+        z = atomic_numbers[el] if isinstance(el, str) else int(el)
+    else:
+        zs = sorted({int(z) for atoms in dataset for z in atoms.numbers})
+        if not zs:
+            raise ValueError("cannot choose a penalty radius for an empty dataset")
+        z = zs[-1]
+    return covalent_radii[z] / Bohr
+
+
+def r0_penalty(r0_w: float, r0_d: float, cov_radius: float) -> float:
+    """Regularisation factor of the loss; its minimum, 4, is at r0_w = 2 r_cov, r0_d = 4 r_cov."""
+    return ((r0_w / (2 * cov_radius) - 1)**2 + 1)**2 * ((r0_d / (4 * cov_radius) - 1)**2 + 2)**2
+
+
 class Loss():
     """
     For storing multiple loss functions and related functions
@@ -75,18 +105,26 @@ class Loss():
                  bolt_f11:list=[],
                  opt_elem: list=[],
                  superposition: str='density',
-                 cov_radius: float=0.5,
+                 cov_radius: float | None=None,
                  path:Path='./',
                  ):
         self.args_input = args_input
         self.dft_input = dft_input
         self.bolt_f11 = bolt_f11
         self.superposition = superposition
+        if cov_radius is None and len(dft_input) > 0:
+            cov_radius = penalty_radius(dft_input, opt_elem)
         self.cov_radius = cov_radius
         self.path = path
         self.hp = hotpy()
         self.opt_elem = opt_elem
     
+
+    def penalty(self, r0_w: float, r0_d: float) -> float:
+        """Regularisation factor for these confinement radii (see :func:`r0_penalty`)."""
+        if self.cov_radius is None:
+            raise ValueError("Loss has no penalty radius: pass cov_radius or a dataset")
+        return r0_penalty(r0_w, r0_d, self.cov_radius)
 
     def get_forces(self, atoms:list, prefix:str):
 
@@ -423,14 +461,14 @@ class Loss():
 
         mu_F = forces_mae
         # Penalty for overlarge parameters (regularization)
-        penalty = ((r0_w / (2*self.cov_radius) - 1)**2 + 1)**2 * ((r0_d / (4*self.cov_radius) - 1)**2 + 2)**2
+        penalty = self.penalty(r0_w, r0_d)
 
         c = 0.1
 
         mu = (mu_E * (1-c) + mu_F * c) * penalty
 
         with  open(self.args_input.log_file, 'a') as output:
-            output.write(f"{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep[0]:15.8f}, {0.0:20.8e}, {self.cov_radius:15.8f}, {mu_E:15.8f}, {mu_F:20.8f}, {0.0: 20.8f}, {0.0:15.5f}, {mu:25.11f}\n")
+            output.write(f"{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep[0]:15.8f}, {0.0:20.8e}, {self.cov_radius:15.8f}, {mu_E:15.8f}, {mu_F:20.8f}, {0.0: 20.8f}, {penalty:15.5f}, {mu:25.11f}\n")
 
         # Reaction mode: report per-formula |E_dft - E_dftb| breakdown alongside
         # the aggregate loss so the user can spot which compositions are well-fit
@@ -607,13 +645,13 @@ class Loss():
             mu_Es.append(dftb_sub[0].info['mu_E'] * bolt_f[num]) 
 
         bolt_left = np.sum([bolt_f[i] for i in range(len(bolt_f)) if bolt_f[i] >= 0.1])
-        mu_E, mu_V, mu_logb = np.sum(mu_Es)/bolt_left, np.sum(mu_Vs)/bolt_left, np.sum(mu_logb)/bolt_left
+        mu_E, mu_V, mu_logb = np.sum(mu_Es)/bolt_left, np.sum(mu_Vs)/bolt_left, np.sum(mu_logbs)/bolt_left
 
         ase.io.write('dftb_full.xyz', dftb_full)
         os.system("rm dftb_sub_*.xyz")
 
         # Penalty term(regularization)
-        penalty = ((r0_w / (2*self.cov_radius) - 1)**2 + 1)**2 * ((r0_d / (4*self.cov_radius) - 1)**2 + 2)**2
+        penalty = self.penalty(r0_w, r0_d)
 
 
         # Combine mu_E and mu_V
@@ -1013,8 +1051,6 @@ class Loss():
                 plot.plot_tradition(atomic_symbols[0], [r0_w, r0_d, sigma_rep, 2.0],  mu, dft_energy_per_atom_relative, dftb_energy_per_atom_relative, bolt_f)
             
 
-            penalty = ((r0_w / (2*self.cov_radius) - 1)**2 + 1)**2 * ((r0_d / (4*self.cov_radius) - 1)**2 + 2)**2
-
             with open(self.args_input.para_file, 'a') as para:
                 para.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.7f}, {mu:25.11f}\n')
 
@@ -1183,13 +1219,19 @@ class Loss():
     # =========================================================
     # Outer-loop optimisers
     # =========================================================
-    def optimize(self, cov_radius, checkpoint_saver, n_calls):
+    def optimize(self, cov_radius=None, checkpoint_saver=None, n_calls=11):
         """Dispatch to the optimiser selected by --optimizer.
 
         Returns an object with at minimum `.x` (best point as list) and
         `.fun` (best loss). The skopt path also exposes `.x_iters` /
         `.func_vals` for plotting; the PSO path provides equivalents.
+        ``cov_radius`` (Bohr) sets the search bounds; by default the penalty radius.
         """
+        if cov_radius is None:
+            cov_radius = self.cov_radius
+        elif self.cov_radius is not None and abs(cov_radius - self.cov_radius) > 1e-12:
+            print(f"Warning: search bounds use r_cov = {cov_radius} Bohr, "
+                  f"the loss penalty {self.cov_radius} Bohr")
         opt = getattr(self.args_input, 'optimizer', 'bo')
         if opt == 'bo':
             return self.Bayesian_optimization(cov_radius, checkpoint_saver, n_calls)
@@ -1366,6 +1408,24 @@ class Loss():
             optimizer='parallel_bo',
         )
 
+    def _check_checkpoint_meta(self, meta_path):
+        """Refuse to resume a checkpoint whose losses were computed on another scale."""
+        meta = None
+        if os.path.exists(meta_path):
+            with open(meta_path) as fh:
+                meta = json.load(fh)
+        if (meta is not None and meta.get("ptbp_loss_version") == LOSS_VERSION
+                and abs(meta.get("penalty_radius_bohr", -1.0) - self.cov_radius) < 1e-5):
+            return
+        found = ("no record of its loss definition (written before PTBP fixed the penalty "
+                 "radius, which was always 0.5 Bohr)" if meta is None else f"loss record {meta}")
+        raise RuntimeError(
+            f"{self.args_input.checkpoint} has {found}; this run uses loss version "
+            f"{LOSS_VERSION} with a penalty radius of {self.cov_radius:.6f} Bohr. Mixing the two "
+            f"scales would corrupt the Bayesian model. Convert the checkpoint with "
+            f"`python tools/rescale_checkpoint.py {self.args_input.checkpoint} "
+            f"--radius {self.cov_radius!r}` or delete it to start afresh.")
+
     def Bayesian_optimization(self,
                               cov_radius,
                               checkpoint_saver,
@@ -1375,7 +1435,11 @@ class Loss():
         """
 
         # if self.args_input.checkpoint.exists():
+        mode = self.args_input.optimization_option.lower()
+        meta_path = f"{self.args_input.checkpoint}.meta.json"
         if os.path.exists(self.args_input.checkpoint):
+            if mode in ('energygeometry', 'dataset', 'reaction'):
+                self._check_checkpoint_meta(meta_path)
             res = load(self.args_input.checkpoint)
             x0 = res.x_iters
             y0 = res.func_vals
@@ -1412,6 +1476,10 @@ class Loss():
                 print(f"BO seed from heuristic: r0_w={x0[0]}, r0_d={x0[1]}")
             y0 = None
             n_calls = n_calls
+
+        with open(meta_path, 'w') as fh:
+            json.dump({"ptbp_loss_version": LOSS_VERSION, "penalty_radius_bohr": self.cov_radius,
+                       "mode": mode}, fh)
 
         if self.args_input.optimization_option.lower() in ('energygeometry', 'dataset', 'reaction'):
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius            # Wavefunction cutoff

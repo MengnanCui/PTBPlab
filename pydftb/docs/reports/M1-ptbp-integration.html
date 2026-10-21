@@ -26,7 +26,7 @@
       <li>已发表的 PTBP 参数是在“按壳层分辨 SCC、T = 0、力用 0.01 Bohr 差分”下拟合的，原因是 ASE 写的老版本输入格式（第一节）。</li>
       <li>新增 <code>--smearing</code>，让展宽真正生效：DFTB+ 一侧正确写入 <code>Filling</code>，并在运行后核对。</li>
       <li>19 个对照算例的 SCC 轮数与 DFTB+ 完全相同；用 <code>fd_delta</code> 证明残余的力差全部来自 DFTB+ 的数值求导。</li>
-      <li>附带发现：在已发表的 Cu 参数下，PTBP 的损失值异常大（约 9e5），两个引擎一致，属于 PTBP 流程本身的问题，待查。</li>
+      <li>附带发现：在已发表的 Cu 参数下，PTBP 的损失值异常大（约 9e5），两个引擎一致，属于 PTBP 流程本身的问题，待查。（后来查明：惩罚项一直用 0.5 Bohr 的共价半径，M3 之前已修正，修正后为 446.20；见<a href="../index.html#issues">索引页的已知问题</a>。）</li>
     </ul>
     <ul class="figures">
       <li><span class="num">< 1e-7</span><span class="lbl">损失函数相对差</span></li>
@@ -203,7 +203,7 @@
 </table></div>
 <p><strong>损失函数的相对差在 1e-7 以内，比验收目标 1e-4 好三个数量级以上。</strong> 单次耗时中 hotcent 生成 SKF 占了很大一部分，这部分两边相同。</p>
 <blockquote>
-<p>附带观察：在已发表的 Cu 参数下，dataset 模式的损失值高达 9e5，EOS 模式为 3.8e3，而论文中 Cu 的损失为 0.288。两个引擎给出的数值一致，说明这是 PTBP 自身流程的问题（可能与 E0 或惩罚项的设置有关）。这不在本阶段范围内，建议另行检查。</p>
+<p>附带观察：在已发表的 Cu 参数下，dataset 模式的损失值高达 9e5，EOS 模式为 3.8e3，而论文中 Cu 的损失为 0.288。两个引擎给出的数值一致，说明这是 PTBP 自身流程的问题（可能与 E0 或惩罚项的设置有关）。这不在本阶段范围内，建议另行检查。<em>（2026-10-21 补记：原因是惩罚项一直用 0.5 Bohr 的共价半径，已在 M3 之前修正。修正后 dataset 模式为 446.20、EOS 模式为 1.8993；EOS 模式与论文的 0.288 仍差约 6.6 倍，来自 μ<sub>E</sub>、μ<sub>V</sub> 本身，见索引页的已知问题。）</em></p>
 </blockquote>
 </section>
 <section id="sec-3-4">

@@ -217,10 +217,19 @@ ptbp --ref_dir dft \
 The same outer Bayesian optimisation loop drives every mode; what changes is
 the loss function inside the inner `Repulsion_optimization` step.
 
+Every loss except `bandstructure` is multiplied by a penalty on the confinement radii,
+P = ((r0_w/(2 r_cov) − 1)² + 1)² · ((r0_d/(4 r_cov) − 1)² + 2)², which is smallest (4) at
+r0_w = 2 r_cov, r0_d = 4 r_cov. r_cov is the covalent radius (Bohr) of the element being
+parametrised: the heaviest element of the dataset, or the `--multi_element` element.
+The published PTBP losses were computed this way. Until the fix described in
+`pydftb/docs/index.html` (known issues), PTBP always used r_cov = 0.5 Bohr here, so loss
+values of older runs are on a different scale (old skopt checkpoints are refused on resume;
+convert them with `tools/rescale_checkpoint.py`).
+
 | `--optimization_option` | Input shape | Loss | Required extras |
 |---|---|---|---|
-| `energygeometry` | An EOS scan of N phases × `--eos_points` volumes (i.e. `--eos_points 11` strict). | μ_E + μ_V + μ_B (Boltzmann-weighted EOS fit; matches the original PTBP paper). | `--eos_file fit.json` (DFT EOS results) |
-| `dataset` | Any ASE-readable trajectory (xyz, traj, …) of structures with DFT energies + forces. | (1−c)·μ_E + c·μ_F over all structures (per-atom formation energy + force MAE). | `--E0s '{"<Z>": <eV>, ...}'` (atomic ref energies as JSON dict) |
+| `energygeometry` | An EOS scan of N phases × `--eos_points` volumes (i.e. `--eos_points 11` strict). | (½μ_V + ½μ_E)·P, Boltzmann-weighted over phases (μ_B is only logged; matches the original PTBP paper). | `--eos_file fit.json` (DFT EOS results) |
+| `dataset` | Any ASE-readable trajectory (xyz, traj, …) of structures with DFT energies + forces. | (0.9·μ_E + 0.1·μ_F)·P, μ_E the sum over structures of the per-atom formation-energy error, μ_F the force MAE. | `--E0s '{"<Z>": <eV>, ...}'` (atomic ref energies as JSON dict) |
 | `reaction` | Same as `dataset`, but the trajectory is expected to span multiple chemical formulas. | Identical to `dataset` plus a `reaction_per_formula.csv` written next to `par.out` reporting per-formula mean / max ΔE per atom. | `--E0s` (same as dataset) |
 | `bandstructure` | A k-path band-structure reference. | HOMO/LUMO mismatch. | `--dft_band_file dft.json` |
 
