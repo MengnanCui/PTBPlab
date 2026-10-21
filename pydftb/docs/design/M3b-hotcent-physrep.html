@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3b hotcent 与 physrep 设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M3b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3b · 设计文档</p>
+    <h1>BO 步的其余部分：hotcent 与 physrep</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd><code>@COMMIT@</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M3b-hotcent-physrep.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M3a 之后，4 核上一个 BO 步 122 s 中 hotcent 占 47 s、physrep 占 65 s。剖析发现两段的时间大多花在重复的工作上：hotcent 对单元素体系把同一张积分表算了三遍；physrep 每试一个 σ（每个 BO 步 74 次）都新建一个进程池、重新读文件、经过轨迹文件拟合状态方程。M3b 去掉这些重复，再把 hotcent 的积分表按距离分给多个进程，所有输出与原来逐字节相同。</p>
+    <ul>
+      <li><strong>hotcent</strong>：每个元素的原子只算一次，每张积分表只算一次；一张表的 700 个距离点交错分给各进程计算并记录，再由父进程调用 hotcent 自己的 <code>run()</code> 回放这些记录，尾部平滑和写文件都由 hotcent 完成，不复制它的数值代码。原型：Cu 的 SKF 逐字节相同，49.4 s → 4.6 s（4 个进程）。</li>
+      <li><strong>physrep 的 <code>evaluate_pbc</code></strong>：向量化，按原来的 (i, j) 顺序累加能量和力；原子对的距离只与结构有关，按结构缓存，74 次评估共用。原型：396 次 Cu 评估、40 个随机三斜晶胞全部逐位相同；缓存命中时每次 0.28 ms（原来 3.7 ms）。</li>
+      <li><strong>physrep 的其余部分</strong>：去掉每次评估新建、却只交一个任务的进程池（每次 275 ms）；读入的两个文件按内容缓存；状态方程直接用内存中的体积和能量拟合，DFT 部分的拟合在一个 BO 步内只做一次；评估结束时照原样写出原来留下的那些文件。</li>
+      <li>σ 的搜索方法不变（网格 11 点 + Nelder–Mead 22 点 + L-BFGS-B 41 点），因为改了会改变结果；报告中记录 L-BFGS-B 那 41 次评估回到同一个 σ 的现象。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">47 → ~5 s</span><span class="lbl">hotcent（Cu，4 核，目标）</span></li>
+      <li><span class="num">65 → ~10 s</span><span class="lbl">physrep（74 次评估，目标）</span></li>
+      <li><span class="num">0</span><span class="lbl">与原来的差（SKF、损失值、日志逐字节相同）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与现状</a></li>
+      <li><a href="#design">二、设计</a></li>
+      <li><a href="#details">三、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#probe">四、探测实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与现状</h2>
+      <p>M3a 的计时（Cu 数据集，已发表的参数点，pydftb，4 核）：hotcent 46.8 s，DFTB 9.6 s，physrep 64.8 s，合计 122.2 s。</p>
+      <ul>
+        <li><strong>hotcent</strong>：<code>hotpy.full_hotcent</code> 为每个元素对开一个进程（单元素体系只有 1 个）。<code>generate_skf</code> 对 <code>['Cu', 'Cu']</code> 的双重循环生成 (Cu, Cu) 三次，每次都重算整张表并覆盖上一次的文件：一张表 16.8 s，三遍 49.4 s。多元素体系中，同核的表在每个含该元素的元素对里都重算一遍，原子也每对重算。</li>
+        <li><strong>physrep</strong>：<code>Repulsion_optimization</code> 对 σ 做网格搜索（11 点，scipy 默认再用 Nelder–Mead 细化 22 点），然后 L-BFGS-B（41 点），每个 BO 步共 74 次评估。每次 0.77 s：
+          <ul>
+            <li>进程池：每次新建 <code>mp.Pool()</code>，按组逐个交任务，每组都要 pickle 整个 <code>Loss</code> 对象：275 ms；</li>
+            <li><code>evaluate_pbc</code>（66 个结构，Python 双重循环）：148 ms；</li>
+            <li>状态方程：每组把结构写成轨迹文件再读回来拟合，DFT 和 DFTB 各 6 次：174 ms；</li>
+            <li>读 <code>dftb_band.xyz</code>、<code>dft_final.xyz</code>：55 ms；写再读 6 个 <code>dftb_sub_n.xyz</code>：40 ms；SKF 写 6 遍、physrep 建 6 遍：50 ms。</li>
+          </ul>
+        </li>
+      </ul>
+      <p>要求：结果与原来逐字节相同，包括最终的 SKF、<code>dftb_full.xyz</code>、<code>log.out</code>、<code>par.out</code>，以及运行目录里留下的 CSV、JSON、轨迹文件。</p>
+    </section>
+
+    <section id="design">
+      <h2>二、设计</h2>
+      <h3>hotcent：去重、分片、回放</h3>
+      <ul>
+        <li>父进程先按原来的规则列出要写的 SKF（单元素：A–A；多元素：<code>combinations</code> 的每一对；指定 <code>opt_elem</code> 时：每个其他元素与被优化元素），去掉重复的表；每个元素的原子（<code>AtomicDFT</code>）只算一次，0.4 s。</li>
+        <li><code>ShardedOffsite2c</code> 继承 hotcent 的 <code>Offsite2cTable</code>，只改写 <code>make_grid</code> 和 <code>calculate</code>。计算模式：分片 s 只算第 i ≡ s (mod K) 行，记录每行的网格点数和 (S, H, H2)，其余行返回空网格（hotcent 会跳过）。回放模式：按记录返回同样长度的网格和结果。</li>
+        <li>任务 = 表 × 分片，交给 <code>utils.parallel.map_tasks</code>（fork 进程继承原子对象，不必 pickle）；父进程合并记录后对每张表调用 hotcent 自己的 <code>run()</code> 回放（0.03 s），由它照常做尾部平滑，再用 <code>write(filename_template=...)</code> 直接写到运行目录，不再进出 <code>SKF_A_B</code> 子目录。</li>
+        <li>只在 hotcent 2.1 且 <code>run()</code> 的源码与预期一致时分片（检查源码的哈希），否则退回原来的串行计算；<code>PTBP_HOTCENT_REFERENCE=1</code> 强制用原来的代码。</li>
+        <li>失败的语义不变：一个元素对的原子或任何一张表出错，就打印同样的 <code>Exception: …</code>，这一对的文件一个都不写，其他元素对照常写。<code>pot.out</code> 的内容与原来相同。</li>
+      </ul>
+      <h3>physrep：向量化 <code>evaluate_pbc</code></h3>
+      <ul>
+        <li>超胞仍用 ASE 的 <code>mol * (n, n, n)</code>，n 的算法不变（包括它对非正交晶胞可能漏掉近邻的老问题：为了结果不变，不修）。</li>
+        <li>距离：原来每对调用 <code>np.linalg.norm</code>，其内部是 BLAS 的 <code>ddot</code>（带 FMA）。逐元素相乘再相加的写法有约 10% 的距离在最后一位不同；<code>np.sqrt(np.vecdot(v, v))</code> 走同一个 <code>ddot</code>，在两个环境中 20 万个随机向量全部相同。运行时先自检一次，不一致或没有 <code>vecdot</code> 时退回逐对调用。</li>
+        <li>能量和力按原来的 (i, j) 顺序累加：能量用前面补一个 0.0 的 <code>cumsum</code>，力对每个原子分别 <code>cumsum</code>（不能用 <code>reduceat</code>，它是成对求和）。样条按元素对分组求值，逐点结果与标量调用相同。</li>
+        <li>缓存：键是（原子序数、坐标、晶胞、周期性的字节，n），值是原子对的向量和距离；按总字节数限制大小。原来的循环保留为 <code>evaluate_pbc_reference</code>，<code>PTBP_PHYSREP_REFERENCE=1</code> 时使用。</li>
+      </ul>
+      <h3>physrep：每次评估的其余工作</h3>
+      <ul>
+        <li><code>parallel_repulsion</code> 在本进程里逐组调用 <code>generate_repulsion</code>（原来每组也只有一个任务）。</li>
+        <li><code>dftb_band.xyz</code>、<code>dft_final.xyz</code> 按文件内容的哈希缓存解析结果，取用时深拷贝。</li>
+        <li>状态方程：直接用内存中各结构的体积和能量（与轨迹文件读回的值逐位相同）做同样的 Birch–Murnaghan 拟合；DFT 一侧的拟合按数据内容缓存。原来每次评估留下的文件（<code>eos_*_0.traj</code>、<code>dft.json</code>、<code>dftb.json</code>、四个 CSV）在评估结束时按“最后一次写入”的内容写出，最终目录与原来相同。</li>
+        <li>不再写、读 <code>dftb_sub_n.xyz</code>：用到的只有能量和 <code>mu_E</code>，在 extxyz 中都按最短十进制表示写出，读回与内存中的值逐位相同（已验证）。<em>实现时保留了这一步：σ 搜索中写出的 <code>dftb_full.xyz</code> 由读回的结构生成，跳过它会改变这个中间文件（见报告第六节）。</em></li>
+      </ul>
+    </section>
+
+    <details class="dev" id="details">
+      <summary><span class="tag">开发细节</span><span class="title">三、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/hotcent_parallel.py</code>（新）</td><td><code>ShardedOffsite2c</code>；<code>skf_jobs(symbols, opt_elem)</code>（原来的元素对和每对写哪些表）；<code>generate_all(...)</code>：原子、分片任务、回放、写文件、<code>pot.out</code>；<code>sharding_supported()</code></td></tr>
+            <tr><td><code>utils/hotpy.py</code></td><td><code>full_hotcent</code> 改用 <code>generate_all</code>，进程数取方案的 hotcent 阶段；原来的实现保留为 <code>full_hotcent_reference</code></td></tr>
+            <tr><td><code>tools/physrep.py</code></td><td>向量化的 <code>evaluate_pbc</code>、结构缓存、<code>vecdot</code> 自检；<code>evaluate_pbc_reference</code></td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>parallel_repulsion</code>（本进程逐组）、读文件缓存、<code>collectAndcalculate_muEV</code> 的内存拟合和最后写文件、<code>generate_repulsion</code> 返回结果而不写 <code>dftb_sub</code></td></tr>
+            <tr><td><code>utils/parallel/plan.py</code></td><td>hotcent 阶段：进程数 = min(核心数, 表数 × 每表分片数)；physrep 串行</td></tr>
+            <tr><td><code>tools/engine_parity.py</code></td><td>BO 步各阶段的计时（<code>Loss.step_timings</code>）；原计划的 <code>tools/bench_m3.py</code> 不再需要</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="probe">
+      <summary><span class="tag">开发细节</span><span class="title">四、探测实验记录</span></summary>
+      <div class="body">
+        <p>脚本在 scratchpad <code>m3b/</code>（未进仓库），数据取自 M3a 的 BO 步计时运行。</p>
+        <ul>
+          <li><code>prof_physrep.py</code>、<code>time_parts.py</code>：一次 physrep 评估的剖析和分项计时（第一节的数字）。日志中 74 次评估的 σ 序列：网格 0.1–0.8，Nelder–Mead 从 0.31 收敛到 0.33058594；L-BFGS-B 从 0.33058594 出发，有限差分的梯度被损失函数在 1e-8 量级的噪声主导，第一步跳到下界 0.1，再用 38 次评估回到 0.33058594，结果与网格搜索相同。</li>
+          <li><code>norm_check.py</code>：20 万个随机向量上，<code>np.linalg.norm</code> 与四种向量化写法的比较（两个环境的结果相同）：逐元素平方和 21379 个不同，<code>einsum</code> 28373 个不同，<code>vecdot</code> 和批量 <code>matmul</code> 0 个不同。</li>
+          <li><code>proto_physrep.py</code>：向量化 <code>evaluate_pbc</code> 的原型和逐位比较；剖析显示缓存命中时每次调用 0.28 ms，其中一半是 <code>cellpar()</code> 和样条调用的固定开销。</li>
+          <li><code>proto_hotcent.py</code>：Cu 的原子 0.4 s，表 16.8 s；分片 1、2、4 个时计算 16.5、8.3、4.6 s，回放 0.03 s，SKF 的 sha256 都与串行相同。<code>fork_slow.py</code> 排除了“fork 出的进程更慢”：同样的表在本进程、<code>mp.Process</code>、<code>mp.Pool</code> 里耗时相同；<code>full_hotcent</code> 慢三倍是因为算了三遍。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <ul>
+          <li><code>tests/test_physrep_vectorised.py</code>：66 个 Cu 结构 × 多个 σ、随机三斜晶胞（多元素），能量和力逐位相同（含零的符号和返回类型）；缓存命中与不命中相同；<code>vecdot</code> 自检失败时的退回路径；<code>PTBP_PHYSREP_REFERENCE</code>。</li>
+          <li><code>tests/test_hotcent_parallel.py</code>（需要 hotcent，标为 slow）：分片 1、2、4 个时 SKF 逐字节相同（Cu；H–C 两元素；带 <code>opt_elem</code>）；<code>skf_jobs</code> 与原来的循环列出同样的文件；出错时这一对不写文件、其他对照写；<code>pot.out</code> 与原来相同。</li>
+          <li>BO 步端到端：<code>tools/engine_parity.py --compare-serial</code> 加上与 M3b 之前代码的比较（<code>tools/bench_m3.py</code>）：损失值逐位相同，<code>log.out</code>、<code>par.out</code>、SKF、<code>dftb_full.xyz</code>、CSV、JSON、轨迹文件逐字节相同。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、局限与不做的事</h2>
+      <ul>
+        <li>不改 σ 的搜索方法，也不修 <code>evaluate_pbc</code> 对非正交晶胞可能漏掉近邻的问题：两者都会改变结果，记入报告，留给以后作为可选项。</li>
+        <li>不并行 σ 的网格搜索：每次评估降到约 0.1 s 后，11 个网格点并行只能省约 1 s，而各次评估都写同一个目录里的文件，要大改。</li>
+        <li>hotcent 的分片依赖 fork 继承原子对象；将来换 MPI 后端时，要在各进程里重算原子（0.4 s）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M3a-dispatch.html">← M3a 并行分发报告</a><a href="../index.html">文档索引</a><a href="../reports/M3b-hotcent-physrep.html">M3b 报告 →</a></nav>
+    <span>M3b</span>
+  </footer>
+</div>
+</body>
+</html>

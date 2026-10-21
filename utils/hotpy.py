@@ -348,6 +348,24 @@ class hotpy():
         print('Exception:', exception)
 
     def full_hotcent(self, superposition:str, opt_elem:list=[], label:str='ptbp'):
+        """
+        Generate the SKF files of all element pairs (see full_hotcent_reference).
+
+        Every atom and every table is computed once and the rows of each table are
+        shared among the processes of the run's plan (utils.hotcent_parallel, M3b);
+        the files are byte-identical to the reference.  PTBP_HOTCENT_REFERENCE=1, or a
+        hotcent other than the one the sharding was checked against, selects the
+        reference implementation.
+        """
+        from utils import hotcent_parallel
+        from utils.parallel import current_plan
+        if os.environ.get("PTBP_HOTCENT_REFERENCE") or not hotcent_parallel.sharding_supported():
+            return self.full_hotcent_reference(superposition, opt_elem, label)
+        plan = current_plan()
+        workers = plan.stage("hotcent").workers if plan is not None else 1
+        hotcent_parallel.generate_all(self, superposition, opt_elem, label, workers=workers)
+
+    def full_hotcent_reference(self, superposition:str, opt_elem:list=[], label:str='ptbp'):
             """
             Generate full SKF files (band+repulsion) based on existed parameters
 

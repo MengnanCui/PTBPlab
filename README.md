@@ -371,15 +371,16 @@ Every BO step runs one DFTB calculation per structure. By default (`--ncores aut
 ```
 [plan] 4 cores (CPU affinity 4); engine pydftb; optimizer bo
 [plan]   DFTB: 4 processes x 1 k-point thread, largest first -- 66 structures >= 4 cores: one structure per process
-[plan]   hotcent: serial -- parallel from M3b
-[plan]   physrep: serial -- vectorised in M3b
+[plan]   hotcent: 4 processes x 1 thread -- each table once, its rows shared by the processes
+[plan]   physrep: serial -- vectorised, in this process
 ```
 
 - Structures go to forked worker processes, largest first (k-points × orbitals³). With fewer structures than cores, the spare cores become pydftb k-point threads or DFTB+ OpenMP threads. On `dft/dft.xyz` (66 structures, 4 cores) the DFTB part of a BO step takes 10 s instead of 35 s with pydftb and 23 s instead of 95 s with DFTB+ (DFTB+'s default of one OpenMP thread per core was slower than one thread on these small cells).
+- hotcent computes every atom and every Slater-Koster table once (it used to compute an elementary system's table three times) and shares the distance rows of each table among the processes; the SKF files are byte-identical. The sigma_rep search no longer starts a process pool per evaluation and evaluates the repulsion vectorised. A whole BO step on `dft/dft.xyz` takes 27 s on 4 cores with pydftb (147 s before) and 40 s with DFTB+ (about 210 s before).
 - The results do not depend on the number of cores: `dft_final.xyz`, `dftb_band.xyz` and `search_index.txt` are byte-identical to a serial run, and pydftb's k-point threads give bitwise identical numbers. DFTB+ is reproducible at a fixed number of OpenMP threads, which the plan sets for every run (one per process when there are more structures than cores; without a plan DFTB+ used all cores, as before).
 - `--optimizer parallel_bo` splits the cores between the BO points it evaluates at the same time.
 - In a parallel step every DFTB+ run gets its own folder `dftb_tasks/sNNNN/` in the step folder; it is removed after a successful run and kept after a failure.
-- `PTBP_BACKEND=serial` forces serial execution (debugging); systems other than Linux run serially.
+- `PTBP_BACKEND=serial` forces serial execution (debugging); systems other than Linux run serially. `PTBP_HOTCENT_REFERENCE=1` and `PTBP_PHYSREP_REFERENCE=1` select the original hotcent driver and repulsion loop.
 
 `python tools/engine_parity.py DATASET --compare-serial` evaluates the loss with one core and with all of them and checks that the loss and the step's files are identical. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `pydftb/docs/reports/M3a-dispatch.html`.
 

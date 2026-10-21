@@ -1,4 +1,5 @@
 import os
+from collections import OrderedDict
 from logging import raiseExceptions
 from math import ceil
 
@@ -12,6 +13,73 @@ from scipy import interpolate
 import xml.etree.ElementTree as ET
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
 from xml.dom import minidom
+
+# ---------------------------------------------------------------------------
+# Pairs of a periodic structure for evaluate_pbc (milestone M3b).
+#
+# The pair vectors and distances depend only on the geometry and the supercell
+# size, so they are computed once and shared by all evaluations of a BO step
+# (each sigma_rep tried rebuilds physrep but evaluates the same structures).
+_PAIR_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+_PAIR_CACHE_LIMIT = 256 * 2**20          # bytes of cached arrays
+_pair_cache_bytes = 0
+_VECDOT_MATCHES_NORM = None
+
+
+def _vecdot_matches_norm() -> bool:
+    """Whether sqrt(vecdot(v, v)) equals np.linalg.norm(v) bit for bit here.
+
+    np.linalg.norm of a 3-vector is sqrt(v.dot(v)), i.e. BLAS ddot (with FMA);
+    vecdot uses the same routine, an elementwise sum of squares does not."""
+    global _VECDOT_MATCHES_NORM
+    if _VECDOT_MATCHES_NORM is None:
+        ok = hasattr(np, "vecdot")
+        if ok:
+            rng = np.random.default_rng(12345)
+            v = rng.normal(scale=rng.choice([1e-3, 1.0, 7.0, 40.0], size=(4096, 1)), size=(4096, 3))
+            v[:512] = np.round(v[:512], 3)
+            ref = np.array([np.linalg.norm(x) for x in v])
+            ok = bool(np.array_equal(np.sqrt(np.vecdot(v, v)), ref))
+        _VECDOT_MATCHES_NORM = ok
+    return _VECDOT_MATCHES_NORM
+
+
+def _norms(vec: np.ndarray) -> np.ndarray:
+    """np.linalg.norm over the last axis, bit for bit as the per-pair calls."""
+    if _vecdot_matches_norm():
+        return np.sqrt(np.vecdot(vec, vec))
+    return np.array([np.linalg.norm(v) for v in vec.reshape(-1, 3)]).reshape(vec.shape[:-1])
+
+
+def _supercell_pairs(mol, n_sup: int, num: int):
+    """(central-cell atomic numbers, supercell atomic numbers, vectors, distances) in Bohr,
+    built as in evaluate_pbc_reference (same ASE supercell, same order); cached."""
+    global _pair_cache_bytes
+    key = (mol.numbers.tobytes(), mol.positions.tobytes(), mol.cell.array.tobytes(),
+           mol.pbc.tobytes(), n_sup)
+    hit = _PAIR_CACHE.get(key)
+    if hit is not None:
+        _PAIR_CACHE.move_to_end(key)
+        return hit
+    n_atom = mol.get_global_number_of_atoms()
+    s_cell = mol * (n_sup, n_sup, n_sup)
+    s_pos = s_cell.get_positions() / Bohr
+    s_ANs = s_cell.get_atomic_numbers()
+    index = n_atom * num * (n_sup ** 2 + n_sup + 1)
+    p_cell = s_cell[index: index + n_atom]
+    p_pos = p_cell.get_positions() / Bohr
+    p_ANs = p_cell.get_atomic_numbers()
+    vec = p_pos[:, None, :] - s_pos[None, :, :]
+    out = (p_ANs, s_ANs, vec, _norms(vec))
+    size = vec.nbytes * 4 // 3
+    if size <= _PAIR_CACHE_LIMIT:
+        _PAIR_CACHE[key] = out
+        _pair_cache_bytes += size
+        while _pair_cache_bytes > _PAIR_CACHE_LIMIT:
+            _, old = _PAIR_CACHE.popitem(last=False)
+            _pair_cache_bytes -= old[2].nbytes * 4 // 3
+    return out
+
 
 class physrep():
     def __init__(self,elements=[1,6,8],
@@ -117,6 +185,50 @@ class physrep():
         return acc, np.sum(ene_pot)*Hartree, -virial/DIM # return the acceleration vector, potential energy and virial coefficient
     
     def evaluate_pbc(self, mol):
+        """Repulsive energy (eV) and forces (eV/A) of a periodic structure.
+
+        Vectorised version of :meth:`evaluate_pbc_reference` (M3b), bit for bit the
+        same: the same supercell and pairs, distances as np.linalg.norm computes them,
+        the spline evaluated pointwise, and energy and forces accumulated in the
+        original (i, j) order (cumulative sums starting from 0.0, never pairwise
+        sums).  ``PTBP_PHYSREP_REFERENCE=1`` selects the original loop.
+        """
+        if os.environ.get("PTBP_PHYSREP_REFERENCE"):
+            return self.evaluate_pbc_reference(mol)
+        n_atom = mol.get_global_number_of_atoms()
+        i_cell = np.min(mol.cell.cellpar()[:3])
+        rcut = np.max([rcut for rcut in self.rcuts.values()])
+        num = ceil(rcut / i_cell)
+        n_sup = num * 2 + 1
+        p_ANs, s_ANs, vec, dist = _supercell_pairs(mol, n_sup, num)
+        species = [(zi, zj) for zi in np.unique(p_ANs).tolist() for zj in np.unique(s_ANs).tolist()]
+        rc = np.empty(dist.shape)
+        for zi, zj in species:
+            rc[np.ix_(p_ANs == zi, s_ANs == zj)] = self.rcuts[f"{zi}_{zj}"]
+        ii, jj = np.nonzero((dist < rc) & (dist > 0.01))     # row-major: the loop order
+        f = np.zeros((n_atom, 3))
+        if len(ii) == 0:
+            return 0.0 * Hartree, f * Hartree / Bohr
+        r = dist[ii, jj]
+        v = np.empty(len(r))
+        dv = np.empty(len(r))
+        for zi, zj in species:
+            sel = (p_ANs[ii] == zi) & (s_ANs[jj] == zj)
+            if sel.any():
+                spline = self.Vreps[f"{zi}_{zj}"]
+                v[sel] = spline(r[sel])
+                dv[sel] = spline(r[sel], 1)
+        e = np.cumsum(np.concatenate(([0.0], v / 2)))[-1]
+        terms = -(dv / r)[:, None] * vec[ii, jj]
+        bounds = np.searchsorted(ii, np.arange(n_atom + 1))
+        for i in range(n_atom):
+            a, b = bounds[i], bounds[i + 1]
+            if b > a:
+                f[i] = np.cumsum(np.vstack((np.zeros((1, 3)), terms[a:b])), axis=0)[-1]
+        return e * Hartree, f * Hartree / Bohr
+
+    def evaluate_pbc_reference(self, mol):
+        """The original double loop over central-cell and supercell atoms."""
         ANs = mol.get_atomic_numbers()
         e   = 0.0
         f   = np.zeros((len(ANs),3))

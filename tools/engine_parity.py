@@ -128,6 +128,7 @@ def main(argv=None):
                 os.chdir(cwd)                              # EnergyGeometry changes directory
                 opt_dir = wd / loss.args_input.results_dir / f"opt_{p[0]:.3f}_{p[1]:.3f}"
                 results.setdefault(p, {})[tag] = {"mu": mu, "mu_hex": mu.hex(), "wall": wall,
+                                                  "stages": getattr(loss, "step_timings", None),
                                                   "files": step_digests(opt_dir)}
                 print(f"[{tag}] r0_w={p[0]:.3f} r0_d={p[1]:.3f}  mu={mu:.10g}  ({wall:.1f} s)",
                       flush=True)
@@ -138,6 +139,12 @@ def main(argv=None):
         mus = [r[t]["mu"] for t in tags]
         rel = abs(mus[-1] - mus[0]) / max(abs(mus[0]), 1e-300) if len(mus) > 1 else 0.0
         print(f"{p[0]:6.3f} {p[1]:6.3f}  " + "  ".join(f"{m:16.10g}" for m in mus) + f"   {rel:.2e}")
+    print(f"\n{'run':>18}  " + "".join(f"{st:>9}" for st in ("hotcent", "dftb", "physrep", "total")))
+    for p, r in results.items():
+        for tag, x in r.items():
+            if x.get("stages"):
+                print(f"{tag:>18}  " + "".join(f"{x['stages'][st]:8.1f}s"
+                                               for st in ("hotcent", "dftb", "physrep", "total")))
     same = True
     if len(budgets) > 1:
         for p, r in results.items():

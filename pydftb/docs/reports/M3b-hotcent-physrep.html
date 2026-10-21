@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3b hotcent 与 physrep 报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M3b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3b · 完成报告</p>
+    <h1>BO 步的其余部分：hotcent 与 physrep</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd><code>@COMMIT@</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M3b-hotcent-physrep.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">4 核上 Cu 数据集的一个 BO 步，pydftb 从 122.2 s 降到 27.1 s，DFTB+ 从 131.9 s 降到 39.7 s；与 M3 开始前的串行流程（pydftb 147.0 s）相比快 5.4 倍。运行目录里的每个文件、<code>log.out</code> 和 <code>par.out</code> 都与原来逐字节相同。</p>
+    <ul>
+      <li><strong>hotcent：47 s → 4.6 s。</strong>原来对单元素体系把同一张 Cu–Cu 表算了三遍（16.8 s × 3）。现在每个原子、每张表只算一次，表的 700 个距离点交错分给 4 个进程计算，再由 hotcent 自己的 <code>run()</code> 回放，SKF 与原来逐字节相同。</li>
+      <li><strong>physrep：65 s → 11.5 s。</strong>σ_rep 搜索每个 BO 步要评估 74 次，每次从 769 ms 降到 163 ms：去掉只交一个任务的进程池（每次 275 ms）；<code>evaluate_pbc</code> 向量化、原子对按结构缓存（每次调用 3.7 → 0.28 ms），结果逐位相同；两个输入文件按内容只解析一次；状态方程直接用内存中的数据拟合，原来留下的文件在评估结束时照样写出。</li>
+      <li><strong>dataset 模式</strong>同样逐字节相同：4 核 87.6 s → 18.0 s。</li>
+      <li><strong>发现：</strong>σ 搜索中 L-BFGS-B 的 41 次评估回到原来的 σ（损失在 1e-8 量级上有噪声，差分梯度没有意义）；σ = 0.38 处一次状态方程拟合失败，损失跳到 101.8；<code>evaluate_pbc</code> 的超胞规则在很斜的晶胞中会漏掉近邻。这些都会改变结果，没有修，记入已知问题。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">4.5×</span><span class="lbl">整个 BO 步，pydftb，4 核（对 M3a）</span></li>
+      <li><span class="num">5.4×</span><span class="lbl">对 M3 之前的串行流程</span></li>
+      <li><span class="num">10×</span><span class="lbl">hotcent（4 核）</span></li>
+      <li><span class="num">0</span><span class="lbl">与原来的差（运行目录逐字节相同）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#same">二、结果是否与原来相同</a></li>
+      <li><a href="#perf">三、性能</a></li>
+      <li><a href="#tests">四、单元测试</a></li>
+      <li><a href="#findings">五、发现的问题与学到的东西</a></li>
+      <li><a href="#deviations">六、与计划的偏差</a></li>
+      <li><a href="#repro">七、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/hotcent_parallel.py</code>（新）</td><td><code>ShardedOffsite2c</code>（只改写 <code>make_grid</code>、<code>calculate</code>：计算模式记录每行的网格点数和 (S, H, H2)，回放模式按记录返回）；<code>skf_jobs</code>、<code>job_tables</code>（与 <code>generate_skf</code> 的循环相同）；<code>generate_all</code>：原子各算一次、表去重、分片交给 <code>map_tasks</code>（即使只有 1 个进程也 fork，hotcent 崩溃只让这一对失败）、回放并直接写到运行目录、<code>pot.out</code>、出错时这一对不写文件；<code>sharding_supported()</code> 检查 <code>Offsite2cTable.run</code> 源码的 sha256</td></tr>
+            <tr><td><code>utils/hotpy.py</code></td><td><code>full_hotcent</code> 改用 <code>generate_all</code>，进程数取方案的 hotcent 阶段；原来的实现改名为 <code>full_hotcent_reference</code>，<code>PTBP_HOTCENT_REFERENCE=1</code> 或 hotcent 版本不符时使用</td></tr>
+            <tr><td><code>tools/physrep.py</code></td><td>向量化的 <code>evaluate_pbc</code>：原子对缓存（按字节数限制的 LRU）、<code>np.vecdot</code> 自检；原来的循环为 <code>evaluate_pbc_reference</code>，<code>PTBP_PHYSREP_REFERENCE=1</code> 时使用</td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>parallel_repulsion</code> 在本进程逐组计算；<code>_read_step_file</code>（按内容缓存 <code>dftb_band.xyz</code>、<code>dft_final.xyz</code> 的解析结果）；<code>_physrep</code>（按参数缓存）；各组元素相同时 SKF 每次评估只写一次；<code>eos_atoms(..., files=)</code> 在内存中拟合并记录文件，<code>write_eos_files</code> 在评估结束时写出；<code>_eos_fit</code> 按输入缓存拟合结果；<code>EnergyGeometry</code> 记录各阶段耗时 <code>step_timings</code></td></tr>
+            <tr><td><code>utils/parallel/plan.py</code></td><td><code>hotcent_stage</code>：进程数 = 核心数；physrep 串行</td></tr>
+            <tr><td><code>tools/engine_parity.py</code></td><td>输出各阶段耗时的表</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="same">
+      <h2>二、结果是否与原来相同</h2>
+      <p>以 M3a 提交（<code>4461794</code>）的运行为基准，比较一个 BO 步后运行目录中的全部文件（SKF、<code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>dftb_full.xyz</code>、<code>search_index.txt</code>、<code>pot.out</code>、状态方程的轨迹、JSON、四个 CSV、两张图）以及 <code>log.out</code>（74 次 σ 评估的损失）和 <code>par.out</code>。已发表的 Cu 参数 r0_w = 2.749、r0_d = 12.036 Bohr。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模式</th><th>引擎</th><th>核心</th><th>与 M3a 比较</th><th>损失值</th></tr></thead>
+        <tbody>
+          <tr><td>energygeometry</td><td>pydftb</td><td>1、4</td><td>17 个文件全部逐字节相同</td><td>1.899324742</td></tr>
+          <tr><td>energygeometry</td><td>DFTB+</td><td>4</td><td>17 个文件全部逐字节相同</td><td>1.899324726</td></tr>
+          <tr><td>energygeometry</td><td>DFTB+</td><td>1</td><td>23 个文件中 21 个相同；<code>Cu.out</code>、<code>Cu2.out</code> 是 DFTB+ 自己的输出，只有随机种子和计时不同</td><td>1.899324726</td></tr>
+          <tr><td>dataset</td><td>pydftb</td><td>1、4</td><td>8 个文件全部逐字节相同（基准为 M3a 的 4 核运行）</td><td>446.2016018</td></tr>
+        </tbody>
+      </table></div>
+      <p>hotcent 单独测试：Cu（1 个元素对）、H–C（1 对）的 SKF 和 <code>pot.out</code> 与原来逐字节相同；H、C、O 优化 O（2 对）时 7 个 SKF 逐字节相同，<code>pot.out</code> 的各行相同但顺序不同——原来两对在两个进程里同时往这个文件追加，行的顺序本来就不确定，现在按元素对的顺序写。</p>
+    </section>
+
+    <section id="perf">
+      <h2>三、性能</h2>
+      <h3>整个 BO 步（energygeometry，<code>tools/engine_parity.py --compare-serial</code>）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>引擎</th><th>核心</th><th>hotcent</th><th>DFTB</th><th>physrep</th><th>合计</th><th>M3a</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb</td><td>1</td><td>16.5 s</td><td>34.4 s</td><td>13.5 s</td><td>65.5 s</td><td>147.0 s</td></tr>
+          <tr><td>pydftb</td><td>4</td><td>4.6 s</td><td>10.0 s</td><td>11.5 s</td><td>27.1 s</td><td>122.2 s</td></tr>
+          <tr><td>DFTB+</td><td>1</td><td>17.0 s</td><td>87.5 s</td><td>12.8 s</td><td>118.3 s</td><td>202.9 s</td></tr>
+          <tr><td>DFTB+</td><td>4</td><td>5.1 s</td><td>22.3 s</td><td>11.0 s</td><td>39.7 s</td><td>131.9 s</td></tr>
+        </tbody>
+      </table></div>
+      <p>每列另有约 1 s 的数据处理和画图。M3 开始前，PTBP 的 DFTB+ 默认用满全部核心的 OpenMP 线程（DFTB 阶段 95.1 s），整个 BO 步约 210 s；现在 4 核 39.7 s，快 5.3 倍。dataset 模式 4 核：pydftb 18.0 s（hotcent 4.6、DFTB 10.3、physrep 3.1 s），M3a 为 87.6 s；DFTB+ 37.0 s。</p>
+      <h3>hotcent（Cu，已发表的参数）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方式</th><th>耗时</th></tr></thead>
+        <tbody>
+          <tr><td>原来的 <code>full_hotcent</code>（表算三遍）</td><td>49.4 s</td></tr>
+          <tr><td>每张表一次，1 个进程</td><td>16.5 s（原子 0.4 s + 表 16.1 s）</td></tr>
+          <tr><td>每张表一次，4 个进程（每个进程 175 行）</td><td>4.6 s；回放 0.03 s</td></tr>
+        </tbody>
+      </table></div>
+      <h3>physrep 的一次 σ 评估（66 个结构，6 组）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>项目</th><th>原来</th><th>现在</th></tr></thead>
+        <tbody>
+          <tr><td>进程池（新建 + 每组 pickle <code>Loss</code>）</td><td>275 ms</td><td>0</td></tr>
+          <tr><td><code>evaluate_pbc</code> × 66</td><td>148 ms</td><td>约 19 ms（缓存命中）</td></tr>
+          <tr><td>状态方程（轨迹文件写、读、拟合）</td><td>174 ms</td><td>在内存中拟合，DFT 一侧的拟合有缓存；剩下的主要是 ASE 取能量时的状态检查（剖析中 67 ms，含剖析开销）</td></tr>
+          <tr><td>读两个输入文件</td><td>55 ms</td><td>约 1 ms（按内容缓存）</td></tr>
+          <tr><td>合计（不含剖析开销）</td><td>769 ms</td><td>163 ms</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>四、单元测试</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>文件</th><th>个数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>tests/test_physrep_vectorised.py</code></td><td>11</td><td>66 个 Cu 结构 × 6 个 σ（首次和缓存命中各一次）、30 个随机三斜的 Cu/O/H 晶胞，能量和力逐位相同（含返回类型）；截断内没有原子对；没有 <code>vecdot</code> 时的退回路径；<code>PTBP_PHYSREP_REFERENCE</code>；<code>vecdot</code> 自检。两个环境都通过</td></tr>
+          <tr><td><code>tests/test_hotcent_parallel.py</code>（slow）</td><td>4</td><td>Cu：原来的实现与无方案、1、4 个进程的 SKF 和 <code>pot.out</code> 逐字节相同；H–C、带 <code>opt_elem</code> 的 H/C/O；元素对和表的列举与 <code>generate_skf</code> 相同；一个元素的原子计算失败时，只有含它的元素对不写文件</td></tr>
+          <tr><td><code>tests/test_sigma_search.py</code></td><td>4</td><td>状态方程在内存中拟合与原来的写文件路径结果相同、写出的轨迹和 JSON 逐字节相同；拟合失败时每次都给出原来的替代值；输入文件按内容缓存、内容变了重新解析；两组结构的一次真实 σ 评估不建进程池，损失与原来的 <code>evaluate_pbc</code> 循环逐位相同，SKF 和日志相同</td></tr>
+          <tr><td><code>tests/test_parallel_budget.py</code></td><td>19</td><td>方案的文字更新：hotcent 阶段按核心数分进程</td></tr>
+        </tbody>
+      </table></div>
+      <p>M3b 新增 19 个测试。conda 环境（有 DFTB+、hotcent）：pydftb 的 223 个、PTBP 的 150 个测试中，除 7 个已知失败的界面冒烟测试外全部通过；最小环境（CI）：pydftb 207 个和 <code>test_physrep_vectorised.py</code> 的 11 个通过，16 个因没有安装 dftd3/dftd4 跳过。</p>
+    </section>
+
+    <section id="findings">
+      <h2>五、发现的问题与学到的东西</h2>
+      <ul>
+        <li><strong>hotcent 的表算了三遍。</strong><code>generate_skf</code> 对元素对 <code>['Cu', 'Cu']</code> 的双重循环（i = 0、1；k ≤ i）产生 (Cu, Cu) 三次，每次都完整计算并覆盖上一次的文件。多元素体系中，同核的表和原子在每个含该元素的元素对里重算。</li>
+        <li><strong>只交一个任务的进程池比工作本身还贵。</strong><code>parallel_repulsion</code> 每次评估新建 <code>mp.Pool()</code>，每组 <code>imap</code> 一个任务，要 pickle 整个 <code>Loss</code>（含 66 个结构）：275 ms，而这一组的计算只有几十毫秒。</li>
+        <li><strong>σ 搜索浪费了一半以上的评估。</strong>网格 11 点、Nelder–Mead 22 点之后，L-BFGS-B 从同一个 σ = 0.33058594 出发，有限差分步长 1e-8，而损失在这个尺度上有噪声（σ 相差 1e-8 的两点，损失差 6e-8），差分梯度没有意义，第一步跳到下界 0.1，再用 38 次评估回到 0.33058594，结果与之前相同。改用其他搜索会改变结果，没有改，留作以后的可选项。</li>
+        <li><strong>损失对 σ 不光滑。</strong>σ = 0.38 时某一相的状态方程拟合失败，μ<sub>V</sub> 从 0.12 跳到 33.3，损失 101.8（两边是 1.90 和 5.5）；记录的 μ<sub>B</sub> 在 σ ≤ 0.31 时为 13.85、在 0.45 时为 1.29，同时出现“对负数取 log10”“负体积的幂”等警告。μ<sub>B</sub> 不进入损失，但说明状态方程拟合在部分 σ 上不可靠。</li>
+        <li><strong><code>np.linalg.norm</code> 与逐元素平方和在最后一位不同。</strong>3 维向量的 <code>norm</code> 是 <code>sqrt(v.dot(v))</code>，即 BLAS 的 <code>ddot</code>（带 FMA）；20 万个随机向量中约 10% 与 <code>sqrt(x² + y² + z²)</code> 不同，<code>einsum</code> 也不同，<code>np.vecdot</code> 和批量 <code>matmul</code> 走同一个 <code>ddot</code>，全部相同。</li>
+        <li><strong><code>evaluate_pbc</code> 的超胞可能不够大。</strong>超胞的层数由最短的晶格矢量长度决定，没有考虑晶面间距。γ = 13° 的测试晶胞中，截断 5.48 Bohr 内应有 22 对，只算到 20 对；Cu 数据集的 66 个结构在已发表的 σ 下没有遗漏（与 ASE 的近邻表比较）。为了结果不变，没有修。</li>
+        <li><strong>hotcent 的积分只用 <code>np.sum</code>。</strong>它不调 BLAS，所以工作进程把 BLAS 限为 1 个线程不影响结果；hotcent 的表按距离点完全独立，交错分片负载均匀。</li>
+        <li><strong>原来的 <code>pot.out</code> 在多个元素对时顺序不确定。</strong>各元素对的进程同时追加同一个文件。</li>
+      </ul>
+    </section>
+
+    <section id="deviations">
+      <h2>六、与计划的偏差</h2>
+      <ul>
+        <li>原计划只做“physrep 向量化 + 去掉进程池”，剖析后发现进程池和文件读写的开销更大，于是一并处理了输入文件缓存、状态方程的内存拟合和 SKF 的重复写入，都保证运行目录逐字节相同。</li>
+        <li>设计文档中打算去掉 <code>dftb_sub_n.xyz</code> 的写、读，实现时保留：σ 搜索中写出的 <code>dftb_full.xyz</code> 由读回的结构生成，跳过这一步会改变这个中间文件（它随后被 <code>EnergyGeometry</code> 覆盖，但 BO 步在中途失败时会留下来）。这一步每次评估约 40 ms（写 12 ms、读 28 ms）。</li>
+        <li>每次评估只写一次 SKF，只在各组元素相同时使用（单元素体系）；各组元素不同时，各组写的是不同的文件，仍然每组都写。</li>
+        <li>原计划的 <code>tools/bench_m3.py</code> 没有写：<code>EnergyGeometry</code> 记录各阶段耗时，<code>tools/engine_parity.py</code> 直接给出表格和逐字节比较。</li>
+        <li>physrep 的目标是约 10 s，实际 11.5 s：每次评估剩下的时间主要是 ASE 读写 extxyz 和取能量时的状态检查。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">七、复现命令与实验记录</span></summary>
+      <div class="body">
+<pre><code>python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
+    --points 2.749,12.036 --engines pydftb dftbplus --compare-serial
+pytest tests/test_physrep_vectorised.py tests/test_hotcent_parallel.py   # 后者需要 hotcent</code></pre>
+        <h3>实验脚本（scratchpad <code>m3b/</code>，未进仓库）</h3>
+        <ul>
+          <li><code>prof_physrep.py</code>、<code>time_parts.py</code>、<code>prof_physrep2.py</code>：σ 评估的剖析和分项计时（改动前后）。</li>
+          <li><code>norm_check.py</code>：<code>np.linalg.norm</code> 与各种向量化写法的逐位比较；<code>proto_physrep.py</code>：向量化原型。</li>
+          <li><code>proto_hotcent.py</code>：分片与回放的原型；<code>fork_slow.py</code>：排除“fork 出的进程更慢”。</li>
+          <li><code>compare_runs.py</code>：两个 <code>engine_parity</code> 工作目录中一个 BO 步的全部文件逐字节比较；<code>bostep_run2/</code>、<code>ds_m3a/</code>、<code>ds_m3b/</code>：第二、三节的运行（M3a 的基准用 <code>git worktree</code> 检出 <code>4461794</code> 运行）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li>M3c：计算策略推荐器——成本模型、内存估计、<code>ptbp plan</code>；可加入“快速 σ 搜索”之类会改变结果的选项，但必须显式开启。</li>
+        <li>M3d：DFTB+ 配置顾问。</li>
+        <li>可以继续的提速：σ 评估中 ASE 的 extxyz 读写和状态检查（约 100 ms/次）；pydftb 的 Ewald 准备和力分线程（M3a 报告）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M3b-hotcent-physrep.html">← M3b 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M3b</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -111,11 +111,18 @@ def dftb_stage(ncores: int, n_structures: int, engine: str) -> StagePlan:
     return StagePlan(workers, threads, 1, "largest-first" if workers > 1 else "index", reasons)
 
 
+def hotcent_stage(ncores: int) -> StagePlan:
+    """M3b: every table once, its distance rows interleaved over the processes."""
+    if ncores <= 1:
+        return StagePlan(reasons=["1 core; every table computed once"])
+    return StagePlan(ncores, 1, 1, "index", ["each table once, its rows shared by the processes"])
+
+
 def _plan(budget, engine, optimizer, n_structures, particles, ncores) -> Plan:
     plan = Plan(budget, engine, optimizer, particles, ncores, n_structures)
     plan.stages["dftb"] = dftb_stage(ncores, n_structures, engine)
-    plan.stages["hotcent"] = StagePlan(reasons=["parallel from M3b"])
-    plan.stages["physrep"] = StagePlan(reasons=["vectorised in M3b"])
+    plan.stages["hotcent"] = hotcent_stage(ncores)
+    plan.stages["physrep"] = StagePlan(reasons=["vectorised, in this process"])
     return plan
 
 

@@ -150,7 +150,8 @@ def test_render_and_json(tmp_path):
     plan = simple_plan(_budget(4), 2, "pydftb")
     text = plan.render()
     assert "2 processes x 2 k-point threads" in text and "largest first" in text
-    assert "hotcent: serial" in text
+    assert "hotcent: 4 processes x 1 thread" in text
+    assert "hotcent: serial" in simple_plan(_budget(1), 2, "pydftb").render()
     plan.save(tmp_path / "plan.json")
     doc = json.loads((tmp_path / "plan.json").read_text())
     assert doc["budget"]["ncores"] == 4 and doc["stages"]["dftb"]["threads"] == 2

@@ -35,6 +35,7 @@ import pickle
 import pprint as pp
 import re
 import time
+from collections import OrderedDict
 from contextlib import nullcontext
 from math import ceil
 from pathlib import Path
@@ -72,6 +73,72 @@ import utils.plot as plot
 # 1: the penalty always used a covalent radius of 0.5 Bohr (the radius was never passed to
 #    Loss); 2: the radius of the element being parametrised, as for the published PTBP losses.
 LOSS_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# Repeated work of the sigma_rep search (milestone M3b).  A BO step evaluates the
+# repulsion for ~74 values of sigma_rep on the same DFTB results: the step's files
+# are parsed once (keyed by their content) and the equation-of-state fits are
+# cached by their input (the DFT side is the same for every sigma_rep).
+_STEP_FILES: "OrderedDict[tuple, list]" = OrderedDict()
+_EOS_FITS: "OrderedDict[tuple, tuple]" = OrderedDict()
+
+
+def _read_step_file(path) -> list:
+    """``ase.io.read(path, ':')``, parsed once per file content.  The Atoms are shared
+    between calls: read them, do not modify them (copy first)."""
+    import hashlib
+    key = (os.path.realpath(path), hashlib.sha1(Path(path).read_bytes()).hexdigest())
+    hit = _STEP_FILES.get(key)
+    if hit is None:
+        hit = ase.io.read(path, ':')
+        _STEP_FILES[key] = hit
+        while len(_STEP_FILES) > 8:
+            _STEP_FILES.popitem(last=False)
+    else:
+        _STEP_FILES.move_to_end(key)
+    return list(hit)
+
+
+_PHYSREP: "OrderedDict[tuple, physrep]" = OrderedDict()
+
+
+def _physrep(elements, scale_cov, k_xc) -> "physrep":
+    """physrep(elements, rmin=0.5, rmax=20, npoints=700, ...), built once per parameters
+    (a pure function of them; evaluated and written, never modified)."""
+    key = (repr(list(elements)), repr(list(scale_cov)), repr(list(k_xc)))
+    pr = _PHYSREP.get(key)
+    if pr is None:
+        pr = physrep(elements=elements, rmin=0.5, rmax=20.0, npoints=700,
+                     scale_cov=scale_cov, k_xc=k_xc)
+        _PHYSREP[key] = pr
+        while len(_PHYSREP) > 64:
+            _PHYSREP.popitem(last=False)
+    return pr
+
+
+def _eos_fit(atoms_list) -> tuple:
+    """(e0, v0, B, Bp) of a Birch-Murnaghan fit to energy and volume per atom, as
+    ``Loss.fit`` computes them after the trajectory round trip (bit for bit: the
+    trajectory stores the same doubles); RuntimeError when the fit fails."""
+    vols = np.array([atoms.get_volume() / len(atoms) for atoms in atoms_list])
+    ens = np.array([atoms.get_potential_energy() / len(atoms) for atoms in atoms_list])
+    key = (vols.tobytes(), ens.tobytes())
+    hit = _EOS_FITS.get(key)
+    if hit is None:
+        try:
+            eos = EOS(list(vols), list(ens), 'birchmurnaghan')
+            eos.fit(warn=False)
+            e0, B, Bp, v0 = eos.eos_parameters
+            hit = (e0, v0, B, Bp)
+        except RuntimeError as err:
+            hit = str(err)                    # a failed fit: raised anew each time
+        _EOS_FITS[key] = hit
+        while len(_EOS_FITS) > 512:
+            _EOS_FITS.popitem(last=False)
+    if isinstance(hit, str):
+        raise RuntimeError(hit)
+    return hit
 
 
 def penalty_radius(dataset, opt_elem=()) -> float:
@@ -403,8 +470,13 @@ class Loss():
         e0, B, Bp, v0 = eos.eos_parameters
         return e0, v0, B, Bp
 
-    def eos_atoms(self, atoms_input, default_eos_points: int, calc_label: str):
-        """Run EOS fit on each phase, return dict of {label_n: {energy,volume,B,Bp}}."""
+    def eos_atoms(self, atoms_input, default_eos_points: int, calc_label: str, files=None):
+        """Run EOS fit on each phase, return dict of {label_n: {energy,volume,B,Bp}}.
+
+        Writes ``<label>_<n>.traj`` per phase and ``<calc_label>.json``.  With ``files``
+        (a dict) the fits use the structures in memory and the files are only recorded
+        there, for :meth:`write_eos_files` (bit for bit the same numbers and files).
+        """
         if isinstance(atoms_input, str):
             atoms_list = ase.io.read(atoms_input, ':')
         else:
@@ -418,13 +490,19 @@ class Loss():
         atomic_syms = [chemical_symbols[i] for i in atomic_nums]
         traj_label = f"eos_{'_'.join(atomic_syms)}"
 
-        self.mk_traj(atoms_list, traj_label, default_eos_points)
+        if files is None:
+            self.mk_traj(atoms_list, traj_label, default_eos_points)
 
         out = {}
         for n in range(num_phases):
             na = traj_label + '_' + str(n)
+            phase = atoms_list[n * default_eos_points: (n + 1) * default_eos_points]
             try:
-                e0, v0, B, Bp = self.fit(na)
+                if files is None:
+                    e0, v0, B, Bp = self.fit(na)
+                else:
+                    files[f'{na}.traj'] = list(phase)
+                    e0, v0, B, Bp = _eos_fit(phase)
             except RuntimeError:
                 e0, v0, B, Bp = 1000, 1000, 1000, 1000
             out[na] = {f'{calc_label}_energy': e0,
@@ -432,8 +510,23 @@ class Loss():
                        f'{calc_label}_B': B,
                        f'{calc_label}_Bp': Bp}
             print(f"\n{na}\n{out[na]}")
-        Path(f'{calc_label}.json').write_text(json.dumps(out))
+        if files is None:
+            Path(f'{calc_label}.json').write_text(json.dumps(out))
+        else:
+            files[f'{calc_label}.json'] = json.dumps(out)
         return out
+
+    def write_eos_files(self, files: dict) -> None:
+        """Write the files recorded by ``eos_atoms(..., files=...)``: trajectories as
+        ``mk_traj`` writes them, JSON as text."""
+        for name, content in files.items():
+            if name.endswith('.traj'):
+                traj = Trajectory(name, 'w')
+                for a in content:
+                    traj.write(a)
+                traj.close()
+            else:
+                Path(name).write_text(content)
 
     def eos_cal(self, dataset, bolt_factor: list):
         """Compute EOS-based loss components: (delta_tot, mu_v_tot, mu_logb_tot).
@@ -517,14 +610,18 @@ class Loss():
         # Read dataset
         num_parall = int(len(dft_incopy) / self.args_input.eos_points)
 
+        # The EOS fits use the structures in memory; the files eos_atoms writes on the
+        # way (trajectories, dft.json, dftb.json) are written once at the end with the
+        # contents the repeated writes used to leave (M3b).
+        eos_files = {}
         dftb_full, mu_Es, mu_Vs, mu_logbs = [], [], [], []
         for num in range(num_parall):
             dft_sub = dft_incopy[num*self.args_input.eos_points:(num+1)*self.args_input.eos_points]
             dftb_sub = ase.io.read(f'dftb_sub_{num}.xyz', ':')
             dftb_full.extend(dftb_sub)
 
-            eos_dftb = self.eos_atoms(dftb_sub, self.args_input.eos_points, 'dftb')
-            eos_dft  = self.eos_atoms(dft_sub, self.args_input.eos_points, 'dft')
+            eos_dftb = self.eos_atoms(dftb_sub, self.args_input.eos_points, 'dftb', files=eos_files)
+            eos_dft  = self.eos_atoms(dft_sub, self.args_input.eos_points, 'dft', files=eos_files)
             print(f"\neos_dftb: {eos_dftb}\neos_dft: {eos_dft}")
 
 
@@ -538,6 +635,7 @@ class Loss():
         bolt_left = np.sum([bolt_f[i] for i in range(len(bolt_f)) if bolt_f[i] >= 0.1])
         mu_E, mu_V, mu_logb = np.sum(mu_Es)/bolt_left, np.sum(mu_Vs)/bolt_left, np.sum(mu_logbs)/bolt_left
 
+        self.write_eos_files(eos_files)
         ase.io.write('dftb_full.xyz', dftb_full)
         os.system("rm dftb_sub_*.xyz")
 
@@ -576,13 +674,7 @@ class Loss():
         print(f"\n> Subparallel Physrep Info: {n}\n  atomic_subnumbers_tot:{atomic_subnumbers_tot}\n  para_rep_tot:{para_rep_tot}\n  kxc_tot:{kxc_tot}\n len(dftb_band):{len(dftb_bandstructure)}\n len(dft_sub):{len(dft_sub)}\n write_rep:{write_rep}")
 
 
-        pr = physrep(elements=atomic_subnumbers_tot,
-                    rmin=0.5,
-                    rmax=20.0,
-                    npoints=700,
-                    scale_cov=para_rep_tot,
-                    k_xc=kxc_tot,
-                    )
+        pr = _physrep(atomic_subnumbers_tot, para_rep_tot, kxc_tot)
         
         if write_rep:
             if self.args_input.multi_element is not None:
@@ -637,19 +729,26 @@ class Loss():
         """
 
         sigma_rep = sigma_rep.tolist()
-        pool = mp.Pool()
 
-        # Prepare data
-        dftb_bandstructure_final = ase.io.read('dftb_band.xyz', ':')
-        dft_final = ase.io.read('dft_final.xyz', ':')
-        dft_incopy = copy.deepcopy(dft_final)
+        # Prepare data (the step's files, parsed once per BO step; nothing below modifies
+        # these structures, so they are not copied)
+        dftb_bandstructure_final = _read_step_file('dftb_band.xyz')
+        dft_final = _read_step_file('dft_final.xyz')
+        dft_incopy = dft_final
 
 
         num_parall = int(len(dft_final) / self.args_input.eos_points)
+        group_elements = [self.get_elements_from_dataset(
+            dft_incopy[num*self.args_input.eos_points:(num+1)*self.args_input.eos_points],
+            self.opt_elem)[:2] for num in range(num_parall)]
+        # Every group used to write the SKF of its elements: with the same elements in all
+        # groups the files are the same each time, and writing them once leaves the same
+        # files (groups with different elements write different files: keep every write)
+        same_files = all(repr(g) == repr(group_elements[0]) for g in group_elements)
         for num in range(num_parall):
-            dft_sub = copy.deepcopy(dft_incopy[num*self.args_input.eos_points:(num+1)*self.args_input.eos_points])
+            dft_sub = dft_incopy[num*self.args_input.eos_points:(num+1)*self.args_input.eos_points]
             dftb_bandstructure = dftb_bandstructure_final[num*self.args_input.eos_points:(num+1)*self.args_input.eos_points]
-            atomic_subnumbers, atomic_subnumbers_exclusive , _, _ = self.get_elements_from_dataset(dft_sub, self.opt_elem)
+            atomic_subnumbers, atomic_subnumbers_exclusive = group_elements[num]
 
 
             if self.args_input.multi_element is None:
@@ -660,12 +759,11 @@ class Loss():
             kxc_tot = [0.0] * len(atomic_subnumbers)
 
             
-            # Prepare input for parallel
-            input_parameters = [(num, dftb_bandstructure, dft_sub, atomic_subnumbers, para_rep_tot, kxc_tot, write_rep)]
-            outputs = list(pool.imap(self.generate_repulsion, input_parameters))
-
-        pool.close()
-        pool.join()
+            # One group at a time, in this process (M3b: the process pool used to get a
+            # single task per group and cost more than the work)
+            write_now = write_rep and (not same_files or num == num_parall - 1)
+            self.generate_repulsion((num, dftb_bandstructure, dft_sub, atomic_subnumbers,
+                                     para_rep_tot, kxc_tot, write_now))
 
         # Judge which loss function to use
 
@@ -698,9 +796,9 @@ class Loss():
 
         """
         
-        # Read dataset from band energy calculation
-        dftb_bandstructure_final = ase.io.read('dftb_band.xyz', ':')
-        dft_final = ase.io.read('dft_final.xyz', ':')
+        # Read dataset from band energy calculation (parsed once per BO step)
+        dftb_bandstructure_final = _read_step_file('dftb_band.xyz')
+        dft_final = _read_step_file('dft_final.xyz')
         dft_incopy = copy.deepcopy(dft_final)
 
 
@@ -714,13 +812,7 @@ class Loss():
 
 
         # Repuslive potential Calculator
-        pr = physrep(elements=atomic_numbers_tot,
-                    rmin=0.5,
-                    rmax=20.0,
-                    npoints=700,
-                    scale_cov=scale_cov_per_elem,
-                    k_xc=kxc_tot,
-                    )
+        pr = _physrep(atomic_numbers_tot, scale_cov_per_elem, kxc_tot)
         
 
         # implement repulsive potential to dftb_bandstructure part 
@@ -946,6 +1038,9 @@ class Loss():
 
 
             t_end = perf_counter()
+            self.step_timings = {'hotcent': t_hotcent - t_ini, 'dftb': t_dftb - t_hotcent,
+                                 'physrep': t_physrep - t_dftb, 'data': t_end - t_physrep,
+                                 'total': t_end - t_ini}
 
             # os.chdir(p / DEFAULT_OUT_DIR)        
             print(f"""\nTime:
