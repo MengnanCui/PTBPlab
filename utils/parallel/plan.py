@@ -1,14 +1,16 @@
 """The parallel plan of a PTBP run: processes and threads for each stage of a BO step.
 
-``cli/run.py`` builds the plan once (:func:`simple_plan`), prints it, saves it as
-``plan.json`` and makes it the process-wide plan (:func:`set_plan`); forked workers
-inherit it.  Library use without a plan (``current_plan() is None``) keeps PTBP's
-historical serial behaviour, untouched thread settings included.
+``cli/run.py`` builds the plan once, prints it, saves it as ``plan.json`` and makes it
+the process-wide plan (:func:`set_plan`); forked workers inherit it.  Library use
+without a plan (``current_plan() is None``) keeps PTBP's historical serial behaviour,
+untouched thread settings included.
 
-M3a plans the DFTB stage with a simple rule: one process per structure up to the
-core budget, spare cores as threads of each process (pydftb k-point threads or
-DFTB+ OpenMP threads), structures handed out largest first (k-points x orbitals^3).
-The cost-model recommender of M3c replaces this rule.
+M3a planned the DFTB stage with a simple rule (:func:`simple_plan`): one process per
+structure up to the core budget, spare cores as threads of each process (pydftb k-point
+threads or DFTB+ OpenMP threads), structures handed out largest first (k-points x
+orbitals^3).  Since M3c ``cli/run.py`` uses the cost-model recommender
+(``utils.recommender.make_plan``), which fills in the same plan plus estimates, the
+stages of every core share of a parallel_bo batch and suggestions.
 """
 from __future__ import annotations
 
@@ -45,6 +47,13 @@ class Plan:
     n_structures: int = 0
     stages: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
+    # utils.recommender (M3c): estimates (seconds, bytes), the stages of every core share
+    # of a parallel_bo batch, estimated seconds per structure (task order), suggestions
+    estimates: dict = field(default_factory=dict)
+    share_stages: dict = field(default_factory=dict)
+    costs: list = field(default_factory=list)
+    suggestions: list = field(default_factory=list)
+    workload: dict = field(default_factory=dict)
 
     def stage(self, name: str) -> StagePlan:
         return self.stages.get(name) or StagePlan(reasons=["serial"])
@@ -52,7 +61,25 @@ class Plan:
     def for_particle(self, i: int) -> Plan:
         """The plan inside particle ``i`` of a parallel_bo batch: its share of the cores."""
         share = core_shares(self.budget.ncores, self.particles)[i % self.particles]
-        return _plan(self.budget, self.engine, self.optimizer, self.n_structures, 1, share)
+        stages = self.share_stages.get(share)
+        if stages is None:
+            return _plan(self.budget, self.engine, self.optimizer, self.n_structures, 1, share)
+        return Plan(self.budget, self.engine, self.optimizer, 1, share, self.n_structures,
+                    dict(stages), costs=self.costs,
+                    estimates=dict(self.estimates) if share == self.ncores else {})
+
+    def step_line(self, measured: dict) -> str:
+        """The measured stage times of a BO step next to the plan's estimates."""
+        est = self.estimates
+        parts = []
+        for key in ("hotcent", "dftb", "physrep"):
+            if key in measured:
+                guess = f" (estimated {format_seconds(est[key])})" if key in est else ""
+                parts.append(f"{key} {format_seconds(measured[key])}{guess}")
+        if "total" in measured:
+            guess = f" (estimated {format_seconds(est['step'])})" if "step" in est else ""
+            parts.append(f"total {format_seconds(measured['total'])}{guess}")
+        return "[plan] BO step: " + ", ".join(parts)
 
     def render(self) -> str:
         head = f"[plan] {self.budget.describe()}; engine {self.engine}; optimizer {self.optimizer}"
@@ -75,16 +102,76 @@ class Plan:
             why = f" -- {'; '.join(st.reasons)}" if st.reasons else ""
             lines.append(f"[plan]   {title}{per}: {what}{why}")
         lines += [f"[plan]   note: {n}" for n in self.notes]
+        lines += self._render_estimates()
+        lines += [f"[plan]   suggestion: {n}" for n in self.suggestions]
         return "\n".join(lines)
+
+    def _render_estimates(self) -> list:
+        est = self.estimates
+        if not est or "step" not in est:
+            return []
+        per = " per BO point" if self.particles > 1 else ""
+        parts = " + ".join(f"{k} {format_seconds(est[k])}"
+                           for k in ("hotcent", "dftb", "physrep", "other") if k in est)
+        lines = [f"[plan]   estimated BO step{per}: {parts} = {format_seconds(est['step'])}"
+                 f"{_speed_note(est.get('speed'))}"]
+        if "run" in est:
+            n = int(est["evaluations"])
+            lines.append(f"[plan]   estimated run: {n} BO point{'s' * (n != 1)}, "
+                         f"about {format_seconds(est['run'])}")
+        if est.get("memory_per_process"):
+            avail = est.get("memory_available")
+            lines.append(f"[plan]   memory: up to {format_bytes(est['memory_per_process'])} per "
+                         f"DFTB process" + (f" ({format_bytes(avail)} available)" if avail else ""))
+        return lines
 
     def to_json(self) -> dict:
         return {"budget": self.budget.to_json(), "engine": self.engine, "optimizer": self.optimizer,
                 "particles": self.particles, "ncores": self.ncores,
                 "n_structures": self.n_structures,
-                "stages": {k: asdict(v) for k, v in self.stages.items()}, "notes": list(self.notes)}
+                "stages": {k: asdict(v) for k, v in self.stages.items()}, "notes": list(self.notes),
+                "estimates": dict(self.estimates), "suggestions": list(self.suggestions),
+                "workload": dict(self.workload),
+                "share_stages": {str(c): {k: asdict(v) for k, v in st.items()}
+                                 for c, st in self.share_stages.items()},
+                "costs": list(self.costs)}
+
+    @classmethod
+    def from_json(cls, data: dict) -> Plan:
+        budget = CpuBudget(int(data["budget"]["ncores"]), dict(data["budget"].get("sources", {})))
+        plan = cls(budget, data.get("engine", "dftbplus"), data.get("optimizer", "bo"),
+                   int(data.get("particles", 1)), int(data.get("ncores", 1)),
+                   int(data.get("n_structures", 0)),
+                   {k: StagePlan(**v) for k, v in data.get("stages", {}).items()},
+                   list(data.get("notes", [])))
+        plan.estimates = dict(data.get("estimates", {}))
+        plan.suggestions = list(data.get("suggestions", []))
+        plan.workload = dict(data.get("workload", {}))
+        plan.share_stages = {int(c): {k: StagePlan(**v) for k, v in st.items()}
+                             for c, st in data.get("share_stages", {}).items()}
+        plan.costs = list(data.get("costs", []))
+        return plan
 
     def save(self, path) -> None:
         Path(path).write_text(json.dumps(self.to_json(), indent=2) + "\n")
+
+
+def format_seconds(t: float) -> str:
+    if t < 120:
+        return f"{t:.1f} s"
+    if t < 7200:
+        return f"{t / 60:.1f} min"
+    return f"{t / 3600:.1f} h"
+
+
+def format_bytes(b: float) -> str:
+    return f"{b / 2 ** 30:.1f} GB" if b >= 2 ** 30 else f"{b / 2 ** 20:.0f} MB"
+
+
+def _speed_note(speed) -> str:
+    if speed is None or abs(speed - 1.0) < 0.05:
+        return ""
+    return f" (this machine {speed:.2f}x the calibration machine)"
 
 
 def core_shares(ncores: int, parts: int) -> list[int]:

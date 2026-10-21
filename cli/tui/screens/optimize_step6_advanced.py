@@ -35,6 +35,10 @@ class OptimizeStep6Advanced(Screen):
                 id="sp-set",
             ),
 
+            Static("cores (a number, or auto = every core this process may use; "
+                   "`ptbp plan` shows how they are used):"),
+            Input(value="auto", id="ncores"),
+
             Static("DFTB engine (pydftb = in-process Python engine, same results as DFTB+):"),
             RadioSet(
                 RadioButton("dftbplus", id="eng-dftbplus"),
@@ -60,6 +64,7 @@ class OptimizeStep6Advanced(Screen):
         rs._selected = 0 if s.superposition == 'density' else 1
         es = self.query_one('#eng-set', RadioSet)
         es._selected = 0 if s.engine == 'dftbplus' else 1
+        self.query_one('#ncores', Input).value = str(s.ncores)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-back":
@@ -84,6 +89,8 @@ class OptimizeStep6Advanced(Screen):
             s.superposition = 'density' if (rs.pressed_index <= 0) else 'potential'
             es = self.query_one('#eng-set', RadioSet)
             s.engine = 'dftbplus' if (es.pressed_index <= 0) else 'pydftb'
+            raw = self.query_one('#ncores', Input).value.strip().lower()
+            s.ncores = raw if raw.isdigit() and int(raw) >= 1 else 'auto'
 
             from cli.tui.screens.optimize_step7_review import OptimizeStep7Review
             self.app.push_screen(OptimizeStep7Review())

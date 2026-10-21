@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3c 计算策略推荐器设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M3c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3c · 设计文档</p>
+    <h1>计算策略推荐器 v1（CPU）</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M3c-recommender.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M3a、M3b 的方案用的是固定规则（结构数和核心数）。M3c 用一个按结构估计耗时和内存的成本模型来定方案：先模拟“最大优先”的调度，比较几种进程数与线程数的组合，再检查内存；只自动调整不影响结果的设置，其余的作为建议打印出来。新命令 <code>ptbp plan</code> 在不运行优化的情况下给出方案、各阶段的预计耗时和建议。</p>
+    <ul>
+      <li><strong>成本模型</strong>（<code>pydftb/perfmodel.py</code>，最小环境可用）：每个结构的轨道数 N、约化后的 k 点数 nk、原子数，估计 pydftb 的单点耗时（对角化 ∝ nk·N³，其余 ∝ nk·N² 和原子数²）和内存（∝ nk·N²），常数用本机的实测数据拟合；<code>--probe</code> 约 1 秒测出本机相对快慢，按机器指纹缓存。</li>
+      <li><strong>自动决定的</strong>：parallel_bo 每个 BO 点分几个核心；DFTB 阶段的进程数 × 线程数（模拟调度取完成时间最短者，内存不够时减少进程）；DFTB+ 的 OpenMP 线程（小矩阵上多线程更慢，只在大体系时给线程）；hotcent 的进程数；任务的发放顺序（第一个 BO 步用模型，之后用实测的每个结构耗时）。</li>
+      <li><strong>只建议的</strong>：结构比核心少时考虑 <code>--optimizer parallel_bo</code>；只有 Γ 点的大体系可以开 BLAS 多线程（结果不再逐位相同，需要用 <code>PTBP_BLAS_THREADS</code> 显式开启）；数据集的 k 点和轨道数统计。</li>
+      <li>启动时打印方案和理由并写 <code>plan.json</code>；每个 BO 步后打印各阶段的预计与实测耗时。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">ptbp plan</span><span class="lbl">不运行优化，先看方案和预计耗时</span></li>
+      <li><span class="num">0</span><span class="lbl">对结果的影响（只调不改变数值的设置）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与现状</a></li>
+      <li><a href="#design">二、设计</a></li>
+      <li><a href="#details">三、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">四、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">五、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与现状</h2>
+      <p>M3a 的规则是“进程数 = min(核心数, 结构数)，多出的核心作为线程”。它在 Cu 数据集上已经接近最优（4 个进程时调度效率 98%），但有几种情况会选错或说不清：</p>
+      <ul>
+        <li>结构大小差别很大时，一个大结构可能决定整个阶段的耗时；此时把核心作为线程给它，或者减少进程数换取内存，需要估计每个结构的耗时才能判断。</li>
+        <li>DFTB+ 的 OpenMP 线程：M3a 测得在 9–18 阶的矩阵上 4 个线程比 1 个线程还慢，规则却会在结构少于核心时给它线程。</li>
+        <li>内存：每个进程都有自己的矩阵，大体系、多 k 点时进程数要受内存限制。</li>
+        <li>用户在开始一次长时间的优化前，看不到预计要多久、哪一段最慢、有没有更好的设置。</li>
+      </ul>
+    </section>
+
+    <section id="design">
+      <h2>二、设计</h2>
+      <h3>成本模型</h3>
+      <ul>
+        <li>输入：每个结构的原子数、轨道数 N（按元素取最高角动量：H、He 为 s，主族为 sp，过渡元素 spd，镧系、锕系 spdf；有 SKF 时可用实际值）、PTBP 规则下的 k 网格（玻尔兹曼权重 &lt; 0.1 只用 Γ 点）和时间反演约化后的 nk。</li>
+        <li>pydftb 单点耗时：t = c<sub>0</sub> + c<sub>1</sub>·原子数² + (n<sub>scc</sub> + 2)·nk·(c<sub>2</sub>·N³ + c<sub>3</sub>·N²) + c<sub>4</sub>·nk·N²；n<sub>scc</sub> 默认 10。常数用 M3c 的标定数据（Cu 数据集 66 个结构和 1–27 个原子的 Cu 晶胞）拟合。k 点线程只加速对角化那一项（M3a 实测 4 线程 1.9–2.9 倍），按这部分的比例估计整体加速。</li>
+        <li>DFTB+ 单点：每次启动程序和读 SKF 的固定开销加上同样形式的计算项；多线程只在 N 较大时计入加速。</li>
+        <li>内存：一个进程约 150 MB 的固定部分加上 k·nk·N²·16 字节（复数矩阵，k 由标定的峰值内存定）。</li>
+        <li>hotcent：每张表的耗时按两个元素的壳层数估计（Cu–Cu 16 s）；physrep：每次 σ 评估约 2.5 ms × 结构数，每个 BO 步 74 次。</li>
+        <li><code>--probe</code>：约 1 秒的小测试（批量本征分解和矩阵乘法），得到本机与标定机器的速度比，按（CPU 型号、核心数、NumPy 与 BLAS 版本）缓存在 <code>$XDG_CACHE_HOME/ptbp/probe.json</code>。</li>
+      </ul>
+      <h3>决定方案</h3>
+      <ul>
+        <li>先按 parallel_bo 的粒子数分核心（与 M3a 相同）。</li>
+        <li>pydftb 的 DFTB 阶段：对 w = 1 … min(C, S) 个进程、每个进程 t = C // w 个 k 点线程，用成本模型模拟最大优先调度，得到完成时间；去掉内存放不下的组合；取完成时间最短者，相差不到 2% 时取进程多、线程少的（k 点线程效率低）。</li>
+        <li>DFTB+：进程数 = min(C, S)；最大的结构 N ≥ 100 时才给 OpenMP 线程（C // 进程数），否则每个进程 1 个线程。</li>
+        <li>任务顺序：第一个 BO 步按模型估计的耗时从大到小；之后按上一个 BO 步实测的每个结构耗时（不同 r0 下 SCC 轮数不同，但相对大小基本不变）。</li>
+        <li>hotcent：进程数 = 核心数（M3b）；physrep：串行。</li>
+      </ul>
+      <h3>建议（只打印，不自动应用）</h3>
+      <ul>
+        <li>结构数少于核心数、优化器为 <code>bo</code>：DFTB 阶段用不满核心（k 点线程效率不高），建议 <code>--optimizer parallel_bo --n-particles P</code>，P 使每个 BO 点的核心数约等于结构数。</li>
+        <li>只有 Γ 点、N 较大的结构占主要耗时、而核心有空闲：可以让 BLAS 多线程，但结果不再逐位相同，需设环境变量 <code>PTBP_BLAS_THREADS</code>。</li>
+        <li>预计的 BO 步耗时中某一段占大头时指出来（例如 DFTB+ 比 pydftb 慢多少）。</li>
+      </ul>
+      <h3>输出</h3>
+      <ul>
+        <li><code>ptbp plan DATASET [--mode --engine --kpts --eos-points --optimizer --n-particles --n-calls --ncores --probe --json]</code>：数据集统计（结构数、只用 Γ 点的个数、nk 和 N 的范围）、方案、各阶段和整个优化的预计耗时、每个进程的内存、建议。</li>
+        <li><code>ptbp optimize</code>：启动时同样打印并写 <code>plan.json</code>（含估计值）；每个 BO 步之后打印 <code>[plan] step: hotcent 实测 (预计) …</code>。</li>
+        <li>TUI 的高级设置页加“核心数”，YAML 键 <code>ncores</code>（M3a 已有）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="details">
+      <summary><span class="tag">开发细节</span><span class="title">三、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/perfmodel.py</code>（新）</td><td><code>basis_size</code>、<code>irreducible_kpoints</code>、<code>CostModel</code>（<code>pydftb_time</code>、<code>dftbplus_time</code>、<code>memory</code>、<code>kthread_speedup</code>）、<code>probe()</code>、<code>load_probe()</code></td></tr>
+            <tr><td><code>utils/recommender.py</code>（新）</td><td><code>Workload</code>、<code>workload_from_dataset</code>（PTBP 的 k 网格规则）、<code>simulate_lpt</code>、<code>make_plan</code>（返回 M3a 的 <code>Plan</code>，附估计值和建议）、<code>render_report</code></td></tr>
+            <tr><td><code>utils/parallel/plan.py</code></td><td><code>Plan</code> 增加 <code>estimates</code>、<code>suggestions</code>、<code>workload</code> 摘要</td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td>记录每个结构的实测耗时，下一步按它排序</td></tr>
+            <tr><td><code>cli/cmd_plan.py</code>（新）、<code>cli/main.py</code>、<code>parameterize.py</code></td><td><code>ptbp plan</code> 子命令</td></tr>
+            <tr><td><code>cli/run.py</code>、<code>utils/loss.py</code></td><td>用推荐器建方案；每个 BO 步打印预计与实测</td></tr>
+            <tr><td><code>cli/tui/state.py</code>、高级设置页</td><td><code>ncores</code></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">四、验证计划</span></summary>
+      <div class="body">
+        <ul>
+          <li>成本模型：在标定数据上的相对误差（报告给出中位数和最大值）；对结构排序的秩相关。</li>
+          <li><code>tests/test_recommender.py</code>：Cu 数据集 4 核 → 4 进程 × 1 线程；1 个结构、2048 个 k 点 → 1 × 4；2 个结构 → 2 × 2；4 个粒子、4 核 → 每个粒子 1 × 1；内存上限减少进程数；DFTB+ 小体系不给线程；随机输入下进程数 × 线程数不超过核心数；结构少于核心时给出 parallel_bo 的建议；JSON 往返；探测缓存；<code>ptbp plan</code> 的输出和 <code>--json</code>。</li>
+          <li>端到端：<code>ptbp plan dft/dft.xyz</code> 的预计耗时与 M3b 的实测比较。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>五、局限与不做的事</h2>
+      <ul>
+        <li>只做 CPU；GPU 后端在 M4。</li>
+        <li>不自动改变求解器、精度、BLAS 线程等会影响结果的设置，只给建议。</li>
+        <li>SCC 轮数无法事先知道，模型用一个典型值；第一步之后用实测耗时排序。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M3b-hotcent-physrep.html">← M3b 报告</a><a href="../index.html">文档索引</a><a href="../reports/M3c-recommender.html">M3c 报告 →</a></nav>
+    <span>M3c</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -187,4 +187,5 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                   repulsive="polynomial" if str(dftb_args.get("poly_rep", "No")).lower() == "yes"
                   else "skf",
                   shell_resolved=True,          # DFTB+ under ASE (ParserVersion 1) default
-                  fd_delta=fd_delta, threads=1, k_threads=int(dftb_args.get("k_threads", 1)))
+                  fd_delta=fd_delta, threads=int(dftb_args.get("blas_threads", 1)),
+                  k_threads=int(dftb_args.get("k_threads", 1)))

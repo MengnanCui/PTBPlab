@@ -39,6 +39,7 @@ class SetupState:
     multi_element: List[str] = field(default_factory=list)
     superposition: str = 'density'
     engine: str = 'dftbplus'             # dftbplus / pydftb
+    ncores: str = 'auto'                 # cores of the parallel BO step: N or auto
 
     # ----- gen flow -----
     gen_symbols: List[str] = field(default_factory=list)
@@ -74,6 +75,8 @@ def assemble_optimize_yaml(state: SetupState) -> dict:
         out['n_calls'] = state.n_calls
     if state.multi_element:
         out['multi_element'] = list(state.multi_element)
+    if str(state.ncores).strip().lower() not in ('', 'auto'):
+        out['ncores'] = int(state.ncores)
 
     # E0s: only emit when the user chose explicit / cache. 'auto' means
     # leave the key out so `ptbp optimize` runs its auto-fit + cache.

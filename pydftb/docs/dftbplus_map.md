@@ -61,7 +61,7 @@
 | 激发态（Casida / 实时） | `timedep/linresp.F90`，`timedep/linrespgrad.F90`，`timedep/timeprop.F90` |
 | REKS、pp-RPA | `reks/`，`timedep/pprpa.F90` |
 | 输运（NEGF） | `transport/negfint.F90`（底层是 libNEGF） |
-| 并行与求解器框架 | `common/mpienv.F90`，`common/blacsenv.F90`，`type/parallelks.F90`（k 点/自旋分组），`elecsolvers/`，`extlibs/elsiiface.F90`。pydftb/PTBP 的对应部分（M3）只做单机：PTBP 把结构分给 fork 出来的进程（`utils/parallel/`，相当于 DFTB+ 外面再套一层任务分发），pydftb 把一个结构的 k 点分给线程（`pydftb/parallel.py`，相当于 `parallelks` 的 k 点分组，但在一个进程内）；没有 MPI、BLACS |
+| 并行与求解器框架 | `common/mpienv.F90`，`common/blacsenv.F90`，`type/parallelks.F90`（k 点/自旋分组），`elecsolvers/`，`extlibs/elsiiface.F90`。pydftb/PTBP 的对应部分（M3）只做单机：PTBP 把结构分给 fork 出来的进程（`utils/parallel/`，相当于 DFTB+ 外面再套一层任务分发），pydftb 把一个结构的 k 点分给线程（`pydftb/parallel.py`，相当于 `parallelks` 的 k 点分组，但在一个进程内）；进程数和线程数由成本模型决定（`pydftb/perfmodel.py`、`utils/recommender.py`，M3c）；没有 MPI、BLACS |
 | 输入解析与初始化 | `io/hsdparser.F90`，`dftbplus/parser.F90`（8,685 行），`dftbplus/initprogram.F90`（7,606 行） |
 
 ## 3. 对照时踩过的坑
@@ -97,3 +97,5 @@
 29. **扩展 SKF 格式（f 轨道）。** 第 1 行以 `@` 开头（DFTB+ 只看第一个字符），其余内容整体下移一行；同核文件的在位行是 13 个数（E、U、占据数各 4 个，按 f d p s，中间是 SPE）；积分表每行先 20 个 H 再 20 个 S，顺序 ff0–3、df0–2、dd0–2、pf0–1、pd0–1、pp0–1、sf0、sd0、sp0、ss0。简单格式的 10 个积分放进第 8、9、10、13、14、15、16、18、19、20 个位置（`iSKInterOld`），所以两种格式可以混用。把同核文件改成异核文件（类型副本）时要删的在位行，在扩展格式里是第 3 行。
 30. **没有 Spline 段的 SKF。** `readSplineRep` 找不到 `Spline` 就报错退出，只有多项式（哪怕全为 0）的文件要配 `PolynomialRepulsive = SetForAll { Yes }`。hotcent 直接写出的文件就是这样（M2g 的 Gd/O 测试参数）。
 31. **两处输入写法。** `HubbardDerivs` 的每个元素要单独一行，写在同一行会报 “Superfluous data”；壳层分辨 SCC 时不能写 `SpinConstants` 中的 `ShellResolvedSpin`（被忽略的节点会让 DFTB+ 报错退出）。
+32. **OpenMP 线程在小矩阵上更慢。** 不设 `OMP_NUM_THREADS` 时 DFTB+ 用满全部核心。M3c 实测（Cu 晶胞，1000 K）：36 个轨道（864 个 k 点）用 4 个线程慢 3.3 倍，288 个轨道慢 1.2–1.3 倍，576 个轨道的 Γ 点不变快，576 个轨道 16 个 k 点快 1.4 倍、972 个轨道 4 个 k 点快 1.74 倍；PTBP 的 Cu 数据集（9–18 个轨道）整体慢 11%（M3a）。线程数还会改变应力的最后一位。PTBP 只在每个结构都有 ≥ 500 个轨道时给 DFTB+ 线程，其余情况每个进程 1 个线程。
+33. **库仑求和的内存。** 壳层分辨 SCC 的短程 γ 算到 1e-10，截断由最小的 Hubbard U 决定（Cu 的 4p 壳层 U = 0.08 Ha 时 96 Bohr）。64 个 Cu 原子的晶胞有约 300 万个原子对：DFTB+ 峰值内存 0.3 GB，pydftb 把所有原子对和壳层对展开成数组，要 2.2 GB（M3c）。

@@ -364,25 +364,33 @@ Related options (also accepted as YAML keys):
 
 To check the two engines against each other on your own dataset, run `python tools/engine_parity.py`, which evaluates the real loss at fixed parameter points.
 
-### 4c. Several cores: `--ncores`
+### 4c. Several cores: `--ncores` and `ptbp plan`
 
-Every BO step runs one DFTB calculation per structure. By default (`--ncores auto`) PTBP runs them in parallel on every core the process may use: the smallest of the CPU affinity, the cgroup CPU quota (containers), `SLURM_CPUS_PER_TASK` and the environment variable `PTBP_NCORES`. `--ncores N` sets a smaller budget and `--ncores 1` runs serially (YAML key `ncores`). At start-up PTBP prints its plan and saves it as `plan.json` in the run folder:
+Every BO step generates the Slater-Koster tables (hotcent), runs one DFTB calculation per structure and fits the repulsion (physrep). By default (`--ncores auto`) PTBP uses every core the process may use: the smallest of the CPU affinity, the cgroup CPU quota (containers), `SLURM_CPUS_PER_TASK` and the environment variable `PTBP_NCORES`. `--ncores N` sets a smaller budget and `--ncores 1` runs serially (YAML key `ncores`; the setup wizard asks for it on its advanced page). At start-up PTBP prints its plan, with estimated times, and saves it as `plan.json` in the run folder:
 
 ```
 [plan] 4 cores (CPU affinity 4); engine pydftb; optimizer bo
-[plan]   DFTB: 4 processes x 1 k-point thread, largest first -- 66 structures >= 4 cores: one structure per process
+[plan]   DFTB: 4 processes x 1 k-point thread, largest first -- 66 structures >= 4 cores: a process per core, the structures handed out largest first
 [plan]   hotcent: 4 processes x 1 thread -- each table once, its rows shared by the processes
 [plan]   physrep: serial -- vectorised, in this process
+[plan]   estimated BO step: hotcent 4.2 s + dftb 11.2 s + physrep 12.1 s + other 1.0 s = 28.5 s
+[plan]   estimated run: 11 BO points, about 5.2 min
+[plan]   memory: up to 153 MB per DFTB process (12.5 GB available)
+[plan]   suggestion: throughput: 4 BO points at a time on 1 core each (--optimizer parallel_bo --n-particles 4) would take about 17 s per point instead of 28 s; batched BO proposes points differently, so the optimisation path changes
 ```
 
-- Structures go to forked worker processes, largest first (k-points × orbitals³). With fewer structures than cores, the spare cores become pydftb k-point threads or DFTB+ OpenMP threads. On `dft/dft.xyz` (66 structures, 4 cores) the DFTB part of a BO step takes 10 s instead of 35 s with pydftb and 23 s instead of 95 s with DFTB+ (DFTB+'s default of one OpenMP thread per core was slower than one thread on these small cells).
-- hotcent computes every atom and every Slater-Koster table once (it used to compute an elementary system's table three times) and shares the distance rows of each table among the processes; the SKF files are byte-identical. The sigma_rep search no longer starts a process pool per evaluation and evaluates the repulsion vectorised. A whole BO step on `dft/dft.xyz` takes 27 s on 4 cores with pydftb (147 s before) and 40 s with DFTB+ (about 210 s before).
-- The results do not depend on the number of cores: `dft_final.xyz`, `dftb_band.xyz` and `search_index.txt` are byte-identical to a serial run, and pydftb's k-point threads give bitwise identical numbers. DFTB+ is reproducible at a fixed number of OpenMP threads, which the plan sets for every run (one per process when there are more structures than cores; without a plan DFTB+ used all cores, as before).
-- `--optimizer parallel_bo` splits the cores between the BO points it evaluates at the same time.
+After every BO step it prints the measured stage times next to the estimates (`[plan] BO step: hotcent 4.6 s (estimated 4.2 s), dftb ...`). `ptbp plan DATASET` shows the same without running anything, plus statistics of the dataset; it takes the options of `ptbp optimize` (`--mode --engine --kpts --eos-points --optimizer --n-particles --n-calls --ncores --multi-element`) and `--json`.
+
+- **How the plan is chosen.** A cost model (`pydftb/perfmodel.py`) estimates the time and peak memory of every structure from its orbitals, k-points and the atom pairs within the Slater-Koster and Coulomb cut-offs. The recommender (`utils/recommender.py`) simulates the largest-first schedule for every split of the cores into processes × threads, drops the splits whose processes would not fit in the available memory (with a safety factor of 1.5) and takes the fastest. From the second BO step on, the structures are handed out by their measured times. On `dft/dft.xyz` the estimated BO step is within 2–4 % of the measured one (both engines, 1 and 4 cores).
+- **Threads only where they help.** With fewer structures than cores the spare cores become pydftb k-point threads, but not for Gamma-only structures (there are no k-points to split). DFTB+ gets OpenMP threads only when every structure has at least 500 orbitals: on smaller matrices threads make DFTB+ slower (3.3× slower with 4 threads on a 4-atom Cu cell).
+- **Memory.** In periodic cells the SCC Coulomb sum reaches as far as the smallest Hubbard U requires (96 Bohr for the 4p shell of Cu), so a cell of 64 Cu atoms needs about 2.2 GB in pydftb (0.3 GB in DFTB+). The plan runs fewer processes when they would not fit.
+- **Results do not depend on the plan.** Only settings that leave every number unchanged are chosen automatically: `dft_final.xyz`, `dftb_band.xyz`, `search_index.txt`, the SKF files and the losses are byte-identical to a serial run, and pydftb's k-point threads give bitwise identical numbers. DFTB+ is reproducible at a fixed number of OpenMP threads, which the plan sets for every run (without a plan, i.e. in library use, DFTB+ uses all cores, as before).
+- **Suggestions are only printed:** `--optimizer parallel_bo` when evaluating several BO points side by side gives more points per hour (it changes the optimisation path); `PTBP_BLAS_THREADS=N` (pydftb) for large Gamma-only cells with idle cores (results then differ in the last bits); the other engine when it would be much faster for the dataset (pydftb on small cells, DFTB+ on cells of tens of atoms).
+- `ptbp plan --probe` measures this machine's speed relative to the calibration machine (about 0.7 s, cached per machine in `~/.cache/ptbp/probe.json`); later estimates use the cached value.
 - In a parallel step every DFTB+ run gets its own folder `dftb_tasks/sNNNN/` in the step folder; it is removed after a successful run and kept after a failure.
 - `PTBP_BACKEND=serial` forces serial execution (debugging); systems other than Linux run serially. `PTBP_HOTCENT_REFERENCE=1` and `PTBP_PHYSREP_REFERENCE=1` select the original hotcent driver and repulsion loop.
 
-`python tools/engine_parity.py DATASET --compare-serial` evaluates the loss with one core and with all of them and checks that the loss and the step's files are identical. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `pydftb/docs/reports/M3a-dispatch.html`.
+`python tools/engine_parity.py DATASET --compare-serial` evaluates the loss with one core and with all of them, checks that the loss and the step's files are identical and prints the measured stage times next to the estimates. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `M3b-hotcent-physrep.html`, `M3c-recommender.html` and the matching reports in `pydftb/docs/reports/`.
 
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 

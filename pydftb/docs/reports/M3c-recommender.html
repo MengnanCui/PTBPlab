@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3c 计算策略推荐器报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M3c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3c · 完成报告</p>
+    <h1>计算策略推荐器 v1（CPU）</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M3c-recommender.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">PTBP 现在按每个结构的估计耗时和内存决定一个 BO 步怎么并行：模拟“最大优先”调度，比较几种进程数 × 线程数，去掉内存放不下的，取最快的。Cu 数据集一个 BO 步的预计耗时与实测相差 2–4%；Cu 数据集的方案与 M3a 相同，运行目录与 M3b 逐字节相同。新命令 <code>ptbp plan</code> 不运行优化就给出方案、预计耗时、内存和建议。</p>
+    <ul>
+      <li><strong>成本模型</strong>（<code>pydftb/perfmodel.py</code>）：按轨道数、约化后的 k 点数，以及 Slater–Koster 截断和库仑截断以内的原子对数，估计 pydftb 和 DFTB+ 单点的耗时和峰值内存。标定用 PTBP 的 Cu 数据集（66 个结构）和 Cu、C、CuO、Li、GdO 的 2–216 个原子的晶胞。耗时的中位误差 pydftb 12%、DFTB+ 7%（SCC 轮数用默认值时 14%、10%），按耗时排序的秩相关 0.98–0.99；pydftb 内存的中位误差 2%，最多低估 29%，所以规划时乘 1.5。</li>
+      <li><strong>发现：大晶胞的耗时和内存主要花在库仑部分，不在对角化。</strong>壳层分辨 SCC 的短程 γ 按 DFTB+ 的规则算到 1e-10，截断由最小的 Hubbard U 决定：Cu 的 4p 壳层 U = 0.08 Ha，截断 96 Bohr。64 个 Cu 原子的晶胞有 300 万个原子对，pydftb 要 2.2 GB 内存，DFTB+ 只要 0.3 GB，还快 2.5 倍。</li>
+      <li><strong>推荐器</strong>（<code>utils/recommender.py</code>）的新规则：只有 Γ 点的结构不给 k 点线程（没有 k 点可分）；DFTB+ 只在每个结构都有 ≥ 500 个轨道时给 OpenMP 线程（36 个轨道时 4 个线程慢 3.3 倍）；内存不够时减少进程（例：12 个 64 原子的 Cu 晶胞、8 GB 内存，M3a 的规则开 4 个进程要 8.6 GB，推荐器开 2 个）；从第二个 BO 步起，按上一步实测的每个结构耗时发放任务。</li>
+      <li><strong>只打印、不自动用的建议：</strong>改用 parallel_bo 提高吞吐（Cu 数据集 4 核：每个点约 17 s 对 28 s，但优化路径会变）；大的 Γ 点晶胞有空闲核心时用 <code>PTBP_BLAS_THREADS</code>（结果不再逐位相同，需显式开启）；换引擎（小晶胞 pydftb 快约 2.4 倍，几十个原子的晶胞 DFTB+ 快约 3 倍）；内存不足。</li>
+      <li><strong>输出：</strong><code>ptbp optimize</code> 启动时打印方案、预计耗时和建议并写 <code>plan.json</code>，每个 BO 步后打印实测与预计（<code>[plan] BO step: hotcent 4.8 s (estimated 4.2 s), dftb 9.7 s (estimated 11.2 s) …</code>）；TUI 高级设置页加核心数；<code>ptbp plan --probe</code> 约 0.7 s 测出本机的相对速度，按机器缓存。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2–4%</span><span class="lbl">一个 BO 步的预计耗时与实测之差（Cu 数据集，两个引擎，1 核和 4 核）</span></li>
+      <li><span class="num">0.99</span><span class="lbl">结构耗时的排序与实测的秩相关</span></li>
+      <li><span class="num">7×</span><span class="lbl">64–108 个原子的晶胞，pydftb 比 DFTB+ 多用的内存</span></li>
+      <li><span class="num">0</span><span class="lbl">对结果的影响（运行目录与 M3b 逐字节相同）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#model">二、成本模型</a></li>
+      <li><a href="#rules">三、推荐器怎么选</a></li>
+      <li><a href="#check">四、预计与实测</a></li>
+      <li><a href="#same">五、结果是否与原来相同</a></li>
+      <li><a href="#tests">六、单元测试</a></li>
+      <li><a href="#findings">七、发现的问题与学到的东西</a></li>
+      <li><a href="#deviations">八、与计划的偏差</a></li>
+      <li><a href="#repro">九、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">十、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/perfmodel.py</code>（新，最小环境可用）</td><td><code>Species</code>（每个壳层的 l 和 Hubbard U）、<code>shape()</code>（轨道数、约化 k 点数、SK 原子对 × 轨道块、壳层对、库仑原子对；周期体系按平均密度，团簇直接数）、<code>CostModel</code>（<code>pydftb_time</code>、<code>dftbplus_time</code>、<code>memory</code>、<code>kthread_speedup</code>、<code>omp_speedup</code>）、<code>effective_kthreads</code>（与 <code>KThreads</code> 的分块规则相同）、<code>probe()</code>、<code>machine_fingerprint()</code>、<code>load_probe(path)</code>；<code>irreducible_kpoints</code>、<code>block_shells</code>、<code>basis_size</code> 从 <code>utils/dftb_stage.py</code> 移来</td></tr>
+            <tr><td><code>utils/recommender.py</code>（新）</td><td><code>ptbp_species</code>（PTBP 参数表的价壳层和 U）、<code>Workload</code>、<code>workload_from_dataset</code>（PTBP 的 k 网格规则、整组 EOS）、<code>bolt_for</code>（与 <code>cli/run.py</code> 相同的权重）、<code>simulate_lpt</code>、<code>dftb_choices</code>/<code>pick</code>（模拟、内存过滤、2% 以内取进程多的）、<code>useful_threads</code>、hotcent 和 physrep 的耗时估计、<code>make_plan</code>（每种核心份额各定一次方案）、<code>suggestions</code>、<code>render_report</code></td></tr>
+            <tr><td><code>utils/parallel/plan.py</code></td><td><code>Plan</code> 增加 <code>estimates</code>、<code>share_stages</code>（parallel_bo 每种核心份额的方案）、<code>costs</code>（每个结构的估计耗时）、<code>suggestions</code>、<code>workload</code>；<code>for_particle</code> 用推荐器的方案；<code>render</code> 打印估计和建议；<code>step_line</code>；<code>from_json</code></td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td>记录每个结构的实测耗时（串行和并行两条路径）；<code>task_order</code>：实测 → 方案的估计 → k 点数 × 轨道数³；<code>PTBP_BLAS_THREADS</code> 时把 BLAS 线程数传给工作进程和 pydftb</td></tr>
+            <tr><td><code>utils/engines.py</code></td><td>pydftb 计算器的 BLAS 线程数取 <code>dftb_args['blas_threads']</code>（默认 1，与原来相同）</td></tr>
+            <tr><td><code>cli/run.py</code></td><td><code>_parallel_plan(dft_input, bolt, opt_elem)</code> 用推荐器；出错时退回 M3a 的规则并说明原因</td></tr>
+            <tr><td><code>utils/loss.py</code></td><td>每个 BO 步后打印 <code>[plan] BO step: …</code>（实测与预计）</td></tr>
+            <tr><td><code>cli/cmd_plan.py</code>（新）、<code>cli/main.py</code>、<code>parameterize.py</code></td><td><code>ptbp plan DATASET [--mode --engine --kpts --eos-points --optimizer --n-particles --n-calls --ncores --multi-element --probe --json]</code></td></tr>
+            <tr><td><code>cli/tui/state.py</code>、<code>optimize_step6_advanced.py</code></td><td>核心数（<code>auto</code> 或数字），写入 YAML 键 <code>ncores</code></td></tr>
+            <tr><td><code>tools/engine_parity.py</code></td><td>用推荐器建方案；阶段耗时表下面加一行预计值</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="model">
+      <h2>二、成本模型</h2>
+      <p>一个单点（能量加力）的耗时写成</p>
+      <p class="formula">t = c<sub>0</sub> + c<sub>sk</sub>·P<sub>sk</sub> + c<sub>site</sub>·P<sub>site</sub> + c<sub>coul</sub>·P<sub>coul</sub> + (n<sub>scc</sub> + 2)·nk·(a·N³ + b·N² + c) + f·nk·P<sub>sk</sub></p>
+      <p>其中 N 是轨道数，nk 是时间反演约化后的 k 点数（只有 Γ 点时用实矩阵，a 取另一个值），n<sub>scc</sub> 是 SCC 轮数。三个原子对计数都在计算之前就能得到：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>记号</th><th>含义</th><th>影响哪一部分</th></tr></thead>
+        <tbody>
+          <tr><td>P<sub>sk</sub></td><td>SK 截断（15.4 Bohr）内的原子对，按两边轨道数的乘积加权</td><td>H、S 的构建；每个 k 点上 H(k)、S(k) 的组装和能带部分的力（乘 nk）</td></tr>
+          <tr><td>P<sub>site</sub></td><td>短程 γ 截断内的壳层对，每一对 U 有自己的截断</td><td>γ 矩阵的准备和库仑部分的力</td></tr>
+          <tr><td>P<sub>coul</sub></td><td>库仑截断（短程截断和 Ewald 实空间截断中较大的）内的原子对</td><td>近邻表；内存</td></tr>
+        </tbody>
+      </table></div>
+      <p>周期体系按平均密度计算：P = n<sub>A</sub>·n<sub>B</sub>/V × 4π r<sub>c</sub>³/3，与 pydftb 实际建的近邻表相差 ≤ 1.3%（Cu、C、CuO、Li、GdO 的 19 个晶胞）；团簇直接数。内存写成 m<sub>0</sub> + m<sub>sk</sub>·P<sub>sk</sub> + m<sub>site</sub>·P<sub>site</sub> + m<sub>coul</sub>·P<sub>coul</sub> + m<sub>k</sub>·nk·N²·(8 或 16 字节)。常数用非负最小二乘拟合相对误差。</p>
+
+      <h3>标定数据与精度</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模型</th><th>数据</th><th>中位误差</th><th>最大误差</th><th>排序秩相关</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb 耗时</td><td>95 次：Cu 数据集 66 个结构、Cu 晶胞 4–108 个原子（1–864 个 k 点）、C、CuO、Li、GdO 晶胞 8–216 个原子</td><td>12%（默认 SCC 轮数 14%）</td><td>53%（73%）</td><td>0.99</td></tr>
+          <tr><td>DFTB+ 耗时</td><td>79 次：Cu 数据集 66 个结构、Cu 晶胞 4–108 个原子</td><td>7%（10%）</td><td>27%（42%）</td><td>0.98–0.99</td></tr>
+          <tr><td>pydftb 峰值内存</td><td>同上 95 次</td><td>2%</td><td>低估 29%、高估 12%</td><td>—</td></tr>
+          <tr><td>DFTB+ 峰值内存</td><td>6 个晶胞（16–108 个原子）</td><td>1%</td><td>2%</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p>SCC 轮数事先不知道，模型用典型值：pydftb 8 轮、DFTB+ 7 轮（Cu 数据集的中位数是 7 和 6；32–108 个原子的金属晶胞 9–23 轮）。只有 Γ 点、SCC 轮数多的大晶胞误差最大。单个结构的估计误差对调度影响不大，调度只依赖结构之间的相对大小，而这一点模型排得很准。</p>
+
+      <h3>库仑部分：最小的 Hubbard U 决定一切</h3>
+      <p>壳层分辨的 γ 的短程部分随 exp(−3.2 U r) 衰减，DFTB+（以及 M2e 起的 pydftb）对每一对 U 算到它小于 1e-10 为止。PTBP 参数表里很多元素有一个 U 很小的壳层，通常是没有占据的极化壳层：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>壳层（PTBP 参数表）</th><th>U（Ha）</th><th>短程截断</th></tr></thead>
+        <tbody>
+          <tr><td>C 2p</td><td>0.356</td><td>23 Bohr</td></tr>
+          <tr><td>Li 2s</td><td>0.167</td><td>48 Bohr</td></tr>
+          <tr><td>Cu 4p</td><td>0.080</td><td>96 Bohr</td></tr>
+          <tr><td>Ga 4d、S 3d、I 5d 等（参数表中 16 种元素 U &lt; 0.05）</td><td>0.041–0.046</td><td>164–192 Bohr</td></tr>
+        </tbody>
+      </table></div>
+      <p>周期晶胞中截断内的原子对按 n²/V × r<sub>c</sub>³ 增长。64 个 Cu 原子的晶胞有 300 万个原子对、1100 万个壳层对；pydftb 把它们全部展开成数组（近邻表、每对的截断、短程函数的中间量），所以几十个原子起，库仑部分的耗时和内存都超过对角化：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Cu 晶胞（1000 K）</th><th>pydftb 耗时</th><th>pydftb 内存</th><th>DFTB+ 耗时</th><th>DFTB+ 内存</th></tr></thead>
+        <tbody>
+          <tr><td>16 个原子，64 个 k 点</td><td>10.2 s</td><td>686 MB</td><td>6.0 s</td><td>125 MB</td></tr>
+          <tr><td>32 个原子，4 个 k 点</td><td>9.2 s</td><td>1189 MB</td><td>3.0 s</td><td>181 MB</td></tr>
+          <tr><td>64 个原子，Γ</td><td>17.3 s</td><td>2231 MB</td><td>6.8 s</td><td>318 MB</td></tr>
+          <tr><td>64 个原子，16 个 k 点</td><td>136.8 s</td><td>2888 MB</td><td>55.0 s</td><td>405 MB</td></tr>
+          <tr><td>108 个原子，Γ</td><td>39.8 s</td><td>3588 MB</td><td>12.5 s</td><td>525 MB</td></tr>
+          <tr><td>108 个原子，4 个 k 点</td><td>152.9 s</td><td>4638 MB</td><td>53.7 s</td><td>597 MB</td></tr>
+        </tbody>
+      </table></div>
+      <p>两个引擎的 SCC 轮数相同或差 1 轮（表中按各自实测）。PTBP 的数据集通常是 1–2 个原子的小晶胞，此时 pydftb 反而快（Cu 数据集 1 核：DFTB 阶段 34 s 对 87 s）。</p>
+
+      <h3>线程</h3>
+      <ul>
+        <li><strong>pydftb 的 k 点线程</strong>只加速每个 k 点上的矩阵运算（M3a）。模型按 Amdahl 定律处理：这部分在 T 个线程上相当于 1 + 0.33(T − 1) 个核心，其余不变；系数由 M3a 的三组实测（2 线程 1.11–1.17 倍、4 线程 1.27–1.43 倍）拟合，模型给出 1.10–1.16 倍和 1.23–1.37 倍。k 点比分块少时实际只用得上更少的线程，与 <code>KThreads</code> 的分块规则相同（只有 Γ 点时 1 个）。</li>
+        <li><strong>DFTB+ 的 OpenMP 线程</strong>（Cu 晶胞，1000 K，与 1 个线程比）：</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>轨道数</th><th>k 点</th><th>2 个线程</th><th>4 个线程</th></tr></thead>
+        <tbody>
+          <tr><td>36</td><td>864</td><td>1.11 倍</td><td>0.30 倍（慢 3.3 倍）</td></tr>
+          <tr><td>288</td><td>32</td><td>—</td><td>0.78 倍</td></tr>
+          <tr><td>288</td><td>4</td><td>0.99 倍</td><td>0.82 倍</td></tr>
+          <tr><td>576</td><td>1（Γ）</td><td>—</td><td>0.98 倍</td></tr>
+          <tr><td>576</td><td>16</td><td>1.33 倍</td><td>1.40 倍</td></tr>
+          <tr><td>972</td><td>1（Γ）</td><td>1.23 倍</td><td>1.20 倍</td></tr>
+          <tr><td>972</td><td>4</td><td>—</td><td>1.74 倍</td></tr>
+        </tbody>
+      </table></div>
+      <p>500 个轨道以下线程只会更慢，推荐器不给；以上按同样的形式拟合，系数 0.2。</p>
+
+      <h3>hotcent 与 physrep</h3>
+      <p>hotcent 一张 700 行的表（1 个进程）：1.7 s + 1.56 s × 壳层对数（两种元素时两个方向都算），H–H 3.0 s、C–C 7.8 s、Cu–Cu 15.5 s、Cu–O 19.6 s，9 张表上模型误差的中位数 8%、最大 32%（O–O）；原子 0.1–0.35 s（Au 0.9 s）。各表的行交错分给进程（M3b），用同样的调度模拟估计。physrep 的 σ 搜索每个 BO 步 74 次评估，energygeometry 每次每个结构约 2.5 ms，dataset/reaction 约 0.6 ms（M3b 实测）。</p>
+
+      <h3>机器速度</h3>
+      <p><code>probe()</code> 跑三个小的矩阵运算（批量复数本征分解、500 阶实对称本征分解、短程 γ 式的逐元素运算），BLAS 限为 1 个线程，各取 5 次中最快的，与标定机器的结果比较，取几何平均作为相对速度；按机器指纹（CPU 型号、核心数、Python、NumPy 和 BLAS 的版本）缓存在 <code>~/.cache/ptbp/probe.json</code>（<code>$XDG_CACHE_HOME</code>）。共享机器上单次测量的波动约 20%，与模型本身的误差相当。最小环境（NumPy 2.5）测得的相对速度约 0.85。</p>
+    </section>
+
+    <section id="rules">
+      <h2>三、推荐器怎么选</h2>
+      <ol>
+        <li>工作量：每个结构按 PTBP 的规则定 k 网格（玻尔兹曼权重 &lt; 0.1 只用 Γ 点），价壳层和 U 取 PTBP 的参数表（表外的元素按周期表的区：H、He 为 s，主族 sp，过渡元素 spd，镧系锕系 spdf；U 取 0.08 Ha 这个偏大的截断）；只算整组 EOS，与 DFTB 阶段相同。</li>
+        <li>parallel_bo 先把核心分给同时评估的 BO 点（与 M3a 相同），每种份额各定一次方案，内存也按份额分。</li>
+        <li>DFTB 阶段：对 w = 1 … min(核心数, 结构数) 个进程、每个进程 C/w 个线程中真正用得上的那么多，按估计耗时模拟“哪个进程空了就领下一个”的最大优先调度（每个任务加 4 ms 的管道开销，每多一个并发进程慢 1%）；去掉 w × 单个计算的最大内存 × 1.5 超过可用内存的组合；取完成最早的，相差不到 2% 时取进程多的。</li>
+        <li>hotcent：进程数 = 核心数；physrep：本进程。</li>
+        <li>任务顺序：第一个 BO 步按模型估计，之后按上一步实测的每个结构耗时。顺序只决定哪个进程算哪个结构，结果与顺序无关（M3a 已验证进程数不同时逐字节相同）。</li>
+      </ol>
+      <h3>与 M3a 规则的比较（4 核，模型给出的 DFTB 阶段耗时）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>工作量</th><th>M3a 的规则</th><th>推荐器</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>Cu 数据集 66 个结构，pydftb / DFTB+</td><td>4 × 1</td><td>4 × 1</td><td>相同</td></tr>
+          <tr><td>1 个 1 原子晶胞，2048 个 k 点，pydftb</td><td>1 × 4</td><td>1 × 4</td><td>相同</td></tr>
+          <tr><td>2 个 Cu 晶胞（8×8×8），DFTB+</td><td>2 × 2 OpenMP</td><td>2 × 1</td><td>9 个轨道的小矩阵上 OpenMP 线程更慢；2 个核心空闲</td></tr>
+          <tr><td>2 个 64 原子 Cu 晶胞，Γ，pydftb</td><td>2 × 2 k 点线程</td><td>2 × 1</td><td>没有 k 点可分，线程什么也不做；建议 <code>PTBP_BLAS_THREADS=2</code></td></tr>
+          <tr><td>12 个 64 原子 Cu 晶胞，Γ，pydftb，8 GB 内存</td><td>4 × 1，峰值约 8.6 GB</td><td>2 × 1，约 4.3 GB</td><td>4 个进程放不下（每个约 2.2 GB × 1.5）；建议改用 DFTB+（同样的 12 个晶胞 4 个进程只要 1.3 GB）</td></tr>
+        </tbody>
+      </table></div>
+      <h3>建议</h3>
+      <ul>
+        <li><strong>吞吐：</strong>优化器为 <code>bo</code>，而同时评估 P 个 BO 点（每个 1 个核心，P 受内存限制）每个点的平均耗时不到现在的 80% 时，建议 <code>--optimizer parallel_bo --n-particles P</code>。Cu 数据集 4 核：17 s 对 28 s 一个点，因为 physrep（12 s）和 hotcent 的原子部分是串行的。</li>
+        <li><strong>BLAS 线程（pydftb）：</strong>有 ≥ 500 个轨道的 Γ 点结构、而 DFTB 阶段有空闲核心时，建议 <code>PTBP_BLAS_THREADS=N</code>。设置后工作进程和 pydftb 的 BLAS 用 N 个线程，结果不再逐位相同，所以不自动开；DFTB+ 的线程仍按方案。</li>
+        <li><strong>引擎：</strong>另一个引擎的总 CPU 时间不到 2/3 时提示（两个引擎的结果相差约 1e-8）。</li>
+        <li><strong>内存：</strong>单个计算的估计内存 × 1.5 超过可用内存时提示。</li>
+      </ul>
+    </section>
+
+    <section id="check">
+      <h2>四、预计与实测</h2>
+      <p>整个 BO 步，energygeometry 模式，已发表的 Cu 参数（r0_w = 2.749、r0_d = 12.036 Bohr），<code>tools/engine_parity.py --compare-serial</code>，空闲的 4 核机器：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>引擎</th><th>核心</th><th>hotcent</th><th>DFTB</th><th>physrep</th><th>合计</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb</td><td>1</td><td>17.0 s（16.0）</td><td>36.7 s（39.9）</td><td>13.2 s（12.1）</td><td>68.0 s（69.0）</td></tr>
+          <tr><td>pydftb</td><td>4</td><td>4.8 s（4.2）</td><td>9.7 s（11.2）</td><td>11.7 s（12.1）</td><td>27.5 s（28.5）</td></tr>
+          <tr><td>DFTB+</td><td>1</td><td>16.2 s（16.0）</td><td>87.7 s（93.9）</td><td>13.4 s（12.1）</td><td>118.4 s（123.0）</td></tr>
+          <tr><td>DFTB+</td><td>4</td><td>5.2 s（4.2）</td><td>23.6 s（25.7）</td><td>11.6 s（12.1）</td><td>41.3 s（43.0）</td></tr>
+        </tbody>
+      </table></div>
+      <p>每格是“实测（预计）”；合计含约 1 s 的数据处理。dataset 模式 4 核预计 pydftb 20.9 s、DFTB+ 37.1 s，M3b 实测 18.0 s、37.0 s。physrep 的估计按已发表参数点上的 74 次 σ 评估；σ 搜索的评估次数随参数点变化，同一次优化中各 BO 步的 physrep 从 5 s 到 17 s 不等（2 核，<code>ptbp optimize</code> 的前三步），所以单个 BO 步的预计在其他参数点上会偏差更大，整个优化的预计取平均后更可靠。</p>
+    </section>
+
+    <section id="same">
+      <h2>五、结果是否与原来相同</h2>
+      <p>推荐器只决定进程数、线程数和任务顺序。上面四次运行的损失值与 M3b 逐位相同（pydftb 1.899324742，DFTB+ 1.899324726），一个 BO 步的全部文件（SKF、<code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>dftb_full.xyz</code>、<code>search_index.txt</code>、<code>pot.out</code>、状态方程的轨迹和 JSON、CSV、图）以及 <code>log.out</code>、<code>par.out</code> 与 M3b 的运行逐字节比较：pydftb 的 1 核、4 核和 DFTB+ 的 4 核运行各 17 个文件全部相同；DFTB+ 的 1 核运行 25 个文件中 23 个相同，不同的 <code>Cu.out</code>、<code>Cu2.out</code> 是 DFTB+ 自己的输出（只有随机种子和计时不同，串行时 DFTB+ 在运行目录里跑，M3b 对 M3a 时也是这样）。同一次运行中 1 核与 4 核的损失和 5 个主要文件逐位相同。</p>
+      <p>DFTB+ 的 OpenMP 线程数会改变应力的最后一位（M3a）。推荐器在 PTBP 常见的小晶胞上总给 1 个线程，与 <code>--ncores 1</code> 相同；M3a 的规则在结构少于核心时会给线程。</p>
+    </section>
+
+    <section id="tests">
+      <h2>六、单元测试</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>文件</th><th>个数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>pydftb/tests/test_perfmodel.py</code>（最小环境）</td><td>19</td><td>k 点约化；按区取壳层；周期晶胞的原子对、壳层对与 <code>Coulomb</code> 实际建的近邻表一致（≤ 2%）；团簇直接数；最小的 U 决定截断；四个标定晶胞的耗时在 40% 以内；内存（pydftb 2.2 GB、DFTB+ 0.3 GB）；有效线程（Γ 点为 1）、k 点线程和 OpenMP 线程的加速范围；速度比例；探测和缓存（第二次不再测）</td></tr>
+          <tr><td><code>tests/test_recommender.py</code></td><td>20</td><td>PTBP 参数表的壳层；Cu 数据集的工作量（66 个结构、33 个只用 Γ 点、k 点 1–2048、只算整组）；调度模拟；Cu 数据集 4 核两个引擎都是 4 × 1；1 个结构 2048 个 k 点 1 × 4；2 个结构 2 × 2；Γ 点结构不给 k 点线程；DFTB+ 只在 ≥ 500 个轨道时给线程；内存减少进程、放不下时提示；parallel_bo 分核心（4 核 4 点每点 1 × 1，6 核 4 点 2/2/1/1）；60 组随机工作量下进程数 × 线程数不超过份额；Cu 数据集的 BO 步估计与 M3b 实测相差 25% 以内；三种优化器的评估次数；三种建议；<code>PTBP_BLAS_THREADS</code>；文字输出和 JSON 往返；任务顺序（实测 → 估计 → 大小）；串行和并行阶段记录实测耗时、传递 BLAS 线程数；<code>ptbp plan</code> 的文字、<code>--json</code> 和找不到文件</td></tr>
+          <tr><td><code>tests/test_tui_state.py</code></td><td>+1</td><td>核心数 <code>auto</code> 不写 YAML，数字写成 <code>ncores</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>M3c 新增 40 个测试。conda 环境（有 DFTB+、hotcent）：pydftb 的 242 个全部通过；PTBP 的 171 个中，除 7 个已知失败的界面冒烟测试（缺 pytest 的 async 插件）和 1 个跳过外全部通过。最小环境（CI）：pydftb 226 个通过，16 个因没有安装 dftd3/dftd4 跳过。<code>refgen --check</code>（最小环境 61 个通过，13 个色散算例需要 dftd3/dftd4）和 <code>dynamics --check</code>（11 个）照常通过。</p>
+    </section>
+
+    <section id="findings">
+      <h2>七、发现的问题与学到的东西</h2>
+      <ul>
+        <li><strong>大晶胞的瓶颈在库仑部分。</strong>64 个 Cu 原子的 Γ 点晶胞（pydftb，17.3 s）中，γ 的准备 7.9 s、力 6.8 s（主要是库仑部分），对角化只有 1.8 s；内存的峰值也出现在库仑部分（准备 1.9 GB、力 1.2 GB，SCC 循环只有 25 MB）。决定性的是最小的 Hubbard U：Cu 的 4p 壳层 U = 0.08 Ha，短程 γ 要算到 96 Bohr。PTBP 参数表的 75 种元素中，33 种有 U &lt; 0.1 Ha 的壳层，16 种 &lt; 0.05 Ha（截断 164–192 Bohr）。</li>
+        <li><strong>pydftb 的库仑准备太占内存。</strong>它把截断内的所有原子对和壳层对展开成数组，每个原子对约 80 字节、每个壳层对约 160 字节，64 个 Cu 原子要 2.2 GB；DFTB+ 只要 0.3 GB，耗时也只有 40%。可以按块处理原子对、对同一对 U 合并壳层，记为后续的优化项。</li>
+        <li><strong>DFTB+ 的 OpenMP 线程在 PTBP 常见的小矩阵上更慢，</strong>36 个轨道、4 个线程慢 3.3 倍；576 个轨道的 Γ 点也不快。M3a 的规则在结构少于核心时会给 DFTB+ 线程，现在不给。已记入 <code>dftbplus_map.md</code> 第 32 条。</li>
+        <li><strong>T = 0 时金属超胞的 SCC 很难收敛。</strong>标定中 64 个原子的 Cu 晶胞在 DFTB+（PTBP 的历史输入，展宽被忽略，即 T = 0）下 3 分半钟还没有收敛，改用 1000 K 的展宽（<code>--smearing fermi</code>）后 23 轮。PTBP 的数据集是小晶胞加 k 点，没有这个问题；用大的 Γ 点晶胞时应开展宽。</li>
+        <li><strong>PTBP 参数表中 Ga 的参数在 hotcent 2.1 下算不出原子。</strong>用表中的 r0 和 p 计算 Ga 的受限原子时报 “Eigensolver out of iterations. Atom not stable?”（4d 壳层几乎不束缚）。与本阶段无关，记入已知问题。</li>
+        <li><strong>计时的波动。</strong>这台共享的 4 核机器上，同一个 10 ms 的小运算重复测量相差 ±25%；计算中有别的进程时，DFTB+ 的 OpenMP 线程会慢得离谱（4 个线程加 1 个别的进程，36 个轨道的算例慢 8 倍）。标定都在空闲机器上重做，探测取 5 次中最快的。</li>
+      </ul>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与计划的偏差</h2>
+      <ul>
+        <li>设计文档中耗时模型的形式是“原子数² + nk·N³ + nk·N²”，内存是“固定部分 + k·nk·N²”。拟合后发现大晶胞完全对不上（64 个原子的 Γ 点晶胞内存低估 5 倍），追查到库仑部分，改用原子对计数作特征，并补了 C、CuO、Li、GdO 晶胞的标定。</li>
+        <li>DFTB+ 给 OpenMP 线程的门槛从设计的 100 个轨道改为 500 个，并且要求每个结构都达到（实测 288 个轨道 4 个线程仍慢 20%）。</li>
+        <li>SCC 轮数的默认值从 10 改为按引擎取 8（pydftb）和 7（DFTB+），这样 Cu 数据集的 DFTB 阶段不再系统性高估。</li>
+        <li>探测缓存的路径由 PTBP 决定（<code>utils/recommender.probe_cache_path</code>），<code>pydftb.perfmodel.load_probe</code> 只接受显式路径，pydftb 本身不往用户目录写东西。</li>
+        <li>增加了设计中没有的两条规则：只有 Γ 点的结构不给 k 点线程（M3a 会给，线程什么也不做）；内存受限时的理由单独写明。</li>
+        <li>parallel_bo 的批宽与 <code>Loss</code> 一致取 max(2, n_particles)（M3a 的方案取 n_particles，<code>--n-particles 1</code> 时两个点会共用全部核心）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">九、复现命令与实验记录</span></summary>
+      <div class="body">
+<pre><code>ptbp plan dft/dft.xyz --mode energygeometry --engine pydftb          # 方案、预计耗时、建议
+ptbp plan dft/dft.xyz --json --probe                                  # JSON，先测本机速度
+python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
+    --points 2.749,12.036 --engines pydftb dftbplus --compare-serial  # 实测与预计
+PYTHONPATH=. pytest pydftb/tests/test_perfmodel.py                    # 最小环境
+pytest tests/test_recommender.py</code></pre>
+        <h3>实验脚本（scratchpad <code>m3c/</code>，未进仓库）</h3>
+        <ul>
+          <li><code>calib_case.py</code>、<code>calib_run.sh</code>：pydftb 的耗时标定（Cu 数据集 66 个结构 + 11 个 Cu 晶胞，每次一个新进程，记录各部分耗时、SCC 轮数、峰值内存）→ <code>calib.jsonl</code>。</li>
+          <li><code>calib_mem.py</code>、<code>calib_mem.sh</code>：C、Cu、CuO、Li、GdO 的 19 个晶胞，另记录 <code>Coulomb</code> 实际的原子对、壳层对和截断 → <code>calib_mem.jsonl</code>；<code>trace_mem.py</code>：tracemalloc 按阶段分的内存（64 个原子的 Cu：<code>Coulomb.__init__</code> 1925 MB、<code>Coulomb.gradient</code> 1201 MB、SCC 25 MB）。</li>
+          <li><code>calib_dftbplus.py</code>、<code>calib_dftbplus*.sh</code>：DFTB+ 的同样标定（经 <code>run_structure</code>，含进程启动和文件读写），1/2/4 个 OpenMP 线程 → <code>calib_dftbplus.jsonl</code>。</li>
+          <li><code>hotcent_times.py</code>：9 张表、6 个原子的 hotcent 耗时。</li>
+          <li><code>fit3.py</code>（第一版特征，弃用）、<code>fit4.py</code>、<code>fit_dftbplus2.py</code>：拟合；<code>eval_model.py</code>：第二节的精度表；<code>scenarios.py</code>：第三节的比较表。</li>
+          <li><code>bostep_run/</code>、<code>bostep.log</code>：第四、五节的运行；与 M3b 的 <code>m3b/bostep_run2/</code> 用 <code>m3b/compare_runs.py</code> 逐字节比较。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>十、下一步</h2>
+      <ul>
+        <li>M3d：DFTB+ 配置顾问（HSD 读取器、规则目录、<code>python -m pydftb.advisor</code>、PTBP 钩子）。</li>
+        <li>pydftb 的库仑准备：按块处理原子对、合并相同 U 的壳层对，把 64 个原子晶胞的内存从 2.2 GB 降到 DFTB+ 的量级；同时可以分线程（M3a 报告）。</li>
+        <li>成本模型可以随运行积累：把每次运行实测的每个结构耗时写进缓存，按机器修正常数。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M3c-recommender.html">← M3c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M3c</span>
+  </footer>
+</div>
+</body>
+</html>

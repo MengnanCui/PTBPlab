@@ -1049,6 +1049,8 @@ class Loss():
                 \nPhysrep: {t_physrep - t_dftb}
                 \nDataProcessing: {t_end - t_physrep}
                 \nTotal: {t_end - t_ini}""")              
+            if current_plan() is not None and current_plan().estimates:
+                print(current_plan().step_line(self.step_timings))
             return mu
             
 

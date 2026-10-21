@@ -14,8 +14,9 @@ Prints, per point, the loss of each engine, the relative difference and the
 time spent in the DFTB part of the pipeline.
 
 ``--ncores 1 4`` evaluates every point once per core budget (the parallel plan of
-``cli/run.py``, milestone M3); ``--compare-serial`` (= ``--ncores 1 auto``) also checks
-that the losses are bitwise equal and the files of the BO step byte-identical::
+``cli/run.py``: the M3c recommender), and prints the measured stage times next to the
+plan's estimates; ``--compare-serial`` (= ``--ncores 1 auto``) also checks that the
+losses are bitwise equal and the files of the BO step byte-identical::
 
     python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
         --points 2.749,12.036 --engines pydftb --compare-serial
@@ -101,7 +102,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     import utils.engines as eng
-    from utils.parallel import detect_cpu, set_plan, simple_plan
+    from utils.parallel import detect_cpu, set_plan
+    from utils.recommender import make_plan, workload_from_dataset
 
     dataset = a.dataset.resolve()
     points = [tuple(float(x) for x in p.split(",")) for p in a.points]
@@ -117,8 +119,11 @@ def main(argv=None):
             loss, _ = build_loss(dataset, a.mode, wd, a.eos_points)
             plan = None
             if nc is not None:
-                n = int(len(loss.dft_input) / loss.args_input.eos_points) * loss.args_input.eos_points
-                plan = simple_plan(detect_cpu(nc), n, engine=engine)
+                work = workload_from_dataset(loss.dft_input, loss.bolt_f11,
+                                             kpts_density=loss.args_input.kpt_density,
+                                             eos_points=loss.args_input.eos_points,
+                                             engine=engine, mode=a.mode)
+                plan = make_plan(detect_cpu(nc), work, n_calls=1)
                 print(plan.render())
             set_plan(plan)
             for p in points:
@@ -129,6 +134,7 @@ def main(argv=None):
                 opt_dir = wd / loss.args_input.results_dir / f"opt_{p[0]:.3f}_{p[1]:.3f}"
                 results.setdefault(p, {})[tag] = {"mu": mu, "mu_hex": mu.hex(), "wall": wall,
                                                   "stages": getattr(loss, "step_timings", None),
+                                                  "estimates": dict(plan.estimates) if plan else None,
                                                   "files": step_digests(opt_dir)}
                 print(f"[{tag}] r0_w={p[0]:.3f} r0_d={p[1]:.3f}  mu={mu:.10g}  ({wall:.1f} s)",
                       flush=True)
@@ -145,6 +151,10 @@ def main(argv=None):
             if x.get("stages"):
                 print(f"{tag:>18}  " + "".join(f"{x['stages'][st]:8.1f}s"
                                                for st in ("hotcent", "dftb", "physrep", "total")))
+            if x.get("estimates"):
+                est = x["estimates"]
+                print(f"{'(estimated)':>18}  " + "".join(f"{est[st]:8.1f}s"
+                                                         for st in ("hotcent", "dftb", "physrep", "step")))
     same = True
     if len(budgets) > 1:
         for p, r in results.items():

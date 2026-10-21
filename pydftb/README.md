@@ -110,6 +110,28 @@ On 4 threads the eigensolver part runs 1.9–2.9× faster and a whole calculatio
 [`docs/reports/M3a-dispatch.html`](docs/reports/M3a-dispatch.html)).  Use the default
 `solver="batched"`: the `"eigh"` solver calls SciPy, which keeps the GIL.
 
+### Cost model
+
+`pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces
+calculation before it runs, from the orbitals, the irreducible k-points and the pairs within
+the Slater-Koster and Coulomb cut-offs (PTBP plans its parallel runs with it):
+
+```python
+from pydftb.perfmodel import CostModel, Species, shape
+
+cu = Species(((2, 0.5095), (1, 0.0800), (0, 0.2403)))      # (l, Hubbard U) of each shell
+s = shape(atoms.get_chemical_symbols(), {"Cu": cu}, cell=atoms.cell, pbc=atoms.pbc, grid=(8, 8, 8))
+model = CostModel()                                         # CostModel(speed=...) from probe()
+model.pydftb_time(s, k_threads=4), model.memory("pydftb", s), model.dftbplus_time(s)
+```
+
+The constants were fitted to calibration runs (Cu, C, CuO, Li, GdO cells of 2–216 atoms
+and PTBP's Cu dataset): median error 12 % for the time (DFTB+ 7 %), 2 % for pydftb's
+memory.  With shell-resolved charges the Coulomb sum reaches as far as the smallest Hubbard
+U requires (96 Bohr for U = 0.08 Ha, the 4p shell of Cu): a periodic cell of 64 Cu atoms
+has 3 million atom pairs within it and pydftb needs about 2.2 GB (DFTB+ 0.3 GB); see
+[`docs/reports/M3c-recommender.html`](docs/reports/M3c-recommender.html).
+
 ## Tests and validation
 
 ```bash

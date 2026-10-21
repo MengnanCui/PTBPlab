@@ -14,11 +14,16 @@ Serial or in parallel (:mod:`utils.parallel`), with the same results and files:
 
 Without a plan (:func:`utils.parallel.current_plan` is None, e.g. library use) the stage
 runs serially with the thread settings untouched, i.e. exactly as before M3.
+
+Tasks are handed out largest first (M3a): by the measured time of every structure in
+the previous BO step when there is one (M3c), else by the plan's cost-model estimate,
+else by k-points x orbitals^3.  The order only affects which process computes what.
 """
 from __future__ import annotations
 
 import os
 import shutil
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,14 +40,14 @@ TASK_DIR = "dftb_tasks"
 SKF_WARNING = ("The problem caused by failed generation of SKF with this parameter. We will "
                "overlook these failed structures in this round of parameterization.")
 
-_D_BLOCK = set(range(21, 31)) | set(range(39, 49)) | set(range(72, 81)) | set(range(104, 113))
-_F_BLOCK = set(range(57, 72)) | set(range(89, 104))
+# wall time of every structure in the last parallel or serial stage: (n tasks, walls)
+_MEASURED: dict = {}
 
 
 def orbitals_estimate(numbers) -> int:
     """Basis size N for the cost estimate: s (H, He), sp, spd (d block), spdf (f block)."""
-    return int(sum(1 if z <= 2 else 16 if z in _F_BLOCK else 9 if z in _D_BLOCK else 4
-                   for z in numbers))
+    from pydftb.perfmodel import basis_size, block_shells
+    return int(sum(basis_size(block_shells(z)) for z in numbers))
 
 
 def kpoint_grid(atoms: Atoms, kpts_dens: float, bolt: float) -> list:
@@ -55,12 +60,9 @@ def kpoint_grid(atoms: Atoms, kpts_dens: float, bolt: float) -> list:
 
 
 def irreducible_kpoints(grid) -> int:
-    """k-points of a Monkhorst-Pack grid after the time-reversal reduction: k and -k
-    pair up; only Gamma is its own partner, and it is on the grid when every n is odd."""
-    if len(grid) != 3:
-        return 1
-    n = [int(k) for k in grid]
-    return (n[0] * n[1] * n[2] + all(k % 2 for k in n)) // 2
+    """k-points of a Monkhorst-Pack grid after the time-reversal reduction (perfmodel)."""
+    from pydftb.perfmodel import irreducible_kpoints as _irreducible
+    return _irreducible(grid)
 
 
 @dataclass
@@ -111,12 +113,35 @@ def run_structure(task: StructureTask) -> Atoms:
 
 
 def _stage_settings():
-    """(workers, threads, apply thread settings?) of the DFTB stage from the current plan."""
+    """(workers, threads, BLAS threads, apply thread settings?) of the DFTB stage."""
     plan = current_plan()
     if plan is None:
-        return 1, 1, False
+        return 1, 1, 1, False
     st = plan.stage("dftb")
-    return st.workers, st.threads, True
+    return st.workers, st.threads, max(1, int(st.blas_threads)), True
+
+
+def task_order(tasks) -> list:
+    """Largest first: measured times of the last stage, else the plan's estimates, else
+    the k-points x orbitals^3 of the task."""
+    n = len(tasks)
+    walls = _MEASURED.get(n)
+    if walls is None:
+        plan = current_plan()
+        costs = list(getattr(plan, "costs", None) or [])
+        walls = costs if len(costs) >= n else None
+    key = (lambda i: (-walls[i], i)) if walls is not None else (lambda i: (-tasks[i].cost, i))
+    return sorted(range(n), key=key)
+
+
+def _record(n: int, walls) -> None:
+    _MEASURED.clear()
+    _MEASURED[n] = list(walls)
+
+
+def measured_times(n: int):
+    """Wall times of the ``n`` structures of the last DFTB stage (None: not measured)."""
+    return _MEASURED.get(n)
 
 
 def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: str = "Yes",
@@ -127,11 +152,13 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
     eos = int(eos_points)
     ngroups = int(len(structures) / eos)
     used = list(structures[:ngroups * eos])
-    workers, threads, planned = _stage_settings()
+    workers, threads, blas, planned = _stage_settings()
     engine = settings()["engine"]
     base = {"calc_type": "static", "poly_rep": poly_rep, "SCC": SCC, "slater_p": "./"}
     if planned and engine == "pydftb":
         base["k_threads"] = threads
+        if blas > 1:                               # PTBP_BLAS_THREADS (opt-in)
+            base["blas_threads"] = blas
     workers = min(workers, len(used)) if used else 1
     parallel = workers > 1
     if parallel and engine == "dftbplus":
@@ -142,11 +169,20 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
 
     dftb_out, dft_out, kept = [], [], []
     if not parallel:
+        walls = [0.0] * len(tasks)
+
+        def timed(i):
+            t0 = time.perf_counter()
+            try:
+                return run_structure(tasks[i])
+            finally:
+                walls[i] = time.perf_counter() - t0
+
         with applied_env(thread_env(threads)) if planned else nullcontext():
             for n in range(ngroups):
                 group = range(n * eos, (n + 1) * eos)
                 try:
-                    atoms = [run_structure(tasks[i]) for i in group]
+                    atoms = [timed(i) for i in group]
                 except FileNotFoundError as err:
                     print("DFTB+ Warning:", err)
                     print(SKF_WARNING)
@@ -154,10 +190,14 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
                 dft_out.extend(used[i] for i in group)
                 dftb_out.extend(atoms)
                 kept.extend(group)
+        if len(kept) == len(tasks):
+            _record(len(tasks), walls)
         return dftb_out, dft_out, kept
 
-    order = sorted(range(len(tasks)), key=lambda i: (-tasks[i].cost, i))
-    results = map_tasks(run_structure, tasks, workers, order=order, threads=threads)
+    results = map_tasks(run_structure, tasks, workers, order=task_order(tasks), threads=threads,
+                        blas_threads=blas)
+    if all(r.ok for r in results):
+        _record(len(tasks), [r.wall for r in results])
     for n in range(ngroups):
         group = range(n * eos, (n + 1) * eos)
         failed = next((results[i] for i in group if not results[i].ok), None)

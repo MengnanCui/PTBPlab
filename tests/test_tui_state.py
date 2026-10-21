@@ -143,3 +143,14 @@ def test_assemble_gen_argv_personal_with_r0_and_rep():
     # Command string is the shlex-quoted argv.
     import shlex
     assert ' '.join(shlex.quote(a) for a in argv) == assemble_gen_command(s)
+
+
+def test_assemble_optimize_yaml_ncores():
+    """'auto' (the default) leaves the key out; a number becomes the YAML key ncores."""
+    from cli.config import YAML_KEY_TO_ARG
+    from cli.tui.state import SetupState, assemble_optimize_yaml
+    s = SetupState()
+    assert s.ncores == 'auto' and 'ncores' not in assemble_optimize_yaml(s)
+    s.ncores = '2'
+    assert assemble_optimize_yaml(s)['ncores'] == 2
+    assert 'ncores' in YAML_KEY_TO_ARG
