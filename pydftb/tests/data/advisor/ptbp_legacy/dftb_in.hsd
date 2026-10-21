@@ -1,0 +1,47 @@
+Geometry = GenFormat {
+    <<< "geo_end.gen"
+}
+
+Analysis {
+   CalculateForces = Yes
+   }
+Hamiltonian = DFTB{
+   ConvergentSCCOnly = No
+   Fermi = {
+      Temperature = 2000
+   }
+   ForceEvaluation = dynamics
+   KPointsAndWeights = SupercellFolding {
+      4 0 0
+      0 4 0
+      0 0 4
+      0.5 0.5 0.5
+   }
+   MaxAngularMomentum = {
+      Cu = "d"
+   }
+   MaxSCCIterations = 1000
+   MethfesselPaxton = {
+      Order = 2
+   }
+   PolynomialRepulsive = SetForAll {Yes}
+   ReadInitialCharges = No
+   SCC = Yes
+   SCCTolerance = 1e-05
+   SlaterKosterFiles = Type2FileNames{
+      Prefix = ./
+      Separator = "-"
+      Suffix = ".skf"
+      }
+   }
+Options {
+   WriteDetailedOut = Yes
+   WriteResultsTag = Yes
+   }
+Parallel {
+   Groups = 1
+   }
+ParserOptions {
+   IgnoreUnprocessedNodes = Yes
+   ParserVersion = 1
+}

@@ -1,0 +1,198 @@
+|===============================================================================
+|
+|  DFTB+ development version (commit: a23bfb2)
+|
+|  Copyright (C) 2006 - 2025  DFTB+ developers group
+|
+|===============================================================================
+|
+|  When publishing results obtained with DFTB+, please cite the following
+|  reference:
+|
+|    Recent Developments in DFTB+, a Software Package for Efficient Atomistic
+|    Quantum Mechanical Simulations, J. Phys. Chem. A 129, 5373−5390 (2025).
+|    [https://doi.org/10.1021/acs.jpca.5c01146]
+|
+|  You should also cite additional publications crediting the parametrization
+|  data you use. Please consult the documentation of the SK-files for the
+|  references.
+|
+|===============================================================================
+
+Reading input file 'dftb_in.hsd'
+Parser version: 14
+
+--------------------------------------------------------------------------------
+***  Converting input from parser version  1 to parser version 14 ...
+WARNING!
+-> Calculations are not orbital resolved per default any more. Keyword 'OrbitalResolvedSCC' added.
+Path: dftbplusinput/Hamiltonian/DFTB/OrbitalResolvedSCC
+
+WARNING!
+-> Adding legacy step size for finite difference differentiation
+Path: dftbplusinput/Hamiltonian/DFTB/Differentiation
+
+WARNING!
+-> Keyword converted to 'ShellResolvedSCC'.
+Path: dftbplusinput/Hamiltonian/DFTB/OrbitalResolvedSCC
+
+WARNING!
+-> Keyword renamed to 'PrintForces'.
+Path: dftbplusinput/Analysis/CalculateForces
+Line: 6-6 (File: dftb_in.hsd)
+
+***  Done.
+
+Reading SK-files:
+././Cu-Cu.skf
+Done.
+WARNING!
+-> Settings will be read but ignored (compiled without MPI support)
+Path: dftbplusinput/Parallel
+Line: 41-43 (File: dftb_in.hsd)
+
+WARNING!
+-> The following 2 node(s) have been ignored by the parser:
+(1)
+Path: dftbplusinput/Hamiltonian/DFTB/Fermi
+Line: 10-12 (File: dftb_in.hsd)
+(2)
+Path: dftbplusinput/Hamiltonian/DFTB/MethfesselPaxton
+Line: 24-26 (File: dftb_in.hsd)
+
+
+
+Processed input in HSD format written to 'dftb_pin.hsd'
+
+Starting initialization...
+--------------------------------------------------------------------------------
+WARNING!
+-> Dipole printed for extended system : value printed is not well defined
+OpenMP threads:              1
+Chosen random seed:          14515437
+Current stacksize:           8 [Mb] (recommended: unlimited)
+WARNING!
+-> Current stacksize not set to unlimited or hard limit, which might cause
+   random crashes (e.g. segmentation faults). It is advised to unlimit the
+   stacksize by issuing 'ulimit -s unlimited' (Linux) or setting it to the 
+   hard limit by 'ulimit -s hard' (Mac) in advance.
+Mode:                        Static calculation
+Self consistent charges:     Yes
+SCC-tolerance:                 0.100000E-04
+Max. scc iterations:                   1000
+Shell resolved Hubbard:      Yes
+Spin polarisation:           No
+Nr. of up electrons:             5.500000
+Nr. of down electrons:           5.500000
+Periodic boundaries:         Yes
+Electronic solver:           Relatively robust
+Mixer:                       Broyden mixer
+Mixing parameter:                  0.200000
+Nr. of chrg. vec. in memory:           1000
+Max. SCC-cycles:                       1000
+Electronic temperature:              0.100000E-07 H      0.272114E-06 eV
+Initial charges:             Set automatically (system chrg:   0.000E+00)
+Included shells:            Cu:  s, p, d
+K-points and weights:           1:  0.125000  0.125000  0.125000     0.031250
+                                2:  0.125000  0.125000  0.375000     0.031250
+                                3:  0.125000  0.125000  0.625000     0.031250
+                                4:  0.125000  0.125000  0.875000     0.031250
+                                5:  0.125000  0.375000  0.125000     0.031250
+                                6:  0.125000  0.375000  0.375000     0.031250
+                                7:  0.125000  0.375000  0.625000     0.031250
+                                8:  0.125000  0.375000  0.875000     0.031250
+                                9:  0.125000  0.625000  0.125000     0.031250
+                               10:  0.125000  0.625000  0.375000     0.031250
+                               11:  0.125000  0.625000  0.625000     0.031250
+                               12:  0.125000  0.625000  0.875000     0.031250
+                               13:  0.125000  0.875000  0.125000     0.031250
+                               14:  0.125000  0.875000  0.375000     0.031250
+                               15:  0.125000  0.875000  0.625000     0.031250
+                               16:  0.125000  0.875000  0.875000     0.031250
+                               17:  0.375000  0.125000  0.125000     0.031250
+                               18:  0.375000  0.125000  0.375000     0.031250
+                               19:  0.375000  0.125000  0.625000     0.031250
+                               20:  0.375000  0.125000  0.875000     0.031250
+                               21:  0.375000  0.375000  0.125000     0.031250
+                               22:  0.375000  0.375000  0.375000     0.031250
+                               23:  0.375000  0.375000  0.625000     0.031250
+                               24:  0.375000  0.375000  0.875000     0.031250
+                               25:  0.375000  0.625000  0.125000     0.031250
+                               26:  0.375000  0.625000  0.375000     0.031250
+                               27:  0.375000  0.625000  0.625000     0.031250
+                               28:  0.375000  0.625000  0.875000     0.031250
+                               29:  0.375000  0.875000  0.125000     0.031250
+                               30:  0.375000  0.875000  0.375000     0.031250
+                               31:  0.375000  0.875000  0.625000     0.031250
+                               32:  0.375000  0.875000  0.875000     0.031250
+
+K-points in absolute space:     1:  0.018323  0.018323  0.018323
+                                2:  0.054970  0.054970 -0.018323
+                                3:  0.091617  0.091617 -0.054970
+                                4:  0.128263  0.128263 -0.091617
+                                5:  0.054970 -0.018323  0.054970
+                                6:  0.091617  0.018323  0.018323
+                                7:  0.128263  0.054970 -0.018323
+                                8:  0.164910  0.091617 -0.054970
+                                9:  0.091617 -0.054970  0.091617
+                               10:  0.128263 -0.018323  0.054970
+                               11:  0.164910  0.018323  0.018323
+                               12:  0.201556  0.054970 -0.018323
+                               13:  0.128263 -0.091617  0.128263
+                               14:  0.164910 -0.054970  0.091617
+                               15:  0.201556 -0.018323  0.054970
+                               16:  0.238203  0.018323  0.018323
+                               17: -0.018323  0.054970  0.054970
+                               18:  0.018323  0.091617  0.018323
+                               19:  0.054970  0.128263 -0.018323
+                               20:  0.091617  0.164910 -0.054970
+                               21:  0.018323  0.018323  0.091617
+                               22:  0.054970  0.054970  0.054970
+                               23:  0.091617  0.091617  0.018323
+                               24:  0.128263  0.128263 -0.018323
+                               25:  0.054970 -0.018323  0.128263
+                               26:  0.091617  0.018323  0.091617
+                               27:  0.128263  0.054970  0.054970
+                               28:  0.164910  0.091617  0.018323
+                               29:  0.091617 -0.054970  0.164910
+                               30:  0.128263 -0.018323  0.128263
+                               31:  0.164910  0.018323  0.091617
+                               32:  0.201556  0.054970  0.054970
+
+Extra options:
+                             Mulliken analysis
+                             Force calculation
+Force type                   erho with S^-1 H D (Te <> 0K)
+
+--------------------------------------------------------------------------------
+
+***  Geometry step: 0
+
+ iSCC Total electronic   Diff electronic      SCC error    
+    1   -0.21526811E+01    0.00000000E+00    0.61131435E+00
+    2   -0.21531196E+01   -0.21526811E+01    0.47294619E+00
+    3   -0.21536736E+01   -0.43854922E-03    0.30336676E-01
+    4   -0.21536729E+01   -0.55399476E-03    0.17949891E-01
+    5   -0.21536738E+01    0.76357286E-06    0.53875838E-03
+>> Charges saved for restart in charges.bin
+    6   -0.21536738E+01   -0.95735972E-06    0.22313281E-05
+
+Total Energy:                       -2.1536738239 H          -58.6044 eV
+Extrapolated to 0K:                 -2.1536738247 H          -58.6044 eV
+Total Mermin free energy:           -2.1536738256 H          -58.6044 eV
+Force related energy:               -2.1536738256 H          -58.6044 eV
+
+Volume:                              0.793703E+02 au^3   0.117615E+02 A^3
+Pressure:                            0.112440E-02 au     0.330810E+11 Pa
+
+--------------------------------------------------------------------------------
+DFTB+ running times                          cpu [s]             wall clock [s]
+--------------------------------------------------------------------------------
+Global initialisation                  +       0.01 (  8.5%)       0.01 (  8.8%)
+Pre-SCC initialisation                 +       0.03 ( 24.6%)       0.03 ( 23.5%)
+SCC                                    +       0.06 ( 47.3%)       0.07 ( 48.5%)
+Post-SCC processing                    +       0.02 ( 18.1%)       0.02 ( 17.6%)
+--------------------------------------------------------------------------------
+Missing                                +       0.00 (  1.5%)       0.00 (  1.5%)
+Total                                  =       0.12 (100.0%)       0.14 (100.0%)
+--------------------------------------------------------------------------------

@@ -94,6 +94,11 @@ def _parallel_plan(dft_input, bolt, opt_elem=()):
                             optimizer=ptbp_args.optimizer, particles=ptbp_args.n_particles)
     _set_plan(plan)
     print(plan.render())
+    if engine == 'dftbplus':
+        # DFTB+ configuration advisor (M3d): checks the first DFTB+ run, reports only
+        from utils import advisor_hook as _advisor_hook
+        from utils.engines import settings as _engine_settings
+        _advisor_hook.configure(path, legacy=_engine_settings()['smearing'] == 'none')
     try:
         plan.save(path / 'plan.json')
     except OSError as err:

@@ -139,7 +139,8 @@ def shape(numbers, species: dict, *, cell=None, pbc=None, positions=None, grid=N
     def shells(k):
         if shell_resolved:
             return [u for _, u in sp[k].shells]
-        return [min(u for _, u in sp[k].shells)]          # one site per atom
+        # one site per atom with the U of the s shell (the first one), as in DFTB+
+        return [next((u for l, u in sp[k].shells if l == 0), sp[k].shells[0][1])]
 
     cuts = {(a, b): [short_cutoff(ua, ub) for ua in shells(a) for ub in shells(b)]
             for a in kinds for b in kinds}

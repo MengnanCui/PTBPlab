@@ -132,6 +132,33 @@ U requires (96 Bohr for U = 0.08 Ha, the 4p shell of Cu): a periodic cell of 64 
 has 3 million atom pairs within it and pydftb needs about 2.2 GB (DFTB+ 0.3 GB); see
 [`docs/reports/M3c-recommender.html`](docs/reports/M3c-recommender.html).
 
+### DFTB+ configuration advisor
+
+`python -m pydftb.advisor RUN_DIR` reads a DFTB+ run -- `dftb_in.hsd`, and if present
+`dftb_pin.hsd` (what DFTB+ really used), the screen output and the SKF files -- and reports
+the pitfalls found while validating pydftb against DFTB+, with the file and line of the
+evidence and advice.  It only reads; DFTB+ is not needed.
+
+```text
+$ python -m pydftb.advisor run/
+[P01] warning old ParserVersion: DFTB+ rewrites the input  (dftb_in.hsd:46)
+    ParserVersion = 1: on the way to version 14, ShellResolvedSCC = Yes is added ...;
+    Differentiation = FiniteDiff { Delta = 0.01 } is added ...
+[P03] warning input ignored by the parser  (dftb_in.hsd:10-12)
+    Hamiltonian/DFTB/Fermi is not inside Filling and is ignored ...; DFTB+ used Filling =
+    Fermi with T = 0 Ha (zero temperature)
+```
+
+18 rules (`--list-rules`, `--explain P03`): old parser versions (P01, P02), ignored input
+(P03), temperatures without a unit (F01), nearly equal Hubbard U values that break DFTB+'s
+gamma formula (H01), SKF files without a Spline repulsive (K01), band runs that stop (B01),
+threads and MPI groups (T01-T04), unconverged SCC results (S01), DFTB+ errors (X01), the
+Ewald tolerance (E01), lattice optimisation and LBFGS (G01, G02), periodic D4 (D02, D03).
+`--json` for machines; the exit status is 1 when there is a finding of `--fail-on`
+severity (default `error`).  Frozen DFTB+ 25.1 runs for every rule are in
+`tests/data/advisor/` (`python -m pydftb.validation.advisor_cases --regenerate`); see
+[`docs/reports/M3d-advisor.html`](docs/reports/M3d-advisor.html).
+
 ## Tests and validation
 
 ```bash

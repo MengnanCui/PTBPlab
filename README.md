@@ -392,6 +392,10 @@ After every BO step it prints the measured stage times next to the estimates (`[
 
 `python tools/engine_parity.py DATASET --compare-serial` evaluates the loss with one core and with all of them, checks that the loss and the step's files are identical and prints the measured stage times next to the estimates. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `M3b-hotcent-physrep.html`, `M3c-recommender.html` and the matching reports in `pydftb/docs/reports/`.
 
+### 4d. DFTB+ configuration advisor
+
+With the DFTB+ engine, PTBP checks the first DFTB+ run of every optimisation (and every DFTB+ run that fails) with the DFTB+ configuration advisor and prints what it finds with an `[advisor]` prefix; the findings also go to `advisor.json` in the run folder. It only reports: no setting is changed and the results are byte-identical. On PTBP's historical input (`--smearing none`) it reports that DFTB+ converts the input from parser version 1 (shell-resolved SCC, H and S differentiated with a 0.01 Bohr step) and ignores the `Fermi`/`MethfesselPaxton` blocks written outside `Filling` (the calculation runs at T = 0); these are marked as expected, since the published parameters were fitted that way. `PTBP_ADVISOR=0` turns the check off; `python -m pydftb.advisor RUN_DIR` checks any DFTB+ run directory by hand. Details: `pydftb/docs/reports/M3d-advisor.html`.
+
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
 After every successful run PTBP snapshots the optimisation outcome to

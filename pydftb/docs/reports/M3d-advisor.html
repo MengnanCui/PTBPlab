@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3d DFTB+ 配置顾问报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M3d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3d · 完成报告</p>
+    <h1>DFTB+ 配置顾问</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M3d-advisor.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead"><code>python -m pydftb.advisor 运行目录</code> 读 DFTB+ 的输入、DFTB+ 实际用的输入（<code>dftb_pin.hsd</code>）、屏幕输出和 SKF，按 18 条规则列出问题，附上证据所在的文件和行号，并给出建议。PTBP 用 DFTB+ 时，每次运行自动检查第一个 DFTB+ 运行和每个失败的运行，结论打印出来并写进 <code>advisor.json</code>。顾问只读、只报告，运行结果与原来逐字节相同。</p>
+    <ul>
+      <li><strong>PTBP 自己的 DFTB+ 输入被查出 5 条</strong>：
+        <ul>
+          <li><code>ParserVersion = 1</code> 让 DFTB+ 自动打开壳层分辨 SCC，并把 H、S 的差分步长定为 0.01 Bohr。这个步长下水、甲醇的力差 4–7e-3 eV/Å，默认步长只差 2e-7。</li>
+          <li><code>Fermi</code>、<code>MethfesselPaxton</code> 两块写在 <code>Filling</code> 外面，被悄悄忽略，实际是 T = 0。</li>
+          <li>栈只有 8 MB；周期体系用的是默认的 Ewald 容差。</li>
+        </ul>
+        前两项标为“预期”：已发表的参数正是在这些设置下拟合的。</li>
+      <li><strong>18 条规则，每条都有出处</strong>（对照中踩过的坑、阶段报告或 DFTB+ 源码）。11 次冻结的 DFTB+ 25.1 运行（每条依赖屏幕输出的规则至少一个正例，外加一个干净的输入），每一次得出的结论都与预期完全一致；DFTB+ 报错退出的运行都被报告为错误。</li>
+      <li><strong>阈值来自实测</strong>：两个 Hubbard U 相差 1e-5 Ha 时，DFTB+ 的 γ 每个原子对差约 1e-4 Ha；相差 1e-4 时差 5e-8 Ha；相差 1e-3 时 &lt; 3e-10 Ha（H01）。OpenMP 线程在 500 个轨道以下反而更慢（T03，M3c 实测）。</li>
+      <li><strong>只读，最小环境可用</strong>：自带只读的 HSD 解析器，记录行号；不依赖 DFTB+，也不运行它。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">18</span><span class="lbl">规则（v1）</span></li>
+      <li><span class="num">11</span><span class="lbl">冻结的 DFTB+ 运行，结论全部符合预期</span></li>
+      <li><span class="num">5</span><span class="lbl">PTBP 历史输入里查出的问题（2 条为预期）</span></li>
+      <li><span class="num">0</span><span class="lbl">改动的设置（运行目录逐字节相同）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#rules">二、规则目录</a></li>
+      <li><a href="#ptbp">三、PTBP 的历史输入</a></li>
+      <li><a href="#evidence">四、验证与实测</a></li>
+      <li><a href="#hook">五、PTBP 中的自动检查</a></li>
+      <li><a href="#tests">六、单元测试</a></li>
+      <li><a href="#findings">七、发现的问题与学到的东西</a></li>
+      <li><a href="#deviations">八、与计划的偏差</a></li>
+      <li><a href="#repro">九、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">十、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/advisor/hsd.py</code>（新）</td><td>只读的 HSD 解析器：<code>K = v</code>、<code>K [unit] = v</code>、<code>K = Method { … }</code>、<code>K = { … }</code>、<code>K { … }</code>、数据行、引号、注释、<code>;</code>、<code>&lt;&lt;&lt;</code>（原样数据，如 .gen 几何）、<code>&lt;&lt;+</code>（嵌入的 HSD）；每个节点记录文件和起止行；按路径不分大小写查找；“一行两个赋值”与 DFTB+ 一样把行尾都当作第一个值</td></tr>
+            <tr><td><code>pydftb/advisor/inputs.py</code>（新）</td><td>屏幕输出的解析（版本、解析器版本、转换警告、被忽略的节点及行号、错误、OpenMP 线程、MPI 进程和分组、栈大小、SCC 未收敛）；GenFormat 和显式几何；按 <code>SlaterKosterFiles</code> 找 SKF，读简单和扩展格式的 U 和 Spline 段；<code>RunFiles</code>（实际的壳层分辨设置、轨道数、线程数等）</td></tr>
+            <tr><td><code>pydftb/advisor/rules.py</code>（新）</td><td><code>@rule</code> 注册的 18 条规则；<code>Finding</code>（编号、程度、标题、说明、建议、位置、“预期”）；一条规则出错不影响其他规则（记为 info）</td></tr>
+            <tr><td><code>pydftb/advisor/report.py</code>、<code>__main__.py</code>、<code>__init__.py</code>（新）</td><td>文字和 JSON 输出；命令行（<code>--json --fail-on --cores --mpi-procs --list-rules --explain</code>，退出码 0/1/2/3）；<code>advise(path, …)</code></td></tr>
+            <tr><td><code>pydftb/validation/advisor_cases.py</code>（新）</td><td>11 个小输入；<code>--regenerate</code> 用 DFTB+ 运行并冻结输入、pin、屏幕输出、几何和 SKF 的头部（表格去掉）到 <code>pydftb/tests/data/advisor/</code></td></tr>
+            <tr><td><code>utils/advisor_hook.py</code>（新）</td><td><code>configure(run_dir, legacy)</code>、<code>check_once(dir)</code>、<code>explain_failure(dir, err)</code>（结论附在异常上）、<code>advisor.json</code>；<code>PTBP_ADVISOR=0</code> 关闭；绝不抛异常</td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td>DFTB+ 的并行阶段保留第一个任务目录，检查后删除；串行时检查当前目录；失败的运行交给顾问</td></tr>
+            <tr><td><code>cli/run.py</code></td><td>DFTB+ 引擎时启用顾问（<code>--smearing none</code> 即历史输入时标出预期的发现）</td></tr>
+            <tr><td><code>pydftb/perfmodel.py</code></td><td>顺带：不分壳层的 SCC 用 s 壳层的 U（与 DFTB+ 相同；原来用最小的 U）</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="rules">
+      <h2>二、规则目录</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>编号</th><th>查什么</th><th>程度</th><th>出处</th><th>冻结的正例</th></tr></thead>
+        <tbody>
+          <tr><td>P01</td><td><code>ParserVersion</code> &lt; 14 时 DFTB+ 自动做的、会改变物理的改写（按输入内容列出：壳层分辨 SCC、0.01 Bohr 差分、<code>ShellResolvedSpin</code>、DftD3 的 DFTB3 默认参数、LBFGS 线搜索）</td><td>warning</td><td>M1；<code>oldcompat.F90</code></td><td>ptbp_legacy</td></tr>
+          <tr><td>P02</td><td>旧版本中 MP 展宽的阶数减 1（1 → 高斯，≤ 0 → 报错）</td><td>warning / error</td><td>坑 1</td><td>mp_order</td></tr>
+          <tr><td>P03</td><td>被 <code>IgnoreUnprocessedNodes</code> 悄悄忽略的节点；展宽块放在 <code>Filling</code> 外面时，说明 DFTB+ 实际用的展宽（取自 pin）</td><td>warning（没有该选项时 error）</td><td>M1</td><td>ptbp_legacy</td></tr>
+          <tr><td>F01</td><td><code>Filling</code> 的温度没写单位（按 Hartree 读）：&gt; 0.5 时 error，否则 info</td><td>error / info</td><td><code>parser.F90</code></td><td>temp_no_unit</td></tr>
+          <tr><td>H01</td><td>参与 SCC 的 U 值相差 3.1e-6 到 3e-4 Ha（DFTB3 时到 1e-3）</td><td>error（&lt; 3e-5 或 DFTB3）/ warning</td><td>坑 6；M2b</td><td>（合成的 SKF 头）</td></tr>
+          <tr><td>K01</td><td>SKF 没有 Spline 段且这对元素没有 <code>PolynomialRepulsive</code></td><td>error</td><td>坑 30</td><td>no_spline</td></tr>
+          <tr><td>B01</td><td>Klines、多原子晶胞、没有 <code>ConvergentSCCOnly = No</code></td><td>error</td><td>坑 16；M2e</td><td>klines</td></tr>
+          <tr><td>T01</td><td>线程 × MPI 进程 × 同时运行的任务数超过核心（没设 <code>OMP_NUM_THREADS</code> 时按全部核心算）</td><td>warning</td><td>RESEARCH §4.4</td><td>（合成）</td></tr>
+          <tr><td>T02</td><td>非 MPI 版本忽略 <code>Groups</code> &gt; 1；MPI 版本中 <code>Groups</code> 不整除进程数</td><td>warning / error</td><td>RESEARCH §4.2–4.3</td><td>groups</td></tr>
+          <tr><td>T03</td><td>500 个轨道以下用多个 OpenMP 线程</td><td>warning</td><td>M3a、M3c</td><td>omp_small</td></tr>
+          <tr><td>T04</td><td>栈不是 unlimited</td><td>info</td><td><code>envcheck.F90</code></td><td>（所有运行）</td></tr>
+          <tr><td>S01</td><td>“SCC is NOT converged”而 <code>ConvergentSCCOnly = No</code> 照常给出结果</td><td>warning</td><td><code>main.F90</code></td><td>scc_unconverged</td></tr>
+          <tr><td>X01</td><td>DFTB+ 报错退出：错误信息和它指出的输入行</td><td>error</td><td>屏幕输出</td><td>no_spline、klines</td></tr>
+          <tr><td>E01</td><td>周期 SCC 用默认 <code>EwaldTolerance</code>（1e-9，约 1e-7 Ha 的精度）</td><td>info</td><td>M2e</td><td>（周期运行）</td></tr>
+          <tr><td>G01</td><td>非正交晶胞的 <code>LatticeOpt</code> 加 <code>Isotropic</code></td><td>warning</td><td>坑 25；M2f</td><td>lattice_iso</td></tr>
+          <tr><td>G02</td><td><code>GeometryOptimisation</code> 的 LBFGS 没有步长上限</td><td>info</td><td>坑 24；M2f</td><td>lattice_iso</td></tr>
+          <tr><td>D02</td><td>周期体系用 DFTB+ 自己的 D4 且开着 EEQ 电荷</td><td>warning</td><td>坑 11；M2d</td><td>d4_periodic</td></tr>
+          <tr><td>D03</td><td>周期体系用 DFTB+ 自己的 D4 且开着三体项</td><td>warning</td><td>坑 12；M2d</td><td>d4_periodic</td></tr>
+        </tbody>
+      </table></div>
+      <p>每条规则用 <code>--explain 编号</code> 可以看到完整的说明。“预期”只在 PTBP 的历史输入下标出（P01、P03）。</p>
+    </section>
+
+    <section id="ptbp">
+      <h2>三、PTBP 的历史输入</h2>
+      <p>PTBP 经 ASE 写 DFTB+ 输入（<code>utils/calculator.py</code>），<code>--smearing none</code>（默认）时就是 PTBP 一直用的输入。<code>ptbp optimize --engine dftbplus</code> 第一个 BO 步里顾问打印：</p>
+<pre><code>[advisor] DFTB+ advisor: input …/dftb_tasks/s0033/dftb_in.hsd; ParserVersion 1; pin yes; screen output Cu2.out; …; 2 atoms (Cu), periodic
+[advisor] [P01] warning old ParserVersion: DFTB+ rewrites the input  (dftb_in.hsd:46)
+[advisor]     ParserVersion = 1: on the way to version 14, ShellResolvedSCC = Yes is added …;
+[advisor]     Differentiation = FiniteDiff { Delta = 0.01 } is added …
+[advisor]     expected here: PTBP's published parameters were fitted with this DFTB+ input …
+[advisor] [P03] warning input ignored by the parser  (dftb_in.hsd:10-12)
+[advisor]     Hamiltonian/DFTB/Fermi is not inside Filling and is ignored …; DFTB+ used Filling = Fermi with T = 0 Ha
+[advisor] [P03] warning input ignored by the parser  (dftb_in.hsd:24-26)   (MethfesselPaxton)
+[advisor] [E01] info    default Ewald tolerance
+[advisor] [T04] info    stack size limit  (Cu2.out)
+[advisor] 0 error(s), 3 warning(s), 2 info</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>发现</th><th>意味着什么</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>壳层分辨 SCC（P01）</td><td>每个壳层有自己的电荷和 U；Cu 的 4p（U = 0.08 Ha）让库仑求和到 96 Bohr（M3c）</td><td>预期：pydftb 也按壳层分辨计算（M1 起）</td></tr>
+          <tr><td>0.01 Bohr 的差分步长（P01）</td><td>H、S 的导数用 0.01 Bohr 中心差分：水、甲醇的力差 4–7e-3 eV/Å，强压缩的 Cu₂ 差 0.11 eV/Å（0.2%）；默认步长 1.22e-4 时 2e-7–9e-6 eV/Å</td><td>预期：pydftb 默认复现这个步长（<code>--pydftb-forces dftbplus</code>），<code>exact</code> 时用精确导数</td></tr>
+          <tr><td>展宽被忽略，T = 0（P03）</td><td>写的 2000 K 和 MP 二阶都没有生效</td><td>预期；<code>--smearing fermi</code> 等写出正确的 <code>Filling</code>（M1）</td></tr>
+          <tr><td>默认 Ewald 容差（E01）</td><td>周期能量约 1e-7 Ha 的精度，远小于拟合误差</td><td>不用处理</td></tr>
+          <tr><td>栈 8 MB（T04）</td><td>大体系可能随机崩溃，PTBP 的 1–2 原子晶胞没有问题</td><td>不用处理</td></tr>
+        </tbody>
+      </table></div>
+      <p>PTBP 的方案给每个 DFTB+ 运行 1 个 OpenMP 线程，所以 T01、T03 不会出现；<code>Parallel { Groups = 1 }</code> 在非 MPI 版本中被忽略也无害（T02 只在 Groups &gt; 1 时报告）。</p>
+    </section>
+
+    <section id="evidence">
+      <h2>四、验证与实测</h2>
+      <h3>冻结的 DFTB+ 运行（<code>pydftb/validation/advisor_cases.py</code>）</h3>
+      <p>每个运行用 conda 环境的 DFTB+ 25.1 跑一次，冻结输入、pin、屏幕输出、几何和 SKF 的头部。顾问在每个运行上的结论（不算各运行都有的 E01、T04）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>运行</th><th>输入的要点</th><th>DFTB+</th><th>顾问的结论</th></tr></thead>
+        <tbody>
+          <tr><td>clean</td><td>ParserVersion 14、<code>Filling = Fermi { Temperature [K] = 300 }</code>、<code>EwaldTolerance = 1e-12</code></td><td>正常</td><td>只有 T04</td></tr>
+          <tr><td>ptbp_legacy</td><td>PTBP 的历史输入（ASE 写法）</td><td>正常，打印转换警告和 2 个被忽略的节点</td><td>P01、P03 × 2</td></tr>
+          <tr><td>scc_unconverged</td><td><code>MaxSCCIterations = 3</code>、<code>ConvergentSCCOnly = No</code></td><td>警告 SCC 未收敛，照常给出结果</td><td>S01</td></tr>
+          <tr><td>no_spline</td><td>hotcent 写的 Gd/O SKF，没有 <code>PolynomialRepulsive</code></td><td>报错：No spline repulsive found in file '././Gd-Gd.skf'</td><td>K01、X01</td></tr>
+          <tr><td>klines</td><td>Klines、4 原子晶胞</td><td>报错：SCC is NOT converged</td><td>B01、X01</td></tr>
+          <tr><td>mp_order</td><td>ParserVersion 13、MP Order = 2</td><td>警告 order 2 现在等于 1</td><td>P02</td></tr>
+          <tr><td>temp_no_unit</td><td><code>Temperature = 2000</code></td><td>按 2000 Ha 正常运行</td><td>F01（error）</td></tr>
+          <tr><td>groups</td><td><code>Parallel { Groups = 2 }</code></td><td>警告：没有 MPI，设置被忽略</td><td>T02</td></tr>
+          <tr><td>omp_small</td><td>9 个轨道、<code>OMP_NUM_THREADS=4</code></td><td>正常（4 个线程）</td><td>T03</td></tr>
+          <tr><td>d4_periodic</td><td>周期体系 DftD4，默认 EEQ，s9 = 1</td><td>正常</td><td>D02、D03</td></tr>
+          <tr><td>lattice_iso</td><td>fcc 原胞，<code>GeometryOptimisation</code>：LBFGS、LatticeOpt、Isotropic</td><td>正常（2 步）</td><td>G01、G02</td></tr>
+        </tbody>
+      </table></div>
+      <h3>H01：DFTB+ 的 γ 闭式公式</h3>
+      <p>用与 DFTB+ 相同的闭式公式，和 pydftb 的 Hermite–Genocchi 积分形式（误差 ≤ 4e-12）比较，r = 2–6 Bohr、U = 0.3 和 0.5 Ha 时一个原子对的 γ 误差：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>|U<sub>a</sub> − U<sub>b</sub>|（Ha）</th><th>5e-6</th><th>1e-5</th><th>3e-5</th><th>1e-4</th><th>3e-4</th><th>1e-3</th></tr></thead>
+        <tbody>
+          <tr><td>γ 的误差（Ha）</td><td>2–3e-3</td><td>1e-4</td><td>3–4e-6</td><td>2–5e-8</td><td>1–3e-9</td><td>0.3–2.4e-10</td></tr>
+        </tbody>
+      </table></div>
+      <p>低于 3.125e-6 Ha 时 DFTB+ 当作相等，用精确的同 U 公式，没有问题。规则把 &lt; 3e-5（误差 &gt; 1e-6 Ha）定为 error，3e-5 到 3e-4 定为 warning；DFTB3 时 ∂γ/∂U 的误差大得多（M2b：1e-5 时相对误差 24），到 1e-3 都是 error。</p>
+    </section>
+
+    <section id="hook">
+      <h2>五、PTBP 中的自动检查</h2>
+      <ul>
+        <li><code>cli/run.py</code> 在 DFTB+ 引擎时调用 <code>advisor_hook.configure</code>；DFTB 阶段并行时保留第一个发出的任务目录，阶段结束后检查并删除；串行时（运行在 BO 步目录里）检查第一个结构的文件。每次运行只检查一次。</li>
+        <li>DFTB+ 运行失败（缺 SKF 以外的错误）时，检查它保留的目录，把报告附在异常上（<code>add_note</code>）。例：两个原子重合的结构，报告中 X01 给出 DFTB+ 的 “Atoms 2 and 1 too close together”。</li>
+        <li>结论追加到运行目录的 <code>advisor.json</code>（每次检查一项，含“第一个 DFTB+ 运行”或“失败的 DFTB+ 运行”）。</li>
+        <li>顾问开和关时，DFTB 阶段写出的 <code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>search_index.txt</code> 逐字节相同（1 核和 4 核，有测试）。读不了的 pin、乱码的屏幕输出、读不了的输入都不会让 PTBP 出错。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、单元测试</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>文件</th><th>个数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>pydftb/tests/test_advisor.py</code>（最小环境）</td><td>29</td><td>HSD 的各种写法和行号、include、错误、“一行两个赋值”；ASE 写出的输入；DFTB+ 的 pin 和屏幕输出（转换、被忽略的节点、错误、MPI 和栈）；11 个冻结运行的结论逐条相同，报错退出的运行与 X01 一一对应；PTBP 历史输入的细节和“预期”；H01 的五种 ΔU 和不分壳层、旧解析器版本；K01 与 <code>PolynomialRepulsive</code> 的两种写法；T01、T02（MPI）、T03；没有屏幕输出时的 P03、F01，G01、D02、D03 的反例；一条规则出错不影响其他规则；命令行的退出码、JSON、<code>--list-rules</code>、<code>--explain</code>、<code>python -m</code></td></tr>
+          <tr><td><code>tests/test_advisor_hook.py</code></td><td>8</td><td>只检查一次、<code>advisor.json</code>、预期标记；非历史输入不标预期；关闭和未启用；坏掉的 pin、屏幕输出和输入都不抛异常；失败报告附在异常上；用 DFTB+ 的 DFTB 阶段（1 核、4 核，slow）：只检查一次、不出现 T01/T03、任务目录删除、开关顾问输出文件逐字节相同；失败的 DFTB+ 运行带着报告</td></tr>
+        </tbody>
+      </table></div>
+      <p>M3d 新增 37 个测试。conda 环境（有 DFTB+、hotcent）：pydftb 的 271 个全部通过；PTBP 的 179 个中，除 7 个已知失败的界面冒烟测试（缺 pytest 的 async 插件）和 1 个跳过外全部通过。最小环境（CI）：pydftb 255 个通过，16 个因没有安装 dftd3/dftd4 跳过。</p>
+    </section>
+
+    <section id="findings">
+      <h2>七、发现的问题与学到的东西</h2>
+      <ul>
+        <li><strong>一行写两个赋值，DFTB+ 报 “Superfluous data found”。</strong><code>MethfesselPaxton { Order = 2  Temperature [K] = 1000 }</code> 中，HSD 把 <code>Order</code> 之后整行都当作它的值。块里的每个赋值要另起一行（或用 <code>;</code>）。生成冻结样例时踩到，顾问的解析器照同样的规则读。</li>
+        <li><strong>不分壳层的 SCC 用 s 壳层的 U。</strong><code>parser.F90:readSKFiles</code> 在 <code>ShellResolvedSCC = No</code> 时把所有壳层的 U 设为第一个（s）壳层的值。M3c 的成本模型原来按最小的 U 算截断，已改为与 DFTB+ 相同（PTBP 总是按壳层分辨，不受影响）。</li>
+        <li><strong>DFTB+ 的 D4 中 <code>s9</code> 必须写</strong>（没有默认值），<code>ChargeScale</code> 默认 3、电荷模型默认 EEQ，所以周期体系不特意关掉时 D02、D03 都会出现。</li>
+        <li><strong>旧的 <code>Driver = LBFGS</code> 有步长上限</strong>（不开线搜索时 <code>setMaxStep</code> 默认开），新的 <code>GeometryOptimisation</code> 驱动里的 LBFGS 没有（M2f），G02 只查后者。</li>
+        <li><strong>屏幕输出的格式。</strong>转换时自动添加的节点在警告里没有行号；被忽略的节点按 “(n) / Path / Line” 列出；DFTB+ 报错退出时，ERROR! 之后还有 “ERROR STOP” 和浮点异常的提示。解析器按这些格式读，消息正文只取 “->” 开头和缩进的续行。</li>
+        <li><strong>线程数要从屏幕输出读。</strong>DFTB+ 在打印 “OpenMP threads” 之前报错退出时，线程数未知；顾问只在还没有屏幕输出（运行之前检查输入）时才按当前环境推断，否则不报告 T01、T03。</li>
+      </ul>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与计划的偏差</h2>
+      <ul>
+        <li>规则从设计的 17 条变为 18 条：加了 X01，把 DFTB+ 的错误信息和它指出的输入行直接报告出来。PTBP 的失败报告主要靠它。</li>
+        <li>设计中的 v2 候选（坑 10、13、14、15、31 和 <code>TimingVerbosity</code> 的提示）没有做。</li>
+        <li>冻结样例的 SKF 只保留顾问读的几行（格式行、在位行、Spline 段），表格去掉，整个样例目录约 0.5 MB。</li>
+        <li>加了 <code>PTBP_ADVISOR=0</code> 关闭自动检查。</li>
+        <li>并行的 DFTB 阶段要多保留一个任务目录直到阶段结束；目录在检查后删除，结果文件不变。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">九、复现命令与实验记录</span></summary>
+      <div class="body">
+<pre><code>python -m pydftb.advisor RUN_DIR [--json] [--fail-on warning]       # 检查一个 DFTB+ 运行目录
+python -m pydftb.advisor --list-rules ; python -m pydftb.advisor --explain H01
+python -m pydftb.validation.advisor_cases --regenerate               # 重新生成冻结样例（需要 dftb+）
+PYTHONPATH=. pytest pydftb/tests/test_advisor.py                     # 最小环境
+pytest tests/test_advisor_hook.py                                    # PTBP；slow 部分需要 dftb+</code></pre>
+        <h3>实验记录</h3>
+        <ul>
+          <li>H01 的阈值：按 DFTB+ 闭式公式写的 Python 函数与 <code>pydftb.coulomb._short_near</code> 比较（第四节的表）。</li>
+          <li>P01 的力差：pydftb 在 <code>fd_delta</code> = 0.01、1.22e-4 和精确导数下的力（H₂O、CH₃OH、数据集中的两个 Cu₂ 结构，原子扰动 0.05 Å）。</li>
+          <li>DFTB+ 源码对照：<code>oldcompat.F90</code>（各版本的改写）、<code>parser.F90</code>（Filling 温度单位、Hubbard U、D4、几何优化选项）、<code>input/geoopt.F90</code>、<code>initprogram.F90</code>、<code>common/mpienv.F90</code>、<code>common/envcheck.F90</code>、<code>io/hsdutils2.F90</code>、<code>main.F90</code>。</li>
+          <li><code>ptbp optimize --engine dftbplus</code> 的冒烟运行（scratchpad <code>m3d_smoke/</code>）：第一个 BO 步打印顾问报告、写 <code>advisor.json</code>。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>十、下一步</h2>
+      <ul>
+        <li>M3 全部完成。下一阶段 M4：PyTorch 后端（GPU、自动求导、批量）。</li>
+        <li>顾问 v2：D4 参考体系和截断（坑 10、13）、SlaterKirkwood 和 UFF 的输入陷阱（坑 14、15）、<code>HubbardDerivs</code> 的写法（坑 31）；DFTB+ 26.1（解析器版本 15）的改写。</li>
+        <li>PTBP 可以提供一个显式的选项写 <code>ParserVersion = 14</code> 和精确的差分步长；这会改变结果，所以只能由用户选择。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M3d-advisor.html">← M3d 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M3d</span>
+  </footer>
+</div>
+</body>
+</html>

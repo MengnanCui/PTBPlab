@@ -13,7 +13,7 @@
 | M3a | 并行分发与 DFTB 阶段：CPU 预算与方案、fork 进程池（最大优先）、DFTB 阶段按结构并行、pydftb 的 k 点线程、`--ncores`（默认用满核心） | ✅ 完成（Cu 数据集 4 核：DFTB 阶段 pydftb 3.4 倍、DFTB+ 4.1 倍，整个 BO 步 1.2–1.5 倍；与串行的输出逐字节相同、损失值逐位相同；pydftb 的 k 点线程逐位相同；DFTB+ 默认的 OpenMP 线程在这些小体系上反而更慢） | `design/M3a-dispatch.html`，`reports/M3a-dispatch.html` |
 | M3b | BO 步的其余部分：hotcent 按行分片并回放（逐字节相同）、physrep 向量化（逐位相同） | ✅ 完成（4 核一个 BO 步：pydftb 122 → 27 s、DFTB+ 132 → 40 s，对 M3 之前快 5.4 倍；运行目录、`log.out`、`par.out` 逐字节相同；hotcent 原来把单元素的表算了三遍；σ_rep 搜索的 74 次评估中 41 次白算，未改） | `design/M3b-hotcent-physrep.html`，`reports/M3b-hotcent-physrep.html` |
 | M3c | 计算策略推荐器 v1（CPU）：成本模型、内存估计、`ptbp plan`、`plan.json` | ✅ 完成（成本模型按轨道数、k 点数和截断内的原子对估计 pydftb、DFTB+ 单点的耗时和内存：耗时中位误差 12%/7%，排序秩相关 0.99，pydftb 内存中位误差 2%；Cu 数据集一个 BO 步的预计耗时与实测相差 2–4%；方案只调不改变数值的设置，运行目录与 M3b 逐字节相同；发现大晶胞的耗时和内存主要在库仑部分：最小的 Hubbard U 决定截断，Cu 的 4p 为 96 Bohr，64 个原子的晶胞 pydftb 要 2.2 GB，DFTB+ 0.3 GB；DFTB+ 的 OpenMP 线程在 500 个轨道以下反而更慢） | `design/M3c-recommender.html`，`reports/M3c-recommender.html` |
-| M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | 计划 | — |
+| M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | ✅ 完成（18 条规则，各有出处；11 次冻结的 DFTB+ 25.1 运行上结论全部符合预期；PTBP 的历史输入被查出 5 条：ParserVersion 1 带来的壳层分辨 SCC 和 0.01 Bohr 差分步长、写在 Filling 外被忽略的展宽（实际 T = 0）、8 MB 的栈、默认 Ewald 容差，前两项标为预期；PTBP 用 DFTB+ 时自动检查第一个运行和失败的运行，只报告，结果逐字节相同） | `design/M3d-advisor.html`，`reports/M3d-advisor.html` |
 | M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
 | M6 | DFTB+ 功能补齐·第二波（按需）：自旋轨道耦合、DFTB+U、长程校正、溶剂、外场、TD-DFTB、XL-BOMD | 计划 | — |

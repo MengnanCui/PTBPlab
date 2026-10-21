@@ -1,0 +1,24 @@
+Geometry = GenFormat {
+    <<< "geo.gen"
+}
+Hamiltonian = DFTB {
+   SCC = Yes
+   SCCTolerance = 1e-6
+   MaxAngularMomentum {
+      Cu = "d"
+   }
+   KPointsAndWeights = Klines {
+      1 0.0 0.0 0.0
+      4 0.5 0.0 0.0
+   }
+   SlaterKosterFiles = Type2FileNames {
+      Prefix = ./
+      Separator = "-"
+      Suffix = ".skf"
+   }
+   PolynomialRepulsive = SetForAll { Yes }
+}
+
+ParserOptions {
+   ParserVersion = 14
+}

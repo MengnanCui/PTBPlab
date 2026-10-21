@@ -1,0 +1,106 @@
+Geometry = GenFormat {
+4 S
+Cu
+1 1 0.02 0.0 0.0
+2 1 0.0 1.805 1.805
+3 1 1.805 0.0 1.805
+4 1 1.805 1.805 0.0
+0.0 0.0 0.0
+3.61 0.0 0.0
+0.0 3.61 0.0
+0.0 0.0 3.61
+}
+Hamiltonian = DFTB {
+  SCC = Yes
+  SCCTolerance = 1e-6
+  MaxAngularMomentum = Cu {
+"d"
+  }
+  KPointsAndWeights = Klines {
+1 0.0 0.0 0.0
+4 0.5 0.0 0.0
+  }
+  SlaterKosterFiles = Type2FileNames {
+    Prefix = ./
+    Separator = "-"
+    Suffix = ".skf"
+    LowerCaseTypeName = No
+  }
+  PolynomialRepulsive = SetForAll {
+Yes
+  }
+  Hybrid = None {}
+  ShellResolvedSCC = No
+  OldSKInterpolation = No
+  ReadInitialCharges = No
+  InitialCharges = {}
+  EwaldParameter = 0.0000000000000000
+  EwaldTolerance = 1.0000000000000001E-009
+  ConvergentSCCOnly = Yes
+  HCorrection = None {}
+  SpinPolarisation = {}
+  ElectricField = {}
+  Solver = RelativelyRobust {}
+  Charge = 0.0000000000000000
+  MaxSCCIterations = 1
+  OnSiteCorrection = {}
+  Dispersion = {}
+  Solvation = {}
+  ElectronicConstraints = {}
+  Electrostatics = GammaFunctional {}
+  Mdftb = None {}
+  ThirdOrder = No
+  ThirdOrderFull = No
+  Differentiation = FiniteDiff {
+    Delta = 1.2207031250000000E-004
+  }
+  ForceEvaluation = "Traditional"
+  Mixer = Broyden {
+    MixingParameter = 0.20000000000000001
+    InverseJacobiWeight = 1.0000000000000000E-002
+    MinimalWeight = 1.0000000000000000
+    MaximalWeight = 100000.00000000000
+    WeightFactor = 1.0000000000000000E-002
+  }
+  Filling = Fermi {
+    Temperature = 0.0000000000000000
+    IndependentKFilling = No
+  }
+}
+ParserOptions = {
+  ParserVersion = 14
+  WriteHSDInput = Yes
+  StopAfterParsing = No
+  IgnoreUnprocessedNodes = No
+}
+Reks = None {}
+Driver = {}
+Analysis = {
+  ProjectStates = {}
+  WriteEigenvectors = No
+  WriteBandOut = Yes
+  MullikenAnalysis = Yes
+  WriteNetCharges = No
+  AtomResolvedEnergies = No
+  PrintForces = No
+}
+ExcitedState = {}
+Options = {
+  WriteDetailedOut = Yes
+  WriteAutotestTag = No
+  WriteDetailedXML = No
+  WriteResultsTag = No
+  RestartFrequency = 20
+  RandomSeed = 0
+  WriteHS = No
+  WriteRealHS = No
+  MinimiseMemoryUsage = No
+  ShowFoldedCoords = No
+  TimingVerbosity = 1
+  WriteCharges = Yes
+  WriteChargesAsText = No
+  WriteAllAtomGeometry = No
+  BinaryAccessTypes = {
+ "stream"
+  }
+}

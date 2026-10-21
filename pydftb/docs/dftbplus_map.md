@@ -66,22 +66,24 @@
 
 ## 3. 对照时踩过的坑
 
-1. **ParserVersion。** 解析器版本低于 14 时，DFTB+ 会把 `MethfesselPaxton { Order = n }` 悄悄改成 n−1（`dftbplus/oldcompat.F90`），而 ASE 写的是版本 1。pydftb 的对照工具固定写 14。
+标有【顾问 Xnn】的条目已做成 DFTB+ 配置顾问的规则（`python -m pydftb.advisor`，M3d）。
+
+1. **ParserVersion。**【顾问 P01、P02】 解析器版本低于 14 时，DFTB+ 会把 `MethfesselPaxton { Order = n }` 悄悄改成 n−1（`dftbplus/oldcompat.F90`），而 ASE 写的是版本 1。pydftb 的对照工具固定写 14。
 2. **数值求导方式。** DFTB+ 的 `Differentiation = Richardson {}` 在这些 SKF 上反而比默认差分更不准：水分子的力误差从 1.2e-6 升到 1.2e-5 Ha/Bohr。原因可能是它的步长较大，跨过了插值多项式更换窗口的格点。因此参考数据使用默认差分。
 3. **SKF 表格少用一行。** 表头写 `0.02, 719`、文件里也有 719 行时，DFTB+ 只读前 718 行（`type/oldskdata.F90:145`，`nGrid = nGrid - 1`）。表格的终点因此是 14.36 Bohr，而不是 14.38 Bohr，最后几个插值窗口和其后 1 Bohr 的衰减尾巴都随之改变。Cu、H、O、C 的积分在这么远处已经极小，看不出差别；Li 的 2s 轨道很弥散，Li₂ 在 14.5–14.9 Bohr 处的能量差达到 2.5e-7 Ha，力甚至反号。M2a 起 pydftb 与 DFTB+ 一致（差异约 1e-11 Ha）。
 4. **数值求导跨过网格节点。** DFTB+ 用步长 1.22e-4 Bohr 的中心差分求 H0、S 的导数。如果某个原子间距离到最近网格节点的距离比这个步长还小，差分的两端会落在两个不同的插值多项式上，导数就有误差。在晶格常数 3.45 Å 的 Li bcc 中，a√2 那一层邻居离第 461 个节点只有 4.3e-5 Bohr，DFTB+ 的应力因此偏差 1.2e-8 Ha/Bohr³。pydftb 默认用复步长精确求导，没有这个问题；设 `fd_delta` 后能逐位复现 DFTB+ 的结果（差异 6e-13）。第 2 条中 Richardson 求导变差，很可能也是这个原因。
 5. **Γ 在 U 恰好相等时大一倍。** DFTB+ 的 `gamma2pU` 在 |U_a − U_b| < 3.125e-6 时对共同的 τ 求全导数，否则求偏导；按对称性，偏导恰好是全导数的一半。3ob 等参数按这个约定拟合，pydftb 照搬。
-6. **U 几乎相等时，DFTB+ 的 γ 闭式公式失效。** 公式里 1/(τ_a² − τ_b²)ⁿ 各项彼此几乎完全抵消。|ΔU| = 1e-5 时，S 的相对误差是 6e-4，∂γ/∂U 的相对误差是 24。DFTB3 下实测总能量错 0.5 eV（ΔU = 4e-6）。pydftb 在 U 相差不到 5% 时改用 Hermite–Genocchi 积分形式，误差 ≤ 4e-12（见 `reports/M2b-dftb3.html`）。
+6. **U 几乎相等时，DFTB+ 的 γ 闭式公式失效。**【顾问 H01】 公式里 1/(τ_a² − τ_b²)ⁿ 各项彼此几乎完全抵消。|ΔU| = 1e-5 时，S 的相对误差是 6e-4，∂γ/∂U 的相对误差是 24。DFTB3 下实测总能量错 0.5 eV（ΔU = 4e-6）。pydftb 在 U 相差不到 5% 时改用 Hermite–Genocchi 积分形式，误差 ≤ 4e-12（见 `reports/M2b-dftb3.html`）。
 7. **费米能级捷径影响力的自洽。** “带隙中点”只要让电子数误差 ≤ 1e-7 就被接受；电子数不严格守恒时，力与能量导数会相差约 5e-7 Ha/Bohr（实例：按壳层分辨的 Cu₄CO，300 K）。
 8. **开自旋时第一轮不混合。** `main.F90:getNextInputCharges` 在第一次 SCC 迭代、且开了自旋（或 DFTB+U 等）时，直接用输出电荷作为下一轮输入，不调用混合器。不照做，SCC 轮数就对不上（O₂：2 轮对 4 轮）。
 9. **“能级全部占满”按“能级数 × 自旋通道数”判断**（`etemp.F90:Efilling`）。把自旋通道当作额外的 k 点处理时，要乘上通道数，否则会误判。
 10. **DFTB+ 的 D4 对 Cu、Zn、Ag、Cd、Au、Hg 多用一个参考体系。** `external/dftd4refs/dftd4_references.fh` 中这 6 种元素的 `refn` 为 3，dftd4 3.6 为 2（第 3 个参考体系仍在数据里，但未启用）；其余 3366 项数据完全相同。Cu₄CO 的色散能因此差 2.1e-3 Ha。
-11. **DFTB+ 周期体系的 EEQ 电荷有错。** 结果随 `EwaldParameter` 变化，大盒子也不收敛到分子极限（按 1/L 衰减）。可疑处：`dftb/encharges.F90:addEwaldContribs` 中对角元加了两次倒空间项。对照时设 `ChargeScale = 0`。
-12. **DFTB+ 周期体系的 D4 三体项计数有错。** 近邻表只存“像原子编号 ≥ 本原子”的近邻，`tripleScale` 的折扣与实际枚举次数不符；梯度不乘这个折扣。同一晶体用原胞和超胞算出的每胞能量不同（差 10%）。对照时设 `s9 = 0`。
+11. **DFTB+ 周期体系的 EEQ 电荷有错。**【顾问 D02】 结果随 `EwaldParameter` 变化，大盒子也不收敛到分子极限（按 1/L 衰减）。可疑处：`dftb/encharges.F90:addEwaldContribs` 中对角元加了两次倒空间项。对照时设 `ChargeScale = 0`。
+12. **DFTB+ 周期体系的 D4 三体项计数有错。**【顾问 D03】 近邻表只存“像原子编号 ≥ 本原子”的近邻，`tripleScale` 的折扣与实际枚举次数不符；梯度不乘这个折扣。同一晶体用原胞和超胞算出的每胞能量不同（差 10%）。对照时设 `s9 = 0`。
 13. **dftd4 库的截断写死为 60/40/30 Bohr**（二体/三体/配位数），DFTB+ 默认 64/40/40。对照时 DFTB+ 写成库的值；稠密周期体系中二体截断的差别约 1e-7 Ha/原子。
 14. **SlaterKirkwood：被跳过的原子不能同时 N = 0。** DFTB+ 只检查原子对中的第一个原子，第二个原子的 √(α/N) 会算成 0/0，总能量变成 NaN。
 15. **UFF 参数按物种名的前两个字母查找**（`dispuffdata.F90:getUffValues`）：`Li1` 会查成 Li，`O2` 查不到。对照工具对类型标签写显式数值。
-16. **Klines 的规则与能带运行。** 第一行之前隐含一个 Γ 点；每行“N k”取从上一个点（不含）到 k（含）的 N 个等距点；N = 0 表示跳到 k 而不取点。有 Klines 时 `MaxSCCIterations` 默认为 1（`parser.F90:maxSelfConsIterations`）。只算一轮时多原子晶胞会被判定“SCC 未收敛”并报错退出，要写 `ConvergentSCCOnly = No`；单原子晶胞的原子布居恒等于电子数，SCC 误差恒为 0，不写也能跑。
+16. **Klines 的规则与能带运行。**【顾问 B01】 第一行之前隐含一个 Γ 点；每行“N k”取从上一个点（不含）到 k（含）的 N 个等距点；N = 0 表示跳到 k 而不取点。有 Klines 时 `MaxSCCIterations` 默认为 1（`parser.F90:maxSelfConsIterations`）。只算一轮时多原子晶胞会被判定“SCC 未收敛”并报错退出，要写 `ConvergentSCCOnly = No`；单原子晶胞的原子布居恒等于电子数，SCC 误差恒为 0，不写也能跑。
 17. **玻尔兹曼常数。** DFTB+ 25.1 是 3.16681534524639e-6 Ha/K（`common/constants.F90`），pydftb 在 M2e 之前用 3.166811429e-6，相对差 1.2e-6，在 500–1000 K 时造成约 3e-9 Ha、3e-9 e 的差别。核实方法：同一温度分别以 K 和以 Hartree 输入，结果必须逐位相同。
 18. **middleGap 在舍入时跳过能隙。** `etemp.F90:middleGap` 逐个累加 k 点权重直到不小于填充数；权重为 1/13 之类时累加和比填充数少一个舍入单位，于是多加一个导带能级，“中点”落在导带内；之后的二分法把绝缘体的费米能级推到导带底下方约 28 kT。占据数不变。pydftb 累加时允许 1e-9 的舍入，取真正的中点。
 19. **短程 γ 的截断。** DFTB+ 对每一对 U 值在 S 降到 1e-10 处截断（`shortgammafuncs.F90:expGammaCutoff`：先倍增再二分，二分精度也是 1e-10）。pydftb 的第二阶项在 M2e 之前一直加到 1e-14，周期体系中每个原子的 SCC 势因此差约 1e-9 Ha（能量差 1.6e-9 Ha，本征值差 ~1e-9 Ha）。
@@ -89,13 +91,13 @@
 21. **输出文件的精度。** `band.out` 的本征值只有 4 位小数（eV），区域文件 6 位小数、k 权重 8 位小数，`results.tag` 是全精度。对照本征值一律读 `results.tag`；需要 `WriteChargesAsText = Yes`（在 `Options` 中）才能读到全精度的 `charges.dat`。
 22. **力用输出电荷。** `RecomputeAfterDensity` 默认开启：每次对角化之后，DFTB+ 用这一轮的输出电荷重算 SCC 势（`main.F90:processPotentials`），所以力中的库仑项（`addForceDc`）和势项（`derivative_shift` 用的 `potential%intBlock`）都来自输出电荷。pydftb 在 M2f 之前用输入电荷：SCC 收敛到 1e-10 时看不出区别，收敛到 1e-5 时（PTBP 的设置）力差可达 8e-7 Ha/Bohr。
 23. **MD 默认去掉质心运动。** `VelocityVerlet` 的 `KeepStationary` 默认 Yes，每一步去掉质心速度；ASE 的积分器不这样做。给定的初速度原样使用（不重新缩放）。
-24. **新的 `GeometryOptimisation` 驱动。** 收敛需要最大梯度分量 < `GradElem`（默认 1e-4 Ha/Bohr）**并且**这一步能量没有升高；梯度范数、位移判据默认关闭。LBFGS 没有步长上限：从远离极小点的结构开始时，在软的势能面上步长会越来越大，直到某个结构上 SCC 发散、程序退出。Rational 稳定但收敛慢（甲醇到 1e-7：1918 步，LBFGS 45 步）。
-25. **`LatticeOpt` 的 `Isotropic = Yes` 只适合正交晶胞。** 它把应力换成压强，但晶格的梯度是 p·L⁻ᵀ，对非正交晶胞（如 bcc 原胞）不平行于 L，LBFGS 的步长会剪切晶胞，而收敛判据只看压强，于是停在剪切过的晶胞上。
+24. **新的 `GeometryOptimisation` 驱动。**【顾问 G02】 收敛需要最大梯度分量 < `GradElem`（默认 1e-4 Ha/Bohr）**并且**这一步能量没有升高；梯度范数、位移判据默认关闭。LBFGS 没有步长上限：从远离极小点的结构开始时，在软的势能面上步长会越来越大，直到某个结构上 SCC 发散、程序退出。Rational 稳定但收敛慢（甲醇到 1e-7：1918 步，LBFGS 45 步）。
+25. **`LatticeOpt` 的 `Isotropic = Yes` 只适合正交晶胞。**【顾问 G01】 它把应力换成压强，但晶格的梯度是 p·L⁻ᵀ，对非正交晶胞（如 bcc 原胞）不平行于 L，LBFGS 的步长会剪切晶胞，而收敛判据只看压强，于是停在剪切过的晶胞上。
 26. **MD 输出的精度。** `geo_end.xyz` 的坐标和速度是 `F16.8`（1e-8 Å、1e-8 Å/ps），`md.out` 的能量是 Hartree 的 10 位小数。
 27. **单位常数。** DFTB+ 用自己的一组常数（Bohr 0.529177249 Å、Hartree 27.2113845 eV、au__fs 0.02418884326505、amu__au = 1/5.4857990945e-4），ASE 用 CODATA 2014，相对差约 1e-7。经 ASE 跑的 40 步 MD 因此与 DFTB+ 相差约 4e-8 Å；用 DFTB+ 的常数则相差 ≤ 1.5e-8 Å（xyz 的精度）。
 28. **插值在网格节点处有折点。** `slakoeqgrid.F90` 的 8 点插值每过一个网格节点就换一组插值点，插值函数的导数在节点处跳变。表格光滑时跳变可忽略；PTBP 用 hotcent 生成的表格有约 1e-7 Ha 的数值噪声，跳变中位数 5e-6、最大 1e-3 Ha/Bohr。DFTB+ 默认用步长 1.22e-4 Bohr 的中心差分求 H0、S 的导数（`nonscc.F90`），原子对距离落在节点一个步长之内时差分跨过跳变，力的误差可达 1.3e-4 Ha/Bohr（水二聚体 MD 中 2% 的步）。pydftb 的复步长导数是插值函数在该点所在分段上的精确导数；要与 DFTB+ 逐位比较力，pydftb 用同样的差分（`fd_delta`）。
 29. **扩展 SKF 格式（f 轨道）。** 第 1 行以 `@` 开头（DFTB+ 只看第一个字符），其余内容整体下移一行；同核文件的在位行是 13 个数（E、U、占据数各 4 个，按 f d p s，中间是 SPE）；积分表每行先 20 个 H 再 20 个 S，顺序 ff0–3、df0–2、dd0–2、pf0–1、pd0–1、pp0–1、sf0、sd0、sp0、ss0。简单格式的 10 个积分放进第 8、9、10、13、14、15、16、18、19、20 个位置（`iSKInterOld`），所以两种格式可以混用。把同核文件改成异核文件（类型副本）时要删的在位行，在扩展格式里是第 3 行。
-30. **没有 Spline 段的 SKF。** `readSplineRep` 找不到 `Spline` 就报错退出，只有多项式（哪怕全为 0）的文件要配 `PolynomialRepulsive = SetForAll { Yes }`。hotcent 直接写出的文件就是这样（M2g 的 Gd/O 测试参数）。
+30. **没有 Spline 段的 SKF。**【顾问 K01】 `readSplineRep` 找不到 `Spline` 就报错退出，只有多项式（哪怕全为 0）的文件要配 `PolynomialRepulsive = SetForAll { Yes }`。hotcent 直接写出的文件就是这样（M2g 的 Gd/O 测试参数）。
 31. **两处输入写法。** `HubbardDerivs` 的每个元素要单独一行，写在同一行会报 “Superfluous data”；壳层分辨 SCC 时不能写 `SpinConstants` 中的 `ShellResolvedSpin`（被忽略的节点会让 DFTB+ 报错退出）。
-32. **OpenMP 线程在小矩阵上更慢。** 不设 `OMP_NUM_THREADS` 时 DFTB+ 用满全部核心。M3c 实测（Cu 晶胞，1000 K）：36 个轨道（864 个 k 点）用 4 个线程慢 3.3 倍，288 个轨道慢 1.2–1.3 倍，576 个轨道的 Γ 点不变快，576 个轨道 16 个 k 点快 1.4 倍、972 个轨道 4 个 k 点快 1.74 倍；PTBP 的 Cu 数据集（9–18 个轨道）整体慢 11%（M3a）。线程数还会改变应力的最后一位。PTBP 只在每个结构都有 ≥ 500 个轨道时给 DFTB+ 线程，其余情况每个进程 1 个线程。
+32. **OpenMP 线程在小矩阵上更慢。**【顾问 T03】 不设 `OMP_NUM_THREADS` 时 DFTB+ 用满全部核心。M3c 实测（Cu 晶胞，1000 K）：36 个轨道（864 个 k 点）用 4 个线程慢 3.3 倍，288 个轨道慢 1.2–1.3 倍，576 个轨道的 Γ 点不变快，576 个轨道 16 个 k 点快 1.4 倍、972 个轨道 4 个 k 点快 1.74 倍；PTBP 的 Cu 数据集（9–18 个轨道）整体慢 11%（M3a）。线程数还会改变应力的最后一位。PTBP 只在每个结构都有 ≥ 500 个轨道时给 DFTB+ 线程，其余情况每个进程 1 个线程。
 33. **库仑求和的内存。** 壳层分辨 SCC 的短程 γ 算到 1e-10，截断由最小的 Hubbard U 决定（Cu 的 4p 壳层 U = 0.08 Ha 时 96 Bohr）。64 个 Cu 原子的晶胞有约 300 万个原子对：DFTB+ 峰值内存 0.3 GB，pydftb 把所有原子对和壳层对展开成数组，要 2.2 GB（M3c）。

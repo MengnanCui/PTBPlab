@@ -27,6 +27,10 @@ results/
 *.traj
 eos_*.json
 result.pkl
+# ... except the frozen DFTB+ runs of the advisor's tests (pydftb M3d)
+!pydftb/tests/data/advisor/*/dftb_in.hsd
+!pydftb/tests/data/advisor/*/dftb_pin.hsd
+!pydftb/tests/data/advisor/*/geo_end.gen
 
 # OS
 .DS_Store

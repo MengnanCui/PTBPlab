@@ -10,7 +10,9 @@ Serial or in parallel (:mod:`utils.parallel`), with the same results and files:
   SinglePointCalculator, so ``dftb_band.xyz`` is byte-identical to the historical file;
 * in a parallel stage each DFTB+ run gets a directory ``dftb_tasks/sNNNN/`` with the SKF
   directory as an absolute path; the directory is removed after a successful run and
-  kept after a failure.  Serial DFTB+ runs stay in the current directory, as before.
+  kept after a failure.  Serial DFTB+ runs stay in the current directory, as before;
+* in PTBP runs with DFTB+ the configuration advisor (``utils.advisor_hook``, M3d) checks
+  the first DFTB+ run once, and every failed run.
 
 Without a plan (:func:`utils.parallel.current_plan` is None, e.g. library use) the stage
 runs serially with the thread settings untouched, i.e. exactly as before M3.
@@ -33,6 +35,7 @@ import numpy as np
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 
+from utils import advisor_hook
 from utils.parallel import current_plan, map_tasks
 from utils.parallel.budget import applied_env, thread_env
 
@@ -76,6 +79,7 @@ class StructureTask:
     dftb_args: dict = field(default_factory=dict)   # PTBP schema (utils.engines)
     workdir: str | None = None                      # DFTB+ task directory (parallel stage)
     cost: float = 1.0                               # nk * N^3, for the largest-first order
+    keep_dir: bool = False                          # keep workdir after success (advisor)
 
 
 def make_tasks(structures, bolt, kpts_dens, dftb_args: dict, task_root: str | None = None):
@@ -107,7 +111,7 @@ def run_structure(task: StructureTask) -> Atoms:
     spc = SinglePointCalculator(atoms)
     spc.results = dict(calc.results)          # as computed: the extxyz output does not change
     atoms.calc = spc
-    if task.workdir is not None:
+    if task.workdir is not None and not task.keep_dir:
         shutil.rmtree(task.workdir, ignore_errors=True)
     return atoms
 
@@ -167,6 +171,7 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
                        task_root=os.path.abspath(TASK_DIR) if parallel and engine == "dftbplus"
                        else None)
 
+    advise = engine == "dftbplus" and advisor_hook.wants_check()
     dftb_out, dft_out, kept = [], [], []
     if not parallel:
         walls = [0.0] * len(tasks)
@@ -174,9 +179,18 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
         def timed(i):
             t0 = time.perf_counter()
             try:
-                return run_structure(tasks[i])
+                atoms = run_structure(tasks[i])
+            except FileNotFoundError:
+                raise
+            except Exception as err:            # a DFTB+ failure: ask the advisor why
+                if engine == "dftbplus":
+                    advisor_hook.explain_failure(os.getcwd(), err)
+                raise
             finally:
                 walls[i] = time.perf_counter() - t0
+            if advise:
+                advisor_hook.check_once(os.getcwd())
+            return atoms
 
         with applied_env(thread_env(threads)) if planned else nullcontext():
             for n in range(ngroups):
@@ -194,10 +208,16 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
             _record(len(tasks), walls)
         return dftb_out, dft_out, kept
 
-    results = map_tasks(run_structure, tasks, workers, order=task_order(tasks), threads=threads,
+    order = task_order(tasks)
+    if advise:                                   # keep one run directory for the advisor
+        tasks[order[0]].keep_dir = True
+    results = map_tasks(run_structure, tasks, workers, order=order, threads=threads,
                         blas_threads=blas)
     if all(r.ok for r in results):
         _record(len(tasks), [r.wall for r in results])
+    if advise and results[order[0]].ok:
+        advisor_hook.check_once(tasks[order[0]].workdir, concurrent=workers)
+        shutil.rmtree(tasks[order[0]].workdir, ignore_errors=True)
     for n in range(ngroups):
         group = range(n * eos, (n + 1) * eos)
         failed = next((results[i] for i in group if not results[i].ok), None)
@@ -206,6 +226,8 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
                 print("DFTB+ Warning:", failed.error)
                 print(SKF_WARNING)
                 continue
+            if engine == "dftbplus":
+                advisor_hook.explain_failure(tasks[failed.index].workdir, failed.error)
             raise failed.error
         dft_out.extend(used[i] for i in group)
         dftb_out.extend(results[i].value for i in group)
