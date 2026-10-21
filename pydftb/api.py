@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from .calculator import DFTB, DFTBResult
+from .dispersion import make_dispersion
 from .kpoints import monkhorst_pack, reduce_time_reversal
 from .params import ParamSet
 from .system import System
@@ -41,7 +42,7 @@ class SCC:
 
     Keyword arguments are passed to :class:`pydftb.calculator.DFTB`
     (``temperature``, ``scc_tol``, ``max_scc``, ``mixing``, ``solver``,
-    ``repulsive`` ...).  ``kpts`` may be a Monkhorst-Pack grid ``(n1, n2, n3)``
+    ``repulsive``, ``dispersion`` ...).  ``kpts`` may be a Monkhorst-Pack grid ``(n1, n2, n3)``
     or explicit ``(kpoints, weights)``.
     """
 
@@ -57,7 +58,12 @@ class SCC:
     # ------------------------------------------------------------------
     def _engine(self) -> DFTB:
         sk = self.params.skset(self.system.unique_labels)
-        return DFTB(sk, scc=self.scc, kpts=self.kpts, charge=self.system.charge, **self.options)
+        opts = dict(self.options)
+        disp = make_dispersion(opts.pop("dispersion", None))
+        if disp is not None:            # elements of the System, also for custom labels
+            disp = disp.with_elements(dict(zip(self.system.labels, map(int, self.system.numbers))))
+        return DFTB(sk, scc=self.scc, kpts=self.kpts, charge=self.system.charge, dispersion=disp,
+                    **opts)
 
     def _run(self, forces: bool) -> DFTBResult:
         s = self.system

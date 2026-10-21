@@ -41,6 +41,12 @@ def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     natom = len(pos)
     pbc = np.zeros(3, bool) if cell is None else np.asarray(pbc, bool)
     nimg = image_range(cell, pbc, cutoff)
+    if cell is not None and natom:
+        # atoms outside the unit cell (fractional spread >= 1) can need one more image
+        inv = np.linalg.inv(cell)
+        frac = pos @ inv
+        reach = cutoff * np.linalg.norm(inv, axis=0) + frac.max(0) - frac.min(0)
+        nimg = np.where(pbc, np.maximum(nimg, np.floor(reach).astype(int)), 0)
     rng = [np.arange(-n, n + 1) for n in nimg]
     shifts = np.array(np.meshgrid(*rng, indexing="ij")).reshape(3, -1).T
     if cell is not None:

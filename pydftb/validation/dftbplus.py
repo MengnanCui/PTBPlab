@@ -116,6 +116,84 @@ def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _yes(flag) -> str:
+    return "Yes" if flag else "No"
+
+
+def dispersion_block(spec, labels) -> str:
+    """HSD ``Dispersion = ...`` for a pydftb dispersion spec (``pydftb.dispersion``).
+
+    Values are written in DFTB+'s default units (Bohr, Hartree).  Type labels that are
+    not element symbols get ``AtomicNumbers`` (D3, D4) or explicit UFF values, because
+    DFTB+ finds parameters by species name.
+    """
+    from ..dispersion import (DFTD3, DFTD4, LennardJones, SimpleDFTD3, SlaterKirkwood,
+                              make_dispersion)
+    from ..system import element_of_label
+
+    model = make_dispersion(spec)
+    if model is None:
+        return ""
+    uniq = list(dict.fromkeys(labels))
+    plain = all(element_of_label(lab) == lab for lab in uniq)
+    numbers = dict(zip(uniq, model.numbers(uniq)))
+    atomic = "" if plain else ("    AtomicNumbers {\n" + "".join(
+        f"      {lab} = {numbers[lab]}\n" for lab in uniq) + "    }\n")
+    if isinstance(model, LennardJones):
+        if model.parameters == "uff" and plain:
+            body = "    Parameters = UFFParameters {}\n"
+        else:
+            dist, depth = model.site_parameters(uniq)
+            body = "    Parameters {\n" + "".join(
+                f"      {lab} {{\n        Distance = {_f(r)}\n        Energy = {_f(d)}\n      }}\n"
+                for lab, r, d in zip(uniq, dist, depth)) + "    }\n"
+        return f"  Dispersion = LennardJones {{\n{body}  }}\n"
+    if isinstance(model, SlaterKirkwood):
+        if model.polar_radius_charge is not None:
+            rows = "".join("      " + " ".join(_f(x) for x in row) + "\n"
+                           for row in model.polar_radius_charge)
+            body = f"    PolarRadiusCharge = {{\n{rows}    }}\n"
+        else:
+            entries = "".join(
+                f"      {lab} {{\n        CovalentRadius = {_f(rc)}\n"
+                f"        HybridPolarisations = {{ {' '.join(_f(x) for x in vals)} }}\n      }}\n"
+                for lab, (rc, vals) in model.hybrid_dependent_pol.items() if lab in uniq)
+            body = f"    PolarRadiusCharge = HybridDependentPol {{\n{entries}    }}\n"
+        return f"  Dispersion = SlaterKirkwood {{\n{body}  }}\n"
+    if isinstance(model, SimpleDFTD3):
+        return (f"  Dispersion = SimpleDftD3 {{\n    s6 = {_f(model.s6)}\n    s8 = {_f(model.s8)}\n"
+                f"    s10 = {_f(model.s10)}\n    a1 = {_f(model.a1)}\n    a2 = {_f(model.a2)}\n"
+                f"    WeightingFactor = {_f(model.weighting_factor)}\n"
+                f"    CutoffInter = {_f(model.cutoff_inter)}\n"
+                f"    CoordinationNumber = Exp {{ Cutoff = {_f(model.cutoff_cn)} }}\n  }}\n")
+    if isinstance(model, DFTD3):
+        if model.kind == "bj":
+            damping = f"BeckeJohnson {{\n      a1 = {_f(model.a1)}\n      a2 = {_f(model.a2)}\n    }}"
+        elif model.kind == "zero":
+            damping = (f"ZeroDamping {{\n      sr6 = {_f(model.sr6)}\n"
+                       f"      alpha6 = {_f(model.alpha6)}\n    }}")
+        else:
+            damping = (f"ModifiedZeroDamping {{\n      sr6 = {_f(model.sr6)}\n"
+                       f"      beta = {_f(model.beta)}\n      alpha6 = {_f(model.alpha6)}\n    }}")
+        return (f"  Dispersion = DftD3 {{\n    Damping = {damping}\n    s6 = {_f(model.s6)}\n"
+                f"    s8 = {_f(model.s8)}\n    Threebody = {_yes(model.threebody)}\n"
+                f"    HHRepulsion = {_yes(model.hhrepulsion)}\n    Cutoff = {_f(model.cutoff)}\n"
+                f"    CutoffCN = {_f(model.cutoff_cn)}\n{atomic}  }}\n")
+    if isinstance(model, DFTD4):
+        cut = DFTD4.LIBRARY_CUTOFFS        # what pydftb (the dftd4 library) uses
+        return (f"  Dispersion = DftD4 {{\n    s6 = {_f(model.s6)}\n    s8 = {_f(model.s8)}\n"
+                f"    s9 = {_f(model.s9)}\n    s10 = {_f(model.s10)}\n    a1 = {_f(model.a1)}\n"
+                f"    a2 = {_f(model.a2)}\n    alpha = {_f(model.alpha)}\n"
+                f"    WeightingFactor = {_f(model.weighting_factor)}\n"
+                f"    ChargeSteepness = {_f(model.charge_steepness)}\n"
+                f"    ChargeScale = {_f(model.charge_scale)}\n"
+                f"    CutoffInter = {_f(cut['cutoff_inter'])}\n"
+                f"    CutoffThree = {_f(cut['cutoff_three'])}\n"
+                f"    CoordinationNumber = Cov {{ Cutoff = {_f(cut['cutoff_cn'])} }}\n"
+                f"    ChargeModel = EEQ {{}}\n{atomic}  }}\n")
+    raise TypeError(f"no DFTB+ input for {type(model).__name__}")
+
+
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False) -> str:
@@ -214,7 +292,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         res = {"wall": wall, "hsd": hsd, "stdout": p.stdout, "dir": workdir}
         for key, name in [("energy", "Total energy"), ("free_energy", "Total Mermin free energy"),
                           ("e_zero", "Extrapolated to 0"), ("e_rep", "Repulsive energy"),
-                          ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS")]:
+                          ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
+                          ("e_disp", "Dispersion energy")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))

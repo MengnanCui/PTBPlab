@@ -35,6 +35,10 @@
 | 应力（M2a） | `calculator.py: DFTB._gradient(virial=True)`，`coulomb.py: Coulomb.gradient(virial=True)` | `dftb/stress.F90`，`dftb/coulomb.F90`，`dftbplus/main.F90` | `getBlockStress`, `invRStress`, `getStress` | 每个原子对的“力 × 键矢量”求和，加 Ewald 倒空间项和背景项；与力在同一遍里算出 |
 | SCC 主循环 | `calculator.py: DFTB.calculate` | `dftbplus/main.F90` | `processGeometry`, SCC 循环 `lpSCC` | pydftb 分成 `_setup/_scc/_energies/_gradient` 四段 |
 | 能量记账（Total / Mermin / Extrapolated） | `calculator.py: DFTBResult` | `dftb/getenergies.F90`, `dftbplus/mainio.F90` | `writeDetailedOut*` | — |
+| 色散：Lennard-Jones/UFF（M2d） | `dispersion.py: LennardJones` | `dftb/dispuff.F90`，`dftb/dispuffdata.F90` | `DispUff_init`, `getDispEnergyAndGrad_cluster`, `getUffValues` | R ≤ 2^(−1/6)r 时用多项式“墙” |
+| 色散：Slater-Kirkwood（M2d） | `dispersion.py: SlaterKirkwood` | `dftb/dispslaterkirkw.F90`，`dftbplus/parser.F90:readDispSlaKirk` | `addDispEnergyAndGrad_cluster`, `getDampCutoff_`；`HybridDependentPol` 的邻居计数在 parser 中 | — |
+| 色散：r⁻⁶ 的 Ewald 求和（M2d） | `dispersion.py: ewald_r6` | `dftb/dispcommon.F90` | `addDispEGr_per_atom/_per_species`, `getOptimalEta`, `getMaxRDispersion`, `getMaxGDispersion` | η 和截断照 DFTB+ 选取 |
+| 色散：D3、SimpleDftD3、D4（M2d） | `dispersion.py: DFTD3, SimpleDFTD3, DFTD4`（调用 `dftd3`/`dftd4` 库） | `extlibs/sdftd3.F90`（库），`dftb/simpledftd3.F90`（原生），`dftb/dispdftd4.F90`、`dftd4param.F90`、`encharges.F90`、`coordnumber.F90`（原生） | `TSDFTD3_init`, `addHHRepulsion`, `threeBodyDispersionGradient`, `weightReferences`, `addEwaldContribs` | DFTB+ 的 D4 是原生实现，与参考库有三处不同（第 3 节第 10–12 条） |
 
 ## 2. 待实现部分对应的 DFTB+ 文件（路线图见 `ROADMAP.md`）
 
@@ -43,7 +47,7 @@
 | 非共线自旋、自旋轨道耦合 | `dftb/spinorbit.F90`，`dftb/sparse2dense.F90`（`unpackHPauli`） |
 | DFTB+U、onsite 修正 | `dftb/dftbplusu.F90`，`dftb/onscorrection.F90` |
 | 长程校正 LC/CAM | `dftb/hybridxc.F90`（7,459 行），`dftb/rshgamma.F90` |
-| 色散 | `dftb/dispuff.F90`，`dispslaterkirkw.F90`，`simpledftd3.F90`，`dispdftd4.F90`，`dispmbd.F90` |
+| 色散 TS/MBD、D4 自洽电荷 | `dftb/dispmbd.F90`（libmbd），`dftb/dispdftd4.F90`（`selfConsistent` 分支） |
 | 氢键 / 卤素修正 | `dftb/h5correction.F90`，`dftb/halogenx.F90` |
 | 溶剂 | `solvation/born.F90`，`cosmo.F90`，`sasa.F90`，`cm5.F90` |
 | 外场、外部点电荷 | `dftb/extfields.F90`，`dftb/extcharges.F90` |
@@ -66,3 +70,9 @@
 7. **费米能级捷径影响力的自洽。** “带隙中点”只要让电子数误差 ≤ 1e-7 就被接受；电子数不严格守恒时，力与能量导数会相差约 5e-7 Ha/Bohr（实例：按壳层分辨的 Cu₄CO，300 K）。
 8. **开自旋时第一轮不混合。** `main.F90:getNextInputCharges` 在第一次 SCC 迭代、且开了自旋（或 DFTB+U 等）时，直接用输出电荷作为下一轮输入，不调用混合器。不照做，SCC 轮数就对不上（O₂：2 轮对 4 轮）。
 9. **“能级全部占满”按“能级数 × 自旋通道数”判断**（`etemp.F90:Efilling`）。把自旋通道当作额外的 k 点处理时，要乘上通道数，否则会误判。
+10. **DFTB+ 的 D4 对 Cu、Zn、Ag、Cd、Au、Hg 多用一个参考体系。** `external/dftd4refs/dftd4_references.fh` 中这 6 种元素的 `refn` 为 3，dftd4 3.6 为 2（第 3 个参考体系仍在数据里，但未启用）；其余 3366 项数据完全相同。Cu₄CO 的色散能因此差 2.1e-3 Ha。
+11. **DFTB+ 周期体系的 EEQ 电荷有错。** 结果随 `EwaldParameter` 变化，大盒子也不收敛到分子极限（按 1/L 衰减）。可疑处：`dftb/encharges.F90:addEwaldContribs` 中对角元加了两次倒空间项。对照时设 `ChargeScale = 0`。
+12. **DFTB+ 周期体系的 D4 三体项计数有错。** 近邻表只存“像原子编号 ≥ 本原子”的近邻，`tripleScale` 的折扣与实际枚举次数不符；梯度不乘这个折扣。同一晶体用原胞和超胞算出的每胞能量不同（差 10%）。对照时设 `s9 = 0`。
+13. **dftd4 库的截断写死为 60/40/30 Bohr**（二体/三体/配位数），DFTB+ 默认 64/40/40。对照时 DFTB+ 写成库的值；稠密周期体系中二体截断的差别约 1e-7 Ha/原子。
+14. **SlaterKirkwood：被跳过的原子不能同时 N = 0。** DFTB+ 只检查原子对中的第一个原子，第二个原子的 √(α/N) 会算成 0/0，总能量变成 NaN。
+15. **UFF 参数按物种名的前两个字母查找**（`dispuffdata.F90:getUffValues`）：`Li1` 会查成 Li，`O2` 查不到。对照工具对类型标签写显式数值。

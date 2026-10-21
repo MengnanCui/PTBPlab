@@ -40,6 +40,19 @@ mf = pydftb.SCC(pydftb.System.from_ase(atoms, labels=labels), params)
 
 `pydftb.skf.write_typed_copies` creates the files for a new type from existing ones.
 
+### Dispersion
+
+`dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):
+
+```python
+d3 = {"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719, "a2": 3.6017, "s6": 1.0, "s8": 0.5883}
+mf = pydftb.SCC(system, params, dispersion=d3)
+```
+
+Lennard-Jones/UFF and Slater-Kirkwood are built in.  D3 and D4 call the reference libraries, which are
+optional: `conda install -c conda-forge dftd3-python dftd4-python` (or `pip install dftd3 dftd4`).
+Models, defaults and the differences found in DFTB+'s own D4: [`docs/design/M2d-dispersion.md`](docs/design/M2d-dispersion.md).
+
 ## Tests and validation
 
 ```bash

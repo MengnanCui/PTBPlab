@@ -24,6 +24,7 @@ import numpy as np
 
 from ..calculator import DFTB
 from ..constants import BOHR
+from ..dispersion import library_versions
 from ..params import ParamSet
 from ..skf import write_typed_copies
 from . import dftbplus
@@ -66,6 +67,7 @@ def _inputs(case: Case) -> dict:
     periodic = bool(atoms.pbc.any())
     k = case.kpoints() if periodic else None
     base = case.typed or {}
+    disp = case.dispersion(list(labels)) if callable(case.dispersion) else case.dispersion
     return {
         "labels": list(labels),
         "positions_angstrom": atoms.positions.tolist(),
@@ -73,7 +75,32 @@ def _inputs(case: Case) -> dict:
         "kpoints": None if k is None else k[0].tolist(),
         "kweights": None if k is None else k[1].tolist(),
         "max_l": {lab: MAXL[base.get(lab, lab).rstrip("0123456789")] for lab in dict.fromkeys(labels)},
+        "dispersion": None if disp is None else json.loads(json.dumps(disp)),
     }
+
+
+# dispersion models that call a library, and which one
+_LIBRARY_OF = {"dftd3": "dftd3", "simpledftd3": "dftd3", "dftd4": "dftd4"}
+
+
+def dispersion_library(inp: dict) -> str | None:
+    disp = inp.get("dispersion")
+    return None if disp is None else _LIBRARY_OF.get(str(disp["model"]).lower())
+
+
+def missing_requirement(doc: dict) -> str | None:
+    """Why a frozen case cannot be checked here (a D3/D4 library missing or of another
+    version than the one that made the reference), or None."""
+    lib = dispersion_library(doc["input"])
+    if lib is None:
+        return None
+    have = library_versions()[lib]
+    want = doc.get("libraries", {}).get(lib)
+    if have is None:
+        return f"needs the optional package {lib} (reference made with {lib} {want})"
+    if have != want:
+        return f"reference made with {lib} {want}, installed {have}"
+    return None
 
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
@@ -95,6 +122,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=1e-10,
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
+                    dispersion=inp.get("dispersion"),
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         return calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
@@ -117,7 +145,8 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                             shell_resolved=case.shell_resolved, repulsive=case.repulsive,
                             extra_ham=dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
                             + dftbplus.spin_block(case.spin, set(inp["labels"]),
-                                                  case.shell_resolved),
+                                                  case.shell_resolved)
+                            + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"]),
                             threads=threads)
 
 
@@ -141,11 +170,14 @@ def regenerate(names=None, threads: int = 1):
                          "shell_resolved": case.shell_resolved, "repulsive": case.repulsive,
                          "typed": case.typed, "dftb3": case.dftb3, "spin": case.spin,
                          "scc_tol": 1e-10},
+            "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
+                          else {}),
             "input": inp,
             "hsd": ref["hsd"],
             "reference": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in ref.items()
                           if k in ("energy", "free_energy", "e_zero", "e_band", "e_scc", "e_rep",
-                                   "ts", "fermi", "forces", "charges_net", "n_scc", "stress")},
+                                   "ts", "fermi", "forces", "charges_net", "n_scc", "stress",
+                                   "e_disp")},
             "tolerances": case.tol,
         }
         path = os.path.join(REF_DIR, f"{case.name}.json")
@@ -180,10 +212,11 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> d
                    if ref.get("stress") is not None else 0.0),
         "forces": float(np.abs(res.forces - np.array(ref["forces"])).max()),
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
+        "e_disp": abs(res.e_disp - ref["e_disp"]) if "e_disp" in ref else 0.0,
     }
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
-          and max(dev["free_energy"], dev["e_zero"]) <= tol["energy"]
+          and max(dev["free_energy"], dev["e_zero"], dev["e_disp"]) <= tol["energy"]
           and dev["stress"] <= tol.get("stress", 1e-7))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
@@ -201,7 +234,7 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
 def check(names=None, solver: str = "eigh") -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
-          f"{'|dsigma|':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
+          f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
     for case in CASES:
         if names and case.name not in names:
             continue
@@ -210,12 +243,18 @@ def check(names=None, solver: str = "eigh") -> bool:
             print(f"{case.name:26s} (no reference JSON)")
             all_ok = False
             continue
-        r = compare(load(case.name), solver)
+        doc = load(case.name)
+        why = missing_requirement(doc)
+        if why:
+            print(f"{case.name:26s} skipped: {why}")
+            continue
+        r = compare(doc, solver)
         d = r["dev"]
         all_ok &= r["ok"]
+        e_disp = f"{d['e_disp']:9.1e}" if "e_disp" in doc["reference"] else f"{'-':>9s}"
         print(f"{case.name:26s} {r['natoms']:4d} {d['energy']:9.1e} {d['forces']:12.1e} "
-              f"{d['charges']:9.1e} {d['stress']:9.1e} {r['n_scc']:>5}/{str(r['n_scc_ref']):<5} "
-              f"{r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
+              f"{d['charges']:9.1e} {d['stress']:9.1e} {e_disp} "
+              f"{r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
     return all_ok
 
 

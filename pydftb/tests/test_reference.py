@@ -17,6 +17,9 @@ REFS = sorted(glob.glob(os.path.join(refgen.REF_DIR, "*.json")))
 @pytest.mark.parametrize("path", REFS, ids=[os.path.basename(p)[:-5] for p in REFS])
 def test_against_dftbplus_reference(path):
     doc = refgen.load(os.path.basename(path)[:-5])
+    why = refgen.missing_requirement(doc)      # D3/D4 cases need the matching library
+    if why:
+        pytest.skip(why)
     r = refgen.compare(doc)
     assert r["ok"], f"{doc['case']}: deviations {r['dev']} exceed {doc['tolerances']}"
     # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path

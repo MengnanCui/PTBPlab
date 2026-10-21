@@ -14,6 +14,7 @@ import numpy as np
 from ase import Atoms
 from ase.build import bulk, molecule
 
+from ..constants import BOHR
 from ..kpoints import monkhorst_pack, reduce_time_reversal
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "data")
@@ -34,6 +35,40 @@ DFTB3_3OB = {"third_order": "full", "hubbard_derivs": UD_3OB, "h_damping": 4.0}
 # spin constants W (Ha): typical PBE values for H and O; Cu values are for testing only
 W_SPIN = {"H": -0.072, "O": [[-0.035, -0.030], [-0.030, -0.028]],
           "Cu": [[-0.016, -0.012, -0.004], [-0.012, -0.040, -0.002], [-0.004, -0.002, -0.017]]}
+# dispersion (milestone M2d).  D3(BJ) and D4 parameters of DFTB3/3ob from the parameter tables of
+# s-dftd3 ("dftb3") and dftd4 ("dftb_3ob", with and without the three-body term)
+D3BJ_3OB = {"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719, "a2": 3.6017,
+            "s6": 1.0, "s8": 0.5883}
+D4_3OB = {"model": "dftd4", "s6": 1.0, "s8": 0.6635015, "s9": 1.0, "a1": 0.5523240,
+          "a2": 4.3537076}
+# periodic D4 against DFTB+: two-body only and no charge dependence, because DFTB+'s periodic
+# EEQ charges and three-body sum are wrong (docs/design/M2d-dispersion.md)
+D4_3OB_2BODY_Q0 = {"model": "dftd4", "s6": 1.0, "s8": 0.4727337, "s9": 0.0, "a1": 0.5467502,
+                   "a2": 4.4955068, "charge_scale": 0.0}
+# Slater-Kirkwood test values in atomic units (Bohr^3, Bohr, e), patterned on Elstner's table,
+# with a different value for every neighbour count (0 ... >= 5) so that the hybridisation rule
+# is tested (H radius 0.5 A instead of 0.4 A, so that every bond of the rattled test molecules
+# counts); O with 4 neighbours has no polarisability (such atoms are skipped)
+SK_HYBRID = {
+    "H": {"covalent_radius": 0.5 / BOHR,
+          "hybrid_polarisations": [2.60, 2.67, 2.70, 2.74, 2.78, 2.82, 6.60, 6.62, 6.64, 6.66, 6.68,
+                                   6.70, 0.80]},
+    "C": {"covalent_radius": 0.8 / BOHR,
+          "hybrid_polarisations": [9.33, 9.30, 9.27, 7.21, 7.18, 7.15, 7.18, 7.20, 7.22, 7.24, 7.26,
+                                   7.28, 2.50]},
+    "O": {"covalent_radius": 0.8 / BOHR,
+          "hybrid_polarisations": [3.78, 3.70, 3.62, 3.55, 0.00, 3.40, 7.18, 7.16, 7.14, 7.12, 7.10,
+                                   7.08, 3.15]},
+}
+SK_ATOM = {"H": [2.67, 6.62, 0.80], "O": [3.62, 7.14, 3.15]}
+
+
+def sk_per_atom(labels, skip=()):
+    """Slater-Kirkwood ``polar_radius_charge`` for these atoms; atoms in ``skip`` get alpha = 0
+    (and keep their electron number: with N = 0 too, DFTB+ divides 0 by 0 and returns NaN)."""
+    rows = [[0.0] + SK_ATOM[lab][1:] if k in skip else SK_ATOM[lab]
+            for k, lab in enumerate(labels)]
+    return {"model": "slaterkirkwood", "polar_radius_charge": rows}
 
 
 @dataclass
@@ -50,6 +85,7 @@ class Case:
     typed: dict | None = None             # label -> base label for write_typed_copies
     dftb3: dict | None = None             # third_order / hubbard_derivs / h_damping options
     spin: dict | None = None              # unpaired_electrons / relax_total_spin / spin_constants
+    dispersion: dict | Callable[[list], dict] | None = None   # spec, or labels -> spec
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
@@ -222,5 +258,46 @@ CASES = [
          spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}),
     Case("cuo_chain_spin_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
          spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}),
+    # --- dispersion (milestone M2d) ---
+    Case("water_dimer_uff", _water_dimer, dispersion={"model": "lennardjones"}),
+    Case("water_box_uff", _water_box, dispersion={"model": "lennardjones"},
+         note="r^-6 by Ewald, r^-12 and the short-range wall in real space"),
+    Case("cuo_chain_uff_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         dispersion={"model": "lennardjones"}),
+    Case("water_dimer_sk", _water_dimer, dispersion=lambda labels: sk_per_atom(labels, skip=(3,)),
+         note="per-atom PolarRadiusCharge; the second O has no polarisability and is skipped"),
+    Case("ch3oh_sk_hybrid", _meoh, dispersion={"model": "slaterkirkwood",
+                                               "hybrid_dependent_pol": SK_HYBRID}),
+    Case("water_box_sk_hybrid", _water_box, dispersion={"model": "slaterkirkwood",
+                                                        "hybrid_dependent_pol": SK_HYBRID}),
+    Case("ch3oh_d3bj", _meoh, dispersion=D3BJ_3OB),
+    Case("water_box_d3bj_3body", _water_box, dispersion={**D3BJ_3OB, "threebody": True}),
+    Case("cuo_chain_d3bj_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         dispersion=D3BJ_3OB),
+    Case("water_dimer_d3zero_3body", _water_dimer,
+         dispersion={"model": "dftd3", "damping": "zerodamping", "sr6": 1.25, "alpha6": 29.61,
+                     "s6": 1.0, "s8": 0.49, "threebody": True}),
+    Case("water_dimer_d3_hhrep", _water_dimer,
+         dispersion={"model": "dftd3", "damping": "zerodamping", "sr6": 1.25, "alpha6": 29.61,
+                     "s6": 1.0, "s8": 0.49, "hhrepulsion": True},
+         note="D3H5-style zero damping with the H-H repulsion (without the H5 correction)"),
+    Case("water_dimer_typed_d3", _water_dimer, typed={"O": "O", "O2": "O", "H": "H"},
+         labels=lambda a: ["O", "H", "H", "O2", "H", "H"],
+         dispersion={"model": "dftd3", "damping": "modifiedzerodamping", "sr6": 1.338153,
+                     "beta": 0.013988, "s6": 1.0, "s8": 1.532981},
+         note="type label O2 mapped to oxygen (DFTB+ AtomicNumbers); modified zero damping "
+              "with the B3LYP-D3M(0) values (only to test the input path)"),
+    Case("ch3oh_simple_d3", _meoh,
+         dispersion={"model": "simpledftd3", "s8": 0.5883, "a1": 0.5719, "a2": 3.6017}),
+    Case("water_box_simple_d3", _water_box,
+         dispersion={"model": "simpledftd3", "s8": 0.5883, "a1": 0.5719, "a2": 3.6017}),
+    Case("water_dimer_d4", _water_dimer, dispersion=D4_3OB),
+    Case("ch3oh_d4", _meoh, dispersion=D4_3OB),
+    Case("water_box_d4_2body", _water_box, dispersion=D4_3OB_2BODY_Q0,
+         note="D4 two-body terms without charge dependence (see D4_3OB_2BODY_Q0)"),
+    Case("h2o_dftb3_d3bj", _water, dftb3=DFTB3_3OB, dispersion=D3BJ_3OB, tol=TOL_DFTBP_FD,
+         note="DFTB3/3ob + D3(BJ); force tolerance see TOL_DFTBP_FD"),
+    Case("o2_triplet_d3bj", _o2, spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
+         dispersion=D3BJ_3OB),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

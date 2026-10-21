@@ -14,6 +14,7 @@ from ase.calculators.calculator import Calculator, all_changes, kptdensity2monkh
 
 from .calculator import DFTB
 from .constants import BOHR
+from .dispersion import make_dispersion
 from .kpoints import monkhorst_pack, reduce_time_reversal
 from .params import ParamSet
 
@@ -37,9 +38,10 @@ class PyDFTB(Calculator):
              default: chemical symbols.
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
     ``solver``, ``shell_resolved``, ``fd_delta``, for DFTB3 ``third_order``,
-    ``hubbard_derivs``, ``h_damping``, and for collinear spin ``spin``,
-    ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``) are passed to
-    :class:`pydftb.DFTB`.
+    ``hubbard_derivs``, ``h_damping``, for collinear spin ``spin``,
+    ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``, and
+    ``dispersion``) are passed to :class:`pydftb.DFTB`.  Dispersion parameters stay
+    in atomic units (Bohr, Hartree) as in DFTB+; the elements come from ``atoms``.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms"]
@@ -52,7 +54,8 @@ class PyDFTB(Calculator):
                  fd_delta: float | None = None, third_order: str | None = None,
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
                  spin: bool = False, unpaired_electrons: float = 0.0,
-                 relax_total_spin: bool = False, spin_constants: dict | None = None, **kwargs):
+                 relax_total_spin: bool = False, spin_constants: dict | None = None,
+                 dispersion=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -65,6 +68,7 @@ class PyDFTB(Calculator):
                                 hubbard_derivs=hubbard_derivs, h_damping=h_damping, spin=spin,
                                 unpaired_electrons=unpaired_electrons,
                                 relax_total_spin=relax_total_spin, spin_constants=spin_constants)
+        self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.labels = None if labels is None else list(labels)
         self.raw = None          # last pydftb.DFTBResult (atomic units)
@@ -90,7 +94,11 @@ class PyDFTB(Calculator):
         periodic = bool(a.pbc.any())
         kpts = self._kpoints(a)
         sk = self.params.skset(labels)
-        calc = DFTB(sk, kpts=kpts, charge=float(a.get_initial_charges().sum()), **self.engine_opts)
+        disp = self.dispersion
+        if disp is not None:
+            disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, a.numbers)})
+        calc = DFTB(sk, kpts=kpts, charge=float(a.get_initial_charges().sum()), dispersion=disp,
+                    **self.engine_opts)
         # As in DFTB+, periodic force runs also give the stress (about 1 % extra
         # time), so ASE cell filters, which ask for forces and then stress, need one run.
         want_forces = "forces" in properties or (periodic and "stress" in properties)

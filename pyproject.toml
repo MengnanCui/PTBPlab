@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 # pydftb extras (the core engine only needs numpy, scipy and ase)
 torch = ["torch>=2.5"]            # GPU / autodiff backend (milestone M4)
-dispersion = ["dftd4"]            # D4 dispersion (milestone M2)
+dispersion = ["dftd3", "dftd4"]   # D3/D4 dispersion (M2d); conda: dftd3-python, dftd4-python
 mpi = ["mpi4py"]                  # multi-node task farming (milestone M3)
 dev = ["pytest"]
 

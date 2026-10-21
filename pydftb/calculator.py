@@ -1,14 +1,16 @@
-"""Self-consistent-charge DFTB driver (DFTB2, DFTB3, collinear spin): energies, forces, stress.
+"""Self-consistent-charge DFTB driver (DFTB2, DFTB3, collinear spin, dispersion): energies,
+forces, stress.
 
 Reference implementation: clarity first, dense linear algebra, NumPy/SciPy.
 
 A calculation runs in four stages, each a separate method so that new
 physics (DFTB3, spin, stress, ...) has an obvious place to plug in:
 
-1. ``_setup``     basis, neighbour pairs, H0/S (real space and folded), Coulomb kernel
+1. ``_setup``     basis, neighbour pairs, H0/S (real space and folded), Coulomb kernel,
+                  dispersion (it depends on the geometry only)
 2. ``_scc``       self-consistent charge loop (density matrices from a solver)
 3. ``_energies``  energy terms, populations, DFTB+-style energy bookkeeping
-4. ``_gradient``  analytic forces (band + SCC + repulsive)
+4. ``_gradient``  analytic forces (band + SCC + repulsive + dispersion)
 
 The matching DFTB+ routines are listed in ``pydftb/docs/dftbplus_map.md``.
 """
@@ -22,6 +24,7 @@ import numpy as np
 
 from .backend import ops
 from .coulomb import Coulomb
+from .dispersion import DispersionTerms, make_dispersion
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
 from .mixer import make_mixer
 from .occupations import Smearing
@@ -36,7 +39,7 @@ class DFTBResult:
     """Results in atomic units (Hartree, Bohr).
 
     Energy names follow DFTB+'s ``detailed.out``:
-    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_rep),
+    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_rep + E_disp),
     ``free_energy`` = "Total Mermin free energy" (Total - TS),
     ``e_zero`` = "Extrapolated to 0" (Total - TS/2).
     """
@@ -66,6 +69,7 @@ class DFTBResult:
     magmoms: np.ndarray | None = None    # (n_atom,) N_up - N_down per atom
     q_spin: np.ndarray | None = None     # (2, n_shell) up / down populations per shell
     fermi_spin: tuple | None = None      # (mu_up, mu_down); equal with relax_total_spin
+    e_disp: float = 0.0                  # dispersion energy
 
     @property
     def e_total(self) -> float:
@@ -82,7 +86,7 @@ class DFTBResult:
     @property
     def terms(self) -> dict:
         return {"H0": self.e_band, "SCC": self.e_scc, "3rd": self.e_3rd, "spin": self.e_spin,
-                "repulsive": self.e_rep, "-TS": -self.ts}
+                "repulsive": self.e_rep, "dispersion": self.e_disp, "-TS": -self.ts}
 
 
 @dataclass
@@ -106,6 +110,7 @@ class _Setup:
     coulomb: Coulomb | None
     third: ThirdOrder | None = None
     spin: "_Spin | None" = None
+    disp: DispersionTerms | None = None
 
 
 @dataclass
@@ -181,6 +186,10 @@ class DFTB:
     relax_total_spin : bool  one Fermi level for both spins (DFTB+ ``RelaxTotalSpin``).
     spin_constants : dict type label -> W (Hartree): one number for all shell pairs,
                           or a (n_shell, n_shell) matrix (DFTB+ ``SpinConstants``).
+    dispersion : dict | Dispersion  dispersion correction (DFTB+ ``Dispersion``), e.g.
+                          ``{"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719,
+                          "a2": 3.6017, "s6": 1.0, "s8": 0.5883}``; see
+                          :mod:`pydftb.dispersion`.
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
@@ -191,7 +200,7 @@ class DFTB:
                  third_order: str | None = None, hubbard_derivs: dict | None = None,
                  h_damping: float | None = None, spin: bool = False,
                  unpaired_electrons: float = 0.0, relax_total_spin: bool = False,
-                 spin_constants: dict | None = None):
+                 spin_constants: dict | None = None, dispersion=None):
         if spin and not scc:
             raise ValueError("spin polarisation needs SCC")
         if spin and spin_constants is None:
@@ -227,6 +236,7 @@ class DFTB:
         self.unpaired_electrons = unpaired_electrons
         self.relax_total_spin = relax_total_spin
         self.spin_constants = spin_constants
+        self.dispersion = make_dispersion(dispersion)
 
     @property
     def kt(self) -> float:
@@ -327,8 +337,15 @@ class DFTB:
         if self.spin:
             spin = _Spin(self._spin_matrix(basis), 0.5 * (nelec + self.unpaired_electrons),
                          0.5 * (nelec - self.unpaired_electrons), self.relax_total_spin)
+        disp = None
+        if self.dispersion is not None:
+            t1 = time.perf_counter()
+            disp = self.dispersion.evaluate(species, pos, cell if periodic else None,
+                                            pbc if periodic else None, grad=forces,
+                                            charge=self.charge)
+            timings["dispersion"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
-                      site_of_orb, site_atom, q0, nelec, coul, third, spin)
+                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp)
 
     def _site_hubbard_derivs(self, basis: Basis) -> np.ndarray:
         """Ud of every charge site: one value per type, or per shell (orbital-resolved SCC)."""
@@ -487,7 +504,8 @@ class DFTB:
         e_3rd = st.third.energy_shift(dq)[0] if st.third is not None else 0.0
         e_spin = 0.5 * m @ st.spin.w @ m if m is not None else 0.0
         e_rep = self._repulsive_energy(st)
-        energy = e_band + e_scc + e_3rd + e_spin + e_rep
+        e_disp = st.disp.energy if st.disp is not None else 0.0
+        energy = e_band + e_scc + e_3rd + e_spin + e_rep + e_disp
         q_atom = ops.segment_sum(sc.q_orb, st.basis.orb_atom, len(st.species))
         q_shell = ops.segment_sum(sc.q_orb, st.basis.orb_shell, len(st.basis.shell_l))
         occ = None if sc.occ is None else [np.asarray(o) for o in sc.occ]
@@ -500,7 +518,7 @@ class DFTB:
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw, e_3rd=e_3rd, **extra)
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, **extra)
 
     def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
@@ -550,6 +568,8 @@ class DFTB:
         if st.third is not None:
             g_3rd, w_3rd = st.third.gradient(dq_in, virial=virial)
             grad = grad + g_3rd
+        if st.disp is not None:
+            grad = grad + st.disp.gradient
         if not virial:
             return grad, None
         w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
@@ -557,6 +577,8 @@ class DFTB:
             w = w + w_scc
         if st.third is not None:
             w = w + w_3rd
+        if st.disp is not None:
+            w = w + st.disp.virial
         return grad, 0.5 * (w + w.T)
 
     # ------------------------------------------------------------------
