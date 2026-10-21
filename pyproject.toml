@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]   # PEP 639 license metadata
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,8 @@ version = "0.2.0"
 description = "Density functional Tight-binding theory Parameterization (PTBP)."
 requires-python = ">=3.10"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "ase>=3.22",
     "scikit-optimize>=0.10",

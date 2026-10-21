@@ -378,6 +378,25 @@ optimiser settings are ignored — only `result.pkl` is read.
 ### 6. Acknowledgement
 The authors gratefully acknowledge Noam Bernstein for providing the initial geometries of the homoelemental crystals and Maxime Van den Bossche for support with the hotcent package. Furthermore, we respectfully thank the works from Thomas Heine's group that initially inspired our work, and the developers of DFTB+ who made our DFTB calculations conveniently possible.
 
+
+## License
+
+PTBPlab, including the `pydftb` engine, is released under the [MIT License](LICENSE).
+
+The MIT License covers the code in this repository. The packages it works with keep their own licenses and are not distributed here:
+
+| Package | License | How PTBPlab uses it |
+|---|---|---|
+| [hotcent](https://gitlab.com/mvdb/hotcent) | GPL-3.0 | imported at run time to generate SKF files |
+| [DFTB+](https://dftbplus.org) | LGPL-3.0-or-later | separate program, run as an external executable |
+| [ASE](https://wiki.fysik.dtu.dk/ase/) | LGPL-2.1-or-later | imported at run time |
+| [libxc / pylibxc](https://libxc.gitlab.io) | MPL-2.0 | used by hotcent |
+| [s-dftd3](https://github.com/dftd3/simple-dftd3), [dftd4](https://github.com/dftd4/dftd4) (optional) | LGPL-3.0-or-later | imported at run time for D3/D4 dispersion in `pydftb` |
+
+If you redistribute PTBPlab bundled with any of these packages, their license terms apply to that bundle.
+
+`pydftb` is written from the published equations and contains no code copied from DFTB+ or the other packages above. Where it reproduces DFTB+ behaviour, its documentation names the DFTB+ source file for reference only.
+
 ---
 
 ## Appendix: Legacy CLI (deprecated)

@@ -10,6 +10,7 @@ It lives inside PTBPlab as an independent sub-package.
 - **Milestone reports:** [`docs/reports/`](docs/reports)
 - **Glossary** (Chinese, plain language): [`docs/glossary.md`](docs/glossary.md)
 - **Prototype research report** (performance experiments): [`RESEARCH.md`](RESEARCH.md)
+- **License:** MIT, like the rest of PTBPlab (see [`LICENSE`](../LICENSE)). The optional D3/D4 dispersion packages (`dftd3`, `dftd4`) are LGPL-3.0 and are only imported at run time.
 
 ## Quick start
 
