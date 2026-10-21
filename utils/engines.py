@@ -75,7 +75,9 @@ def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | Non
 
     ``dftb_args`` keeps PTBP's schema: ``calc_type`` ('static', 'band', 'xtb'),
     ``SCC`` ('Yes'/'No'), ``poly_rep`` ('Yes'/'No'), ``kpts`` (Monkhorst-Pack
-    grid ``[n1, n2, n3]`` or an ASE k-path), ``slater_p`` (SKF directory).
+    grid ``[n1, n2, n3]`` or an ASE k-path), ``slater_p`` (SKF directory), optionally
+    ``directory`` (DFTB+: run directory, default the current one) and ``k_threads``
+    (pydftb: threads over k-points, bitwise identical results).
     Contract (both engines): energy = DFTB+ "Total energy" (eV), forces (eV/A);
     FileNotFoundError for a missing SKF; results are returned even if the SCC
     does not converge (``ConvergentSCCOnly = No``).
@@ -185,4 +187,4 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                   repulsive="polynomial" if str(dftb_args.get("poly_rep", "No")).lower() == "yes"
                   else "skf",
                   shell_resolved=True,          # DFTB+ under ASE (ParserVersion 1) default
-                  fd_delta=fd_delta, threads=1)
+                  fd_delta=fd_delta, threads=1, k_threads=int(dftb_args.get("k_threads", 1)))

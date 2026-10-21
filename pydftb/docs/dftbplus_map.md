@@ -61,7 +61,7 @@
 | 激发态（Casida / 实时） | `timedep/linresp.F90`，`timedep/linrespgrad.F90`，`timedep/timeprop.F90` |
 | REKS、pp-RPA | `reks/`，`timedep/pprpa.F90` |
 | 输运（NEGF） | `transport/negfint.F90`（底层是 libNEGF） |
-| 并行与求解器框架 | `common/mpienv.F90`，`common/blacsenv.F90`，`type/parallelks.F90`（k 点/自旋分组），`elecsolvers/`，`extlibs/elsiiface.F90` |
+| 并行与求解器框架 | `common/mpienv.F90`，`common/blacsenv.F90`，`type/parallelks.F90`（k 点/自旋分组），`elecsolvers/`，`extlibs/elsiiface.F90`。pydftb/PTBP 的对应部分（M3）只做单机：PTBP 把结构分给 fork 出来的进程（`utils/parallel/`，相当于 DFTB+ 外面再套一层任务分发），pydftb 把一个结构的 k 点分给线程（`pydftb/parallel.py`，相当于 `parallelks` 的 k 点分组，但在一个进程内）；没有 MPI、BLACS |
 | 输入解析与初始化 | `io/hsdparser.F90`，`dftbplus/parser.F90`（8,685 行），`dftbplus/initprogram.F90`（7,606 行） |
 
 ## 3. 对照时踩过的坑

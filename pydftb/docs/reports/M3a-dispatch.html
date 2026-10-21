@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M3a 并行分发报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M3a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M3a · 完成报告</p>
+    <h1>并行分发与 DFTB 阶段</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd><code>@COMMIT@</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M3a-dispatch.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">PTBP 的 DFTB 阶段现在默认用满可用的核心：数据集里的结构分给多个进程同时算，结构比核心少时，多出的核心变成每个进程的线程。Cu 数据集（66 个结构）在 4 核上，pydftb 的 DFTB 阶段从 34.7 s 降到 10.3 s，DFTB+ 从 95.1 s 降到 23.2 s；结果与核心数无关，写出的文件逐字节相同。</p>
+    <ul>
+      <li><strong>结果不变。</strong><code>--ncores</code> 取 1、2、3、4 时，<code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>search_index.txt</code> 逐字节相同；整个 BO 步的损失值逐位相同（<code>tools/engine_parity.py --compare-serial</code>）。pydftb 的结果也与 M3 之前的串行代码逐字节相同。</li>
+      <li><strong>DFTB+ 的线程。</strong>方案为每次 DFTB+ 运行设定 OpenMP 线程数（结构多于核心时为 1）。M3 之前 DFTB+ 默认用满 4 个核心，在这些小矩阵上反而比 1 个线程慢（95.1 s 对 85.4 s）。改为 1 个线程后，能量、力、电荷逐位不变，只有应力差 1.9e-16 eV/Å³（相对 3e-15），PTBP 的损失不用应力。作为库调用、没有方案时，行为与原来完全相同。</li>
+      <li><strong>自写的 fork 进程池。</strong>工作进程不是 daemon，所以可以嵌套（parallel_bo 的粒子里再分发）；任务按估计耗时从大到小发放；异常类型原样传回；工作进程崩溃时记为 <code>WorkerDied</code>，不会卡住；Ctrl-C、SIGTERM，甚至用 SIGKILL 杀掉 PTBP，都不会留下工作进程和 dftb+。</li>
+      <li><strong>pydftb 的 k 点线程</strong>（<code>k_threads</code>）：结果逐位相同（6 个参考算例 × 2 种求解器 × 2–4 个线程）。对角化部分在 4 个线程下快 1.9–2.9 倍；Ewald、力和费米能级不分线程，整个单点只快 1.3–1.5 倍。PTBP 的结构通常远多于核心，k 点线程只在结构少于核心时启用。</li>
+      <li><strong>用法。</strong><code>ptbp optimize --ncores N|auto</code>（默认 auto），YAML 键 <code>ncores</code>，环境变量 <code>PTBP_NCORES</code>。启动时打印方案，并在运行目录写 <code>plan.json</code>。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">3.4×</span><span class="lbl">pydftb 的 DFTB 阶段（66 个结构，4 核）</span></li>
+      <li><span class="num">4.1×</span><span class="lbl">DFTB+ 的 DFTB 阶段（与 M3 之前的默认设置相比）</span></li>
+      <li><span class="num">0</span><span class="lbl">与串行结果的差（文件逐字节相同）</span></li>
+      <li><span class="num">1.2× / 1.5×</span><span class="lbl">整个 BO 步，pydftb / DFTB+（hotcent、physrep 到 M3b 才并行）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#same">二、结果是否与串行相同</a></li>
+      <li><a href="#perf">三、性能</a></li>
+      <li><a href="#tests">四、单元测试</a></li>
+      <li><a href="#findings">五、发现的问题与学到的东西</a></li>
+      <li><a href="#deviations">六、与计划的偏差</a></li>
+      <li><a href="#repro">七、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/parallel/budget.py</code>（新）</td><td><code>detect_cpu(ncores)</code>：亲和性、cgroup v1/v2 的 CPU 配额（沿层级取最紧的，向上取整）、<code>SLURM_CPUS_PER_TASK</code>、<code>PTBP_NCORES</code>、<code>--ncores</code> 取最小值，并记录各自的值；<code>available_memory()</code>（MemAvailable 与 cgroup 内存余量取小，M3c 用）；<code>thread_env(n)</code>：<code>OMP/OPENBLAS/MKL/BLIS_NUM_THREADS</code> 设为 n，删去 <code>OMP_PROC_BIND</code> 等绑核变量；<code>applied_env</code> 在串行阶段临时设置</td></tr>
+            <tr><td><code>utils/parallel/plan.py</code>（新）</td><td><code>StagePlan</code>（进程数、每进程线程数、BLAS 线程数、发放顺序、理由）、<code>Plan</code>（<code>for_particle</code>、<code>render</code>、<code>to_json</code>、<code>save</code>）、<code>core_shares</code>、M3a 的简单规则 <code>dftb_stage</code>/<code>simple_plan</code>、进程全局的 <code>set_plan</code>/<code>current_plan</code></td></tr>
+            <tr><td><code>utils/parallel/backends.py</code>（新）</td><td><code>map_tasks(fn, tasks, workers, order, threads, blas_threads)</code> → 按任务顺序的 <code>TaskResult</code>；<code>ForkBackend</code>（每次新 fork 非 daemon 进程，每个进程一条双向管道，父进程逐个发任务编号；<code>connection.wait</code> 同时看结果和进程哨兵）；<code>SerialBackend</code>；<code>WorkerDied</code>；<code>PTBP_BACKEND=serial|fork</code></td></tr>
+            <tr><td><code>utils/dftb_stage.py</code>（新）</td><td><code>StructureTask</code>（可 pickle 的纯数据）、<code>make_tasks</code>（沿用 PTBP 的 k 网格规则，按 nk·N³ 估计耗时）、<code>run_structure</code>（结果放进 <code>SinglePointCalculator</code>）、<code>run_dataset</code>（按 EOS 分组，串行时保持原来的循环，并行时先全部算完再按组复现原语义）、<code>write_outputs</code></td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>run_calculator_seperately</code> 改为调用 <code>run_dataset</code>；删去 GNU parallel 的死代码 <code>run_calculator_seperately_parallel</code>；有方案时 E0 用 1 个线程；<code>_optimize_parallel_bo</code> 的每个粒子按 <code>plan.for_particle(i)</code> 分核心</td></tr>
+            <tr><td><code>utils/calculator.py</code>、<code>utils/engines.py</code>、<code>utils/data.py</code></td><td><code>run_calculator</code> 改为 <code>run_structure</code> 的薄包装；DFTB+ 计算器接受 <code>dftb_args['directory']</code>；pydftb 计算器接受 <code>k_threads</code>；删去 <code>data.py</code> 中的 GNU parallel 副本</td></tr>
+            <tr><td><code>pydftb/parallel.py</code>（新）、<code>solvers.py</code>、<code>calculator.py</code>、<code>ase_calc.py</code></td><td><code>KThreads</code>（线程池，按 N³ 决定最小块，fork 前由 <code>os.register_at_fork</code> 关闭）；<code>EighSolver</code>、<code>BatchedSolver</code> 的 <code>threads</code>：Cholesky、求逆、三矩阵乘、<code>eigh</code>、密度矩阵按 k 分块；<code>DFTB(k_threads=)</code>、<code>PyDFTB(k_threads=)</code>，多于 1 个线程时 BLAS 限为 1 个线程</td></tr>
+            <tr><td><code>cli/</code></td><td><code>--ncores</code>（<code>arg_parser.py</code>、<code>cmd_optimize.py</code> 转发）、YAML 键 <code>ncores</code>（<code>config.py</code>）；<code>run.py</code> 读入数据集后建立方案、打印并写 <code>plan.json</code></td></tr>
+            <tr><td><code>tools/engine_parity.py</code></td><td><code>--ncores 1 4 …</code>、<code>--compare-serial</code>：每个核心预算算一遍，比较损失值的十六进制表示和 BO 步文件的 sha256</td></tr>
+          </tbody>
+        </table></div>
+        <p>工作进程开始时：自成进程组（父进程也调用一次 <code>setpgid</code>，避免竞争）；<code>PR_SET_PDEATHSIG</code> 让父进程死后自己收到 SIGTERM；SIGTERM 处理函数结束整个进程组（含 dftb+）；忽略 SIGINT（交给父进程处理）；按方案设置线程环境变量，用 threadpoolctl 把本进程的 BLAS 限为 1 个线程；关闭继承来的其他工作进程的管道端。</p>
+      </div>
+    </details>
+
+    <section id="same">
+      <h2>二、结果是否与串行相同</h2>
+      <p>Cu 数据集 <code>dft/dft.xyz</code>（6 种结构 × 11 个体积），PTBP 的设置（k 点密度 5.0，玻尔兹曼权重 &lt; 0.1 的结构只用 Γ 点，SCC 容差 1e-5），SKF 取自已发表参数下的一次 PTBP 运行。“M3 之前”是逐字复制的旧代码（<code>run_calculator_seperately</code> + <code>run_calculator</code>）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>引擎</th><th>比较</th><th>三个输出文件</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb</td><td>M3 之前 / 无方案 / <code>--ncores 1</code> / <code>--ncores 4</code></td><td>全部逐字节相同</td><td>k 点线程另有单元测试，逐位相同</td></tr>
+          <tr><td>DFTB+</td><td>M3 之前 / 无方案</td><td>逐字节相同</td><td>没有方案时不改线程设置</td></tr>
+          <tr><td>DFTB+</td><td><code>--ncores 1</code> / <code>--ncores 4</code></td><td>逐字节相同</td><td>都是每次运行 1 个 OpenMP 线程</td></tr>
+          <tr><td>DFTB+</td><td>M3 之前（默认 4 线程）/ <code>--ncores 1</code></td><td><code>dftb_band.xyz</code> 不同</td><td>只有应力不同：最大 1.9e-16 eV/Å³，相对 3e-15；能量、力、电荷逐位相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>整个 BO 步（已发表的 Cu 参数 r0_w = 2.749、r0_d = 12.036 Bohr，energygeometry 模式）：两个引擎都是 <code>--ncores 1</code> 与 4 核的损失值逐位相同（pydftb 1.899324742，DFTB+ 1.899324726，两个引擎相对差 8e-9），<code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>search_index.txt</code>、<code>dftb_full.xyz</code> 和最终的 <code>Cu-Cu.skf</code> 逐字节相同。</p>
+    </section>
+
+    <section id="perf">
+      <h2>三、性能</h2>
+      <h3>DFTB 阶段（66 个结构，4 核）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>引擎</th><th>M3 之前</th><th><code>--ncores 1</code></th><th><code>--ncores 4</code></th><th>加速（对 M3 之前）</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb</td><td>34.7 s</td><td>32.4 s</td><td>10.3 s</td><td>3.4×</td></tr>
+          <tr><td>DFTB+</td><td>95.1 s（OpenMP 默认 4 线程）</td><td>85.4 s（1 线程）</td><td>23.2 s（4 进程 × 1 线程）</td><td>4.1×</td></tr>
+        </tbody>
+      </table></div>
+      <p>调度几乎没有浪费：pydftb 用 4 个进程时，计算部分 9.1 s，各任务耗时之和的四分之一是 8.9 s；4 个进程同时运行时，每个任务平均只慢 3%；按 nk·N³ 估计的耗时与实际耗时的秩相关系数是 0.97。其余约 1 s 是父进程准备任务和写文件的时间。DFTB+ 在 4 个进程上是 <code>--ncores 1</code> 的 3.7 倍。</p>
+      <h3>整个 BO 步</h3>
+      <p>已发表的 Cu 参数（r0_w = 2.749、r0_d = 12.036 Bohr），energygeometry 模式，<code>tools/engine_parity.py --compare-serial</code>：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>引擎</th><th>核心</th><th>hotcent</th><th>DFTB</th><th>physrep</th><th>合计</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb</td><td>1</td><td>48.0 s</td><td>35.0 s</td><td>62.8 s</td><td>147.0 s</td></tr>
+          <tr><td>pydftb</td><td>4</td><td>46.8 s</td><td>9.6 s</td><td>64.8 s</td><td>122.2 s（1.20×）</td></tr>
+          <tr><td>DFTB+</td><td>1</td><td>49.6 s</td><td>88.0 s</td><td>64.2 s</td><td>202.9 s</td></tr>
+          <tr><td>DFTB+</td><td>4</td><td>47.6 s</td><td>21.8 s</td><td>61.5 s</td><td>131.9 s（1.54×）</td></tr>
+        </tbody>
+      </table></div>
+      <p>DFTB 阶段提速后，hotcent（约 48 s）和 physrep（约 63 s）占了 BO 步的八到九成，二者都是 M3b 的内容。</p>
+      <h3>pydftb 的 k 点线程（一个结构，一个进程，batched 求解器）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>结构</th><th>轨道数 N</th><th>k 点（约化后）</th><th>1 线程</th><th>2 线程</th><th>4 线程</th><th>其中对角化，4 线程</th></tr></thead>
+        <tbody>
+          <tr><td>PTBP 数据集中最大的任务（Cu₂，15×15×15，T = 0）</td><td>18</td><td>1688</td><td>1.79 s</td><td>1.11×</td><td>1.27×</td><td>1.30 → 0.70 s（1.9×）</td></tr>
+          <tr><td>Cu fcc 惯用胞（4 个原子，8×8×8，1000 K）</td><td>36</td><td>256</td><td>1.21 s</td><td>1.15×</td><td>1.28×</td><td>0.50 → 0.22 s（2.2×）</td></tr>
+          <tr><td>Cu fcc 2×2×2 惯用胞（32 个原子，3×3×3，1000 K）</td><td>288</td><td>14</td><td>11.9 s</td><td>1.17×</td><td>1.43×</td><td>4.15 → 1.45 s（2.9×）</td></tr>
+        </tbody>
+      </table></div>
+      <p>对角化部分（Cholesky、三矩阵乘、<code>eigh</code>、密度矩阵）按 k 分块后快 1.9–2.9 倍；整个单点受其余部分限制。32 个原子的晶胞中，Ewald 的 γ 准备（3.7 s）和力（4.5 s）比对角化（4.2 s）还多，这两部分目前不分线程，是下一步可以提速的地方。</p>
+    </section>
+
+    <section id="tests">
+      <h2>四、单元测试</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>文件</th><th>个数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>pydftb/tests/test_kthreads.py</code>（最小环境）</td><td>17</td><td>Cu fcc、Cu₈（MP 展宽）、自旋 CuO 链、DFTB3 CuO 链、f 轨道 GdO、水，eigh 和 batched 两种求解器，2–4 个线程，结果的每个字段逐位相同；k 点比线程少；ASE 计算器；分块规则；fork 前关闭线程池、子进程里重建</td></tr>
+          <tr><td><code>tests/test_parallel_backend.py</code></td><td>13</td><td>结果顺序；按给定顺序发放；最大优先的负载均衡；异常类型（含不能 pickle 的）；结果不能 pickle；工作进程崩溃和全部崩溃；嵌套；工作进程的线程环境和 BLAS；后端选择；SIGINT、SIGTERM、SIGKILL 后不留工作进程和子进程</td></tr>
+          <tr><td><code>tests/test_parallel_budget.py</code></td><td>19</td><td>cgroup v1/v2 配额（层级、命名空间）、SLURM、<code>PTBP_NCORES</code>、<code>--ncores</code>；内存；线程环境；核心分配；M3a 规则；500 组随机输入下进程数 × 线程数不超过核心数；parallel_bo 分核心；方案的文字和 JSON；命令行转发 <code>--ncores</code></td></tr>
+          <tr><td><code>tests/test_dftb_stage_parallel.py</code></td><td>10</td><td>无方案、1、2、3、4 个核心时文件逐字节相同；结构少于核心时用 k 点线程；SKF 缺失时丢掉整组（串行和并行）；其他异常按原类型抛出；不满一组的余数不算；<code>Loss</code> 写出三个文件；DFTB+ 的任务目录（成功后删除、失败的保留，需要 dftb+，标为 slow）</td></tr>
+        </tbody>
+      </table></div>
+      <p>M3a 新增 60 个测试。conda 环境（有 DFTB+、hotcent）：pydftb 的 223 个、PTBP 的 131 个测试中，除 7 个已知失败的界面冒烟测试（缺 pytest 的 async 插件，与本阶段无关）外全部通过；最小环境（CI）：pydftb 207 个通过，16 个因没有安装 dftd3/dftd4 跳过。<code>refgen --check</code> 74 个、<code>dynamics --check</code> 11 个对照照常通过。</p>
+    </section>
+
+    <section id="findings">
+      <h2>五、发现的问题与学到的东西</h2>
+      <ul>
+        <li><strong>DFTB+ 的默认线程在 PTBP 的体系上更慢。</strong>不设 <code>OMP_NUM_THREADS</code> 时 DFTB+ 用满全部核心；PTBP 的结构只有 1–2 个原子，矩阵只有 9–18 阶，多线程的开销大于收益：4 个线程 95.1 s，1 个线程 85.4 s。</li>
+        <li><strong>DFTB+ 的结果随 OpenMP 线程数变化，但只在应力上。</strong>4 个线程与 1 个线程相比，能量、力、电荷逐位相同，应力差 1.9e-16 eV/Å³。所以方案总是设定线程数，保证同一方案下结果可复现。</li>
+        <li><strong>SciPy 的 <code>eigh</code> 不释放 GIL。</strong>eigh 求解器（逐个 k 点调 SciPy）用 k 点线程几乎不快（Cu₈：0.95 → 0.93 s）；PyDFTB 默认的 batched 求解器调 NumPy，才有加速。README 中注明。</li>
+        <li><strong>写 extxyz 只读 <code>calc.results</code>。</strong>把计算器的结果原样放进 <code>SinglePointCalculator</code>，写出的文件与挂着原计算器时逐字节相同，所以只需在进程间传回结果，不必传计算器。</li>
+        <li><strong>粗 k 网格加 T = 0 时，金属结构的 SCC 可能不收敛。</strong>k 点密度 2.0 时，Cu 数据集的第 44 个结构（6×6×6 网格）在两个引擎中都是 1000 轮不收敛（pydftb 37 s、DFTB+ 40 s，电荷误差 0.15 e）；pydftb 给出警告并返回最后一轮的结果，DFTB+ 在 <code>ConvergentSCCOnly = No</code> 下只在输出文件中注明。密度 3.0 和默认的 5.0 下，66 个结构最多 8 轮就收敛。已记入已知问题。</li>
+        <li><strong>fork 与线程。</strong>Python 3.12 起，在有其他线程的进程里 fork 会发出警告，子进程也拿不到那些线程。pydftb 的 k 点线程池在 fork 前自动关闭（<code>os.register_at_fork</code>），子进程第一次用时重建；OpenBLAS 自己的线程池有 fork 处理。</li>
+        <li><strong>进程清理。</strong>工作进程自成进程组，用户按 Ctrl-C 时终端的 SIGINT 不会直接打到它们，由父进程统一结束；父进程被 SIGKILL 时，靠 <code>PR_SET_PDEATHSIG</code> 让工作进程收到 SIGTERM，再结束整个进程组。三种情况都有测试。</li>
+      </ul>
+    </section>
+
+    <section id="deviations">
+      <h2>六、与计划的偏差</h2>
+      <ul>
+        <li>k 点线程的整体加速低于原型：原型只测了 <code>eigh</code>（1.7–2.7 倍），完整单点还有 Ewald、力、费米能级等不分线程的部分，4 个线程只快 1.3–1.5 倍。对 PTBP 影响不大，因为结构通常远多于核心。</li>
+        <li><code>tests/test_dftb_stage_parallel.py</code> 原计划用整个数据集；实际用 9 个结构（6 个只用 Γ 点、3 个 14×14×14 网格），每次运行约 2 s，整份测试 25 s。整个数据集的逐字节比较放在第七节的实验脚本和 <code>engine_parity --compare-serial</code> 中。</li>
+        <li>新增 <code>PTBP_BACKEND=serial|fork</code>（调试和非 Linux 系统用）；有方案时孤立原子的 E0 固定用 1 个线程（与核心数无关）。</li>
+        <li>失败的 BO 步不提前停止：并行时先把所有结构算完，再按原来的分组语义决定丢组或抛出异常。结果与串行相同，只是失败的 BO 步会多花一些时间。</li>
+        <li>内存检查留到 M3c（推荐器）；M3a 只提供 <code>available_memory()</code>。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">七、复现命令与实验记录</span></summary>
+      <div class="body">
+<pre><code>PYTHONPATH=. pytest pydftb/tests/test_kthreads.py            # 最小环境
+PATH=$CONDA/bin:$PATH pytest tests/test_parallel_*.py tests/test_dftb_stage_parallel.py
+python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
+    --points 2.749,12.036 --engines pydftb dftbplus --compare-serial</code></pre>
+        <h3>实验脚本（scratchpad <code>m3/</code>，未进仓库）</h3>
+        <ul>
+          <li><code>proto/proto_stage.py</code>：设计阶段的原型（<code>multiprocessing.Pool</code> + 最大优先）。</li>
+          <li><code>stage_check.py ENGINE</code>：逐字复制的 M3 之前代码、无方案、<code>--ncores 1</code>、<code>--ncores 4</code> 四种方式各算一遍整个数据集，比较三个文件的 sha256 和耗时（第二、三节的表）。</li>
+          <li><code>kt_quick.py</code>：参考算例在 1–4 个 k 点线程下逐字段比较；<code>kt_bench.py</code>：k 点线程的计时（第三节）。</li>
+          <li><code>bostep.log</code>、<code>bostep.json</code>：<code>engine_parity --compare-serial</code> 的输出（整个 BO 步）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li>M3b：hotcent 按行分片并用 hotcent 自己的 <code>run()</code> 回放（逐字节相同），physrep 的 <code>evaluate_pbc</code> 向量化（逐位相同），去掉 <code>parallel_repulsion</code> 里只交一个任务的进程池。DFTB 阶段提速后，这两段占 BO 步的大部分时间。</li>
+        <li>M3c：成本模型和推荐器替换 M3a 的简单规则（含内存检查、<code>ptbp plan</code>）；可以考虑把 Ewald 的 γ 准备和力也分线程。</li>
+        <li>M3d：DFTB+ 配置顾问。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M3a-dispatch.html">← M3a 并行分发设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M3a</span>
+  </footer>
+</div>
+</body>
+</html>

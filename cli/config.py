@@ -25,6 +25,7 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     smearing_temperature:  # float, K
     mp_order:       # int
     pydftb_forces:  # dftbplus / exact
+    ncores:         # int or auto (cores of the parallel BO step)
 """
 from __future__ import annotations
 
@@ -56,6 +57,7 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'smearing_temperature': 'smearing_temperature',
     'mp_order':      'mp_order',
     'pydftb_forces': 'pydftb_forces',
+    'ncores':        'ncores',
 }
 
 

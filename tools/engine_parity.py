@@ -12,10 +12,18 @@ Example (run inside the conda environment with hotcent, pylibxc and dftb+)::
 
 Prints, per point, the loss of each engine, the relative difference and the
 time spent in the DFTB part of the pipeline.
+
+``--ncores 1 4`` evaluates every point once per core budget (the parallel plan of
+``cli/run.py``, milestone M3); ``--compare-serial`` (= ``--ncores 1 auto``) also checks
+that the losses are bitwise equal and the files of the BO step byte-identical::
+
+    python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
+        --points 2.749,12.036 --engines pydftb --compare-serial
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -25,6 +33,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# files of a BO step that must not depend on the core budget
+STEP_FILES = ("dft_final.xyz", "dftb_band.xyz", "search_index.txt", "dftb_full.xyz")
+
+
+def step_digests(opt_dir: Path) -> dict:
+    """sha256 of the BO step's output files and SKFs (``results/opt_<r0_w>_<r0_d>``)."""
+    names = sorted(STEP_FILES) + sorted(p.name for p in opt_dir.glob("*.skf"))
+    return {n: hashlib.sha256((opt_dir / n).read_bytes()).hexdigest()
+            for n in names if (opt_dir / n).exists()}
 
 
 def build_loss(dataset: Path, mode: str, workdir: Path, eos_points: int):
@@ -74,36 +92,67 @@ def main(argv=None):
     ap.add_argument("--engines", nargs="+", default=["dftbplus", "pydftb"])
     ap.add_argument("--pydftb-forces", default="dftbplus", choices=["dftbplus", "exact"])
     ap.add_argument("--workdir", type=Path, default=Path("engine_parity"))
+    ap.add_argument("--ncores", nargs="+", default=None, metavar="N",
+                    help="core budgets (integers or 'auto') to evaluate each point with; "
+                         "default: no parallel plan (serial, thread settings untouched)")
+    ap.add_argument("--compare-serial", action="store_true",
+                    help="--ncores 1 auto, and check that the results are identical")
     ap.add_argument("--json", type=Path, default=None, help="write results here")
     a = ap.parse_args(argv)
 
     import utils.engines as eng
+    from utils.parallel import detect_cpu, set_plan, simple_plan
 
     dataset = a.dataset.resolve()
     points = [tuple(float(x) for x in p.split(",")) for p in a.points]
+    budgets = ["1", "auto"] if a.compare_serial else (a.ncores or [None])
     results = {}
     cwd = os.getcwd()
     for engine in a.engines:
-        wd = (a.workdir / f"{a.mode}_{engine}").resolve()
-        wd.mkdir(parents=True, exist_ok=True)
-        eng.configure(engine=engine, pydftb_forces=a.pydftb_forces)
-        loss, _ = build_loss(dataset, a.mode, wd, a.eos_points)
-        for p in points:
-            t0 = time.perf_counter()
-            mu = float(loss.Loss_EnergyGeometry(list(p)))
-            wall = time.perf_counter() - t0
-            os.chdir(cwd)                                  # EnergyGeometry changes directory
-            results.setdefault(p, {})[engine] = {"mu": mu, "wall": wall}
-            print(f"[{engine}] r0_w={p[0]:.3f} r0_d={p[1]:.3f}  mu={mu:.10g}  ({wall:.1f} s)",
-                  flush=True)
-    print(f"\n{'r0_w':>6} {'r0_d':>6}  " + "  ".join(f"{e:>16}" for e in a.engines) + "   rel.diff")
+        for nc in budgets:
+            tag = engine if nc is None else f"{engine}_n{nc}"
+            wd = (a.workdir / f"{a.mode}_{tag}").resolve()
+            wd.mkdir(parents=True, exist_ok=True)
+            eng.configure(engine=engine, pydftb_forces=a.pydftb_forces)
+            loss, _ = build_loss(dataset, a.mode, wd, a.eos_points)
+            plan = None
+            if nc is not None:
+                n = int(len(loss.dft_input) / loss.args_input.eos_points) * loss.args_input.eos_points
+                plan = simple_plan(detect_cpu(nc), n, engine=engine)
+                print(plan.render())
+            set_plan(plan)
+            for p in points:
+                t0 = time.perf_counter()
+                mu = float(loss.Loss_EnergyGeometry(list(p)))
+                wall = time.perf_counter() - t0
+                os.chdir(cwd)                              # EnergyGeometry changes directory
+                opt_dir = wd / loss.args_input.results_dir / f"opt_{p[0]:.3f}_{p[1]:.3f}"
+                results.setdefault(p, {})[tag] = {"mu": mu, "mu_hex": mu.hex(), "wall": wall,
+                                                  "files": step_digests(opt_dir)}
+                print(f"[{tag}] r0_w={p[0]:.3f} r0_d={p[1]:.3f}  mu={mu:.10g}  ({wall:.1f} s)",
+                      flush=True)
+            set_plan(None)
+    tags = list(next(iter(results.values())))
+    print(f"\n{'r0_w':>6} {'r0_d':>6}  " + "  ".join(f"{t:>16}" for t in tags) + "   rel.diff")
     for p, r in results.items():
-        mus = [r[e]["mu"] for e in a.engines]
+        mus = [r[t]["mu"] for t in tags]
         rel = abs(mus[-1] - mus[0]) / max(abs(mus[0]), 1e-300) if len(mus) > 1 else 0.0
         print(f"{p[0]:6.3f} {p[1]:6.3f}  " + "  ".join(f"{m:16.10g}" for m in mus) + f"   {rel:.2e}")
+    same = True
+    if len(budgets) > 1:
+        for p, r in results.items():
+            for engine in a.engines:
+                runs = [r[f"{engine}_n{nc}"] for nc in budgets]
+                ok = all(x["mu_hex"] == runs[0]["mu_hex"] and x["files"] == runs[0]["files"]
+                         for x in runs[1:])
+                same &= ok
+                print(f"{engine} r0_w={p[0]:.3f} r0_d={p[1]:.3f}: --ncores {' / '.join(budgets)} "
+                      f"{'bitwise identical' if ok else 'DIFFER'} (loss and "
+                      f"{len(runs[0]['files'])} files)")
     if a.json:
         a.json.write_text(json.dumps({f"{p[0]},{p[1]}": r for p, r in results.items()}, indent=1))
+    return 0 if same else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -163,6 +163,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=4,
     )
     parser.add_argument(
+        '--ncores', help="Cores for the parallel BO step: a number, or 'auto' (default): "
+                         "every core this process may use (CPU affinity, cgroup quota, "
+                         "SLURM_CPUS_PER_TASK, PTBP_NCORES). 1 runs serially.",
+        type=str,
+        default='auto',
+    )
+    parser.add_argument(
         '--postprocess_only', help="Skip the optimisation and reuse a previous "
                                    "run's result.pkl in cwd: re-emit "
                                    "convergence.png, copy the best opt_<r0_w>_"

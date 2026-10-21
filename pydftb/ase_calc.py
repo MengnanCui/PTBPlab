@@ -17,6 +17,7 @@ from .calculator import DFTB
 from .constants import BOHR
 from .dispersion import make_dispersion
 from .kpoints import monkhorst_pack, reduce_time_reversal
+from .parallel import as_kthreads
 from .params import ParamSet
 
 
@@ -38,6 +39,8 @@ class PyDFTB(Calculator):
                Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
     repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
     threads : limit BLAS/OpenMP threads during the calculation (None = leave as is).
+    k_threads : threads over chunks of k-points (int or "auto"; see :mod:`pydftb.parallel`);
+            bitwise identical results for any number, BLAS on one thread while they run.
     reuse_charges : start each SCC from the previous calculation's input populations
             (same type labels), as DFTB+'s own drivers do between geometry steps; far
             fewer SCC iterations in optimisations and MD.  Default off: every
@@ -63,7 +66,7 @@ class PyDFTB(Calculator):
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
                  spin: bool = False, unpaired_electrons: float = 0.0,
                  relax_total_spin: bool = False, spin_constants: dict | None = None,
-                 dispersion=None, reuse_charges: bool = False, **kwargs):
+                 dispersion=None, reuse_charges: bool = False, k_threads=1, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -78,6 +81,7 @@ class PyDFTB(Calculator):
                                 relax_total_spin=relax_total_spin, spin_constants=spin_constants)
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
+        self.k_threads = as_kthreads(k_threads)       # one pool for all calculations
         self.labels = None if labels is None else list(labels)
         self.reuse_charges = reuse_charges
         self.raw = None          # last pydftb.DFTBResult (atomic units)
@@ -110,7 +114,7 @@ class PyDFTB(Calculator):
         if disp is not None:
             disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, atoms.numbers)})
         calc = DFTB(sk, kpts=self._kpoints(atoms), charge=float(atoms.get_initial_charges().sum()),
-                    dispersion=disp, **self.engine_opts)
+                    dispersion=disp, k_threads=self.k_threads, **self.engine_opts)
         return calc, labels, sk
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):

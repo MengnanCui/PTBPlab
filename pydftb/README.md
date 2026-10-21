@@ -93,6 +93,23 @@ Comparisons with DFTB+'s `GeometryOptimisation` and `VelocityVerlet`:
 `python -m pydftb.validation.dynamics --check`; details in
 [`docs/reports/M2f-opt-md.html`](docs/reports/M2f-opt-md.html).
 
+### Threads over k-points
+
+`k_threads` (for `pydftb.DFTB`, `PyDFTB` and `pydftb.SCC`) splits the k-points of a periodic
+calculation into chunks that run in threads: the reduction to standard form, the eigensolver
+and the density matrices (NumPy releases the GIL inside LAPACK/BLAS).  The results are bitwise
+identical for any number of threads; sums over k are never split, and BLAS runs on one thread
+while the k threads work.
+
+```python
+atoms.calc = PyDFTB("path/to/skf", kpts=(14, 14, 14), k_threads=4)   # or "auto"
+```
+
+On 4 threads the eigensolver part runs 1.9–2.9× faster and a whole calculation 1.3–1.5×
+(the Ewald setup, the forces and the Fermi level are not threaded; see
+[`docs/reports/M3a-dispatch.html`](docs/reports/M3a-dispatch.html)).  Use the default
+`solver="batched"`: the `"eigh"` solver calls SciPy, which keeps the GIL.
+
 ## Tests and validation
 
 ```bash

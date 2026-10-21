@@ -148,46 +148,24 @@ def monkhorstpack2kptdensity(atoms, k_density):
 
 def run_calculator(dft_data:Atoms, poly_rep:str, SCC:str, kpts_dens, bolt_f):
         """
-        Calculate DFTB+ and delta forces between DFT and DFTB
+        DFTB energies and forces of every structure, in this process (utils.dftb_stage).
 
         Parameters:
-            dft_data: dft Atoms object
-            opt: 'Yes' or 'No'. 'yes', when skf without repulsive pot.  
-            kpts: list eg. kpts = [11,11,11]
-            bolt_f: Boltzmann factor 1x6 array
+            dft_data: dft Atoms objects
+            poly_rep: 'Yes' or 'No'. 'Yes' when the SKF has no repulsive potential.
+            kpts_dens: k-point density; Gamma only for structures with bolt_f < 0.1
+            bolt_f: Boltzmann factor of every structure
 
         Return:
-            Atoms object
+            list of Atoms (results in a SinglePointCalculator)
         """
+        from utils.dftb_stage import make_tasks, run_structure
         dftb_args = {"calc_type": "static",
                      "poly_rep" : poly_rep,
                      "SCC"      : SCC,
                      "slater_p" : './',
         }
-
-        atoms = []
-        for num, mole_dft in enumerate(dft_data):
-            atoms_new = Atoms(mole_dft.get_chemical_symbols(), positions=mole_dft.get_positions())
-            atoms_new.set_cell(mole_dft.get_cell())
-            atoms_new.set_pbc(mole_dft.get_pbc())
-
-
-            # formula = mole_dft.get_chemical_formula()
-            # force_dft = mole_dft.get_forces()
-
-            # calculate dftb forces
-            if bolt_f[num] < 0.1:
-                kpts_dftb = [1,1,1]
-            else:
-                ks, kpts_dftb = monkhorstpack2kptdensity(mole_dft, kpts_dens)
-
-            dftb_args['kpts'] = kpts_dftb
-            calc = dftbplus_calculator(atoms_new, dftb_args)
-            atoms_new.calc = calc
-            # energy     = atoms_new.get_potential_energy()
-            force_dftb = atoms_new.get_forces()
-            atoms.append(atoms_new)
-        return atoms
+        return [run_structure(task) for task in make_tasks(dft_data, bolt_f, kpts_dens, dftb_args)]
 
 
 
@@ -233,6 +211,8 @@ def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
     # poly_rep = 'SetForAll {' + str(opt) + '}'
     calc_type, poly_rep, SCC, kpts, slater_p = dftb_args['calc_type'], dftb_args['poly_rep'], dftb_args['SCC'], dftb_args['kpts'], dftb_args['slater_p']
     formula = mole.get_chemical_formula()
+    # run directory (parallel DFTB stage: one per task, with an absolute slater_p)
+    directory = {'directory': dftb_args['directory']} if dftb_args.get('directory') else {}
 
     if filling is None:
         # ONLY FOR SCC CONVERGENCE (historical keywords; ignored by DFTB+, see docstring)
@@ -242,7 +222,7 @@ def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
         smearing_kwargs = dict(filling)
 
     if calc_type == 'static':
-        calc = _CheckedDftb(atoms=mole, label=str(formula), kpts=kpts,
+        calc = _CheckedDftb(atoms=mole, label=str(formula), kpts=kpts, **directory,
 
                     Hamiltonian_='DFTB',
                     Hamiltonian_SCC=SCC,

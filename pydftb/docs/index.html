@@ -26,16 +26,16 @@
     <h2 id="key-title">关键信息</h2>
     <p class="lead">pydftb 是从零写成的 Python SCC-DFTB 程序，每一项功能都与 DFTB+ 逐项对照，参考结果冻结在仓库里，测试不需要 DFTB+。它已接入 PTBP，可以替代 DFTB+ 做参数优化。</p>
     <ul>
-      <li>已完成：原型、M0 底座、M1 接入 PTBP，以及 M2 的全部七项：应力、DFTB3、共线自旋、色散、能带与 DOS/PDOS、结构优化与 MD 的验证、f 轨道。</li>
-      <li>下一步：M3，计算策略推荐器、结构和 k 点的并行分发、DFTB+ 配置顾问。</li>
+      <li>已完成：原型、M0 底座、M1 接入 PTBP，M2 的全部七项（应力、DFTB3、共线自旋、色散、能带与 DOS/PDOS、结构优化与 MD 的验证、f 轨道），以及 M3a：PTBP 的 DFTB 阶段默认用满可用核心，结果与串行逐字节相同。</li>
+      <li>下一步：M3b（hotcent、physrep 并行，DFTB 阶段提速后它们占 BO 步的八到九成），然后是 M3c 计算策略推荐器、M3d DFTB+ 配置顾问。</li>
       <li>验收标准：与 DFTB+ 的能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³。实际差异通常小 3–5 个数量级，剩下的差异都已归因。</li>
       <li>对照中发现并记录了 DFTB+ 自身的几处问题：U 接近时 γ 公式数值崩溃（M2b）、原生 D4 的三处错误（M2d），以及 k 点权重有舍入时绝缘体的费米能级被放到导带底（M2e）。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">74 + 11</span><span class="lbl">DFTB+ 参考算例（单点 + 优化/MD），全部通过</span></li>
-      <li><span class="num">207</span><span class="lbl">离线测试（conda 环境）</span></li>
+      <li><span class="num">223 + 131</span><span class="lbl">离线测试：pydftb + PTBP（conda 环境）</span></li>
       <li><span class="num">&lt; 1e-7</span><span class="lbl">PTBP 损失函数与 DFTB+ 的相对差</span></li>
-      <li><span class="num">1.8×</span><span class="lbl">PTBP 的 DFTB 阶段提速</span></li>
+      <li><span class="num">3.4× / 4.1×</span><span class="lbl">PTBP 的 DFTB 阶段，4 核（pydftb / DFTB+）</span></li>
     </ul>
   </section>
 
@@ -68,7 +68,8 @@
             <tr><td>M2e</td><td>能带与 DOS/PDOS</td><td><span class="chip done">已完成</span></td><td>周期体系本征值差 ≤ 1.7e-11 Ha；统一玻尔兹曼常数和短程 γ 截断</td><td><span class="links"><a href="design/M2e-bands.html">设计</a><a href="reports/M2e-bands.html">报告</a></span></td></tr>
             <tr><td>M2f</td><td>结构优化与 MD 的验证</td><td><span class="chip done">已完成</span></td><td>与 DFTB+ 驱动一致：优化终点能量差 ≤ 5e-11 Ha，MD 40 步位置差 ≤ 4.4e-8 Å；力改用输出电荷</td><td><span class="links"><a href="design/M2f-opt-md.html">设计</a><a href="reports/M2f-opt-md.html">报告</a></span></td></tr>
             <tr><td>M2g</td><td>f 轨道（扩展 SKF 格式）</td><td><span class="chip done">已完成</span></td><td>Gd/O 测试参数下 8 个算例与 DFTB+ 能量差 ≤ 4.1e-11 Ha、SCC 轮数相同；单点计算快 8–45%</td><td><span class="links"><a href="design/M2g-f-orbitals.html">设计</a><a href="reports/M2g-f-orbitals.html">报告</a></span></td></tr>
-            <tr><td>M3–M8</td><td>计算策略推荐、PyTorch/GPU、多套参数、DFTB+ 功能第二波、大体系、AI 层</td><td><span class="chip plan">计划</span></td><td>—</td><td><a href="ROADMAP.md">路线图</a></td></tr>
+            <tr><td>M3a</td><td>并行分发与 DFTB 阶段（<code>--ncores</code>，默认用满核心）</td><td><span class="chip done">已完成</span></td><td>Cu 数据集 4 核：DFTB 阶段 pydftb 3.4 倍、DFTB+ 4.1 倍；与串行的输出逐字节相同；k 点线程逐位相同</td><td><span class="links"><a href="design/M3a-dispatch.html">设计</a><a href="reports/M3a-dispatch.html">报告</a></span></td></tr>
+            <tr><td>M3b–M8</td><td>hotcent/physrep 并行、计算策略推荐器、DFTB+ 配置顾问、PyTorch/GPU、多套参数、DFTB+ 功能第二波、大体系、AI 层</td><td><span class="chip plan">计划</span></td><td>—</td><td><a href="ROADMAP.md">路线图</a></td></tr>
           </tbody>
         </table>
       </div>
@@ -123,6 +124,7 @@ python -m pydftb.validation.make_f_set                     # 重新生成 f 轨�
         <li><strong>已修正（M3 之前）：</strong>PTBP 损失函数的惩罚项过去总用 0.5 Bohr 的共价半径（<code>cli/run.py</code> 算出了元素的半径，但没有传给 <code>Loss(...)</code>），Cu 的惩罚因子因此是 1.2e4 而不是 6.0。现在用被参数化元素的半径；参数表中已发表的 75 个元素的损失值都能用这个公式复现（相对差 ≤ 5e-5）。已发表的 Cu 参数下，dataset 模式的损失从 901629.83 变为 446.20，energygeometry 模式从 3837.92 变为 1.8993，两个引擎的相对差仍在 1e-8 以内。旧运行的损失值是另一个尺度：旧的 skopt 检查点在恢复时会被拒绝，可用 <code>tools/rescale_checkpoint.py</code> 精确换算。</li>
         <li>energygeometry 模式在已发表的 Cu 参数下的损失为 1.90，论文中为 0.288：μ<sub>E</sub>、μ<sub>V</sub> 本身大约大 6.6 倍（0.510、0.120 对 0.0775、0.0182），与惩罚项无关，待查（可能与数据集、hotcent 版本或 E0 的设置有关）。</li>
         <li>多元素模式（<code>--multi_element</code>）跑不通：命令行给的是元素符号，而 <code>data.get_elements_from_dataset</code>、<code>Loss.set_parameters</code> 要原子序数；参数表里也没有 <code>set_parameters</code> 要读的 <code>r_wave</code> 键。<code>cli/run.py</code> 只优化 <code>sigma_rep</code> 的分支调用 <code>Loss_EnergyGeometry</code> 的参数也不对。</li>
+        <li>k 点密度较低（<code>--kpts 2.0</code>）、T = 0 时，Cu 数据集的第 44 个结构（6×6×6 网格）在两个引擎中都 1000 轮 SCC 不收敛（各约 40 s），结果照常返回：pydftb 给出警告，DFTB+ 只在输出文件里注明。默认的 5.0 和 3.0 下都收敛（见 M3a 报告）。</li>
         <li><code>tools/physrep.py</code> 可能改编自 J. Margraf 的 physrep，上游许可未知；仓库整体为 MIT，需确认这个文件可以按 MIT 发布。</li>
       </ul>
     </section>

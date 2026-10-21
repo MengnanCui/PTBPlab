@@ -49,6 +49,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('--n-particles', type=int, default=4, metavar='N',
                    dest='n_particles',
                    help="Population/batch width for PSO and parallel_bo. Default: 4.")
+    p.add_argument('--ncores', default='auto', metavar='N|auto',
+                   help="Cores for the parallel BO step (structures in parallel processes, "
+                        "k-point/OpenMP threads). 'auto' (default): every core this process "
+                        "may use; 1: serial. The plan is printed and saved as plan.json.")
     p.add_argument('--E0s', default=None, metavar='JSON',
                    help='Atomic reference energies as JSON, e.g. \'{"6": -37.8, "1": -0.5}\'. '
                         'Omit to auto-fit from the dataset and cache to <ref_dir>/E0s_dft.json.')
@@ -208,6 +212,7 @@ def run(args: argparse.Namespace) -> int:
         '--eos_points', str(args.eos_points),
         '--optimizer', args.optimizer,
         '--n_particles', str(args.n_particles),
+        '--ncores', str(args.ncores),
         '--checkpoint', args.checkpoint,
         '--engine', args.engine,
         '--smearing', args.smearing,

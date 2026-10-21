@@ -70,6 +70,26 @@ print("[engine]", _configure_engine(
     pydftb_forces=getattr(ptbp_args, 'pydftb_forces', None),
 ))
 
+from utils.parallel import detect_cpu as _detect_cpu, set_plan as _set_plan, simple_plan as _simple_plan
+
+
+def _parallel_plan(dft_input):
+    """CPU budget and parallel plan of this run (milestone M3): printed, saved as
+    plan.json and set process-wide, so the DFTB stage of every BO step follows it."""
+    budget = _detect_cpu(getattr(ptbp_args, 'ncores', None))
+    eos = max(1, int(ptbp_args.eos_points))
+    plan = _simple_plan(budget, int(len(dft_input) / eos) * eos,
+                        engine=getattr(ptbp_args, 'engine', None) or 'dftbplus',
+                        optimizer=ptbp_args.optimizer, particles=ptbp_args.n_particles)
+    _set_plan(plan)
+    print(plan.render())
+    try:
+        plan.save(path / 'plan.json')
+    except OSError as err:
+        print(f"[plan] plan.json not written: {err}")
+    return plan
+
+
 # Define the OptimizationScheme
 # (1) Elementary system 
 # opt_elem = []
@@ -171,6 +191,7 @@ Atomic number: {atomic_numbers}
 Covalent radius: {cov_radius}
 Boltzmann factor: {bolt_f.tolist()}
             """)
+            _parallel_plan(dft_input)
 
             loss = Loss(args_input=ptbp_args, 
                         dft_input=dft_input,
@@ -299,6 +320,7 @@ Atomic number: {atomic_numbers}
 Covalent radius: {cov_radius}
 Boltzmann factor: {bolt_f.tolist()}
             """)
+            _parallel_plan(dft_input)
 
             loss = Loss(args_input=ptbp_args, 
                         dft_input=dft_input,

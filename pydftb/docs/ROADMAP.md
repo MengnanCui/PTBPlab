@@ -10,7 +10,10 @@
 | M0 | 底座整理：ops 分发层、`System`/`ParamSet`/`SCC` 接口、四段式计算、冻结的 DFTB+ 参考数据、文档骨架 | ✅ 完成 | `design/M0-foundation.html`，`reports/M0-foundation.html` |
 | M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | ✅ 完成（损失函数相对差 < 1e-7，DFTB 阶段快 1.8 倍） | `design/M1-ptbp-integration.html`，`reports/M1-ptbp-integration.html` |
 | M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | ✅ 完成：M2a 应力 ✅（与 DFTB+ 差 ≤ 3e-9 Ha/Bohr³，顺带修正 SKF 表格末端）；M2b DFTB3 ✅（顺带修正 U 接近时 γ 的数值崩溃）；M2c 共线自旋 ✅（SCC 轮数与 DFTB+ 全部相同）；M2d 色散 ✅（UFF、SK、D3、SimpleD3、D4，色散部分与 DFTB+ 差 ≤ 1e-10；发现 DFTB+ 原生 D4 的三处问题；仓库改为 MIT 许可）；M2e 能带/DOS/PDOS ✅（周期体系本征值与 DFTB+ 差 ≤ 1.7e-11 Ha；顺带统一玻尔兹曼常数和短程 γ 截断；发现 DFTB+ middleGap 的舍入问题）；M2f 结构优化与 MD ✅（与 DFTB+ 自带驱动对照：优化终点能量差 ≤ 5e-11 Ha，MD 40 步位置差 ≤ 4.4e-8 Å、SCC 轮数逐步一致；力改用输出电荷，SCC 容差 1e-5 时力与 DFTB+ 一致到 ~1e-11）；M2g f 轨道 ✅（读 DFTB+ 的扩展 SKF 格式，两种格式可混用；Gd/O 测试参数下 8 个对照算例的能量差 ≤ 4.1e-11 Ha、SCC 轮数相同，用 DFTB+ 的差分时力差 ≤ 8.2e-13 Ha/Bohr；顺带去掉旋转中 einsum 的路径搜索，单点计算快 8–45%） | `design/M2a-stress.html`、`reports/M2a-stress.html`；`design/M2b-dftb3.html`、`reports/M2b-dftb3.html`；`design/M2c-spin.html`、`reports/M2c-spin.html`；`design/M2d-dispersion.html`、`reports/M2d-dispersion.html`；`design/M2e-bands.html`、`reports/M2e-bands.html`；`design/M2f-opt-md.html`、`reports/M2f-opt-md.html`；`design/M2g-f-orbitals.html`、`reports/M2g-f-orbitals.html` |
-| M3 | 计算策略推荐器 v1（CPU）+ 结构/k 点并行分发 + DFTB+ 配置顾问 | 计划 | — |
+| M3a | 并行分发与 DFTB 阶段：CPU 预算与方案、fork 进程池（最大优先）、DFTB 阶段按结构并行、pydftb 的 k 点线程、`--ncores`（默认用满核心） | ✅ 完成（Cu 数据集 4 核：DFTB 阶段 pydftb 3.4 倍、DFTB+ 4.1 倍，整个 BO 步 1.2–1.5 倍；与串行的输出逐字节相同、损失值逐位相同；pydftb 的 k 点线程逐位相同；DFTB+ 默认的 OpenMP 线程在这些小体系上反而更慢） | `design/M3a-dispatch.html`，`reports/M3a-dispatch.html` |
+| M3b | BO 步的其余部分：hotcent 按行分片并回放（逐字节相同）、physrep 向量化（逐位相同） | 计划 | — |
+| M3c | 计算策略推荐器 v1（CPU）：成本模型、内存估计、`ptbp plan`、`plan.json` | 计划 | — |
+| M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | 计划 | — |
 | M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
 | M6 | DFTB+ 功能补齐·第二波（按需）：自旋轨道耦合、DFTB+U、长程校正、溶剂、外场、TD-DFTB、XL-BOMD | 计划 | — |

@@ -31,6 +31,7 @@ from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_
 from .mixer import make_mixer
 from .occupations import Smearing
 from .neighbors import neighbor_list
+from .parallel import as_kthreads
 from .solvers import SOLVERS, _density
 from .skf import SKSet
 from .thirdorder import ThirdOrder
@@ -195,6 +196,10 @@ class DFTB:
                           ``{"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719,
                           "a2": 3.6017, "s6": 1.0, "s8": 0.5883}``; see
                           :mod:`pydftb.dispersion`.
+    k_threads : int | "auto" | KThreads  threads over chunks of k-points for the
+                          eigensolver and density matrices (:mod:`pydftb.parallel`);
+                          bitwise identical results for any number.  With more than one,
+                          BLAS runs on one thread during the calculation.
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
@@ -205,7 +210,7 @@ class DFTB:
                  third_order: str | None = None, hubbard_derivs: dict | None = None,
                  h_damping: float | None = None, spin: bool = False,
                  unpaired_electrons: float = 0.0, relax_total_spin: bool = False,
-                 spin_constants: dict | None = None, dispersion=None):
+                 spin_constants: dict | None = None, dispersion=None, k_threads=1):
         if spin and not scc:
             raise ValueError("spin polarisation needs SCC")
         if spin and spin_constants is None:
@@ -242,6 +247,7 @@ class DFTB:
         self.relax_total_spin = relax_total_spin
         self.spin_constants = spin_constants
         self.dispersion = make_dispersion(dispersion)
+        self.k_threads = as_kthreads(k_threads)
 
     @property
     def kt(self) -> float:
@@ -255,6 +261,13 @@ class DFTB:
         ``stress`` (default: with forces for periodic systems) adds the stress
         tensor sigma = -(1/V) dE/d(strain), the sign convention of DFTB+.
         """
+        if self.k_threads.n == 1:
+            return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(1, user_api="blas"):    # the k threads take the cores
+            return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
+
+    def _calculate(self, species, positions, cell, pbc, forces, q_init, stress) -> DFTBResult:
         t0 = time.perf_counter()
         timings = {}
         periodic = cell is not None and (pbc is None or np.any(pbc))
@@ -432,11 +445,14 @@ class DFTB:
             return rho, wdm, evals, mu, ts, getattr(solver, "last_occupations", None)
         e, c = solver.eig(h)
         nk = len(st.kw)
+        threads = getattr(solver, "threads", None)
         if st.spin.shared_ef:
             rho, wdm, evals, mu, ts, occ = _density(e, c, np.tile(st.kw, 2), st.nelec,
-                                                    self.smearing, need_w, spin_factor=1.0)
+                                                    self.smearing, need_w, spin_factor=1.0,
+                                                    threads=threads)
             return rho, wdm, evals, (mu, mu), ts, list(occ)
-        parts = [_density(e[s], c[s], st.kw, n, self.smearing, need_w, spin_factor=1.0)
+        parts = [_density(e[s], c[s], st.kw, n, self.smearing, need_w, spin_factor=1.0,
+                          threads=threads)
                  for s, n in ((slice(0, nk), st.spin.n_up), (slice(nk, 2 * nk), st.spin.n_down))]
         rho = np.concatenate([p[0] for p in parts])
         wdm = np.concatenate([p[1] for p in parts]) if need_w else None
@@ -458,7 +474,8 @@ class DFTB:
                                             ops.segment_sum(q_dn, shells, nsh)])
 
     def _scc(self, st: _Setup, q_init, forces, timings) -> _SCCState:
-        solver = self.solver if not isinstance(self.solver, str) else SOLVERS[self.solver]()
+        solver = (self.solver if not isinstance(self.solver, str)
+                  else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
         t1 = time.perf_counter()
         solver.prepare(st.smat if st.spin is None else np.concatenate([st.smat, st.smat]))
         t_diag = time.perf_counter() - t1

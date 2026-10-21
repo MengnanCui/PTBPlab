@@ -109,7 +109,7 @@ def missing_requirement(doc: dict) -> str | None:
 
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
-               fd_delta: float | None = None, engine: bool = False):
+               fd_delta: float | None = None, engine: bool = False, k_threads=1):
     """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set.
     ``engine``: also return the pydftb.DFTB object (for band structures)."""
     tmp = None
@@ -128,7 +128,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
-                    dispersion=inp.get("dispersion"),
+                    dispersion=inp.get("dispersion"), k_threads=k_threads,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,

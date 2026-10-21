@@ -9,6 +9,10 @@ level and the entropic term T*S.
 * ``SP2Solver``      diagonalisation-free second-order spectral projection
                      (Niklasson 2002).  Only GEMMs => GPU / tensor-core
                      friendly; optional mixed precision.  Gamma, T = 0, gapped.
+
+``EighSolver`` and ``BatchedSolver`` take ``threads`` (a :class:`pydftb.parallel.KThreads`):
+the per-k work then runs on chunks of k-points in threads, bitwise identical to
+the whole stack (see :mod:`pydftb.parallel`).
 """
 from __future__ import annotations
 
@@ -19,32 +23,57 @@ from .backend import ops
 from .occupations import fill
 
 
-def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0):
-    occ, mu, ts = fill(evals, kw, nelec, smearing, spin_factor=spin_factor)
+def _kmap(threads, fn, nk, norb):
+    """fn over chunks of the k stack (all of it at once without threads)."""
+    return [fn(slice(0, nk))] if threads is None else threads.map(fn, nk, norb)
+
+
+def _stack(parts):
+    return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
+def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0, threads=None):
+    occ, mu, ts = fill(evals, kw, nelec, smearing, spin_factor=spin_factor)   # all k at once
     occ = np.array(occ)
-    cf = evecs * occ[:, None, :]
-    rho = cf @ np.conj(np.swapaxes(evecs, 1, 2))
-    wdm = (cf * evals[:, None, :]) @ np.conj(np.swapaxes(evecs, 1, 2)) if need_w else None
+
+    def part(sl):
+        c = evecs[sl]
+        cf = c * occ[sl, None, :]
+        rho = cf @ np.conj(np.swapaxes(c, 1, 2))
+        wdm = (cf * evals[sl, None, :]) @ np.conj(np.swapaxes(c, 1, 2)) if need_w else None
+        return rho, wdm
+
+    parts = _kmap(threads, part, len(evecs), evecs.shape[-1])
+    rho = _stack([p[0] for p in parts])
+    wdm = _stack([p[1] for p in parts]) if need_w else None
     return rho, wdm, evals, mu, ts, occ
 
 
 class EighSolver:
     name = "eigh"
 
+    def __init__(self, threads=None):
+        self.threads = threads
+
     def prepare(self, s):
         self.s = s
 
     def eig(self, h):
         """Eigenvalues and S-orthonormal eigenvectors for every k."""
-        ev, vec = [], []
-        for hk, sk in zip(h, self.s):
-            e, c = ops.eigh(hk, sk)
-            ev.append(e)
-            vec.append(c)
-        return np.array(ev), np.array(vec)
+        def part(sl):
+            ev, vec = [], []
+            for hk, sk in zip(h[sl], self.s[sl]):
+                e, c = ops.eigh(hk, sk)
+                ev.append(e)
+                vec.append(c)
+            return np.array(ev), np.array(vec)
+
+        parts = _kmap(self.threads, part, len(h), h.shape[-1])
+        return _stack([p[0] for p in parts]), _stack([p[1] for p in parts])
 
     def solve(self, h, kw, nelec, smearing, need_w=True):
-        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w)
+        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w,
+                                               threads=self.threads)
         return tuple(out)
 
 
@@ -52,19 +81,31 @@ class BatchedSolver:
     """Reduce to standard form once per geometry (S is fixed in the SCC loop)."""
     name = "batched"
 
+    def __init__(self, threads=None):
+        self.threads = threads
+
     def prepare(self, s):
-        l = ops.cholesky(s)
-        eye = np.broadcast_to(np.eye(s.shape[-1], dtype=s.dtype), s.shape)
-        self.linv = ops.solve(l, eye)                       # L^-1
+        eye = np.eye(s.shape[-1], dtype=s.dtype)
+
+        def part(sl):
+            l = ops.cholesky(s[sl])
+            return ops.solve(l, np.broadcast_to(eye, l.shape))     # L^-1
+
+        self.linv = _stack(_kmap(self.threads, part, len(s), s.shape[-1]))
         self.linv_h = np.conj(np.swapaxes(self.linv, 1, 2))
 
     def eig(self, h):
         """Eigenvalues and S-orthonormal eigenvectors for every k."""
-        e, c = ops.batched_eigh(self.linv @ h @ self.linv_h)
-        return e, self.linv_h @ c
+        def part(sl):
+            e, c = ops.batched_eigh(self.linv[sl] @ h[sl] @ self.linv_h[sl])
+            return e, self.linv_h[sl] @ c
+
+        parts = _kmap(self.threads, part, len(h), h.shape[-1])
+        return _stack([p[0] for p in parts]), _stack([p[1] for p in parts])
 
     def solve(self, h, kw, nelec, smearing, need_w=True):
-        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w)
+        *out, self.last_occupations = _density(*self.eig(h), kw, nelec, smearing, need_w,
+                                               threads=self.threads)
         return tuple(out)
 
 
@@ -111,10 +152,11 @@ class SP2Solver:
     """Gamma-point, zero-temperature, diagonalisation-free solver."""
     name = "sp2"
 
-    def __init__(self, dtype=np.float64, refine_fp64: int = 0):
+    def __init__(self, dtype=np.float64, refine_fp64: int = 0, threads=None):
         self.dtype = dtype
         self.refine = refine_fp64
         self.iterations = 0
+        self.threads = None             # Gamma only: nothing to split over k
 
     def prepare(self, s):
         if s.shape[0] != 1 or np.iscomplexobj(s):

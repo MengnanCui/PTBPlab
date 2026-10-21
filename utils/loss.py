@@ -35,6 +35,7 @@ import pickle
 import pprint as pp
 import re
 import time
+from contextlib import nullcontext
 from math import ceil
 from pathlib import Path
 from typing import Tuple
@@ -55,7 +56,10 @@ from itertools import combinations
 from math import pi, sqrt
 from pathlib import Path
 from utils.hotpy import hotpy  
-from utils.calculator import run_calculator, dftbplus_calculator, calc_band_binary, delta_band_binary
+from utils.calculator import dftbplus_calculator, calc_band_binary, delta_band_binary
+import utils.dftb_stage as dftb_stage
+from utils.parallel import current_plan, set_plan
+from utils.parallel.budget import applied_env, thread_env
 from math import pi, sqrt, floor
 from tools.physrep import physrep
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
@@ -266,13 +270,16 @@ class Loss():
                      'calc_type': 'static'}
 
         E0s = {}
-        for Z in unique_Z:
-            atoms = ase.Atoms(chemical_symbols[int(Z)], positions=[[0, 0, 0]])
-            atoms.set_cell(np.eye(3) * 20.0)  # 20 Å cubic vacuum
-            atoms.set_pbc([True, True, True])
-            calc = dftbplus_calculator(atoms, dftb_args)
-            atoms.calc = calc
-            E0s[int(Z)] = atoms.get_potential_energy()
+        # one-atom runs: serial, on one thread whenever the run has a parallel plan
+        # (the same E0 for every --ncores)
+        with applied_env(thread_env(1)) if current_plan() is not None else nullcontext():
+            for Z in unique_Z:
+                atoms = ase.Atoms(chemical_symbols[int(Z)], positions=[[0, 0, 0]])
+                atoms.set_cell(np.eye(3) * 20.0)  # 20 Å cubic vacuum
+                atoms.set_pbc([True, True, True])
+                calc = dftbplus_calculator(atoms, dftb_args)
+                atoms.calc = calc
+                E0s[int(Z)] = atoms.get_potential_energy()
 
         if not hasattr(self, '_E0_dftb_cache'):
             self._E0_dftb_cache = {}
@@ -282,137 +289,21 @@ class Loss():
         return E0s
 
 
-    def run_calculator_seperately_parallel(self, dft_incopy:Atoms, calculator_code:str, tag:str):
-        # def prep_gnuparallel(dataset_infile:str, num_parall, calculator_code:str, tag:str):
-        """
-
-        Seperate the dataset and run DFTB calculation parallelly!
-
-        The reason is due to the trivial parallelization setting of DFTB+, basically we simply run each DFTB+ calculation with one CUP core.
-
-        The parallelization is based on the number of eos_points, defaultly, self.args_input.eos_points = 11, therefore, if we have 66 structures, the number of parallelized calculators will be 66/11 = 6.
-        Be parallelized respect to args_input.eos_points
-
-        """
-
-        # 1. Divide input file into num_parall folders
-        # initialize information
-        dataset = dft_incopy#ase.io.read(dataset_infile, ':')
-        dataset_file = "ref.xyz"
-        # dataset_file = dataset_infile.strip().split('/')[-1]
-        # dataset_file_output = dataset_file.replace('.xyz', f'_{tag}.xyz')
-        dataset_file_output = "dftb_band.xyz"
-        num_atoms = len(dft_incopy)
-        num_parall = int(num_atoms / self.args_input.eos_points)
-        if num_parall == 0:
-            num_parall = 1
-        
-
-        # seperate val_dataset into num_parall parts
-        size_subs = math.ceil(num_atoms / num_parall)
-
-        subdataset_names = [f"{tag}_{i}/tmp.{dataset_file.split('.')[0]}.xyz" for i in range(num_parall)]
-        subdataset_gap_names = [f"{tag}_{i}/tmp.{dataset_file.split('.')[0]}_dftb.xyz" for i in range(num_parall)]
-        print(f"subdataset_names: {'  '.join(subdataset_names)}")
-        print(f"subdataset_gap_names: {'  '.join(subdataset_gap_names)}")
-
-
-        # write subdataset
-        cmd_file = open("cmd.lst", 'w')
-        for n in range(num_parall):
-            if self.bolt_f11[n*self.args_input_eos_points + floor(self.args_input_eos_points/2)] >= 0.1:
-                k_dens = self.args_input.kpt_density
-            else:
-                k_dens = 1
-            start_index = n * size_subs
-            end_index = (n + 1) * size_subs
-            subdataset = dataset[start_index: end_index]
-
-            subfolder_name = f"{tag}_{n}"
-            if not os.path.exists(subfolder_name):
-                os.system(f"mkdir {subfolder_name}")
-                os.system(f"cp {self.path}/{calculator_code} {subfolder_name}")
-                if tag.lower() != "xtb":
-                    os.system(f"cp *.skf {subfolder_name}")
-            else:
-                os.system(f"cp {self.path}/{calculator_code} {subfolder_name}")
-                if tag.lower() != "xtb":
-                    os.system(f"cp *.skf {subfolder_name}")
-            subdataset_name = subdataset_names[n]  
-            ase.io.write(subdataset_name, subdataset)
-
-
-            # write cmd file to cmd.lst, here i run calculator with python
-            cmd_run = f"python  {calculator_code} -sp tmp.{dataset_file.split('.')[0]}.xyz {tag} -d {k_dens}"
-
-            cmd_file.write(f"cd {subfolder_name} ; {cmd_run} >> output\n")
-        cmd_file.close()
-
-        print("Seperate validation dataset into " + str(num_parall) + " parts for parallel calculation.")
-
-
-        # 2. Run GAP on each part
-        os.system(f"parallel --delay 0.2 --joblog task.log --progress --resume -j {num_parall} < cmd.lst")
-
-
-        # 3. Collect data after finished
-        os.system(f"cat {' '.join(subdataset_gap_names)} > {dataset_file_output}")
-        os.system("mv task.log task_backup.log")
-
-        output_dataset = ase.io.read(dataset_file_output, ':')
-        dft_final, search_index = data.find_ref_by_structure(output_dataset, dft_incopy, "_", "_")
-        
-        # bolt_f11_final = [bolt_f11[i] for i in search_index]
-        # write the search index into a file
-        with open("search_index.txt", 'w') as search_index_file:
-            search_index_file.write(','.join([str(i) for i in search_index]))
-
-        ase.io.write("dft_final.xyz", dft_final)
-
-
-        if len(output_dataset) == len(dataset):
-            os.system(f"rm -r {tag}_*")
-        else:
-            print(f"WARNING: len(ref_dataset):{len(dataset)} != len(gap_dataset):{len(output_dataset)}")
-        
-        return output_dataset, dft_final
-
     def run_calculator_seperately(self, dft_incopy:Atoms):
         """
-        Seperate the dataset is aims to save most of caculation rather than ruin all by a few failed DFTB+ calculation.
-        
+        DFTB energies and forces of the dataset (``utils.dftb_stage``), serial or in
+        parallel according to the run's plan.  The dataset goes in EOS groups so that a
+        few failed DFTB runs (missing SKF) do not ruin the whole BO step: such a group is
+        left out of this round.  Writes dft_final.xyz, dftb_band.xyz, search_index.txt.
         """
-
-        dft_subincopy_final = []
-        dftb_bandstructure_final = []
-        kept_indices = []
-        eos = self.args_input.eos_points
-        for n in np.arange(int(len(dft_incopy) / eos)):
-            dft_sub = dft_incopy[n*eos:(n+1)*eos]
-            bolt_subf = self.bolt_f11[n*eos:(n+1)*eos]
-            try:
-                dftb_bandstructure = run_calculator(dft_sub,
-                                                    poly_rep='Yes',
-                                                    SCC='Yes',
-                                                    kpts_dens=self.args_input.kpt_density,
-                                                    bolt_f=bolt_subf)
-                # poly_rep = 'Yes': switch polynomial repulsion (default 0.0 for hotcent skf generator)
-                # SCC = 'Yes': switch the self charge consistent calculation(DFTB2)
-
-                dft_subincopy_final.extend(dft_sub)
-                dftb_bandstructure_final.extend(dftb_bandstructure)
-                kept_indices.extend(range(n*eos, (n+1)*eos))
-            except FileNotFoundError as err:
-                print("DFTB+ Warning:", err)
-                print("The problem caused by failed generation of SKF with this parameter. We will overlook these failed structures in this round of parameterization.")
-
-        ase.io.write('dft_final.xyz', dft_subincopy_final)
-        ase.io.write('dftb_band.xyz', dftb_bandstructure_final)
-        with open("search_index.txt", 'w') as search_index_file:
-            search_index_file.write(','.join(str(i) for i in kept_indices))
-
+        # poly_rep = 'Yes': switch polynomial repulsion (default 0.0 for hotcent skf generator)
+        # SCC = 'Yes': switch the self charge consistent calculation(DFTB2)
+        dftb_bandstructure_final, dft_subincopy_final, kept_indices = dftb_stage.run_dataset(
+            dft_incopy, self.bolt_f11, self.args_input.eos_points, self.args_input.kpt_density,
+            poly_rep='Yes', SCC='Yes')
+        dftb_stage.write_outputs(dftb_bandstructure_final, dft_subincopy_final, kept_indices)
         return dftb_bandstructure_final, dft_subincopy_final
-    
+
     def set_parameters(self, conf_parameters:list):
         """
         Set parameters as the input for Hotcent and Physrep
@@ -974,7 +865,6 @@ class Loss():
             dft_incopy = copy.deepcopy(self.dft_input)
 
             # Calculate energy/forces for the band energy part  
-            # dftb_bandstructure_final, dft_subincopy_final = self.run_calculator_seperately_parallel(dft_incopy, self.args_input.kpt_density, 'calc_dftb.py', 'static')
             self.run_calculator_seperately(dft_incopy)
 
             # dft_subincopy_final = ase.io.read('dft_final.xyz', ':'); dftb_bandstructure_final = ase.io.read('dftb_band.xyz', ':')
@@ -1338,7 +1228,10 @@ class Loss():
         Notes:
         - We use `multiprocessing.Process` (not `Pool`) because Pool workers
           are daemonic and would forbid the nested mp.Pool that
-          `hotpy.full_hotcent` and `parallel_repulsion` create internally.
+          `hotpy.full_hotcent` and `parallel_repulsion` create internally,
+          and the forked DFTB-stage workers (utils.parallel).
+        - With a parallel plan (cli/run.py) every particle uses its share of the
+          cores (Plan.for_particle), so particles x workers x threads <= cores.
         - par.out and log.out at the parent cwd are appended-to by every
           worker concurrently — line interleaving is possible but writes
           are atomic per-line on POSIX. The per-evaluation
@@ -1357,9 +1250,13 @@ class Loss():
 
         ctx = mp.get_context('fork')
 
+        plan = current_plan()
+
         def _worker(x_arg, q, idx):
             # Closure over `cost_fn` works under fork because the child
             # inherits the parent's full Python state; no pickling involved.
+            if plan is not None:
+                set_plan(plan.for_particle(idx))     # this BO point's share of the cores
             try:
                 val = float(cost_fn(x_arg))
                 q.put((idx, val, None))
