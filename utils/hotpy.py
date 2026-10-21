@@ -186,6 +186,9 @@ class hotpy():
 
 
             # Apply confinement potential and solving the pseudo-atom orbitals
+            # perturbative_confinement=False confines self-consistently, which reproduces the published
+            # PTBP SKFs. hotcent >= 2.0 defaults to True, which first solves the free atom and cannot
+            # converge an empty subshell that is unbound there (e.g. Si 3d).
             atom = AtomicDFT(symbol_x,
                             xc=xc,
                             configuration=config,
@@ -193,6 +196,7 @@ class hotpy():
                             scalarrel=True,
                             confinement=conf_dens,
                             wf_confinement=conf_wf,
+                            perturbative_confinement=False,
                             txt='-',
                             )
             atom.run()
@@ -391,22 +395,43 @@ class hotpy():
             print("Number of jobs: " + str(len(symbol_pairs)))
             
             
+            # maxtasksperchild=1: generate_skf chdir()s into SKF_<pair>, so a worker whose pair raised
+            # must not be reused (it would write the next pair's files inside that folder)
             if len(symbol_pairs) < num_cores:
-                pool = mp.Pool(processes=len(symbol_pairs)) if len(symbol_pairs) != 0 else mp.Pool(processes=1)
+                pool = mp.Pool(processes=len(symbol_pairs), maxtasksperchild=1) if len(symbol_pairs) != 0 else mp.Pool(processes=1, maxtasksperchild=1)
             else:
-                pool = mp.Pool(processes=num_cores)
+                pool = mp.Pool(processes=num_cores, maxtasksperchild=1)
 
 
+            jobs = []
             for i, pair in enumerate(symbol_pairs):
                 symbol_pair = list(pair)
 
                 r0_pair = {sym: r0[sym] for sym in symbol_pair}
                 p_pair = {sym: p[sym] for sym in symbol_pair}
 
-                pool.apply_async(self.generate_skf, args=(symbol_pair, r0_pair, p_pair, xc, superposition, label), error_callback=self.error_callback)
-            
+                job = pool.apply_async(self.generate_skf, args=(symbol_pair, r0_pair, p_pair, xc, superposition, label), error_callback=self.error_callback)
+                jobs.append((symbol_pair, job))
+
             pool.close()
             pool.join()
+
+            # error_callback only prints: re-raise, otherwise the missing SKFs only surface later in physrep
+            failed = []
+            for symbol_pair, job in jobs:
+                try:
+                    job.get()
+                except Exception as exc:
+                    failed.append(('-'.join(symbol_pair), exc))
+            if failed:
+                details = []
+                for pair, exc in failed:
+                    # hotcent messages can span many lines (e.g. an epsilon history): keep first and last
+                    lines = str(exc).strip().splitlines() or ['']
+                    message = lines[0] if len(lines) == 1 else f"{lines[0]} ... {lines[-1]}"
+                    details.append(f"  {pair}: {type(exc).__name__}: {message}")
+                raise RuntimeError(f"hotcent failed to generate band-structure SKFs for {len(failed)} of "
+                                   f"{len(jobs)} element pair(s):\n" + '\n'.join(details)) from failed[0][1]
 
 
 
