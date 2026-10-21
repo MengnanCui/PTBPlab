@@ -52,6 +52,23 @@ Lennard-Jones/UFF and Slater-Kirkwood are built in.  D3 and D4 call the referenc
 optional: `conda install -c conda-forge dftd3-python dftd4-python` (or `pip install dftd3 dftd4`).
 Models, defaults and the differences found in DFTB+'s own D4: [`docs/design/M2d-dispersion.html`](docs/design/M2d-dispersion.html).
 
+### Band structures, DOS and PDOS
+
+After an SCC run, the states at other k-points come from the converged charges, as in DFTB+'s
+band-structure run (`ReadInitialCharges` + `Klines`):
+
+```python
+cu.calc = PyDFTB("path/to/skf", kpts=(6, 6, 6), temperature=1000.0)
+cu.get_potential_energy()
+bs = cu.calc.band_structure(path="GXWLGK", npoints=100)     # ASE BandStructure (eV)
+st = cu.calc.states(kpts=(24, 24, 24), projections=True)    # pydftb.bands.States
+e, dos = st.dos()                                           # dp_dos rules: Gaussian 0.1 eV
+e, d = st.pdos(atoms=[0], shell=2)                          # d shell of atom 0
+```
+
+`pydftb.SCC.states()` does the same in atomic units; `pydftb.bands.klines` turns a DFTB+ `Klines`
+block into k-points.  Details: [`docs/reports/M2e-bands.html`](docs/reports/M2e-bands.html).
+
 ## Tests and validation
 
 ```bash

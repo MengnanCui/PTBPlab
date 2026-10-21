@@ -22,10 +22,7 @@ import numpy as np
 
 from .backend import ops
 from .constants import MIN_HUB_DIFF
-from .coulomb import NEAR_TAU, Coulomb, _short, _short_near
-
-MIN_SHORT_GAMMA = 1e-10     # DFTB+ minShortGamma: S below this is cut off
-TOL_SHORT_GAMMA = 1e-10     # DFTB+ tolShortGamma: bisection tolerance
+from .coulomb import NEAR_TAU, Coulomb, _short_near, short_cutoff
 
 
 # ---- DFTB+ thirdorder.F90 helper functions (tau = 3.2 U, r > 0) ----------
@@ -136,27 +133,6 @@ def dgamma_du_onsite(ua, ub):
     return np.where(np.abs(ua - ub) < MIN_HUB_DIFF, 0.5, general)
 
 
-def short_cutoff_dftbplus(u2: float, u1: float) -> float:
-    """DFTB+ ``expGammaCutoff``: where S drops below 1e-10 (doubling, then bisection)."""
-    def s(r):
-        return float(_short(np.array([r]), np.array([3.2 * u2]), np.array([3.2 * u1]))[0][0])
-    rab = 1.0
-    while s(rab) > MIN_SHORT_GAMMA:
-        rab *= 2.0
-    min_cut, max_cut = rab + 0.1, 0.5 * rab - 0.1
-    decreasing = s(max_cut) >= s(min_cut)
-    lower = s(min_cut)
-    cut = max_cut + 0.1
-    gamma = s(cut)
-    while gamma - lower > TOL_SHORT_GAMMA:
-        mid = 0.5 * (cut + min_cut)
-        if decreasing == (MIN_SHORT_GAMMA >= s(mid)):
-            min_cut, lower = mid, s(mid)
-        else:
-            cut, gamma = mid, s(mid)
-    return min_cut
-
-
 class ThirdOrder:
     """Third-order term for a fixed geometry (DFTB+ ``ThirdOrderFull``).
 
@@ -190,7 +166,7 @@ class ThirdOrder:
             umin = np.full(self.natom, np.inf)
             np.minimum.at(umin, self.site_atom, u)
             uniq, inv = np.unique(umin, return_inverse=True)
-            table = np.array([[short_cutoff_dftbplus(b, a) for b in uniq] for a in uniq])
+            table = np.array([[short_cutoff(3.2 * b, 3.2 * a) for b in uniq] for a in uniq])
             i, j, shift, vec, d = c.nl
             keep = d < table[inv[i], inv[j]]
             self.nl = (i[keep], j[keep], shift[keep], vec[keep], d[keep])

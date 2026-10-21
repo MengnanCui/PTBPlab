@@ -34,7 +34,7 @@ from ase import Atoms
 ENGINES = ("dftbplus", "pydftb")
 SMEARINGS = ("none", "fermi", "gaussian", "mp")
 PYDFTB_FORCES = ("dftbplus", "exact")
-KB_HARTREE = 3.166811429e-6           # Boltzmann constant in Hartree/K (DFTB+ value)
+KB_HARTREE = 3.16681534524639e-6      # Boltzmann constant in Hartree/K (DFTB+, = pydftb's)
 LEGACY_FD_DELTA = 1.0e-2               # DFTB+ finite-difference step for ParserVersion 1
 
 _SETTINGS: dict[str, Any] = {

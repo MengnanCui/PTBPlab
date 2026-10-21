@@ -3,7 +3,9 @@
     gamma_ab = sum_T [ 1/|R_AB + T|  -  S(tau_a, tau_b, |R_AB + T|) ],  tau = 16/5 U
 
 The long-range 1/R lattice sum is done with Ewald summation; the short-range
-correction S decays exponentially and is summed in real space.
+correction S decays exponentially and is summed in real space up to DFTB+'s cut-off
+(S < 1e-10, :func:`short_cutoff`).  An earlier, tighter cut-off (1e-14) left ~1e-9 Ha
+differences in the potentials of periodic systems (M2e report).
 
 "Sites" carry the charges: atoms (standard SCC) or shells (orbital-resolved
 SCC).  Several sites may sit on one atom.  Everything that depends only on
@@ -18,11 +20,10 @@ import numpy as np
 from scipy.special import erfc
 
 from .backend import ops
-from .constants import MIN_HUB_DIFF
+from .constants import MIN_HUB_DIFF, MIN_SHORT_GAMMA, TOL_SHORT_GAMMA
 from .neighbors import neighbor_list
 
 EWALD_TOL = 1e-12
-SHORT_TOL = 1e-14
 # DFTB+ treats U_a, U_b as equal if |U_a - U_b| < MIN_HUB_DIFF; in tau = 3.2 U:
 SAME_TAU = 3.2 * MIN_HUB_DIFF
 # The closed form of S for tau_a != tau_b carries 1/(tau_a^2 - tau_b^2)^n terms that
@@ -109,14 +110,27 @@ def _gamma0(ta, tb):
     return np.where(same, (ta + tb) / 6.4, general)   # = (U_a + U_b) / 2
 
 
-def _short_cutoff(ta: float, tb: float) -> float:
-    """Distance beyond which |S(ta, tb, r)| < SHORT_TOL (S decays monotonically)."""
-    r = 1.0
-    while True:
-        s, _ = _short(np.array([r]), np.array([ta]), np.array([tb]))
-        if abs(s[0]) < SHORT_TOL:
-            return r
-        r += 0.5
+def short_cutoff(ta: float, tb: float) -> float:
+    """DFTB+ ``expGammaCutoff`` for tau = 3.2 U: the distance where S drops below
+    MIN_SHORT_GAMMA, by doubling and then bisection to TOL_SHORT_GAMMA in S.  The same
+    cut serves the second-order term (per pair of U values) and the third-order term."""
+    def s(r):
+        return float(_short(np.array([r]), np.array([ta]), np.array([tb]))[0][0])
+    rab = 1.0
+    while s(rab) > MIN_SHORT_GAMMA:
+        rab *= 2.0
+    min_cut, max_cut = rab + 0.1, 0.5 * rab - 0.1
+    decreasing = s(max_cut) >= s(min_cut)
+    lower = s(min_cut)
+    cut = max_cut + 0.1
+    gamma = s(cut)
+    while gamma - lower > TOL_SHORT_GAMMA:
+        mid = 0.5 * (cut + min_cut)
+        if decreasing == (MIN_SHORT_GAMMA >= s(mid)):
+            min_cut, lower = mid, s(mid)
+        else:
+            cut, gamma = mid, s(mid)
+    return min_cut
 
 
 class Coulomb:
@@ -154,7 +168,7 @@ class Coulomb:
             fill[a] += 1
         # per-(tau_a, tau_b) short-range cut-offs
         self._utau = np.unique(self.tau)
-        self._cut = np.array([[_short_cutoff(a, b) for b in self._utau] for a in self._utau])
+        self._cut = np.array([[short_cutoff(a, b) for b in self._utau] for a in self._utau])
         self.rcut_short = float(self._cut.max())
         if self.periodic:
             vol = abs(np.linalg.det(self.cell))

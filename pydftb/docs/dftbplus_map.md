@@ -20,13 +20,13 @@
 | 邻居表（含周期镜像） | `neighbors.py` | `dftb/periodic.F90`, `type/dynneighlist.F90` | `TNeighbourList`, `updateNeighbourListAndSpecies`, `getCellTranslations` | pydftb 用 k-d 树 |
 | H0 和 S 的构建及其导数 | `hamiltonian.py: build_pairs` | `dftb/nonscc.F90` | `buildH0`, `buildS`, `getFirstDerivFiniteDiff` | **DFTB+ 用数值差分（中心差分，默认步长 1.22e-4，老版本输入为 0.01）**，pydftb 默认用复步长法（解析精度）；设 `fd_delta` 后可以逐位复现 DFTB+ 的力（差异 1e-12） |
 | 稀疏存储 → 稠密 / k 点矩阵 | `hamiltonian.py: fold, fold_all` | `dftb/sparse2dense.F90` | `getSparseDescriptor`, `unpackHS`, `unpackHS_cmplx_kpts` | 相位因子是 exp(2πi k·T) |
-| 短程 γ 函数 | `coulomb.py: _short, _gamma0` | `dftb/shortgammafuncs.F90`, `dftb/shortgamma.F90` | `expGamma`, `expGammaPrime`, `TShortGamma` | “两个 U 相等”的判据 \|ΔU\| < 3.125e-6 已与 DFTB+ 一致 |
+| 短程 γ 函数 | `coulomb.py: _short, _gamma0, short_cutoff` | `dftb/shortgammafuncs.F90`, `dftb/shortgamma.F90` | `expGamma`, `expGammaPrime`, `expGammaCutoff`, `TShortGamma` | “两个 U 相等”的判据 \|ΔU\| < 3.125e-6 已与 DFTB+ 一致；每对 U 值在 S < 1e-10 处截断（`expGammaCutoff`，M2e 起第二阶和第三阶共用，见坑 19） |
 | 长程 1/R（Ewald 求和） | `coulomb.py: Coulomb` | `dftb/coulomb.F90` | `TCoulomb`, `ewaldReal`, `ewaldReciprocal`, `getOptimalAlphaEwald` | — |
 | SCC 势加入哈密顿量 | `calculator.py: DFTB._scc` | `dftb/hamiltonian.F90`, `dftb/shift.F90`, `dftb/scc.F90` | `getSccHamiltonian`, `addShift`, `TScc` | H = H0 + ½S(V_μ+V_ν) |
 | Mulliken 布居 | `calculator.py` | `dftb/populations.F90`, `dftb/charges.F90` | `mulliken` | — |
 | 轨道分辨 SCC | `calculator.py: _sites` | `dftb/uniquehubbard.F90`, `dftb/orbitalequiv.F90` | `TUniqueHubbard` | — |
 | 电荷混合 | `mixer.py: BroydenMixer`（默认），`AndersonMixer`（Pulay 型） | `mixer/broydenmixer.F90` | `modifiedBroydenMixing` | 照搬 DFTB+ 的改进 Broyden（M1）：19 个对照算例的 SCC 轮数与 DFTB+ 完全相同 |
-| 占据数与费米能级 | `occupations.py` | `dftb/etemp.F90`，`dftbplus/main.F90:getFillingsAndBandEnergies` | `Efilling`, `electronCount`, `electronFill`, `middleGap` | M1 已照搬：先试带隙中点，再按 DFTB+ 的方式二分；T 不低于 1e-8 Ha；Gaussian 即 MP 0 阶；另提供变分熵 |
+| 占据数与费米能级 | `occupations.py` | `dftb/etemp.F90`，`dftbplus/main.F90:getFillingsAndBandEnergies` | `Efilling`, `electronCount`, `electronFill`, `middleGap` | M1 已照搬：先试带隙中点，再按 DFTB+ 的方式二分；T 不低于 1e-8 Ha；Gaussian 即 MP 0 阶；另提供变分熵。玻尔兹曼常数与 DFTB+ 25.1 相同（M2e，坑 17）；带隙中点的搜索允许权重累加的舍入（M2e，坑 18） |
 | 本征求解与密度矩阵 | `solvers.py` | `math/eigensolver.F90`, `dftb/densitymatrix.F90` | `hegvd`, `getDensityMatrix`, `getEDensityMatrix` | pydftb 另有 SP2 纯化和批量求解器 |
 | 力 | `calculator.py: DFTB._gradient` | `dftb/forces.F90`, `dftbplus/main.F90` | `derivative_shift`, `getGradients` | — |
 | DFTB3 三阶项（M2b） | `thirdorder.py: ThirdOrder`, `dgamma_du`, `dgamma_du_onsite` | `dftb/thirdorder.F90`，`dftb/chargepenalty.F90`（`ThirdOrder`） | `gamma3`, `gamma2pU`, `gamma2pUpR`, `dGdUr0`, `updateCharges`, `getShifts`, `addGradientDc`, `addStressDc` | U 几乎相等时 pydftb 改用稳定的积分形式（见第 3 节第 6 条） |
@@ -34,6 +34,9 @@
 | 共线自旋（M2c） | `calculator.py`：`_Spin`、`_spin_matrix`、`_potentials`、`_solve`、`_populations` | `dftb/spin.F90`，`dftbplus/main.F90`（`getFillingsAndBandEnergies`、`getNextInputCharges`、`reduceCharges`），`dftbplus/initprogram.F90`（`initElectronNumber`、`initializeCharges`） | `getSpinShift`, `getEnergySpin_*`, `Spin_getOrbitalEquiv`, `qm2ud`, `Efilling` | 两个自旋通道沿 k 点方向堆叠；混合向量与 DFTB+ 相同（↑/↓、按壳层） |
 | 应力（M2a） | `calculator.py: DFTB._gradient(virial=True)`，`coulomb.py: Coulomb.gradient(virial=True)` | `dftb/stress.F90`，`dftb/coulomb.F90`，`dftbplus/main.F90` | `getBlockStress`, `invRStress`, `getStress` | 每个原子对的“力 × 键矢量”求和，加 Ewald 倒空间项和背景项；与力在同一遍里算出 |
 | SCC 主循环 | `calculator.py: DFTB.calculate` | `dftbplus/main.F90` | `processGeometry`, SCC 循环 `lpSCC` | pydftb 分成 `_setup/_scc/_energies/_gradient` 四段 |
+| 冻结电荷求本征态，即 DFTB+ 的能带运行（M2e） | `bands.py: eigenstates`（复用 `_setup` 和 `_potentials`） | `dftbplus/parser.F90`（`getEuclideanKSampling` 的 Klines 分支、`maxSelfConsIterations`），`dftbplus/main.F90`（`getNextInputCharges`、`writeCharges`） | `readKPoints`, `writeCharges` | `charges.bin` 存的是最后一轮的输入电荷 `qInput`（收敛后不再混合），对应 `DFTBResult.q_in`；Klines 的规则见坑 16 |
+| 投影态 / 区域（M2e） | `bands.py: States.orbitals, weights` | `dftbplus/initprogram.F90`（区域与文件名），`dftbplus/mainio.F90` | `writeProjCplxEigvecsSerial`, `writeProjEigvecHeader`, `writeProjEigvecData` | 权重 Re[c*·(S c)]，不乘占据数和 k 权重；文件名 `标签.out`、`标签.壳层.out`、`标签.壳层.m.out` |
+| DOS/PDOS 曲线（M2e） | `bands.py: broaden, States.dos, States.pdos` | dptools `scripts/dp_dos.py`（Python 工具，不在二进制里） | — | Gaussian、Fermi、Methfessel-Paxton；网格起点向下取整到网格间隔的整数倍 |
 | 能量记账（Total / Mermin / Extrapolated） | `calculator.py: DFTBResult` | `dftb/getenergies.F90`, `dftbplus/mainio.F90` | `writeDetailedOut*` | — |
 | 色散：Lennard-Jones/UFF（M2d） | `dispersion.py: LennardJones` | `dftb/dispuff.F90`，`dftb/dispuffdata.F90` | `DispUff_init`, `getDispEnergyAndGrad_cluster`, `getUffValues` | R ≤ 2^(−1/6)r 时用多项式“墙” |
 | 色散：Slater-Kirkwood（M2d） | `dispersion.py: SlaterKirkwood` | `dftb/dispslaterkirkw.F90`，`dftbplus/parser.F90:readDispSlaKirk` | `addDispEnergyAndGrad_cluster`, `getDampCutoff_`；`HybridDependentPol` 的邻居计数在 parser 中 | — |
@@ -76,3 +79,9 @@
 13. **dftd4 库的截断写死为 60/40/30 Bohr**（二体/三体/配位数），DFTB+ 默认 64/40/40。对照时 DFTB+ 写成库的值；稠密周期体系中二体截断的差别约 1e-7 Ha/原子。
 14. **SlaterKirkwood：被跳过的原子不能同时 N = 0。** DFTB+ 只检查原子对中的第一个原子，第二个原子的 √(α/N) 会算成 0/0，总能量变成 NaN。
 15. **UFF 参数按物种名的前两个字母查找**（`dispuffdata.F90:getUffValues`）：`Li1` 会查成 Li，`O2` 查不到。对照工具对类型标签写显式数值。
+16. **Klines 的规则与能带运行。** 第一行之前隐含一个 Γ 点；每行“N k”取从上一个点（不含）到 k（含）的 N 个等距点；N = 0 表示跳到 k 而不取点。有 Klines 时 `MaxSCCIterations` 默认为 1（`parser.F90:maxSelfConsIterations`）。只算一轮时多原子晶胞会被判定“SCC 未收敛”并报错退出，要写 `ConvergentSCCOnly = No`；单原子晶胞的原子布居恒等于电子数，SCC 误差恒为 0，不写也能跑。
+17. **玻尔兹曼常数。** DFTB+ 25.1 是 3.16681534524639e-6 Ha/K（`common/constants.F90`），pydftb 在 M2e 之前用 3.166811429e-6，相对差 1.2e-6，在 500–1000 K 时造成约 3e-9 Ha、3e-9 e 的差别。核实方法：同一温度分别以 K 和以 Hartree 输入，结果必须逐位相同。
+18. **middleGap 在舍入时跳过能隙。** `etemp.F90:middleGap` 逐个累加 k 点权重直到不小于填充数；权重为 1/13 之类时累加和比填充数少一个舍入单位，于是多加一个导带能级，“中点”落在导带内；之后的二分法把绝缘体的费米能级推到导带底下方约 28 kT。占据数不变。pydftb 累加时允许 1e-9 的舍入，取真正的中点。
+19. **短程 γ 的截断。** DFTB+ 对每一对 U 值在 S 降到 1e-10 处截断（`shortgammafuncs.F90:expGammaCutoff`：先倍增再二分，二分精度也是 1e-10）。pydftb 的第二阶项在 M2e 之前一直加到 1e-14，周期体系中每个原子的 SCC 势因此差约 1e-9 Ha（能量差 1.6e-9 Ha，本征值差 ~1e-9 Ha）。
+20. **`WriteRealHS` 可以用来对照势。** 它在第一轮 SCC 建好 H 后写出实空间 H、S 并退出（返回码非 0）。配合 `ReadInitialCharges` 读回收敛电荷时，on-site 块的对角元减去 on-site 能就是每个原子的 SCC 势。
+21. **输出文件的精度。** `band.out` 的本征值只有 4 位小数（eV），区域文件 6 位小数、k 权重 8 位小数，`results.tag` 是全精度。对照本征值一律读 `results.tag`；需要 `WriteChargesAsText = Yes`（在 `Options` 中）才能读到全精度的 `charges.dat`。

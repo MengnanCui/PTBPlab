@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2e 能带报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M2e</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2e · 完成报告</p>
+    <h1>能带与态密度</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M2e-bands.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 可以在收敛的电荷上求任意 k 点的本征态，给出能带、DOS 和 PDOS。6 个新对照算例全部通过：周期体系的本征值与 DFTB+ 相差 ≤ 1.7e-11 Ha，单原子晶胞和分子 ≤ 3e-14 Ha。</p>
+    <ul>
+      <li>区域投影权重与 DFTB+ 相差 5e-7，正好是区域文件 6 位小数的舍入；在同一输入下，DOS 曲线与 dp_dos 相差 1.3e-11（相对于曲线最大值）。</li>
+      <li>为了达到上面的精度，统一了两个数值约定：玻尔兹曼常数改用 DFTB+ 25.1 的值；第二阶 γ 的短程部分改在 DFTB+ 的截断处（S &lt; 1e-10）截断。统一后，周期体系的本征值差从 ~1e-9 降到 ~1e-11 Ha，有展宽的算例能量差下降 1–3 个数量级。</li>
+      <li>发现 DFTB+ 的一个小问题：绝缘体的 k 点权重若不能精确表示（如 1/13），<code>middleGap</code> 累加的权重会比电子数少一个舍入单位，于是跳过能隙，费米能级落到导带底附近。占据数不受影响；pydftb 改为取能隙中点。</li>
+      <li>接口：<code>SCC.states()</code>、<code>PyDFTB.states()</code>、<code>PyDFTB.band_structure(path=...)</code>；<code>kpts</code> 可以是 ASE 的 BandPath。在进程内算一条能带路径只要 12–46 ms。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">62</span><span class="lbl">DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 1.7e-11 Ha</span><span class="lbl">周期体系本征值差</span></li>
+      <li><span class="num">1.3e-11</span><span class="lbl">DOS 曲线与 dp_dos 的相对差</span></li>
+      <li><span class="num">167</span><span class="lbl">离线测试（conda 环境）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#results">二、验证结果</a></li>
+      <li><a href="#findings">三、发现的问题与学到的东西</a></li>
+      <li><a href="#deviations">四、与计划的偏差</a></li>
+      <li><a href="#perf">五、性能</a></li>
+      <li><a href="#usage">六、用法</a></li>
+      <li><a href="#repro">七、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/bands.py</code>（新）</td><td><code>eigenstates</code>：冻结电荷、分批 k 点对角化、可选投影权重，并在新 k 点上重新填充占据数；<code>States</code>：<code>orbitals</code>、<code>weights</code>（区域与 DFTB+ Region 对应）、<code>dos</code>、<code>pdos</code>、<code>band_structure</code>；<code>klines</code>（DFTB+ Klines 规则）；<code>broaden</code>（dp_dos 的三种展宽，结果逐位对齐）</td></tr>
+            <tr><td><code>calculator.py</code></td><td><code>_setup(matrices=False)</code>：跳过 SCC 网格上的矩阵折叠和色散；<code>_Setup.eps0</code>；<code>DFTBResult.q_in</code>（最后一轮的输入布居，即 DFTB+ 的 <code>charges.bin</code>）</td></tr>
+            <tr><td><code>api.py</code></td><td><code>SCC.states()</code>；<code>make_kpoints</code> 接受路径点（NumPy 数组或 BandPath，等权重、不约化）</td></tr>
+            <tr><td><code>ase_calc.py</code></td><td><code>states()</code>、<code>band_structure(path, npoints)</code>；<code>kpts</code> 接受 BandPath 和 <code>{"path", "npoints"}</code>；抽出 <code>_engine()</code></td></tr>
+            <tr><td><code>constants.py</code>、<code>utils/engines.py</code></td><td>玻尔兹曼常数改为 DFTB+ 的 3.16681534524639e-6 Ha/K（PTBP 写给 DFTB+ 的温度也用它，两个引擎保持同一 kT）；新增 <code>TOL_SHORT_GAMMA</code></td></tr>
+            <tr><td><code>coulomb.py</code>、<code>thirdorder.py</code></td><td><code>short_cutoff</code>：DFTB+ 的 <code>expGammaCutoff</code>（倍增后二分），第二阶和第三阶共用；去掉原来的 1e-14 截断</td></tr>
+            <tr><td><code>occupations.py</code></td><td>能隙中点搜索允许累加权重有 1e-9 的舍入（见三、3.3）</td></tr>
+            <tr><td><code>validation/dftbplus.py</code></td><td>Klines、<code>ReadInitialCharges</code>、<code>ConvergentSCCOnly = No</code>、<code>ProjectStates</code>；<code>run_bands</code>（同一目录先 SCC 再算能带）；<code>parse_levels</code>（<code>band.out</code> 与区域文件）；<code>dp_dos</code>（调用 dptools，只在生成参考时用）</td></tr>
+            <tr><td><code>validation/cases.py</code>、<code>refgen.py</code></td><td>算例字段 <code>klines</code>、<code>regions</code>、<code>dp_dos</code>、<code>ewald_tolerance</code>；6 个新算例；参考 JSON 保存本征值、占据数、费米能级、区域权重、dp_dos 的输入和输出；<code>--check</code> 表格加一列本征值差</td></tr>
+            <tr><td><code>tests/test_bands.py</code>（新）、<code>tests/test_smearing.py</code></td><td>13 个测试（见七）；新增一个绝缘体能隙中点的测试</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="results">
+      <h2>二、验证结果</h2>
+      <h3>与 DFTB+ 的逐项对照</h3>
+      <p>每个算例照常比较能量、力和电荷，另外比较 SCC 网格上和能带路径上的本征值与占据数、路径上的费米能级、区域权重（按简并组求和），以及冻结的 dp_dos 曲线。周期算例让 DFTB+ 用 <code>EwaldTolerance = 1e-12</code>（它的默认值 1e-9 本身会使水盒子的本征值偏 ~1e-7 Ha）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>路径点</th><th>本征值差 (Ha)</th><th>占据数差</th><th>路径费米能级差 (Ha)</th><th>区域权重差</th><th>dp_dos</th></tr></thead>
+        <tbody>
+          <tr><td><code>cu_fcc_k6_bands</code></td><td>42</td><td>4.0e-15</td><td>2.0e-13</td><td>3.3e-16</td><td>5.0e-7（3 个文件）</td><td>—</td></tr>
+          <tr><td><code>li_bcc_bands</code></td><td>39</td><td>3.6e-15</td><td>2.7e-14</td><td>2.4e-16</td><td>—</td><td>—</td></tr>
+          <tr><td><code>cuo_chain_spin_bands</code></td><td>32（含 N = 0 跳转）</td><td>9.5e-12</td><td>1.4e-11</td><td>8.5e-12（↑↓ 两个）</td><td>5.0e-7（3 个文件）</td><td>1.2e-11</td></tr>
+          <tr><td><code>cuo_chain_dftb3_bands</code></td><td>13</td><td>7.1e-12</td><td>2.0e-11</td><td>5.9e-12</td><td>—</td><td>—</td></tr>
+          <tr><td><code>water_box_bands</code></td><td>13</td><td>1.7e-11</td><td>2.5e-12</td><td>1.3e-12（对能隙中点，见 3.3）</td><td>—</td><td>—</td></tr>
+          <tr><td><code>cu4co_pdos</code></td><td>分子</td><td>2.9e-14</td><td>6.0e-14</td><td>—</td><td>5.0e-7（8 个文件）</td><td>1.3e-11（4 条曲线）</td></tr>
+        </tbody>
+      </table></div>
+      <p>验收标准：本征值、占据数、费米能级 ≤ 1e-8；区域权重 ≤ 1e-6；dp_dos ≤ 1e-9。实际结果比标准小 3 个数量级以上。区域权重的 5.0e-7 全部来自 DFTB+ 文件的 6 位小数。</p>
+      <p>原有 56 个算例全部照常通过。两个数值约定统一后（见三），有展宽的算例和周期算例的差异变小，没有任何算例变差到超出标准；详细数字见 3.1、3.2。</p>
+
+      <h3>DOS 曲线与 dp_dos</h3>
+      <ul>
+        <li><strong>同一输入</strong>：把 DFTB+ 写出的 <code>band.out</code> 或区域文件解析后交给 <code>broaden()</code>，与 dp_dos 读同一文件的输出比较，差 ≤ 1.3e-11（dp_dos 只打印 11 位有效数字）。覆盖 Gaussian（默认与 <code>-b</code>）、Fermi、Methfessel-Paxton 2 阶、占据数加权（<code>-w</code>）、自定义网格（<code>-g</code>）和自旋（三列输出）。这几条曲线和它们的输入冻结在 <code>cuo_chain_spin_bands</code>、<code>cu4co_pdos</code> 的参考 JSON 中，离线测试会检查。</li>
+        <li><strong>端到端</strong>：pydftb 用自己的全精度本征值算 Cu fcc 的 DOS，与 dp_dos 读 DFTB+ 文件的结果比较：d 轨道 PDOS 差 1.6e-6（区域文件 6 位小数），总 DOS 差 7.2e-5（<code>band.out</code> 只有 4 位小数）。</li>
+      </ul>
+
+      <h3>测试</h3>
+      <p>conda 环境 167 个测试全部通过（M2d 结束时 147 个）；最小环境（numpy、scipy、ase）151 个通过、16 个跳过（需要 D3/D4 库的算例）。PTBP 的测试除已知的 7 个界面冒烟测试外全部通过。PTBP 损失函数的两个引擎相对差为 8.0e-10（M1 时 1.2e-8），见 3.2 末尾。</p>
+    </section>
+
+    <section id="findings">
+      <h2>三、发现的问题与学到的东西</h2>
+
+      <section id="f-kb">
+        <h3>3.1 玻尔兹曼常数</h3>
+        <p>pydftb 原来用 3.166811429e-6 Ha/K，DFTB+ 25.1 的源码（<code>common/constants.F90</code>）是 3.16681534524639e-6，相对差 1.2e-6。用二进制核实：同一温度分别以 K 和以 Hartree（乘新常数）输入，两次结果逐位相同；乘旧常数则能量差 3e-9 Ha、电荷差 4.5e-9 e。pydftb 和 PTBP 的 <code>utils/engines.py</code> 都改为新值（原计划在 M2f 做，因为它直接影响本阶段的费米能级对照，提前到这里）。</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例（展宽）</th><th>能量差：旧 → 新 (Ha)</th><th>电荷差：旧 → 新 (e)</th></tr></thead>
+          <tbody>
+            <tr><td><code>cu4co_300K</code>（Fermi 300 K）</td><td>1.6e-11 → 1.8e-11</td><td>2.5e-9 → 2.9e-13</td></tr>
+            <tr><td><code>cu_fcc_k6</code>（Fermi 1000 K）</td><td>6.1e-10 → 9.0e-13</td><td>3e-15 → 7e-15</td></tr>
+            <tr><td><code>cu8_distorted_k355</code>（Fermi 1000 K）</td><td>3.4e-9 → 1.8e-12</td><td>2.8e-9 → 3.0e-9</td></tr>
+            <tr><td><code>cu8_distorted_k355_gauss_1000K</code></td><td>5.6e-10 → 3.9e-11</td><td>2.9e-9 → 2.9e-9</td></tr>
+            <tr><td><code>cu_fcc_k6_mp1_3000K</code></td><td>2.7e-10 → 2.4e-11</td><td>3.5e-14 → 3.6e-14</td></tr>
+            <tr><td><code>cuo_chain_k422</code>（Fermi 500 K）</td><td>3.8e-9 → 7.0e-9</td><td>4.5e-8 → 4.0e-8</td></tr>
+          </tbody>
+        </table></div>
+        <p>CuO 链在 DFTB+ 的默认 Ewald 精度下由 Ewald 误差主导，原来两个误差部分抵消；Ewald 精度提高到 1e-12 时，新常数把两边电荷差从 5.3e-9 降到 8.2e-10，再统一短程截断后降到 ~5e-11。PTBP 默认不展宽（T = 0 时 kT 取下限 1e-8 Ha，与常数无关），所以默认设置下的 PTBP 结果不受影响。</p>
+      </section>
+
+      <section id="f-short">
+        <h3>3.2 短程 γ 的截断</h3>
+        <p>γ 的短程部分 S 随距离指数衰减。DFTB+ 对每一对 U 值求出 S 降到 1e-10 的距离（<code>expGammaCutoff</code>：先倍增再二分，二分精度也是 1e-10），超过这个距离就不算。pydftb 的第二阶项原来一直加到 S &lt; 1e-14。逐一排查的过程（CuO 链，Ewald 精度 1e-12）：</p>
+        <ol>
+          <li>能带路径上的本征值差 4.9e-10–8.4e-9 Ha，几乎是一个整体平移。</li>
+          <li>两边都把 SCC 收敛到 1e-13，差别不变（9.0e-10），排除 SCC 收敛精度。</li>
+          <li>用 DFTB+ 自己的输入电荷（<code>WriteChargesAsText</code>）在 pydftb 中建 H，本征值仍差 1.1e-9，说明是哈密顿量本身不同。</li>
+          <li>让 DFTB+ 读回收敛电荷并写出实空间 H（<code>ReadInitialCharges</code> + <code>WriteRealHS</code>），用 on-site 对角元减去 on-site 能得到每个原子的 SCC 势：与 pydftb 相差 −0.9e-9（Cu）和 −1.15e-9（O）；水盒子中为 −0.2e-9 到 −0.8e-9。Ewald 精度提高到 1e-16 时不变，排除 Ewald。</li>
+          <li>把 pydftb 的短程截断换成 DFTB+ 的规则后，势差降到 ≤ 9e-14。</li>
+        </ol>
+        <p>决定：第二阶项也采用 DFTB+ 的截断（第三阶项在 M2b 已经这样做），两者共用 <code>coulomb.short_cutoff</code>。被截掉的每对贡献 &lt; 1e-10 Ha，对物理结果没有意义，但统一后能逐位对照；截断距离也更短，计算略快。效果：周期算例在 Ewald 精度 1e-12 下能量差从 1.6e-9 降到 6e-11 Ha，本征值差从 ~1e-9 降到 ~1e-11 Ha；DFTB+ 默认 Ewald 精度下的算例仍由 Ewald 误差主导（水盒子 1.3e-7 Ha，与以前相同）；分子不受影响（所有原子对都在截断距离内）。</p>
+        <p id="parity">PTBP 损失函数（<code>tools/engine_parity.py</code>，dataset 模式，已发表的 Cu 参数，66 个结构）：DFTB+ 901629.83202，pydftb 901629.83274，相对差 8.0e-10（M1 时为 1.2e-8）。PTBP 默认不展宽，这里的改善来自短程截断的统一。单次耗时 DFTB+ 188 s、pydftb 125 s。</p>
+      </section>
+
+      <section id="f-middlegap">
+        <h3>3.3 DFTB+ 的 middleGap 在舍入时跳过能隙</h3>
+        <div class="callout flag"><strong>DFTB+ 的问题：</strong>对整数电子数，DFTB+ 先把费米能级试放在能隙中点（<code>dftb/etemp.F90</code> 的 <code>middleGap</code>）：把能级按能量排序，逐个累加 k 点权重，直到不小于填充数 N。k 点权重是 1/13 这样不能精确表示的数时，416 个权重累加得到 31.999999999999904 而不是 32，于是多加了一个导带能级，“中点”落在导带内部；接着的电子数检查不通过，转入二分法。二分法中，能隙内的电子数（Kahan 求和）比 32 少一个舍入单位，于是费米能级一路上移，停在导带底下方约 28 kT 处。</div>
+        <p>水盒子的 13 点能带路径：DFTB+ 的费米能级是 0.098460 Ha（导带底 0.098460 Ha），能隙中点是 0.065541 Ha。两者填充的态完全相同（占据数差 2.5e-12），能量也不受影响；受影响的只有报告出来的费米能级，例如以它为零点画图时零点会贴着导带底。</p>
+        <p>pydftb 的做法：累加时允许 1e-9 的舍入（<code>CUM_WEIGHT_TOL</code>），对这类情况给出真正的能隙中点；其他情况结果不变（原有 56 个算例的数值不因此改变）。对照时，绝缘体的路径费米能级改为与“DFTB+ 本征值给出的能隙中点”比较（水盒子 1.3e-12 Ha）。<code>tests/test_smearing.py</code> 有一个专门的测试：旧代码在那里重现 DFTB+ 的行为（导带底下方 3e-7 Ha），新代码给出中点。</p>
+      </section>
+
+      <section id="f-convergent">
+        <h3>3.4 DFTB+ 能带运行的“SCC 未收敛”</h3>
+        <p>DFTB+ 看到 Klines 时把 <code>MaxSCCIterations</code> 的默认值设为 1。只算一轮时，路径 k 点上的输出电荷与读入电荷不同，DFTB+ 判定“SCC 未收敛”并报错退出（CuO 链：SCC 误差 0.066，返回码 1），所以多原子晶胞要写 <code>ConvergentSCCOnly = No</code>。单原子晶胞是例外：原子布居恒等于电子数，SCC 误差恒为 0。设计文档里原来写的是“一律需要”，探测实验后更正。</p>
+      </section>
+
+      <section id="f-degenerate">
+        <h3>3.5 简并态的投影权重</h3>
+        <p>简并能级的本征向量可以在简并子空间里任意旋转，单个态的区域权重因此不唯一。若区域在对称操作下不变（如 Cu fcc 的 d 壳层），交叉项为零，单个态的权重也唯一；一般情况下只有简并组的总和唯一。对照时把本征值相差小于 1e-7 Ha 的态归为一组，比较每组的平均权重。</p>
+      </section>
+    </section>
+
+    <section id="deviations">
+      <h2>四、与计划的偏差</h2>
+      <ul>
+        <li>玻尔兹曼常数的统一从 M2f 提前到本阶段（影响本阶段的费米能级对照）。</li>
+        <li>短程 γ 截断的统一不在计划内，是排查本征值残差时发现的。</li>
+        <li>设计文档中“能带运行一律需要 <code>ConvergentSCCOnly = No</code>”不准确，见 3.4。</li>
+        <li>路径费米能级的验收对绝缘体改为与能隙中点比较，见 3.3。</li>
+        <li>dp_dos 曲线只冻结了两个算例（5 条曲线），因为曲线较大；其余算例用本征值和区域权重对照即可推出曲线一致。</li>
+        <li>含 f 轨道的能带路径按计划放在 M2g。</li>
+      </ul>
+    </section>
+
+    <section id="perf">
+      <h2>五、性能</h2>
+      <p>单线程，开发机。DFTB+ 的时间是第二次运行（读回电荷、算路径）整个进程的耗时，包括启动和读写文件。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>k 点</th><th>pydftb <code>eigenstates</code></th><th>DFTB+ 能带运行</th></tr></thead>
+        <tbody>
+          <tr><td>Cu fcc（9 个轨道）</td><td>42 路径点</td><td>12 ms</td><td>60 ms</td></tr>
+          <tr><td>CuO 链，自旋（26 个轨道）</td><td>32 路径点</td><td>31 ms</td><td>62 ms</td></tr>
+          <tr><td>水盒子（48 个轨道）</td><td>13 路径点</td><td>46 ms</td><td>93 ms</td></tr>
+          <tr><td>Cu fcc，带投影</td><td>12×12×12（864 个约化 k 点）</td><td>0.07 s；d-PDOS 曲线 61 ms</td><td>—</td></tr>
+          <tr><td>Cu fcc，带投影</td><td>24×24×24（6912 个约化 k 点）</td><td>0.73 s；d-PDOS 曲线 0.48 s</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="usage">
+      <h2>六、用法</h2>
+<pre><code>from ase.build import bulk
+from pydftb.ase_calc import PyDFTB
+
+cu = bulk("Cu", "fcc", a=3.61)
+cu.calc = PyDFTB("path/to/skf", kpts=(6, 6, 6), temperature=1000.0)
+cu.get_potential_energy()                                  # SCC on the grid
+
+bs = cu.calc.band_structure(path="GXWLGK", npoints=100)    # ASE BandStructure, eV
+bs.plot(emin=-12, emax=6)
+
+st = cu.calc.states(kpts=(24, 24, 24), projections=True)  # pydftb.bands.States
+e, dos = st.dos()                                          # eV, states/eV (dp_dos rules)
+e, d_pdos = st.pdos(atoms=[0], shell=2)                    # Cu d shell</code></pre>
+      <p>PySCF 风格：<code>mf = pydftb.SCC(system, params, kpts=(6, 6, 6)); mf.kernel(); st = mf.states(kpts=path_points)</code>。底层：<code>pydftb.bands.eigenstates(dftb, labels, pos, cell, pbc, result.q_in, kpts=...)</code>，单位为 Bohr 和 Hartree。</p>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">七、复现命令与实验记录</span></summary>
+      <div class="body">
+        <h3>生成和检查参考数据</h3>
+<pre><code># dp_dos 只在生成参考时运行；dptools 来自 DFTB+ 仓库的 tools/dptools/src（LGPL，不进本仓库）
+export DPTOOLS=/path/to/dftbplus/tools/dptools/src
+python -m pydftb.validation.refgen --regenerate cu_fcc_k6_bands li_bcc_bands \
+    cuo_chain_spin_bands cuo_chain_dftb3_bands water_box_bands cu4co_pdos
+python -m pydftb.validation.refgen --check          # 62 个算例，多出一列 |deps|</code></pre>
+        <h3>参考 JSON 中新增的字段（<code>reference</code> 下）</h3>
+        <ul>
+          <li><code>eigenvalues</code>、<code>filling</code>、<code>fermi_levels</code>：SCC 运行的 <code>results.tag</code>，形状 (自旋, k 点, 能级)；</li>
+          <li><code>band</code>：能带运行的同三项；输入中的 <code>band_kpoints</code> 是 <code>klines()</code> 生成的路径点，<code>klines</code> 是 DFTB+ 输入原样；</li>
+          <li><code>regions</code>：{文件名: 权重}，文件名规则同 DFTB+（<code>标签.out</code>、<code>标签.壳层.out</code>、<code>标签.壳层.m.out</code>）；</li>
+          <li><code>levels</code> 和 <code>dp_dos</code>：dp_dos 的输入（解析后的 <code>band.out</code> 或区域文件）、参数、网格起点、点数和各列数值；</li>
+          <li>文档顶层的 <code>band_hsd</code> 是能带运行的 DFTB+ 输入。</li>
+        </ul>
+        <h3>测试清单</h3>
+        <ul>
+          <li><code>test_bands.py</code>：Klines 规则（含开头跳转和非法输入）；路径点不约化；SCC 网格上冻结电荷的本征值、占据数与 SCC 相同（无自旋、自旋、DFTB3、壳层分辨）；投影求和为 1 并还原 Mulliken 布居；分批大小不影响结果；布居长度检查；区域选择与 DFTB+ 文件名对应；DOS 积分等于态数（Gaussian、Fermi，以及占据数加权等于电子数）；<code>broaden</code> 与按 dp_dos 规则写的逐态循环一致；ASE 的 <code>band_structure</code> 与画图；<code>kpts</code> 为路径时 ASE 默认的 <code>band_structure()</code>。</li>
+          <li><code>test_smearing.py</code>：13 个等权重 k 点的绝缘体，费米能级在能隙中点。</li>
+          <li><code>test_reference.py</code>：自动包含 6 个新参考。</li>
+        </ul>
+        <h3>实验脚本（scratchpad，未进仓库）</h3>
+        <ul>
+          <li><code>probe1.py</code>、<code>probe2.py</code>：两步运行、区域文件格式、<code>ConvergentSCCOnly</code>（3.4）。</li>
+          <li><code>probe3.py</code>、<code>probe4.py</code>、<code>kb_test.py</code>、<code>kb_binary.py</code>、<code>kb_table.py</code>：Ewald 精度、<code>charges.dat</code> 对照、玻尔兹曼常数（3.1）。</li>
+          <li><code>scc_tol_attrib.py</code>、<code>ham_attrib.py</code>、<code>pot_attrib.py</code>：本征值残差的逐步归因（3.2）。</li>
+          <li><code>dos_check.py</code>、<code>dos_e2e.py</code>：与 dp_dos 的同输入和端到端对照；<code>timing.py</code>：第五节的计时。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <p>M2f：结构优化与 MD 的验证（含 <code>reuse_charges</code> 和“力用输入电荷还是输出电荷”的结论）；M2g：f 轨道。</p>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M2e-bands.html">← M2e 能带设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M2e</span>
+  </footer>
+</div>
+</body>
+</html>

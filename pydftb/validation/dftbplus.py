@@ -17,7 +17,16 @@ Notes on matching DFTB+ exactly:
   ``results.tag`` (full precision).
 * DFTB+'s default ``EwaldTolerance`` is 1e-9 (pydftb uses 1e-12): in a 24-atom
   periodic water box this alone gives 1.3e-7 Ha; with ``EwaldTolerance = 1e-12``
-  the two codes agree to 1.6e-9 Ha.  References keep DFTB+'s default.
+  the two codes agree to 6e-11 Ha (1.6e-9 before M2e, when pydftb still summed the
+  short-range gamma further than DFTB+'s 1e-10 cut-off).  References keep DFTB+'s
+  default, except the band-structure cases (M2e), whose eigenvalues are compared to
+  1e-8 Ha.
+* Band structures take two runs in one directory (:func:`run_bands`): the SCC run
+  writes ``charges.bin`` (the last input charges); the band run reads them back
+  (``ReadInitialCharges``) and does one iteration on ``Klines`` points.  For cells
+  with more than one atom it needs ``ConvergentSCCOnly = No``, or DFTB+ stops with
+  "SCC is NOT converged" (one atom per cell always "converges": its population is the
+  electron count).
 """
 from __future__ import annotations
 
@@ -25,12 +34,16 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
 import numpy as np
 
 DFTBPLUS = os.environ.get("DFTBPLUS", shutil.which("dftb+") or "/opt/mm/dftb/bin/dftb+")
+# dptools sources (DFTB+ tools/dptools/src), for dp_dos when freezing DOS curves; dptools is
+# LGPL and not part of pydftb, it is only run while regenerating references
+DPTOOLS = os.environ.get("DPTOOLS")
 PARSER_VERSION = 14
 
 
@@ -194,12 +207,53 @@ def dispersion_block(spec, labels) -> str:
     raise TypeError(f"no DFTB+ input for {type(model).__name__}")
 
 
+def klines_block(lines) -> str:
+    """HSD ``KPointsAndWeights = Klines`` for ``[(n, (k1, k2, k3)), ...]`` (see pydftb.bands.klines)."""
+    rows = "\n".join(f"    {int(n)} {_f(k[0])} {_f(k[1])} {_f(k[2])}" for n, k in lines)
+    return f"  KPointsAndWeights = Klines {{\n{rows}\n  }}\n"
+
+
+def regions_block(regions) -> str:
+    """HSD ``ProjectStates`` for ``[{"label", "atoms" (0-based), "shell_resolved",
+    "orbital_resolved"}, ...]``; DFTB+ needs every keyword on its own line."""
+    if not regions:
+        return ""
+    out = ["  ProjectStates {"]
+    for r in regions:
+        out += ["    Region {", f"      Atoms = {' '.join(str(a + 1) for a in r['atoms'])}"]
+        if r.get("shell_resolved"):
+            out.append("      ShellResolved = Yes")
+        if r.get("orbital_resolved"):
+            out.append("      OrbitalResolved = Yes")
+        out += [f'      Label = "{r["label"]}"', "    }"]
+    out.append("  }")
+    return "\n".join(out) + "\n"
+
+
+def region_files(regions, shells) -> list:
+    """(file name, region index, shell or None, m or None) of every file DFTB+ writes;
+    ``shells[i]`` = angular momenta of the (single) species of region i (resolved regions)."""
+    out = []
+    for i, r in enumerate(regions or []):
+        if r.get("orbital_resolved"):
+            for ish, l in enumerate(shells[i]):
+                out += [(f"{r['label']}.{ish + 1}.{m}.out", i, ish, m) for m in range(-l, l + 1)]
+        if r.get("shell_resolved"):
+            out += [(f"{r['label']}.{ish + 1}.out", i, ish, None) for ish in range(len(shells[i]))]
+        if not (r.get("orbital_resolved") or r.get("shell_resolved")):
+            out.append((f"{r['label']}.out", i, None, None))
+    return out
+
+
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
-             richardson=False, charge=0.0, extra_ham="", timing=False) -> str:
+             richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
+             read_charges=False, convergent_only=True, extra_analysis="") -> str:
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
     kblock = ""
-    if periodic:
+    if periodic and klines is not None:
+        kblock = klines_block(klines)
+    elif periodic:
         if kpts is None:
             kpts = (np.zeros((1, 3)), np.ones(1))
         k, w = kpts
@@ -211,6 +265,10 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
     if scc:   # DFTB+ rejects SCC-only keywords in non-SCC runs
         scc_block = (f"  SCCTolerance = {_f(scc_tol)}\n  MaxSCCIterations = {max_scc}\n"
                      f"  ShellResolvedSCC = {'Yes' if shell_resolved else 'No'}\n")
+        if read_charges:
+            scc_block += "  ReadInitialCharges = Yes\n"
+        if not convergent_only:
+            scc_block += "  ConvergentSCCOnly = No\n"
     return f"""Geometry = GenFormat {{
   <<< "geo.gen"
 }}
@@ -229,7 +287,7 @@ Hamiltonian = DFTB {{
 {kblock}{poly}{diff}{extra_ham}
 }}
 Analysis {{
-  PrintForces = Yes
+{extra_analysis}  PrintForces = Yes
   MullikenAnalysis = Yes
 }}
 Options {{
@@ -265,11 +323,30 @@ def parse_results_tag(path) -> dict:
     return out
 
 
+def parse_levels(path):
+    """``band.out`` or a ``ProjectStates`` region file -> (k weights (n_spin, n_k), values
+    (n_spin, n_k, n_state, 2)): energy (eV) and occupation or region weight, as printed."""
+    blocks = []
+    with open(path) as fh:
+        text = fh.read()
+    for m in re.finditer(r"KPT\s+(\d+)\s+SPIN\s+(\d+)\s+KWEIGHT\s+(\S+)\s*\n(.*?)(?:\n\s*\n|\Z)",
+                         text, re.S):
+        rows = np.array([[float(x) for x in ln.split()] for ln in m.group(4).strip().splitlines()])
+        blocks.append((int(m.group(2)), float(m.group(3)), rows[:, -2:]))
+    nspin = len({b[0] for b in blocks})
+    nk = len(blocks) // nspin
+    kw = np.array([b[1] for b in blocks]).reshape(nspin, nk)
+    vals = np.array([b[2] for b in blocks]).reshape(nspin, nk, -1, 2)
+    return kw, vals
+
+
 def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=True,
         filling=("fermi", 0.0), shell_resolved=False, scc_tol=1e-10, max_scc=500,
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
-        timing=False, workdir=None, keep=False) -> dict:
-    """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, metadata."""
+        timing=False, workdir=None, keep=False, klines=None, read_charges=False,
+        convergent_only=True, extra_analysis="") -> dict:
+    """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
+    (n_spin, n_k, n_level)), metadata."""
     if not available():
         raise FileNotFoundError("dftb+ binary not found; set $DFTBPLUS")
     own_dir = workdir is None
@@ -278,7 +355,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         write_gen(os.path.join(workdir, "geo.gen"), labels, np.asarray(pos_ang),
                   None if cell_ang is None else np.asarray(cell_ang))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
-                       scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing)
+                       scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
+                       klines, read_charges, convergent_only, extra_analysis)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
@@ -300,6 +378,9 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         if "ts" in res:
             res["ts"] = -res["ts"]          # detailed.out prints -TS
         res["fermi"] = float(np.atleast_1d(tag["fermi_level"])[0])
+        res["fermi_levels"] = np.atleast_1d(tag["fermi_level"]).astype(float)
+        res["eigenvalues"] = tag.get("eigenvalues")
+        res["filling"] = tag.get("filling")
         res["forces"] = tag["forces"]
         if "stress" in tag:
             res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
@@ -314,3 +395,42 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
     finally:
         if own_dir and not keep:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def dp_dos(args, infile, workdir) -> np.ndarray:
+    """Run dptools' dp_dos on a band.out-like file; returns its columns (x, y...)."""
+    if not DPTOOLS:
+        raise FileNotFoundError("dp_dos needs $DPTOOLS = the dptools source directory "
+                                "(tools/dptools/src in the DFTB+ repository)")
+    out = os.path.join(workdir, "dp_dos.dat")
+    code = (f"import sys; sys.path.insert(0, {DPTOOLS!r}); "
+            "from dptools.scripts.dp_dos import main; main()")
+    subprocess.run([sys.executable, "-I", "-c", code, *args, infile, out], check=True,
+                   capture_output=True, text=True)
+    return np.loadtxt(out, ndmin=2)
+
+
+def run_bands(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, klines=None,
+              regions=None, region_shells=None, dos=None, threads=1, **kw) -> dict:
+    """The SCC run (with ``ProjectStates`` regions) and, for ``klines``, DFTB+'s band run
+    on the SCC charges, in one directory.  Returns the SCC results with ``regions``
+    ({file: (k weights, values)}), ``band_out`` (parsed ``band.out``) and ``dp_dos``
+    (``dos`` = [(file, arguments)] -> [(file, arguments, columns)]), plus ``band``: the
+    band run's ``eigenvalues``, ``filling`` and ``fermi_levels``."""
+    workdir = tempfile.mkdtemp(prefix="dftbp_bands_")
+    try:
+        res = run(labels, pos_ang, cell_ang, skdir, max_l, kpts, threads=threads, workdir=workdir,
+                  extra_analysis=regions_block(regions), **kw)
+        res["regions"] = {name: parse_levels(os.path.join(workdir, name))
+                          for name, *_ in region_files(regions, region_shells)}
+        res["band_out"] = parse_levels(os.path.join(workdir, "band.out"))
+        res["dp_dos"] = [(name, list(args), dp_dos(args, os.path.join(workdir, name), workdir))
+                         for name, args in (dos or [])]
+        if klines is not None:
+            band = run(labels, pos_ang, cell_ang, skdir, max_l, kpts, threads=threads,
+                       workdir=workdir, klines=klines, read_charges=True,
+                       convergent_only=False, **{**kw, "max_scc": 1})
+            res["band"] = {k: band[k] for k in ("eigenvalues", "filling", "fermi_levels", "hsd")}
+        return res
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

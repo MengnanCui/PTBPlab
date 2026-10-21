@@ -61,6 +61,22 @@ SK_HYBRID = {
                                    7.08, 3.15]},
 }
 SK_ATOM = {"H": [2.67, 6.62, 0.80], "O": [3.62, 7.14, 3.15]}
+# band structures and PDOS (milestone M2e): eigenvalues are compared to 1e-8 Ha, so DFTB+ runs
+# with a tight Ewald sum (its default 1e-9 alone moves water-box eigenvalues by ~1e-7 Ha);
+# region weights are printed with 6 decimals; dp_dos curves are compared relative to their maximum
+TOL_BANDS = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "eigenvalues": 1e-8,
+             "occupations": 1e-8, "fermi": 1e-8, "regions": 1e-6, "dp_dos": 1e-9}
+# special points (fractional, ASE's convention for these cells)
+FCC = {"G": (0, 0, 0), "X": (0.5, 0, 0.5), "W": (0.5, 0.25, 0.75), "L": (0.5, 0.5, 0.5),
+       "K": (0.375, 0.375, 0.75)}
+BCC = {"G": (0, 0, 0), "H": (0.5, -0.5, 0.5), "N": (0, 0, 0.5), "P": (0.25, 0.25, 0.25)}
+ORC = {"G": (0, 0, 0), "X": (0.5, 0, 0), "S": (0.5, 0.5, 0), "Z": (0, 0, 0.5), "U": (0.5, 0, 0.5)}
+
+
+def path(points, names, steps):
+    """Klines lines [(n, k), ...]: the first special point once, then ``steps[i]`` points
+    up to ``names[i + 1]`` (n = 0: jump there without a point)."""
+    return [(1, points[names[0]])] + [(n, points[name]) for n, name in zip(steps, names[1:])]
 
 
 def sk_per_atom(labels, skip=()):
@@ -86,6 +102,10 @@ class Case:
     dftb3: dict | None = None             # third_order / hubbard_derivs / h_damping options
     spin: dict | None = None              # unpaired_electrons / relax_total_spin / spin_constants
     dispersion: dict | Callable[[list], dict] | None = None   # spec, or labels -> spec
+    klines: list | None = None            # band run on DFTB+ Klines [(n, (k1, k2, k3)), ...]
+    regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
+    dp_dos: list | None = None            # dp_dos curves to freeze: [(file, [arguments])]
+    ewald_tolerance: float | None = None  # DFTB+ EwaldTolerance (default 1e-9)
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
@@ -299,5 +319,34 @@ CASES = [
          note="DFTB3/3ob + D3(BJ); force tolerance see TOL_DFTBP_FD"),
     Case("o2_triplet_d3bj", _o2, spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
          dispersion=D3BJ_3OB),
+    # --- band structures and projected DOS (milestone M2e) ---
+    Case("cu_fcc_k6_bands", _cu_fcc, kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         klines=path(FCC, "GXWLGK", [10, 5, 7, 9, 10]),
+         regions=[{"label": "cu", "atoms": [0], "shell_resolved": True}],
+         ewald_tolerance=1e-12, tol=TOL_BANDS,
+         note="SCC on the grid with s/p/d projections, then DFTB+'s band run on G-X-W-L-G-K"),
+    Case("li_bcc_bands", _li_bcc, skf_set="orbit", kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         klines=path(BCC, "GHNGPH", [10, 7, 7, 9, 5]), ewald_tolerance=1e-12, tol=TOL_BANDS),
+    Case("cuo_chain_spin_bands", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
+         klines=path(ORC, "GXSGZU", [10, 5, 10, 0, 6]),
+         regions=[{"label": "cu", "atoms": [0, 2]},
+                  {"label": "o", "atoms": [1, 3], "shell_resolved": True}],
+         dp_dos=[("band.out", ["-g", "0.05"])], ewald_tolerance=1e-12, tol=TOL_BANDS,
+         note="two spin channels and Fermi levels; the path jumps (n = 0) from G to Z"),
+    Case("cuo_chain_dftb3_bands", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         dftb3={"third_order": "full", "hubbard_derivs": {"Cu": -0.05, "O": -0.1575}},
+         klines=path(ORC, "GX", [12]), ewald_tolerance=1e-12, tol=TOL_BANDS),
+    Case("water_box_bands", _water_box, klines=path({"G": (0, 0, 0), "X": (0.5, 0, 0),
+                                                     "M": (0.5, 0.5, 0)}, "GXM", [6, 6]),
+         ewald_tolerance=1e-12, tol=TOL_BANDS, note="SCC at Gamma, band run on G-X-M"),
+    Case("cu4co_pdos", _cu4co, filling=("fermi", 300.0),
+         regions=[{"label": "cu", "atoms": [0, 1, 2, 3], "shell_resolved": True},
+                  {"label": "c", "atoms": [4], "orbital_resolved": True},
+                  {"label": "o", "atoms": [5]}],
+         dp_dos=[("band.out", ["-g", "0.05"]), ("cu.3.out", ["-w", "-g", "0.05"]),
+                 ("c.2.0.out", ["-w", "-f", "fermi", "-b", "0.2", "-g", "0.05"]),
+                 ("o.out", ["-w", "-f", "mp", "-o", "2", "-g", "0.05"])],
+         tol=TOL_BANDS, note="molecular PDOS from the SCC run's projections; dp_dos curves"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

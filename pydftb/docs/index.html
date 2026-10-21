@@ -26,14 +26,14 @@
     <h2 id="key-title">关键信息</h2>
     <p class="lead">pydftb 是从零写成的 Python SCC-DFTB 程序，每一项功能都与 DFTB+ 逐项对照，参考结果冻结在仓库里，测试不需要 DFTB+。它已接入 PTBP，可以替代 DFTB+ 做参数优化。</p>
     <ul>
-      <li>已完成：原型、M0 底座、M1 接入 PTBP，以及 M2 的应力、DFTB3、共线自旋、色散。</li>
-      <li>进行中：M2 剩下的能带/DOS、结构优化与 MD 的验证、f 轨道（M2e–M2g）。</li>
+      <li>已完成：原型、M0 底座、M1 接入 PTBP，以及 M2 的应力、DFTB3、共线自旋、色散、能带与 DOS/PDOS。</li>
+      <li>进行中：M2 剩下的结构优化与 MD 的验证、f 轨道（M2f–M2g）。</li>
       <li>验收标准：与 DFTB+ 的能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³。实际差异通常小 3–5 个数量级，剩下的差异都已归因。</li>
-      <li>对照中发现并记录了 DFTB+ 自身的几处问题：U 接近时 γ 公式数值崩溃（M2b），以及原生 D4 的三处错误（M2d）。</li>
+      <li>对照中发现并记录了 DFTB+ 自身的几处问题：U 接近时 γ 公式数值崩溃（M2b）、原生 D4 的三处错误（M2d），以及 k 点权重有舍入时绝缘体的费米能级被放到导带底（M2e）。</li>
     </ul>
     <ul class="figures">
-      <li><span class="num">56</span><span class="lbl">DFTB+ 参考算例，全部通过</span></li>
-      <li><span class="num">147</span><span class="lbl">离线测试（conda 环境）</span></li>
+      <li><span class="num">62</span><span class="lbl">DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">167</span><span class="lbl">离线测试（conda 环境）</span></li>
       <li><span class="num">&lt; 1e-7</span><span class="lbl">PTBP 损失函数与 DFTB+ 的相对差</span></li>
       <li><span class="num">1.8×</span><span class="lbl">PTBP 的 DFTB 阶段提速</span></li>
     </ul>
@@ -65,8 +65,8 @@
             <tr><td>M2b</td><td>DFTB3、H–X 阻尼</td><td><span class="chip done">已完成</span></td><td>SCC 轮数一致；修正 U 接近时 γ 的数值崩溃</td><td><span class="links"><a href="design/M2b-dftb3.html">设计</a><a href="reports/M2b-dftb3.html">报告</a></span></td></tr>
             <tr><td>M2c</td><td>共线自旋极化</td><td><span class="chip done">已完成</span></td><td>7 个算例的 SCC 轮数全部一致</td><td><span class="links"><a href="design/M2c-spin.html">设计</a><a href="reports/M2c-spin.html">报告</a></span></td></tr>
             <tr><td>M2d</td><td>色散（UFF、SK、D3、SimpleD3、D4）；MIT 许可</td><td><span class="chip done">已完成</span></td><td>色散部分差 ≤ 1.2e-10 Ha；发现 DFTB+ D4 的三处问题</td><td><span class="links"><a href="design/M2d-dispersion.html">设计</a><a href="reports/M2d-dispersion.html">报告</a></span></td></tr>
-            <tr><td>M2e</td><td>能带与 DOS/PDOS</td><td><span class="chip wip">进行中</span></td><td>—</td><td>—</td></tr>
-            <tr><td>M2f</td><td>结构优化与 MD 的验证</td><td><span class="chip plan">计划</span></td><td>—</td><td>—</td></tr>
+            <tr><td>M2e</td><td>能带与 DOS/PDOS</td><td><span class="chip done">已完成</span></td><td>周期体系本征值差 ≤ 1.7e-11 Ha；统一玻尔兹曼常数和短程 γ 截断</td><td><span class="links"><a href="design/M2e-bands.html">设计</a><a href="reports/M2e-bands.html">报告</a></span></td></tr>
+            <tr><td>M2f</td><td>结构优化与 MD 的验证</td><td><span class="chip wip">进行中</span></td><td>—</td><td>—</td></tr>
             <tr><td>M2g</td><td>f 轨道（扩展 SKF 格式）</td><td><span class="chip plan">计划</span></td><td>—</td><td>—</td></tr>
             <tr><td>M3–M8</td><td>计算策略推荐、PyTorch/GPU、多套参数、DFTB+ 功能第二波、大体系、AI 层</td><td><span class="chip plan">计划</span></td><td>—</td><td><a href="ROADMAP.md">路线图</a></td></tr>
           </tbody>
@@ -79,7 +79,7 @@
       <h3>环境</h3>
       <ul>
         <li><strong>最小环境</strong>：numpy、scipy、ase（与 CI 相同）。全部离线测试都能跑；需要 D3/D4 库或 DFTB+ 的用例会跳过并写明原因。</li>
-        <li><strong>完整环境</strong>：再从 conda-forge 装 <code>dftbplus=25.1</code>（nompi）、<code>dftd3-python=1.0.0</code>、<code>dftd4-python=3.6.0</code>、<code>hotcent</code>。这两个库的版本与 DFTB+ 链接的库相同，参考结果才能逐位复现。开发机上它们在 <code>/opt/mm/dftb</code>，DFTB+ 路径可用环境变量 <code>DFTBPLUS</code> 指定。</li>
+        <li><strong>完整环境</strong>：再从 conda-forge 装 <code>dftbplus=25.1</code>（nompi）、<code>dftd3-python=1.0.0</code>、<code>dftd4-python=3.6.0</code>、<code>hotcent</code>。这两个库的版本与 DFTB+ 链接的库相同，参考结果才能逐位复现。开发机上它们在 <code>/opt/mm/dftb</code>，DFTB+ 路径可用环境变量 <code>DFTBPLUS</code> 指定。重新生成 M2e 中冻结的 DOS 曲线还需要 DFTB+ 仓库里的 dptools 源码（<code>tools/dptools/src</code>，环境变量 <code>DPTOOLS</code>）。</li>
       </ul>
       <h3>常用命令（在仓库根目录）</h3>
 <pre><code>PYTHONPATH=. pytest -q pydftb/tests -o addopts=""         # 离线测试，用冻结的 DFTB+ 参考
@@ -119,7 +119,6 @@ python -m pydftb.validation.refgen --live &lt;算例名&gt;          # 与新跑
         <li>PTBP 的 <code>--optimization_option bandstructure</code> 模式有多处错误，目前跑不通（与 pydftb 无关，另有任务）。</li>
         <li>在已发表的 Cu 参数下，PTBP 的损失值异常大（M1 报告 3.3 节），两个引擎一致，属于 PTBP 流程本身的问题，待查。</li>
         <li><code>tools/physrep.py</code> 可能改编自 J. Margraf 的 physrep，上游许可未知；仓库整体为 MIT，需确认这个文件可以按 MIT 发布。</li>
-        <li>pydftb 的玻尔兹曼常数与 DFTB+ 相差 1.2e-6（相对），将在 M2f 核对后统一。</li>
       </ul>
     </section>
   </main>

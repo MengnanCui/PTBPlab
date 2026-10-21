@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2e 能带设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M2e</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2e · 设计文档</p>
+    <h1>能带与态密度</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M2e-bands.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">在已经收敛的电荷上，求任意 k 点的本征态，给出能带（沿 k 路径）、态密度（DOS）和投影态密度（PDOS），与 DFTB+ 的两步算法和 dp_dos 脚本逐项一致。</p>
+    <ul>
+      <li>DFTB+ 分两次运行：先在 k 网格上做 SCC 并写出 <code>charges.bin</code>；再读回电荷，在 <code>Klines</code> 路径上只算一轮。pydftb 在同一个进程里做第二步：用 SCC 最后一轮的输入布居（正是 <code>charges.bin</code> 的内容）建一次势，然后分批对角化。</li>
+      <li>探测实验：多原子晶胞的第二次运行必须写 <code>ConvergentSCCOnly = No</code>，否则 DFTB+ 报“SCC 未收敛”退出；单原子晶胞不需要（原子布居恒等于电子数，SCC 误差恒为 0）。</li>
+      <li>投影权重沿用 DFTB+ <code>ProjectStates</code> 的定义：本征态 c 在轨道 μ 上的份额 Re[c<sub>μ</sub>*(S c)<sub>μ</sub>]，对全部轨道求和为 1。</li>
+      <li>DFTB+ 本身不做展宽，DOS 曲线由 dptools 的 <code>dp_dos</code> 生成。pydftb 的 <code>dos()</code> 用与它相同的展宽函数、截断和能量网格。</li>
+      <li>验收：本征值差 ≤ 1e-8 Ha；投影权重差 ≤ 1e-6（DFTB+ 区域文件只有 6 位小数）；同一输入下 DOS 曲线与 dp_dos 相差 ≤ 1e-10。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">6</span><span class="lbl">计划的 DFTB+ 对照算例</span></li>
+      <li><span class="num">1e-8 Ha</span><span class="lbl">本征值验收标准</span></li>
+      <li><span class="num">0</span><span class="lbl">新增依赖（ASE 已是依赖）</span></li>
+    </ul>
+  </section>
+
+  <div class="callout note"><strong>实施中的变化</strong>（详见<a href="../reports/M2e-bands.html#deviations">完成报告第四节</a>）：玻尔兹曼常数的统一从 M2f 提前到本阶段；排查本征值残差时把短程 γ 的截断也改成了 DFTB+ 的规则；绝缘体的路径费米能级改为与能隙中点比较（DFTB+ 的 middleGap 有舍入问题）。</div>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与用途</a></li>
+      <li><a href="#dftbplus">二、DFTB+ 怎么算能带和 DOS</a></li>
+      <li><a href="#design">三、pydftb 的做法</a></li>
+      <li><a href="#api">四、接口</a></li>
+      <li><a href="#details">五、公式、文件格式与 DFTB+ 源码位置</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#probe">六、探测实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">七、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">八、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与用途</h2>
+      <p>SCC 计算给出的是基态：总能量、力、电荷，以及计算所用 k 网格上的本征值。分析电子结构还需要另外两样东西：</p>
+      <ul>
+        <li><strong>能带</strong>：沿布里渊区中一条折线（k 路径，例如 fcc 的 Γ–X–W–L–Γ–K）画出本征值，看带隙、色散和简并。路径上的点不适合做 SCC（它们不是对布里渊区的均匀取样），所以电荷要沿用 SCC 的结果，只做一次对角化。</li>
+        <li><strong>态密度（DOS）和投影态密度（PDOS）</strong>：把本征值展宽成连续曲线，看各能量处有多少电子态；PDOS 再把每个态按原子、壳层或轨道拆开，例如 Cu 的 d 带在哪里、O 的 p 态在哪里。</li>
+      </ul>
+      <p>用途：分析计算结果；PTBP 的能带拟合模式（<code>--optimization_option bandstructure</code>）需要在固定电荷下求路径上的本征值。PTBP 这一模式本身的错误另有任务处理，本阶段只提供 pydftb 一侧的能力。</p>
+    </section>
+
+    <section id="dftbplus">
+      <h2>二、DFTB+ 怎么算能带和 DOS</h2>
+      <h3>两次运行</h3>
+      <ol>
+        <li>SCC 运行：在 k 网格上（如 <code>SupercellFolding</code>）做 SCC。结束时 DFTB+ 写出 <code>charges.bin</code>，内容是最后一轮的<strong>输入</strong>布居（收敛后不再混合，见 <code>main.F90</code> 的 <code>getNextInputCharges</code>）。</li>
+        <li>能带运行：同一目录，<code>ReadInitialCharges = Yes</code> 读回电荷，k 点换成 <code>Klines</code>。DFTB+ 发现是 Klines 时把 <code>MaxSCCIterations</code> 的默认值设为 1，于是只建一次哈密顿量、对角化一次。本征值写进 <code>band.out</code>（4 位小数的 eV）和 <code>results.tag</code>（全精度 Hartree）。</li>
+      </ol>
+      <div class="callout flag"><strong>容易踩的坑：</strong>只算一轮时，路径上的输出电荷与读入电荷不同，DFTB+ 判定“SCC 未收敛”并报错退出，所以多原子晶胞要加 <code>ConvergentSCCOnly = No</code>。单原子晶胞（如 Cu fcc）是例外：唯一原子的布居恒等于电子数，SCC 误差恒为 0，不加也能跑。</div>
+      <h3>Klines 的规则</h3>
+      <p>每行“N k”表示从上一个点走到 k，取 N 个等距点：<strong>不含起点、含终点</strong>。第一行之前隐含一个 Γ 点 (0, 0, 0)。N = 0 表示跳到 k 而不取点，下一段从 k 出发（同样不含 k）。所以常见写法是第一行 <code>1 0.0 0.0 0.0</code>（只取 Γ 本身），之后每段写段内点数。k 点权重全部为 1（再归一化）。</p>
+      <h3>投影态（PDOS 的原始数据）</h3>
+      <p><code>Analysis { ProjectStates { Region { ... } } }</code> 为每个区域写一个文件。区域由一组原子定义，可以按壳层拆（<code>ShellResolved</code>，每个壳层一个文件 <code>标签.壳层号.out</code>）或按轨道拆（<code>OrbitalResolved</code>，<code>标签.壳层号.m.out</code>）。文件中每个 k 点、每个自旋一块，每个本征态一行：本征值（eV，6 位小数）和该态在区域轨道上的权重（6 位小数）。权重不乘占据数，也不乘 k 点权重。</p>
+      <h3>展宽成曲线</h3>
+      <p>DFTB+ 不输出 DOS 曲线。官方工具 <code>dp_dos</code>（dptools）读 <code>band.out</code> 或区域文件，用 Gaussian（默认，σ = 0.1 eV，截断 3.5σ）、Fermi 函数导数或 Methfessel-Paxton 函数展宽，能量网格间隔 0.01 eV。不加 <code>-w</code> 时每个态权重为 1（总 DOS）；加 <code>-w</code> 时用第二列（<code>band.out</code> 中是占据数，区域文件中是投影权重）。</p>
+    </section>
+
+    <section id="design">
+      <h2>三、pydftb 的做法</h2>
+      <h3>冻结电荷求本征态</h3>
+      <p>新模块 <code>pydftb/bands.py</code> 的核心函数 <code>eigenstates</code> 做 DFTB+ 第二次运行的事：</p>
+      <ol>
+        <li>用计算器的第一段（<code>_setup</code>）建实空间的 H0、S 对块和库仑核，但不在 SCC 网格上折叠矩阵；</li>
+        <li>用给定的布居一次性算出电荷势（含 DFTB3 三阶项）和自旋势（<code>_potentials</code>，与 SCC 循环用的是同一个函数）；</li>
+        <li>把 k 点分批：每批折叠出 H0(k)、S(k)，加上势，求广义本征值问题。分批是为了控制内存（每批的复数矩阵约占 200 MB 以内）。</li>
+      </ol>
+      <p>布居用 SCC 最后一轮的输入布居 q_in，这正是 DFTB+ 写进 <code>charges.bin</code> 的量，因此 SCC 网格上的本征值与 SCC 本身的结果完全相同。<code>DFTBResult</code> 新增字段 <code>q_in</code> 保存它。</p>
+      <h3>占据数</h3>
+      <p>与 DFTB+ 第二次运行一样，按同样的展宽方式和电子数，在新的 k 点集合上重新求费米能级和占据数（<code>States.occupations</code>、<code>States.fermi</code>）。画能带时的参考能量则用 SCC 运行的费米能级（<code>States.scc_fermi</code>），路径上的费米能级没有物理意义。</p>
+      <h3>投影权重与 PDOS</h3>
+      <p>需要时（<code>projections=True</code>）对每个态保存 w<sub>μn</sub> = Re[c<sub>μn</sub>*(S c)<sub>μn</sub>]。区域权重是对区域内轨道求和。选择方式与 DFTB+ 的 Region 一一对应：一组原子；可再限定一个壳层（ShellResolved 的一个文件）；可再限定磁量子数 m（OrbitalResolved 的一个文件）。</p>
+      <h3>DOS 曲线</h3>
+      <p><code>broaden()</code> 照搬 <code>dp_dos</code>：同样的三种展宽函数和归一化、同样的截断宽度、同样的网格起点（向下取整到网格间隔的整数倍）。唯一的差别是累加的顺序（pydftb 向量化），只影响最后一两位。能量用 DFTB+ 的 Hartree→eV 常数，与 DFTB+ 写出的文件一致。</p>
+      <h3>k 点从哪里来</h3>
+      <ul>
+        <li><code>klines(spec)</code>：按 DFTB+ Klines 的规则生成路径点，便于和 DFTB+ 输入一一对应；</li>
+        <li>ASE 的 <code>BandPath</code>（<code>atoms.cell.bandpath("GXWLGK", npoints=100)</code>）：自动给出各晶格的高对称点；</li>
+        <li>Monkhorst-Pack 网格或显式列表：用于更密网格上的 DOS（网格做时间反演约化，与 SCC 相同）。</li>
+      </ul>
+      <p>路径点<strong>不做</strong>时间反演约化（约化会把路径上的点合并、打乱顺序），权重相等。</p>
+    </section>
+
+    <section id="api">
+      <h2>四、接口</h2>
+<pre><code># 底层：任意 DFTB 计算器 + 收敛的布居
+from pydftb.bands import eigenstates, klines
+res = calc.calculate(labels, pos, cell, pbc)
+path, w = klines([(1, (0, 0, 0)), (20, (0.5, 0, 0.5)), (10, (0.5, 0.25, 0.75))])
+st = eigenstates(calc, labels, pos, cell, pbc, res.q_in, kpts=path, scc_fermi=res.fermi)
+st.eigenvalues           # (n_spin, n_k, n_state)，Hartree
+
+# PySCF 风格
+mf = pydftb.SCC(system, params, kpts=(6, 6, 6)); mf.kernel()
+st = mf.states(kpts=(12, 12, 12), projections=True)
+e, dos = st.dos(sigma=0.1)                 # eV，与 dp_dos 相同
+e, pd = st.pdos(atoms=[0], shell=2)        # 第 0 个原子的 d 壳层
+
+# ASE
+atoms.calc = PyDFTB(skdir, kpts=(6, 6, 6)); atoms.get_potential_energy()
+bs = atoms.calc.band_structure(path="GXWLGK", npoints=100)   # ase BandStructure
+bs.plot()</code></pre>
+      <ul>
+        <li><code>PyDFTB.band_structure()</code> 不带参数时保持 ASE 原有行为（用计算器自己的 k 点）；带 <code>path</code> 时在 SCC 电荷上沿路径计算。</li>
+        <li><code>PyDFTB(kpts=BandPath 或 {"path": ..., "npoints": ...})</code> 直接用路径点（不约化、等权重），与 ASE + DFTB+ 的用法相同，适合非 SCC 或固定电荷的计算。</li>
+        <li><code>States</code> 的能量单位：<code>eigenvalues</code> 为 Hartree；<code>dos()</code>、<code>pdos()</code> 和 <code>band_structure()</code> 返回 eV。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="details">
+      <summary><span class="tag">开发细节</span><span class="title">五、公式、文件格式与 DFTB+ 源码位置</span></summary>
+      <div class="body">
+        <h3>DFTB+ 源码位置（25.1）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>内容</th><th>文件与例程</th></tr></thead>
+          <tbody>
+            <tr><td>Klines 解析（隐含 Γ 起点、N = 0 跳转）</td><td><code>dftbplus/parser.F90</code> <code>getEuclideanKSampling</code>，<code>case ("klines")</code></td></tr>
+            <tr><td>Klines 时 <code>MaxSCCIterations</code> 默认 1</td><td><code>parser.F90</code> <code>maxSelfConsIterations</code>（<code>poorKSampling</code>）</td></tr>
+            <tr><td>收敛判据、收敛后不再混合</td><td><code>dftbplus/main.F90</code> <code>getNextInputCharges</code></td></tr>
+            <tr><td>写 <code>charges.bin</code>（<code>qInput</code>）</td><td><code>main.F90</code> <code>processScc</code>、运行结束处的 <code>writeCharges</code></td></tr>
+            <tr><td>“SCC 未收敛”报错</td><td><code>main.F90</code>，<code>isSccConvRequired</code></td></tr>
+            <tr><td>区域定义与文件名</td><td><code>dftbplus/initprogram.F90</code>（<code>tShellResInRegion</code>、<code>tOrbResInRegion</code>）</td></tr>
+            <tr><td>投影权重 Re[c*·(S c)]</td><td><code>dftbplus/mainio.F90</code> <code>writeProjCplxEigvecsSerial</code>（<code>hemv</code> 后乘 <code>conjg(c)</code>）</td></tr>
+            <tr><td>区域文件格式</td><td><code>mainio.F90</code> <code>writeProjEigvecHeader</code>、<code>writeProjEigvecData</code>（<code>f13.6, f10.6</code>）</td></tr>
+            <tr><td><code>band.out</code> 格式</td><td><code>mainio.F90</code> <code>writeBandOut</code>（<code>I6, F12.4, F9.5</code>）</td></tr>
+            <tr><td>DOS 展宽</td><td>dptools <code>scripts/dp_dos.py</code>（不在 DFTB+ 二进制里）</td></tr>
+          </tbody>
+        </table></div>
+        <h3>dp_dos 的规则（逐条复现）</h3>
+        <ul>
+          <li>Gaussian：前因子 1/(σ√π)，函数 exp(−x²/σ²)，默认 σ = 0.1 eV，截断 3.5σ。</li>
+          <li>Fermi：前因子 0.5/σ，函数 1/(1 + cosh(x/σ))（即费米函数的导数，kT = σ），截断 7σ。</li>
+          <li>Methfessel-Paxton（阶数 N）：前因子 1/σ，函数 Σ<sub>i=0..N</sub> A<sub>i</sub> H<sub>2i</sub>(x/σ) exp(−x²/σ²)，A<sub>i</sub> = (−1)<sup>i</sup>/(i! 4<sup>i</sup> √π)，截断 3.5σ。</li>
+          <li>网格：min = 最低本征值 − 截断宽度，max = 最高本征值 + 截断宽度；起点 floor(min/Δ)·Δ，终点 ceil(max/Δ)·Δ，<code>np.arange(起点, 终点 + Δ, Δ)</code>（浮点步长可能多出一个点，照搬）。</li>
+          <li>每个态只加到 [floor((ε − 截断 − 起点)/Δ), ceil((ε + 截断 − 起点)/Δ)] 这些网格点上，系数为 前因子 × k 点权重 × 权重。</li>
+          <li>自旋极化时 dp_dos 输出“总和、↑、↓”三列；pydftb 返回每个自旋一行，由调用者求和。</li>
+          <li>dp_dos 的一个边界问题：若浮点舍入使最低态的起始下标为 −1，Python 的切片规则会让这个态整个被丢掉。pydftb 把下标截到 0，不复现这个问题（实际几乎碰不到）。</li>
+        </ul>
+        <h3>投影权重在简并时是否唯一</h3>
+        <p>简并能级的本征向量可以在简并子空间内任意旋转，单个态的投影权重因此可能不唯一。若区域在对称操作下不变（例如单原子晶胞中一个原子的某个壳层），交叉项为零，每个态的权重与旋转无关；一般情况下只有简并组的权重之和不变。对照时把本征值相差小于 1e-7 Ha 的态归为一组，比较每组的权重之和。</p>
+        <h3>需要改动的现有代码</h3>
+        <ul>
+          <li><code>calculator.py</code>：<code>_setup</code> 加参数，可以跳过 SCC 网格上的矩阵折叠和色散；<code>_Setup</code> 记下 on-site 能量；<code>DFTBResult</code> 加 <code>q_in</code>。</li>
+          <li><code>api.py</code>：<code>SCC.states()</code>。</li>
+          <li><code>ase_calc.py</code>：<code>states()</code>、<code>band_structure()</code>，<code>kpts</code> 接受 BandPath 和路径字典；建计算器的代码抽成一个方法，供 <code>calculate</code> 和 <code>states</code> 共用。</li>
+          <li><code>validation/dftbplus.py</code>：生成 Klines、<code>ReadInitialCharges</code>、<code>ConvergentSCCOnly = No</code>、<code>ProjectStates</code> 区域；两次运行共用一个工作目录；读取区域文件。</li>
+          <li><code>validation/cases.py</code>、<code>refgen.py</code>：算例新增 <code>klines</code> 和 <code>regions</code> 两个字段，参考 JSON 保存本征值、占据数、区域权重和 dp_dos 曲线。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="probe">
+      <summary><span class="tag">开发细节</span><span class="title">六、探测实验记录</span></summary>
+      <div class="body">
+        <p>脚本在 scratchpad（<code>m2e/probe1.py</code>，未进仓库），用本机 DFTB+ 25.1。</p>
+        <ul>
+          <li>Cu fcc（<code>cu_fcc_k6</code> 的设置）：SCC 运行加三个区域（Cu 按壳层、1 号原子按轨道、1 号原子整体），生成 <code>cu.1.out</code>…<code>cu.3.out</code>、<code>orb.1.0.out</code>…<code>orb.3.2.out</code>、<code>all.out</code>。区域文件头为 <code>KPT 2 SPIN 1 KWEIGHT   0.00925926</code>，数据行为两列。</li>
+          <li>Cu fcc 的能带运行（Klines，<code>MaxSCCIterations = 1</code>，<code>ReadInitialCharges = Yes</code>）：不写 <code>ConvergentSCCOnly</code> 也正常结束，SCC 误差打印为 0。<code>results.tag</code> 含 <code>eigenvalues</code>（形状 1×16×9，Hartree）和 <code>filling</code>；费米能级 −0.1439 Ha，与 SCC 的 −0.1228 Ha 不同（路径上重新填充）。</li>
+          <li>CuO 链（<code>cuo_chain_k422</code> 的设置）：同样的能带运行不写 <code>ConvergentSCCOnly = No</code> 时返回码 1（SCC 误差 0.066）；写上后正常结束。</li>
+          <li><code>band.out</code> 的本征值是 <code>F12.4</code>（1e-4 eV），只适合画图；对照一律读 <code>results.tag</code>。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">七、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 对照算例</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>SCC</th><th>能带路径</th><th>投影区域</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>cu_fcc_k6_bands</code></td><td>6×6×6，1000 K</td><td>Γ–X–W–L–Γ–K</td><td>Cu 按壳层；1 号原子按轨道</td><td>复数 H(k)、d 带、PDOS 文件名规则</td></tr>
+            <tr><td><code>li_bcc_bands</code></td><td>orbit 参数，6×6×6，1000 K</td><td>Γ–H–N–Γ–P–H</td><td>—</td><td>第二套参数、只有 s 轨道</td></tr>
+            <tr><td><code>cuo_chain_spin_bands</code></td><td>4×2×2，500 K，自旋</td><td>含 N = 0 跳转</td><td>Cu、O 各一个区域</td><td>↑↓ 两套能带、两个费米能级、Klines 跳转</td></tr>
+            <tr><td><code>cuo_chain_dftb3_bands</code></td><td>4×2×2，DFTB3</td><td>沿链方向</td><td>—</td><td>三阶项的势进入能带</td></tr>
+            <tr><td><code>water_box_bands</code></td><td>Γ 点</td><td>Γ–X–M</td><td>—</td><td>分子晶体（几乎无色散）</td></tr>
+            <tr><td><code>cu4co_pdos</code></td><td>分子，300 K</td><td>—</td><td>Cu 按壳层；C；O</td><td>分子的 PDOS（SCC 运行本身的投影）</td></tr>
+          </tbody>
+        </table></div>
+        <p>每个算例照常比较能量、力和电荷，另外比较：SCC 网格上的本征值和占据数；路径上的本征值、占据数和费米能级；区域权重（按简并组求和）；以及冻结在 JSON 里的 dp_dos 曲线。</p>
+        <h3>验收标准</h3>
+        <ul>
+          <li>本征值 ≤ 1e-8 Ha（预计 1e-11 量级：两边的 SCC 路径相同，电荷几乎逐位一致）；</li>
+          <li>占据数 ≤ 1e-8；路径上的费米能级 ≤ 1e-8 Ha；</li>
+          <li>区域权重 ≤ 1e-6（区域文件 6 位小数，舍入误差 5e-7）；</li>
+          <li>同一份输入（解析出的 <code>band.out</code> 和区域文件）下，<code>broaden()</code> 与 dp_dos 的输出 ≤ 1e-10；pydftb 用自己全精度本征值算出的曲线与 dp_dos 的差只来自 DFTB+ 文件的舍入。</li>
+        </ul>
+        <h3>单元测试（<code>tests/test_bands.py</code>，不需要 DFTB+）</h3>
+        <ul>
+          <li>Klines 规则：隐含 Γ 起点、不含起点含终点、N = 0 跳转，以及非法输入报错；</li>
+          <li>在 SCC 网格上冻结电荷求得的本征值与 SCC 结果相同（无自旋、自旋、DFTB3、分子）；</li>
+          <li>投影权重对全部轨道求和为 1；乘占据数和 k 点权重后还原 Mulliken 轨道布居；</li>
+          <li>DOS 对能量积分等于态数（Gaussian 与 Fermi 展宽），PDOS 对各区域求和等于总 DOS；</li>
+          <li>路径点不做时间反演约化、顺序不变；</li>
+          <li>ASE：<code>band_structure()</code> 返回的 <code>BandStructure</code> 能取出能量并画图；<code>kpts</code> 为 BandPath 时 ASE 默认的 <code>band_structure()</code> 也能用；</li>
+          <li>分批大小不影响结果。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>八、局限与不做的事</h2>
+      <ul>
+        <li>不做能带反折叠（超胞到原胞）、四面体积分 DOS、非共线自旋和自旋轨道耦合（后两者属于 M6）。</li>
+        <li>PTBP 能带拟合模式的修复不在本阶段（另有任务卡）。</li>
+        <li>大体系的 PDOS 需要保存 (轨道数)² 个投影值，<code>projections</code> 默认关闭，需要时再打开。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M2d-dispersion.html">← M2d 完成报告</a><a href="../index.html">文档索引</a></nav>
+    <span>M2e</span>
+  </footer>
+</div>
+</body>
+</html>

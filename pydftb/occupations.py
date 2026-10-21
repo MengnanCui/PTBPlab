@@ -9,6 +9,11 @@ Reproduces DFTB+ (``dftb/etemp.F90`` and ``main.F90:getFillingsAndBandEnergies``
 * the Fermi level is first tried at mid-gap (integer electron counts), then
   found by DFTB+'s bisection, which is deterministic even though N(mu) is not
   monotonic for Methfessel-Paxton;
+* one deliberate difference: the mid-gap search allows for rounding in the summed
+  k-point weights.  DFTB+'s ``middleGap`` adds the weights until they reach N; with
+  weights such as 1/13 the sum can land one rounding step below N, the gap is missed,
+  and the bisection puts the Fermi level of an insulator next to the conduction band
+  (the occupations are the same either way);
 * Gaussian = Methfessel-Paxton order 0.
 
 Entropy convention for Methfessel-Paxton order N >= 1: DFTB+ uses
@@ -28,6 +33,7 @@ from scipy.special import erfc, expit
 from .constants import ELEC_TOL_MAX, KB_HARTREE, MIN_TEMP
 
 ELEC_TOL = 1.0e-15
+CUM_WEIGHT_TOL = 1.0e-9               # rounding allowance of the summed k-point weights
 EPS2 = 2.0 * np.finfo(float).eps
 EPS_SINGLE = float(np.finfo(np.float32).eps)
 M_EXP_ARG = 36.043653389117154        # DFTB+ exp() trap: f = 0 beyond this
@@ -114,7 +120,8 @@ def _middle_gap(evals, kw, nfill) -> float:
     wts = np.repeat(kw, evals.shape[1])
     order = np.argsort(flat, kind="stable")
     cum = np.cumsum(wts[order])
-    i_last = int(np.searchsorted(cum, nfill, side="left"))   # first index with cum >= nfill
+    # first index with cum >= nfill, allowing for rounding in the sum (DFTB+ has no allowance)
+    i_last = int(np.searchsorted(cum, nfill - CUM_WEIGHT_TOL, side="left"))
     i_next = min(i_last + 1, len(flat) - 1)
     return 0.5 * (flat[order[i_last]] + flat[order[i_next]])
 

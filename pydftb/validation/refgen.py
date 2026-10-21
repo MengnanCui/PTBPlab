@@ -22,6 +22,7 @@ import time
 
 import numpy as np
 
+from ..bands import broaden, eigenstates, klines
 from ..calculator import DFTB
 from ..constants import BOHR
 from ..dispersion import library_versions
@@ -31,6 +32,7 @@ from . import dftbplus
 from .cases import CASES, CASES_BY_NAME, MAXL, REF_DIR, SKF_SETS, Case
 
 SCHEMA = 1
+STATE_KEYS = ("eigenvalues", "occupations", "fermi", "regions", "dp_dos")   # band/PDOS cases
 
 
 # ----------------------------------------------------------------------------
@@ -76,6 +78,9 @@ def _inputs(case: Case) -> dict:
         "kweights": None if k is None else k[1].tolist(),
         "max_l": {lab: MAXL[base.get(lab, lab).rstrip("0123456789")] for lab in dict.fromkeys(labels)},
         "dispersion": None if disp is None else json.loads(json.dumps(disp)),
+        "klines": None if case.klines is None else [[n, list(k)] for n, k in case.klines],
+        "band_kpoints": None if case.klines is None else klines(case.klines)[0].tolist(),
+        "regions": case.regions,
     }
 
 
@@ -104,8 +109,9 @@ def missing_requirement(doc: dict) -> str | None:
 
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
-               fd_delta: float | None = None):
-    """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set."""
+               fd_delta: float | None = None, engine: bool = False):
+    """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set.
+    ``engine``: also return the pydftb.DFTB object (for band structures)."""
     tmp = None
     if skdir is None and case.typed:
         tmp = tempfile.mkdtemp(prefix="pydftb_case_")
@@ -125,8 +131,9 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     dispersion=inp.get("dispersion"),
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
-        return calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
-                              np.ones(3, bool) if periodic else None)
+        res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
+                             np.ones(3, bool) if periodic else None)
+        return (res, calc) if engine else res
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -139,15 +146,128 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
         kpts = None
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
-        return dftbplus.run(inp["labels"], np.array(inp["positions_angstrom"]),
-                            np.array(inp["cell_angstrom"]) if periodic else None, skdir=skdir,
-                            max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
-                            shell_resolved=case.shell_resolved, repulsive=case.repulsive,
-                            extra_ham=dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
-                            + dftbplus.spin_block(case.spin, set(inp["labels"]),
-                                                  case.shell_resolved)
-                            + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"]),
-                            threads=threads)
+        extra = (dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
+                 + dftbplus.spin_block(case.spin, set(inp["labels"]), case.shell_resolved)
+                 + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"]))
+        if case.ewald_tolerance is not None:
+            extra += f"  EwaldTolerance = {dftbplus._f(case.ewald_tolerance)}\n"
+        args = (inp["labels"], np.array(inp["positions_angstrom"]),
+                np.array(inp["cell_angstrom"]) if periodic else None)
+        kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
+                  shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
+                  threads=threads)
+        if not (case.klines or case.regions or case.dp_dos):
+            return dftbplus.run(*args, **kw)
+        shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
+                  for r in case.regions or []]
+        return dftbplus.run_bands(*args, klines=case.klines, regions=case.regions,
+                                  region_shells=shells, dos=case.dp_dos, **kw)
+
+
+
+# ---- band structures, projections and DOS curves (milestone M2e) ---------------
+def _band_reference(case: Case, ref: dict) -> dict:
+    """What a band/PDOS case freezes from DFTB+ (see dftbplus.run_bands)."""
+    out = {"eigenvalues": ref["eigenvalues"].tolist(), "filling": ref["filling"].tolist(),
+           "fermi_levels": ref["fermi_levels"].tolist()}
+    if case.regions:
+        out["regions"] = {name: vals[..., 1].tolist() for name, (_, vals) in ref["regions"].items()}
+    if case.klines:
+        out["band"] = {k: np.asarray(ref["band"][k]).tolist()
+                       for k in ("eigenvalues", "filling", "fermi_levels")}
+    if case.dp_dos:
+        files = {"band.out": ref["band_out"], **ref["regions"]}
+        out["levels"] = {name: {"kweights": files[name][0].tolist(), "values": files[name][1].tolist()}
+                         for name in dict.fromkeys(name for name, _ in case.dp_dos)}
+        out["dp_dos"] = [{"file": name, "args": args, "x0": float(cols[0, 0]), "nx": len(cols),
+                          "y": cols[:, 1:].T.tolist()} for name, args, cols in ref["dp_dos"]]
+    return out
+
+
+def dp_dos_options(args) -> tuple[bool, dict]:
+    """dp_dos command-line arguments -> (weight by the second column?, pydftb.bands.broaden keywords)."""
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-g", type=float, default=0.01)
+    ap.add_argument("-w", action="store_true")
+    ap.add_argument("-f", default="gauss")
+    ap.add_argument("-o", type=int, default=1)
+    ap.add_argument("-b", type=float, default=None)
+    ap.add_argument("-s", type=float, default=None)
+    a = ap.parse_args(args)
+    return a.w, {"grid": a.g, "kind": a.f, "mp_order": a.o, "width": a.b, "cutoff": a.s}
+
+
+def _cluster_dev(evals, w, w_ref, tol=1e-7) -> float:
+    """Largest difference of the weights summed over degenerate groups (per state)."""
+    worst = 0.0
+    for e, a, b in zip(evals.reshape(-1, evals.shape[-1]), w.reshape(-1, evals.shape[-1]),
+                       w_ref.reshape(-1, evals.shape[-1])):
+        gid = np.cumsum(np.concatenate([[True], np.diff(e) > tol])) - 1
+        size = np.bincount(gid)
+        diff = np.abs(np.bincount(gid, weights=a) - np.bincount(gid, weights=b)) / size
+        worst = max(worst, float(diff.max()))
+    return worst
+
+
+def _fermi_dev(band, ref_band) -> float:
+    """Fermi level of the band run vs DFTB+'s.  For an insulator any level in the gap fills
+    the same states: pydftb takes the middle of the gap (occupations.py) and is compared
+    with the middle of DFTB+'s gap, because DFTB+'s own value is where its bisection ends
+    after middleGap missed the gap (water_box_bands: just below the conduction band)."""
+    occ = np.array(ref_band["filling"])
+    full = 2.0 if band.nspin == 1 else 1.0
+    if not np.all((occ < 1e-9) | (occ > full - 1e-9)):
+        return float(np.abs(band.fermi - np.array(ref_band["fermi_levels"])).max())
+    e = np.array(ref_band["eigenvalues"])
+    filled = occ > 0.5 * full
+    if np.ptp(band.fermi) == 0.0:                   # one Fermi level for all channels
+        mids = [0.5 * (e[filled].max() + e[~filled].min())] * band.nspin
+    else:
+        mids = [0.5 * (e[s][filled[s]].max() + e[s][~filled[s]].min()) for s in range(band.nspin)]
+    return float(np.abs(band.fermi - np.array(mids)).max())
+
+
+def _compare_states(case: Case, inp: dict, ref: dict, res, engine) -> dict:
+    """Deviations of eigenvalues, occupations, Fermi levels, region weights, DOS curves."""
+    periodic = inp["cell_angstrom"] is not None
+    geo = (inp["labels"], np.array(inp["positions_angstrom"]) / BOHR,
+           np.array(inp["cell_angstrom"]) / BOHR if periodic else None,
+           np.ones(3, bool) if periodic else None)
+    fermi = res.fermi_spin if res.fermi_spin is not None else res.fermi
+    st = eigenstates(engine, *geo, res.q_in, projections=bool(case.regions), scc_fermi=fermi)
+    dev = {"eigenvalues": float(np.abs(st.eigenvalues - np.array(ref["eigenvalues"])).max()),
+           "occupations": float(np.abs(st.occupations - np.array(ref["filling"])).max())}
+    if case.regions:
+        shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1)) for r in case.regions]
+        dev["regions"] = max(
+            _cluster_dev(st.eigenvalues, st.weights(case.regions[i]["atoms"], ish, m),
+                         np.array(ref["regions"][name]))
+            for name, i, ish, m in dftbplus.region_files(case.regions, shells))
+    if case.klines:
+        band = eigenstates(engine, *geo, res.q_in, kpts=np.array(inp["band_kpoints"]),
+                           scc_fermi=fermi)
+        b = ref["band"]
+        dev["eigenvalues"] = max(dev["eigenvalues"],
+                                 float(np.abs(band.eigenvalues - np.array(b["eigenvalues"])).max()))
+        dev["occupations"] = max(dev["occupations"],
+                                 float(np.abs(band.occupations - np.array(b["filling"])).max()))
+        dev["fermi"] = _fermi_dev(band, b)
+    if ref.get("dp_dos"):
+        worst = 0.0
+        for curve in ref["dp_dos"]:
+            occ, kw = dp_dos_options(curve["args"])
+            lev = ref["levels"][curve["file"]]
+            vals = np.array(lev["values"])
+            x, y = broaden(vals[..., 0], np.array(lev["kweights"]), vals[..., 1] if occ else None,
+                           **kw)
+            cols = y if len(y) == 1 else np.vstack([y.sum(0), y])    # dp_dos: total, up, down
+            yref = np.array(curve["y"])
+            if len(x) != curve["nx"] or abs(x[0] - curve["x0"]) > 1e-9:
+                worst = np.inf
+            else:
+                worst = max(worst, float(np.abs(cols - yref).max() / np.abs(yref).max()))
+        dev["dp_dos"] = worst
+    return dev
 
 
 # ----------------------------------------------------------------------------
@@ -169,7 +289,7 @@ def regenerate(names=None, threads: int = 1):
             "settings": {"scc": case.scc, "filling": list(case.filling),
                          "shell_resolved": case.shell_resolved, "repulsive": case.repulsive,
                          "typed": case.typed, "dftb3": case.dftb3, "spin": case.spin,
-                         "scc_tol": 1e-10},
+                         "scc_tol": 1e-10, "ewald_tolerance": case.ewald_tolerance},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -180,6 +300,12 @@ def regenerate(names=None, threads: int = 1):
                                    "e_disp")},
             "tolerances": case.tol,
         }
+        if case.klines or case.regions or case.dp_dos:
+            doc["reference"].update(_band_reference(case, ref))
+            doc["band_hsd"] = ref.get("band", {}).get("hsd")
+        if case.dp_dos:
+            doc["dp_dos"] = ("dp_dos of DFTB+ 25.1 dptools (LGPL), run only to freeze these "
+                             "curves; inputs in reference.levels")
         path = os.path.join(REF_DIR, f"{case.name}.json")
         with open(path, "w") as fh:
             json.dump(doc, fh, indent=1)
@@ -200,7 +326,7 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> d
     case = CASES_BY_NAME[doc["case"]]
     inp = doc["input"]
     t0 = time.perf_counter()
-    res = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta)
+    res, engine = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, engine=True)
     wall = time.perf_counter() - t0
     ref = doc["reference"]
     sk_q0 = _neutral_populations(case, inp)
@@ -214,10 +340,13 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> d
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
         "e_disp": abs(res.e_disp - ref["e_disp"]) if "e_disp" in ref else 0.0,
     }
+    if "eigenvalues" in ref:
+        dev.update(_compare_states(case, inp, ref, res, engine))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"]) <= tol["energy"]
-          and dev["stress"] <= tol.get("stress", 1e-7))
+          and dev["stress"] <= tol.get("stress", 1e-7)
+          and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -234,7 +363,7 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
 def check(names=None, solver: str = "eigh") -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
-          f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
+          f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'|deps| Ha':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
     for case in CASES:
         if names and case.name not in names:
             continue
@@ -252,8 +381,9 @@ def check(names=None, solver: str = "eigh") -> bool:
         d = r["dev"]
         all_ok &= r["ok"]
         e_disp = f"{d['e_disp']:9.1e}" if "e_disp" in doc["reference"] else f"{'-':>9s}"
+        eps = f"{d['eigenvalues']:9.1e}" if "eigenvalues" in d else f"{'-':>9s}"
         print(f"{case.name:26s} {r['natoms']:4d} {d['energy']:9.1e} {d['forces']:12.1e} "
-              f"{d['charges']:9.1e} {d['stress']:9.1e} {e_disp} "
+              f"{d['charges']:9.1e} {d['stress']:9.1e} {e_disp} {eps} "
               f"{r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
     return all_ok
 

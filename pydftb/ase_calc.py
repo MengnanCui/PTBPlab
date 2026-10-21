@@ -12,6 +12,7 @@ import numpy as np
 from ase import units
 from ase.calculators.calculator import Calculator, all_changes, kptdensity2monkhorstpack
 
+from .bands import States, eigenstates
 from .calculator import DFTB
 from .constants import BOHR
 from .dispersion import make_dispersion
@@ -27,9 +28,12 @@ class PyDFTB(Calculator):
     max_l : optional {label: l}; default is the ASE/PTBP rule (highest occupied
             shell in the homonuclear SKF).
     kpts  : None (Gamma), (n1, n2, n3) Monkhorst-Pack grid, a k-point density
-            (float, ASE ``kptdensity2monkhorstpack``), or explicit
-            ``{"kpts": (nk,3) fractional, "weights": (nk,)}``.
-    time_reversal : reduce k and -k (DFTB+ does this for SupercellFolding).
+            (float, ASE ``kptdensity2monkhorstpack``), explicit
+            ``{"kpts": (nk,3) fractional, "weights": (nk,)}``, or a band path (ASE
+            ``BandPath`` or ``{"path": "GXWLGK", "npoints": 100}``: the path points in
+            order, equal weights, as ASE + DFTB+; for a band structure after an SCC on a
+            grid use :meth:`band_structure` instead).
+    time_reversal : reduce k and -k (DFTB+ does this for SupercellFolding); never for paths.
     smearing : ("fermi", T) | ("gaussian", T) | ("mp", T, order); T in K.
                Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
     repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
@@ -74,10 +78,15 @@ class PyDFTB(Calculator):
         self.raw = None          # last pydftb.DFTBResult (atomic units)
 
     # ------------------------------------------------------------------
-    def _kpoints(self, atoms):
-        spec = self.kpts_spec
+    def _kpoints(self, atoms, spec=None):
+        spec = self.kpts_spec if spec is None else spec
         if not atoms.pbc.any() or spec is None:
             return None
+        if hasattr(spec, "special_points") or (isinstance(spec, dict) and "path" in spec):
+            path = spec if hasattr(spec, "special_points") else atoms.cell.bandpath(
+                spec["path"], npoints=spec.get("npoints"), density=spec.get("density"))
+            k = np.asarray(path.kpts, float)
+            return k, np.full(len(k), 1.0 / len(k))
         if isinstance(spec, dict):
             k, w = np.atleast_2d(spec["kpts"]), np.asarray(spec.get("weights", np.ones(len(spec["kpts"]))))
         else:
@@ -87,18 +96,22 @@ class PyDFTB(Calculator):
             k, w = reduce_time_reversal(k, w)
         return k, w / w.sum()
 
-    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
-        super().calculate(atoms, properties, system_changes)
-        a = self.atoms
-        labels = self.labels or a.get_chemical_symbols()
-        periodic = bool(a.pbc.any())
-        kpts = self._kpoints(a)
+    def _engine(self, atoms):
+        """pydftb.DFTB for these atoms, its type labels and SK set."""
+        labels = self.labels or atoms.get_chemical_symbols()
         sk = self.params.skset(labels)
         disp = self.dispersion
         if disp is not None:
-            disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, a.numbers)})
-        calc = DFTB(sk, kpts=kpts, charge=float(a.get_initial_charges().sum()), dispersion=disp,
-                    **self.engine_opts)
+            disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, atoms.numbers)})
+        calc = DFTB(sk, kpts=self._kpoints(atoms), charge=float(atoms.get_initial_charges().sum()),
+                    dispersion=disp, **self.engine_opts)
+        return calc, labels, sk
+
+    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+        a = self.atoms
+        periodic = bool(a.pbc.any())
+        calc, labels, sk = self._engine(a)
         # As in DFTB+, periodic force runs also give the stress (about 1 % extra
         # time), so ASE cell filters, which ask for forces and then stress, need one run.
         want_forces = "forces" in properties or (periodic and "stress" in properties)
@@ -163,3 +176,51 @@ class PyDFTB(Calculator):
     def get_fermi_levels(self):
         r = self._raw()
         return np.array(r.fermi_spin if r.fermi_spin is not None else [r.fermi]) * units.Hartree
+
+    # ---- band structure, DOS, PDOS at the SCC charges (pydftb.bands) -------
+    def states(self, kpts=None, projections: bool = False, atoms=None,
+               chunk: int | None = None) -> States:
+        """Eigenstates at the charges of the SCC run for ``atoms`` (run first if needed), as
+        DFTB+'s band-structure run (``ReadInitialCharges``, one iteration).
+
+        ``kpts``: None (the SCC k-points) or any form the constructor accepts (grid, density,
+        explicit dict, ASE ``BandPath`` or path dict).  Returns :class:`pydftb.bands.States`
+        (Hartree; ``dos()``/``pdos()`` in eV).
+        """
+        atoms = self.atoms if atoms is None else atoms
+        if atoms is None:
+            raise ValueError("no atoms: attach the calculator or pass atoms")
+        self.get_potential_energy(atoms)
+        r = self.raw
+        a = self.atoms
+        periodic = bool(a.pbc.any())
+        if kpts is not None and not periodic:
+            raise ValueError("k-points need a periodic system")
+        calc, labels, _ = self._engine(a)
+        run = lambda: eigenstates(                                     # noqa: E731
+            calc, labels, a.positions / BOHR, a.cell.array / BOHR if periodic else None,
+            a.pbc if periodic else None, r.q_in,
+            kpts=None if kpts is None else self._kpoints(a, kpts), projections=projections,
+            scc_fermi=r.fermi_spin if r.fermi_spin is not None else r.fermi, chunk=chunk)
+        if self.threads is None:
+            return run()
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(self.threads):
+            return run()
+
+    def band_structure(self, path=None, npoints=None, atoms=None):
+        """ASE ``BandStructure`` (eV, zero = SCC Fermi level of spin up).
+
+        Without arguments: ASE's default, i.e. the calculator's own k-points (useful with
+        ``kpts=BandPath``).  With ``path`` (ASE ``BandPath`` or special points such as
+        "GXWLGK") and/or ``npoints``: the states along that path at the SCC charges.
+        """
+        if path is None and npoints is None:
+            return super().band_structure()
+        atoms = self.atoms if atoms is None else atoms
+        if atoms is None:
+            raise ValueError("no atoms: attach the calculator or pass atoms")
+        if not hasattr(path, "special_points"):
+            path = atoms.cell.bandpath(path, npoints=npoints)
+        st = self.states(kpts=path, atoms=atoms)
+        return st.band_structure(path, reference=self.get_fermi_level(), ev=units.Hartree)

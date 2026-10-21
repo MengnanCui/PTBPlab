@@ -43,6 +43,20 @@ def test_insulator_fermi_level_mid_gap():
     assert np.allclose(occ[0], [2, 2, 2, 0, 0]) and ts == 0.0
 
 
+def test_insulator_mid_gap_with_inexact_k_weights():
+    """416 weights of 1/13 add up to 31.999999999999904, not 32 (the water box on a 13-point
+    path): DFTB+'s middleGap then misses the gap (M2e report); pydftb allows for the rounding
+    and stays mid-gap."""
+    rng = np.random.default_rng(2)
+    ev = np.sort(np.concatenate([rng.uniform(-0.5, -0.2, (13, 32)), rng.uniform(0.1, 0.4, (13, 4))],
+                                axis=1), axis=1)
+    w = np.full(13, 1.0 / 13)
+    assert np.cumsum(np.repeat(w, 32))[-1] < 32.0                 # the rounding in question
+    occ, mu, _ = fill(ev, w, 64.0, ("fermi", 0.0))
+    assert mu == pytest.approx(0.5 * (ev[:, 31].max() + ev[:, 32].min()), abs=1e-15)
+    assert np.allclose(np.array(occ)[:, :32], 2.0) and np.allclose(np.array(occ)[:, 32:], 0.0)
+
+
 def _cluster():
     a = Atoms("Cu4CO", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.1, 0], [1.25, 0.7, 2.0],
                                    [1.25, 0.7, 3.9], [1.25, 0.75, 5.05]])

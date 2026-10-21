@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from .bands import States, eigenstates
 from .calculator import DFTB, DFTBResult
 from .dispersion import make_dispersion
 from .kpoints import monkhorst_pack, reduce_time_reversal
@@ -23,9 +24,18 @@ from .system import System
 
 
 def make_kpoints(kpts, time_reversal: bool = True):
-    """None | (n1, n2, n3) Monkhorst-Pack grid | (kpts, weights) -> (kpts, weights) or None."""
+    """None | (n1, n2, n3) Monkhorst-Pack grid | (kpts, weights) | path points -> (kpts, weights)
+    or None.
+
+    Path points, an (n_k, 3) NumPy array or an ASE ``BandPath``, keep their order and get
+    equal weights (never time-reversal reduced).
+    """
     if kpts is None:
         return None
+    if hasattr(kpts, "special_points"):            # ase BandPath
+        kpts = np.asarray(kpts.kpts, float)
+    if isinstance(kpts, np.ndarray) and kpts.ndim == 2:
+        return kpts.astype(float), np.full(len(kpts), 1.0 / len(kpts))
     if len(kpts) == 3 and np.ndim(kpts[0]) == 0:
         k, w = monkhorst_pack(tuple(int(n) for n in kpts))
     else:
@@ -90,6 +100,25 @@ class SCC:
         if res is None or res.forces is None:
             res = self._run(forces=True)
         return res.forces
+
+    def states(self, kpts=None, projections: bool = False, time_reversal: bool = True,
+               chunk: int | None = None) -> States:
+        """Eigenstates at the converged charges (DFTB+'s band-structure run).
+
+        ``kpts``: None (the SCC k-points), a Monkhorst-Pack grid ``(n1, n2, n3)``,
+        ``(kpoints, weights)``, or path points (an (n_k, 3) array or an ASE ``BandPath``).
+        ``projections`` keeps the orbital shares of every state (PDOS).  See
+        :class:`pydftb.bands.States` for DOS, PDOS and band-structure plots.
+        """
+        r = self._need()
+        s = self.system
+        if kpts is not None and not s.periodic:
+            raise ValueError("k-points need a periodic system")
+        k = None if kpts is None else make_kpoints(kpts, time_reversal)
+        return eigenstates(self._engine(), s.labels, s.positions, s.cell if s.periodic else None,
+                           s.pbc if s.periodic else None, r.q_in, kpts=k,
+                           projections=projections, chunk=chunk,
+                           scc_fermi=r.fermi_spin if r.fermi_spin is not None else r.fermi)
 
     # ------------------------------------------------------------------
     @property

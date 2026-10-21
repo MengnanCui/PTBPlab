@@ -13,6 +13,8 @@ physics (DFTB3, spin, stress, ...) has an obvious place to plug in:
 4. ``_gradient``  analytic forces (band + SCC + repulsive + dispersion)
 
 The matching DFTB+ routines are listed in ``pydftb/docs/dftbplus_map.md``.
+``pydftb.bands`` reuses stage 1 and the potentials of stage 2 to diagonalise H(k) at
+frozen charges (band structures, DOS).
 """
 from __future__ import annotations
 
@@ -70,6 +72,8 @@ class DFTBResult:
     q_spin: np.ndarray | None = None     # (2, n_shell) up / down populations per shell
     fermi_spin: tuple | None = None      # (mu_up, mu_down); equal with relax_total_spin
     e_disp: float = 0.0                  # dispersion energy
+    q_in: np.ndarray | None = None       # input populations of the last SCC iteration (the mixed
+                                         # vector; what DFTB+ writes to charges.bin)
 
     @property
     def e_total(self) -> float:
@@ -111,6 +115,7 @@ class _Setup:
     third: ThirdOrder | None = None
     spin: "_Spin | None" = None
     disp: DispersionTerms | None = None
+    eps0: np.ndarray | None = None   # on-site energies per orbital
 
 
 @dataclass
@@ -292,7 +297,9 @@ class DFTB:
             q0 = np.array([sk.occupation[s].sum() for s in basis.species])
         return site_of_orb, site_atom, u, q0
 
-    def _setup(self, species, positions, cell, pbc, forces, timings) -> _Setup:
+    def _setup(self, species, positions, cell, pbc, forces, timings, matrices=True) -> _Setup:
+        """``matrices=False`` skips the folded H0/S on the k-point set and the dispersion
+        (``bands.eigenstates`` folds at its own k-points)."""
         t0 = time.perf_counter()
         sk = self.sk
         pos = np.asarray(positions, float)
@@ -313,7 +320,9 @@ class DFTB:
         else:
             kpts, kw = np.zeros((1, 3)), np.ones(1)
         gamma_only = len(kpts) == 1 and not np.any(kpts[0])
-        if gamma_only:
+        if not matrices:
+            h0 = smat = None
+        elif gamma_only:
             h0 = fold(pb, pb.h, norb, None, eps0)[None]
             smat = fold(pb, pb.s, norb, None, np.ones(norb))[None]
         else:
@@ -338,14 +347,14 @@ class DFTB:
             spin = _Spin(self._spin_matrix(basis), 0.5 * (nelec + self.unpaired_electrons),
                          0.5 * (nelec - self.unpaired_electrons), self.relax_total_spin)
         disp = None
-        if self.dispersion is not None:
+        if self.dispersion is not None and matrices:
             t1 = time.perf_counter()
             disp = self.dispersion.evaluate(species, pos, cell if periodic else None,
                                             pbc if periodic else None, grad=forces,
                                             charge=self.charge)
             timings["dispersion"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
-                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp)
+                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0)
 
     def _site_hubbard_derivs(self, basis: Basis) -> np.ndarray:
         """Ud of every charge site: one value per type, or per shell (orbital-resolved SCC)."""
@@ -518,7 +527,7 @@ class DFTB:
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, **extra)
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in, **extra)
 
     def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
