@@ -126,7 +126,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
         kpts = None
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
-        calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=1e-10,
+        calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
                     dispersion=inp.get("dispersion"),
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
@@ -155,7 +155,7 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                 np.array(inp["cell_angstrom"]) if periodic else None)
         kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
-                  threads=threads)
+                  scc_tol=case.scc_tol, threads=threads)
         if not (case.klines or case.regions or case.dp_dos):
             return dftbplus.run(*args, **kw)
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
@@ -289,7 +289,7 @@ def regenerate(names=None, threads: int = 1):
             "settings": {"scc": case.scc, "filling": list(case.filling),
                          "shell_resolved": case.shell_resolved, "repulsive": case.repulsive,
                          "typed": case.typed, "dftb3": case.dftb3, "spin": case.spin,
-                         "scc_tol": 1e-10, "ewald_tolerance": case.ewald_tolerance},
+                         "scc_tol": case.scc_tol, "ewald_tolerance": case.ewald_tolerance},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,

@@ -1,0 +1,217 @@
+{
+ "schema": 1,
+ "case": "cuo_chain_opt",
+ "base": "cuo_chain_k422",
+ "kind": "opt",
+ "note": "k-points, atoms only",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "isotropic": false,
+  "ewald_tolerance": 1e-12,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Cu",
+   "O",
+   "Cu",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    -0.0037498234331959385,
+    0.013986451568947105,
+    0.048902028056696294
+   ],
+   [
+    1.902242944786306,
+    0.016789213333045824,
+    0.04412621401108175
+   ],
+   [
+    3.788395222743496,
+    0.014522016840539498,
+    0.043269420090285456
+   ],
+   [
+    5.6921123157963205,
+    0.014589086644107536,
+    0.04362191822831253
+   ]
+  ],
+  "cell_angstrom": [
+   [
+    7.6,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    4.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    4.0
+   ]
+  ],
+  "kpoints": [
+   [
+    -0.375,
+    -0.25,
+    -0.25
+   ],
+   [
+    -0.375,
+    -0.25,
+    0.25
+   ],
+   [
+    -0.375,
+    0.25,
+    -0.25
+   ],
+   [
+    -0.375,
+    0.25,
+    0.25
+   ],
+   [
+    -0.125,
+    -0.25,
+    -0.25
+   ],
+   [
+    -0.125,
+    -0.25,
+    0.25
+   ],
+   [
+    -0.125,
+    0.25,
+    -0.25
+   ],
+   [
+    -0.125,
+    0.25,
+    0.25
+   ]
+  ],
+  "kweights": [
+   0.125,
+   0.125,
+   0.125,
+   0.125,
+   0.125,
+   0.125,
+   0.125,
+   0.125
+  ],
+  "max_l": {
+   "Cu": 2,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 15
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_dyn_e5giewlb/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Cu = \"d\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 500.0\n  }\n  KPointsAndWeights = {\n    -0.375 -0.25 -0.25 0.125\n    -0.375 -0.25 0.25 0.125\n    -0.375 0.25 -0.25 0.125\n    -0.375 0.25 0.25 0.125\n    -0.125 -0.25 -0.25 0.125\n    -0.125 -0.25 0.25 0.125\n    -0.125 0.25 -0.25 0.125\n    -0.125 0.25 0.25 0.125\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "n_scc": [
+   16,
+   6,
+   6,
+   6,
+   5,
+   6,
+   5,
+   6,
+   6,
+   5,
+   6,
+   6,
+   5,
+   6,
+   5,
+   6,
+   6,
+   6,
+   6,
+   5,
+   5,
+   6,
+   5,
+   5,
+   5,
+   5,
+   5,
+   4,
+   4,
+   4,
+   3
+  ],
+  "geometry_steps": 31,
+  "wall": 1.1624269580006512,
+  "free_energy": -10.7282865157,
+  "positions": [
+   [
+    -0.003405461181,
+    0.01497175469,
+    0.04497991787
+   ],
+   [
+    1.901928775,
+    0.01497165438,
+    0.04497987554
+   ],
+   [
+    3.788870579,
+    0.01497168783,
+    0.04497991019
+   ],
+   [
+    5.691606767,
+    0.01497167149,
+    0.04497987678
+   ]
+  ],
+  "cell": [
+   [
+    7.6,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    4.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    4.0
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}

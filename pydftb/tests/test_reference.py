@@ -27,11 +27,14 @@ def test_against_dftbplus_reference(path):
         assert abs(r["n_scc"] - r["n_scc_ref"]) <= 1, (r["n_scc"], r["n_scc_ref"])
 
 
-@pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep", "li_bcc_k666_node"])
+@pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep", "li_bcc_k666_node",
+                                  "ch3oh_loose_scc", "water_dimer_dftb3_loose_scc",
+                                  "cuo_chain_spin_loose_scc"])
 def test_dftbplus_finite_difference_emulation(name):
     """With DFTB+'s finite-difference step pydftb reproduces DFTB+ forces and stress exactly:
     the residual (~1e-6 Ha/Bohr for water, 1.2e-8 Ha/Bohr^3 for the Li stress) is DFTB+'s
-    numerical derivative, not a pydftb error."""
+    numerical derivative, not a pydftb error.  The *_loose_scc cases (SCC tolerance 1e-5)
+    hold only because the forces use the output charges, as DFTB+ does."""
     doc = refgen.load(name)
     exact = refgen.compare(doc)["dev"]
     fd = refgen.compare(doc, fd_delta=float(np.finfo(float).eps) ** 0.25)["dev"]

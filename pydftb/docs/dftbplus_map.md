@@ -28,12 +28,15 @@
 | 电荷混合 | `mixer.py: BroydenMixer`（默认），`AndersonMixer`（Pulay 型） | `mixer/broydenmixer.F90` | `modifiedBroydenMixing` | 照搬 DFTB+ 的改进 Broyden（M1）：19 个对照算例的 SCC 轮数与 DFTB+ 完全相同 |
 | 占据数与费米能级 | `occupations.py` | `dftb/etemp.F90`，`dftbplus/main.F90:getFillingsAndBandEnergies` | `Efilling`, `electronCount`, `electronFill`, `middleGap` | M1 已照搬：先试带隙中点，再按 DFTB+ 的方式二分；T 不低于 1e-8 Ha；Gaussian 即 MP 0 阶；另提供变分熵。玻尔兹曼常数与 DFTB+ 25.1 相同（M2e，坑 17）；带隙中点的搜索允许权重累加的舍入（M2e，坑 18） |
 | 本征求解与密度矩阵 | `solvers.py` | `math/eigensolver.F90`, `dftb/densitymatrix.F90` | `hegvd`, `getDensityMatrix`, `getEDensityMatrix` | pydftb 另有 SP2 纯化和批量求解器 |
-| 力 | `calculator.py: DFTB._gradient` | `dftb/forces.F90`, `dftbplus/main.F90` | `derivative_shift`, `getGradients` | — |
+| 力 | `calculator.py: DFTB._gradient` | `dftb/forces.F90`, `dftbplus/main.F90` | `derivative_shift`, `getGradients` | 电荷项和势用最后一轮的输出电荷（M2f 起，见坑 22） |
 | DFTB3 三阶项（M2b） | `thirdorder.py: ThirdOrder`, `dgamma_du`, `dgamma_du_onsite` | `dftb/thirdorder.F90`，`dftb/chargepenalty.F90`（`ThirdOrder`） | `gamma3`, `gamma2pU`, `gamma2pUpR`, `dGdUr0`, `updateCharges`, `getShifts`, `addGradientDc`, `addStressDc` | U 几乎相等时 pydftb 改用稳定的积分形式（见第 3 节第 6 条） |
 | H–X 阻尼（M2b） | `coulomb.py: Coulomb._sp_short`，`thirdorder.py: dgamma_du` | `dftb/shortgammafuncs.F90`，`dftbplus/initprogram.F90` | `expGammaDamped`, `expGammaDampedPrime`, `hh`, `hpU`；被阻尼的是质量 < 3.5 amu 的原子 | — |
 | 共线自旋（M2c） | `calculator.py`：`_Spin`、`_spin_matrix`、`_potentials`、`_solve`、`_populations` | `dftb/spin.F90`，`dftbplus/main.F90`（`getFillingsAndBandEnergies`、`getNextInputCharges`、`reduceCharges`），`dftbplus/initprogram.F90`（`initElectronNumber`、`initializeCharges`） | `getSpinShift`, `getEnergySpin_*`, `Spin_getOrbitalEquiv`, `qm2ud`, `Efilling` | 两个自旋通道沿 k 点方向堆叠；混合向量与 DFTB+ 相同（↑/↓、按壳层） |
 | 应力（M2a） | `calculator.py: DFTB._gradient(virial=True)`，`coulomb.py: Coulomb.gradient(virial=True)` | `dftb/stress.F90`，`dftb/coulomb.F90`，`dftbplus/main.F90` | `getBlockStress`, `invRStress`, `getStress` | 每个原子对的“力 × 键矢量”求和，加 Ewald 倒空间项和背景项；与力在同一遍里算出 |
 | SCC 主循环 | `calculator.py: DFTB.calculate` | `dftbplus/main.F90` | `processGeometry`, SCC 循环 `lpSCC` | pydftb 分成 `_setup/_scc/_energies/_gradient` 四段 |
+| 几何步之间的电荷（M2f） | `ase_calc.py: PyDFTB(reuse_charges=True)` | `dftbplus/main.F90`（每个几何步重置混合器、保留 `qInput`），`dftbplus/initprogram.F90:getMinSccIters` | `chrgMixerReal%reset` | 默认关闭：ASE + DFTB+ 每次计算是一个新进程，从中性原子开始 |
+| 结构优化（M2f，只对照，用 ASE 的优化器） | `validation/dynamics.py` | `dftbplus/input/geoopt.F90`，`geoopt/`（`lbfgs.F90`、`rationalfunc.F90`、`fire.F90`、`filter.F90`） | `readGeoOptInput`, `TFilter%transformDerivative` | 收敛：最大梯度分量 < GradElem 且能量没有升高（坑 24） |
+| 速度 Verlet MD（M2f，只对照，用 ASE 的积分器） | `validation/dynamics.py`（`verlet_dftbplus_units` 是同一算法、DFTB+ 的常数） | `md/velocityverlet.F90`，`dftbplus/parser.F90`（VelocityVerlet 输入） | `VelocityVerlet_next` | 更新顺序与 ASE 相同；`KeepStationary` 默认 Yes（坑 23） |
 | 冻结电荷求本征态，即 DFTB+ 的能带运行（M2e） | `bands.py: eigenstates`（复用 `_setup` 和 `_potentials`） | `dftbplus/parser.F90`（`getEuclideanKSampling` 的 Klines 分支、`maxSelfConsIterations`），`dftbplus/main.F90`（`getNextInputCharges`、`writeCharges`） | `readKPoints`, `writeCharges` | `charges.bin` 存的是最后一轮的输入电荷 `qInput`（收敛后不再混合），对应 `DFTBResult.q_in`；Klines 的规则见坑 16 |
 | 投影态 / 区域（M2e） | `bands.py: States.orbitals, weights` | `dftbplus/initprogram.F90`（区域与文件名），`dftbplus/mainio.F90` | `writeProjCplxEigvecsSerial`, `writeProjEigvecHeader`, `writeProjEigvecData` | 权重 Re[c*·(S c)]，不乘占据数和 k 权重；文件名 `标签.out`、`标签.壳层.out`、`标签.壳层.m.out` |
 | DOS/PDOS 曲线（M2e） | `bands.py: broaden, States.dos, States.pdos` | dptools `scripts/dp_dos.py`（Python 工具，不在二进制里） | — | Gaussian、Fermi、Methfessel-Paxton；网格起点向下取整到网格间隔的整数倍 |
@@ -54,8 +57,7 @@
 | 氢键 / 卤素修正 | `dftb/h5correction.F90`，`dftb/halogenx.F90` |
 | 溶剂 | `solvation/born.F90`，`cosmo.F90`，`sasa.F90`，`cm5.F90` |
 | 外场、外部点电荷 | `dftb/extfields.F90`，`dftb/extcharges.F90` |
-| 结构优化 | `geoopt/`（`lbfgs.F90`，`fire.F90`，`gdiis.F90`，`conjgrad.F90`） |
-| 分子动力学 / XL-BOMD | `md/velocityverlet.F90`，`md/thermostats.F90`，`md/xlbomd.F90` |
+| 热浴、压浴、XL-BOMD | `md/thermostats.F90`，`md/nhctherm.F90`，`md/xlbomd.F90`（XL-BOMD 在 M6） |
 | 激发态（Casida / 实时） | `timedep/linresp.F90`，`timedep/linrespgrad.F90`，`timedep/timeprop.F90` |
 | REKS、pp-RPA | `reks/`，`timedep/pprpa.F90` |
 | 输运（NEGF） | `transport/negfint.F90`（底层是 libNEGF） |
@@ -85,3 +87,10 @@
 19. **短程 γ 的截断。** DFTB+ 对每一对 U 值在 S 降到 1e-10 处截断（`shortgammafuncs.F90:expGammaCutoff`：先倍增再二分，二分精度也是 1e-10）。pydftb 的第二阶项在 M2e 之前一直加到 1e-14，周期体系中每个原子的 SCC 势因此差约 1e-9 Ha（能量差 1.6e-9 Ha，本征值差 ~1e-9 Ha）。
 20. **`WriteRealHS` 可以用来对照势。** 它在第一轮 SCC 建好 H 后写出实空间 H、S 并退出（返回码非 0）。配合 `ReadInitialCharges` 读回收敛电荷时，on-site 块的对角元减去 on-site 能就是每个原子的 SCC 势。
 21. **输出文件的精度。** `band.out` 的本征值只有 4 位小数（eV），区域文件 6 位小数、k 权重 8 位小数，`results.tag` 是全精度。对照本征值一律读 `results.tag`；需要 `WriteChargesAsText = Yes`（在 `Options` 中）才能读到全精度的 `charges.dat`。
+22. **力用输出电荷。** `RecomputeAfterDensity` 默认开启：每次对角化之后，DFTB+ 用这一轮的输出电荷重算 SCC 势（`main.F90:processPotentials`），所以力中的库仑项（`addForceDc`）和势项（`derivative_shift` 用的 `potential%intBlock`）都来自输出电荷。pydftb 在 M2f 之前用输入电荷：SCC 收敛到 1e-10 时看不出区别，收敛到 1e-5 时（PTBP 的设置）力差可达 8e-7 Ha/Bohr。
+23. **MD 默认去掉质心运动。** `VelocityVerlet` 的 `KeepStationary` 默认 Yes，每一步去掉质心速度；ASE 的积分器不这样做。给定的初速度原样使用（不重新缩放）。
+24. **新的 `GeometryOptimisation` 驱动。** 收敛需要最大梯度分量 < `GradElem`（默认 1e-4 Ha/Bohr）**并且**这一步能量没有升高；梯度范数、位移判据默认关闭。LBFGS 没有步长上限：从远离极小点的结构开始时，在软的势能面上步长会越来越大，直到某个结构上 SCC 发散、程序退出。Rational 稳定但收敛慢（甲醇到 1e-7：1918 步，LBFGS 45 步）。
+25. **`LatticeOpt` 的 `Isotropic = Yes` 只适合正交晶胞。** 它把应力换成压强，但晶格的梯度是 p·L⁻ᵀ，对非正交晶胞（如 bcc 原胞）不平行于 L，LBFGS 的步长会剪切晶胞，而收敛判据只看压强，于是停在剪切过的晶胞上。
+26. **MD 输出的精度。** `geo_end.xyz` 的坐标和速度是 `F16.8`（1e-8 Å、1e-8 Å/ps），`md.out` 的能量是 Hartree 的 10 位小数。
+27. **单位常数。** DFTB+ 用自己的一组常数（Bohr 0.529177249 Å、Hartree 27.2113845 eV、au__fs 0.02418884326505、amu__au = 1/5.4857990945e-4），ASE 用 CODATA 2014，相对差约 1e-7。经 ASE 跑的 40 步 MD 因此与 DFTB+ 相差约 4e-8 Å；用 DFTB+ 的常数则相差 ≤ 1.5e-8 Å（xyz 的精度）。
+28. **插值在网格节点处有折点。** `slakoeqgrid.F90` 的 8 点插值每过一个网格节点就换一组插值点，插值函数的导数在节点处跳变。表格光滑时跳变可忽略；PTBP 用 hotcent 生成的表格有约 1e-7 Ha 的数值噪声，跳变中位数 5e-6、最大 1e-3 Ha/Bohr。DFTB+ 默认用步长 1.22e-4 Bohr 的中心差分求 H0、S 的导数（`nonscc.F90`），原子对距离落在节点一个步长之内时差分跨过跳变，力的误差可达 1.3e-4 Ha/Bohr（水二聚体 MD 中 2% 的步）。pydftb 的复步长导数是插值函数在该点所在分段上的精确导数；要与 DFTB+ 逐位比较力，pydftb 用同样的差分（`fd_delta`）。

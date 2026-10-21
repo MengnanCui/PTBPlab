@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "case": "o2_triplet_opt",
+ "base": "o2_triplet_wmatrix",
+ "kind": "opt",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    -0.0017401100894275778,
+    -0.0034802201759567366,
+    -0.04211065656878618
+   ],
+   [
+    0.05174011008942758,
+    0.10348022017595673,
+    1.252110656568786
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 4
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_dyn_4mayadzn/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  SpinPolarisation = Colinear {\n    UnpairedElectrons = 2.0\n    RelaxTotalSpin = No\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "n_scc": [
+   4,
+   3,
+   3
+  ],
+  "geometry_steps": 3,
+  "wall": 0.03852081399963936,
+  "free_energy": -6.428113907,
+  "positions": [
+   [
+    -0.001736181236,
+    -0.003472362468,
+    -0.04201557567
+   ],
+   [
+    0.05173618124,
+    0.1034723625,
+    1.252015576
+   ]
+  ],
+  "cell": null
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}

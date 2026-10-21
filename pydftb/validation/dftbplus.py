@@ -245,10 +245,34 @@ def region_files(regions, shells) -> list:
     return out
 
 
+def md_driver(velocities_aaps, time_step_fs, steps, keep_stationary=False) -> str:
+    """HSD ``Driver = VelocityVerlet`` (NVE) with the given velocities (Angstrom/ps).
+
+    DFTB+ uses given velocities as they are; ``KeepStationary`` (DFTB+ default Yes)
+    removes the centre-of-mass motion every step, which ASE's VelocityVerlet does not.
+    """
+    rows = "\n".join("    " + " ".join(_f(x) for x in v) for v in np.asarray(velocities_aaps))
+    return (f"Driver = VelocityVerlet {{\n  TimeStep [fs] = {_f(time_step_fs)}\n"
+            f"  Steps = {int(steps)}\n  MovedAtoms = 1:-1\n"
+            f"  KeepStationary = {'Yes' if keep_stationary else 'No'}\n  MDRestartFrequency = 1\n"
+            f"  Thermostat = None {{}}\n  Velocities [AA/ps] = {{\n{rows}\n  }}\n}}\n")
+
+
+def opt_driver(optimiser="LBFGS {}", lattice=False, grad_elem=1e-7, max_steps=3000,
+               isotropic=False) -> str:
+    """HSD ``Driver = GeometryOptimisation``: converged when the largest gradient component
+    (atoms, and lattice with ``lattice``) is below ``grad_elem`` and the energy did not rise.
+    ``isotropic`` scales the cell uniformly."""
+    iso = "  Isotropic = Yes\n" if lattice and isotropic else ""
+    return (f"Driver = GeometryOptimisation {{\n  Optimiser = {optimiser}\n"
+            f"  LatticeOpt = {'Yes' if lattice else 'No'}\n{iso}  MaxSteps = {int(max_steps)}\n"
+            f"  Convergence {{ GradElem = {_f(grad_elem)} }}\n}}\n")
+
+
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
-             read_charges=False, convergent_only=True, extra_analysis="") -> str:
+             read_charges=False, convergent_only=True, extra_analysis="", driver="") -> str:
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
     kblock = ""
     if periodic and klines is not None:
@@ -269,7 +293,7 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
             scc_block += "  ReadInitialCharges = Yes\n"
         if not convergent_only:
             scc_block += "  ConvergentSCCOnly = No\n"
-    return f"""Geometry = GenFormat {{
+    return f"""{driver}Geometry = GenFormat {{
   <<< "geo.gen"
 }}
 Hamiltonian = DFTB {{
@@ -340,11 +364,57 @@ def parse_levels(path):
     return kw, vals
 
 
+def parse_md_out(path) -> dict:
+    """``md.out`` -> arrays (one entry per MD step) in Hartree: ``potential`` (Mermin free
+    energy), ``kinetic``, ``total``."""
+    with open(path) as fh:
+        text = fh.read()
+    out = {}
+    for key, name in (("potential", "Potential Energy"), ("kinetic", "MD Kinetic Energy"),
+                      ("total", "Total MD Energy")):
+        out[key] = np.array([float(x) for x in re.findall(rf"^{name}:\s+(\S+)\s+H", text, re.M)])
+    return out
+
+
+def parse_xyz_frames(path) -> list:
+    """DFTB+ ``.xyz`` trajectory -> frames {symbols, positions (A), charges, velocities (A/ps)}."""
+    frames = []
+    with open(path) as fh:
+        lines = fh.read().splitlines()
+    i = 0
+    while i < len(lines) and lines[i].strip():
+        n = int(lines[i])
+        rows = [ln.split() for ln in lines[i + 2:i + 2 + n]]
+        vals = np.array([[float(x) for x in r[1:]] for r in rows])
+        frames.append({"symbols": [r[0] for r in rows], "positions": vals[:, :3],
+                       "charges": vals[:, 3] if vals.shape[1] > 3 else None,
+                       "velocities": vals[:, 4:7] if vals.shape[1] >= 7 else None})
+        i += 2 + n
+    return frames
+
+
+def read_gen(path):
+    """DFTB+ gen file -> (species per atom, positions (A), cell (A) or None)."""
+    with open(path) as fh:
+        lines = [ln for ln in fh.read().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    n, kind = int(lines[0].split()[0]), lines[0].split()[1].upper()
+    names = lines[1].split()
+    rows = [ln.split() for ln in lines[2:2 + n]]
+    labels = [names[int(r[1]) - 1] for r in rows]
+    pos = np.array([[float(x) for x in r[2:5]] for r in rows])
+    cell = None
+    if kind in ("S", "F"):
+        cell = np.array([[float(x) for x in ln.split()] for ln in lines[3 + n:6 + n]])
+        if kind == "F":
+            pos = pos @ cell
+    return labels, pos, cell
+
+
 def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=True,
         filling=("fermi", 0.0), shell_resolved=False, scc_tol=1e-10, max_scc=500,
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
-        convergent_only=True, extra_analysis="") -> dict:
+        convergent_only=True, extra_analysis="", driver="") -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata."""
     if not available():
@@ -356,7 +426,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                   None if cell_ang is None else np.asarray(cell_ang))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
-                       klines, read_charges, convergent_only, extra_analysis)
+                       klines, read_charges, convergent_only, extra_analysis, driver)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
@@ -391,6 +461,15 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         res["version"] = ver.group(1) if ver else "unknown"
         iters = re.findall(r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*$", p.stdout, re.M)
         res["n_scc"] = int(iters[-1]) if iters else (1 if not scc else None)
+        if driver:
+            res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", p.stdout))
+            res["converged_geometry"] = "Geometry converged" in p.stdout
+            res["final_geometry"] = read_gen(os.path.join(workdir, "geo_end.gen"))
+            res["scc_iterations"] = [int(x) for x in re.findall(
+                r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*\n\s*\n", p.stdout, re.M)]
+            if os.path.exists(os.path.join(workdir, "md.out")):
+                res["md"] = parse_md_out(os.path.join(workdir, "md.out"))
+                res["trajectory"] = parse_xyz_frames(os.path.join(workdir, "geo_end.xyz"))
         return res
     finally:
         if own_dir and not keep:

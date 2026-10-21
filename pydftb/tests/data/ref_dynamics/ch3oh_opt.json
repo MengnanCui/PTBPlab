@@ -1,0 +1,170 @@
+{
+ "schema": 1,
+ "case": "ch3oh_opt",
+ "base": "ch3oh",
+ "kind": "opt",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "C",
+   "O",
+   "H",
+   "H",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    -0.08322938021039639,
+    0.6470076257108085,
+    -0.007777323131682757
+   ],
+   [
+    -0.0732528789440728,
+    -0.9317250560704278,
+    -0.018796031855423806
+   ],
+   [
+    -1.3262789565982744,
+    1.0008024199345926,
+    -0.06559611857191071
+   ],
+   [
+    1.0122318445846097,
+    -1.0783139779462405,
+    0.043984645458437346
+   ],
+   [
+    0.4766128587625238,
+    1.0725882354709326,
+    1.0925868362342166
+   ],
+   [
+    0.5726218352267325,
+    1.0935281330945024,
+    -1.0458834144981861
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "C": 1,
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 29
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_dyn_s70bztmm/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "n_scc": [
+   12,
+   8,
+   8,
+   8,
+   8,
+   8,
+   8,
+   8,
+   8,
+   8,
+   8,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   7,
+   8,
+   7,
+   8,
+   7,
+   7,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   6,
+   5,
+   6,
+   6,
+   6
+  ],
+  "geometry_steps": 45,
+  "wall": 0.4331782459994429,
+  "free_energy": -6.1522399602,
+  "positions": [
+   [
+    -0.08310771255,
+    0.6466240742,
+    -0.006966353691
+   ],
+   [
+    -0.07273696793,
+    -0.9323466384,
+    -0.01531612223
+   ],
+   [
+    -1.326148774,
+    1.000886758,
+    -0.064925872
+   ],
+   [
+    1.012844806,
+    -1.083178891,
+    0.03618736688
+   ],
+   [
+    0.4724346505,
+    1.079966008,
+    1.092547251
+   ],
+   [
+    0.5754193211,
+    1.09193607,
+    -1.043007677
+   ]
+  ],
+  "cell": null
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}

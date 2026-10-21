@@ -532,9 +532,14 @@ class DFTB:
     def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
 
-        Every pair term contributes (dE/d r_pair) (x) r_pair to the virial.
+        Every pair term contributes (dE/d r_pair) (x) r_pair to the virial.  As in DFTB+
+        (``RecomputeAfterDensity = Yes``, its default) the charge terms use the output
+        populations of the last iteration and their potentials: with a loose SCC
+        tolerance (PTBP: 1e-5) this keeps the forces equal to DFTB+'s to ~1e-11 Ha/Bohr,
+        where the input populations differ by ~|q_out - q_in| (M2f report).
         """
         pb = st.pairs
+        v_orb, vs_orb = self._potentials(st, sc.q_out)
         grad, w_rep = self._repulsive_gradient(st)
         nk = len(st.kw)
         nspin = len(sc.rho) // nk
@@ -562,20 +567,20 @@ class DFTB:
             w_e = w_t[t_of, pb.cols, pb.rows].real
             if nspin == 2:
                 p_m = ((ph * sgn[None, :]) @ rho2).reshape(-1, norb, norb)[t_of, pb.cols, pb.rows].real
-        vsum = 0.5 * (sc.v_orb[pb.rows] + sc.v_orb[pb.cols])
+        vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
         coef_s = p_e * vsum - w_e
         if p_m is not None:
-            coef_s = coef_s + p_m * 0.5 * (sc.vs_orb[pb.rows] + sc.vs_orb[pb.cols])
+            coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
         ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
         gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
         natom = len(st.pos)
         grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
-        dq_in, _ = self._charge_and_magnetisation(st, sc.q_in)
+        dq, _ = self._charge_and_magnetisation(st, sc.q_out)
         if self.scc:
-            g_scc, w_scc = st.coulomb.gradient(dq_in, virial=virial)
+            g_scc, w_scc = st.coulomb.gradient(dq, virial=virial)
             grad = grad + g_scc                                    # already per atom
         if st.third is not None:
-            g_3rd, w_3rd = st.third.gradient(dq_in, virial=virial)
+            g_3rd, w_3rd = st.third.gradient(dq, virial=virial)
             grad = grad + g_3rd
         if st.disp is not None:
             grad = grad + st.disp.gradient

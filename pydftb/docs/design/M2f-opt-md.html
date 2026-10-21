@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2f 优化与 MD 设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M2f</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2f · 设计文档</p>
+    <h1>结构优化与分子动力学的验证</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M2f-opt-md.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">验证 pydftb 通过 ASE 做结构优化和分子动力学（MD）时，与 DFTB+ 自带的驱动给出相同的结果；顺带让 SCC 没有完全收敛时的力也与 DFTB+ 相同。</p>
+    <ul>
+      <li>力和应力改用最后一轮的<strong>输出</strong>电荷（DFTB+ 的默认做法 <code>RecomputeAfterDensity</code>）。在 PTBP 用的 SCC 容差 1e-5 下实测 10 个体系：原来用输入电荷时与 DFTB+ 的力差最多 8.1e-7 Ha/Bohr，改后 ≤ 3.2e-11。</li>
+      <li><code>PyDFTB</code> 新增 <code>reuse_charges</code>：每一步从上一步的输入电荷开始 SCC，与 DFTB+ 驱动在几何步之间的做法相同，优化和 MD 的 SCC 轮数会大幅减少。默认关闭，保持与“ASE + DFTB+、每步一个新进程”逐步一致。</li>
+      <li>对照方法：DFTB+ 用自己的 <code>GeometryOptimisation</code>、<code>VelocityVerlet</code>；pydftb 用 ASE（BFGS、FrechetCellFilter、VelocityVerlet），设 <code>fd_delta = 1.22e-4</code> 让力与 DFTB+ 的数值导数相同，并打开 <code>reuse_charges</code>。</li>
+      <li>探测实验：从扰动过的结构直接优化时，DFTB+ 的 LBFGS 在软的水二聚体上步长越来越大，最后 SCC 发散、程序退出；Rational 稳定但很慢（甲醇 1918 步）。所以优化算例先用 pydftb 预优化到 0.02 eV/Å，两边再从同一个起点精细收敛，这时 DFTB+ 的 LBFGS 最快。</li>
+      <li>MD：DFTB+ 默认每步去掉质心运动（<code>KeepStationary</code>），ASE 不会，对照时关掉。ASE 的单位常数与 DFTB+ 相差约 1e-7，所以另写一个用 DFTB+ 常数的速度 Verlet，把积分器、力和单位常数分开检验。</li>
+      <li>验收：优化终点能量差 ≤ 1e-9 Ha、结构差 ≤ 1e-4 Å、晶格常数差 ≤ 1e-5 Å；MD 40 步内经 ASE 每帧位置差 ≤ 1e-7 Å、能量差 ≤ 2e-8 Ha，用 DFTB+ 常数时 ≤ 2e-8 Å、≤ 2e-9 Ha。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">11</span><span class="lbl">对照算例（7 个优化、4 段 MD）</span></li>
+      <li><span class="num">≤ 3.2e-11</span><span class="lbl">SCC 容差 1e-5 时与 DFTB+ 的力差（Ha/Bohr）</span></li>
+      <li><span class="num">0.5 fs</span><span class="lbl">MD 时间步长</span></li>
+    </ul>
+  </section>
+
+  <div class="callout note"><strong>实施中的变化</strong>（详见<a href="../reports/M2f-opt-md.html#deviations">完成报告第六节</a>）：优化算例从预优化的起点开始；Cu₄CO 的优化换成 Cu fcc 的晶格优化，Li bcc 改用立方惯用胞做均匀缩放；DFTB3 + D3 水二聚体的优化没有做；另加了容差 1e-5 的单点算例和 DFTB+ 常数下的速度 Verlet。</div>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与用途</a></li>
+      <li><a href="#dftbplus">二、DFTB+ 的驱动怎么工作</a></li>
+      <li><a href="#design">三、pydftb 的做法</a></li>
+      <li><a href="#details">四、DFTB+ 源码位置与文件格式</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#probe">五、探测实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">六、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">七、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与用途</h2>
+      <p>单点计算（一个结构的能量、力、应力）已经与 DFTB+ 逐项一致。实际工作中更常用的是在此基础上“走起来”：</p>
+      <ul>
+        <li><strong>结构优化</strong>：沿着力的方向移动原子（周期体系还可以改变晶胞），直到力和应力都接近零，得到稳定结构和晶格常数。</li>
+        <li><strong>分子动力学（MD）</strong>：按牛顿方程一步步推进原子的位置和速度，研究振动、扩散、反应。常用的速度 Verlet 算法在没有热浴时保持总能量守恒（NVE）。</li>
+      </ul>
+      <p>pydftb 不自己实现优化器和积分器，而是作为 ASE 的计算器，用 ASE 现成的 BFGS、FIRE、VelocityVerlet 等。本阶段要回答：这样得到的结果与 DFTB+ 自带驱动的结果是否一致；差在哪里、为什么。</p>
+    </section>
+
+    <section id="dftbplus">
+      <h2>二、DFTB+ 的驱动怎么工作</h2>
+      <h3>结构优化（<code>Driver = GeometryOptimisation</code>）</h3>
+      <ul>
+        <li>优化器：Rational（默认）、LBFGS、FIRE、SteepestDescent。</li>
+        <li>收敛判据（<code>Convergence</code> 块）：默认只看梯度的最大分量 <code>GradElem</code>（1e-4 Ha/Bohr），并要求这一步能量没有升高；梯度范数、位移的判据默认关闭。</li>
+        <li><code>LatticeOpt = Yes</code> 时，原子的笛卡尔坐标和三个晶格矢量作为独立变量一起优化；晶格的“梯度”由应力换算而来。收敛时力和应力同时为零，与 ASE 的 <code>FrechetCellFilter</code> 求的是同一个极小点。</li>
+      </ul>
+      <h3>分子动力学（<code>Driver = VelocityVerlet</code>）</h3>
+      <ul>
+        <li>算法：v(t+½Δt) = v(t) + ½a(t)Δt，x(t+Δt) = x(t) + v(t+½Δt)Δt，算新的力，v(t+Δt) = v(t+½Δt) + ½a(t+Δt)Δt。更新顺序与 ASE 的 <code>VelocityVerlet</code> 相同。</li>
+        <li>初速度可以由输入给出（<code>Velocities [AA/ps]</code>），DFTB+ 原样使用；质量取自 SKF 文件（测试用的参数中与 ASE 的值相同）。</li>
+        <li><code>KeepStationary</code> 默认开启：每一步去掉质心速度。ASE 的积分器不这样做，对照时关掉。</li>
+        <li>输出：<code>md.out</code> 每步的 Mermin 自由能（“Potential Energy”）、动能、总能（Hartree，10 位小数）；<code>geo_end.xyz</code> 每步的坐标（Å）、电荷和速度（Å/ps），8 位小数。</li>
+      </ul>
+      <h3>几何步之间的 SCC</h3>
+      <ul>
+        <li>下一步的初始电荷是上一步最后的输入电荷，混合器（Broyden）每步重置。</li>
+        <li>开自旋时，只有第一个几何步要求至少 2 轮 SCC；之后的步可以在第 1 轮就收敛。</li>
+      </ul>
+      <h3>力用哪一组电荷</h3>
+      <p><code>RecomputeAfterDensity</code> 默认开启：每次对角化之后，DFTB+ 用这一轮的<strong>输出</strong>电荷重新算 SCC 势（<code>main.F90:processPotentials</code>）。所以 SCC 结束时，力中的电荷项（库仑力 <code>addForceDc</code>）和势项（<code>derivative_shift</code> 用的 <code>potential%intBlock</code>）都来自输出电荷。pydftb 原来用输入电荷；SCC 收敛到 1e-10 时两者差 &lt; 1e-10，看不出来，收敛到 1e-5 时就看得出来了。</p>
+    </section>
+
+    <section id="design">
+      <h2>三、pydftb 的做法</h2>
+      <h3>力改用输出电荷</h3>
+      <p><code>calculator.DFTB._gradient</code> 用最后一轮的输出布居重新算电荷势和自旋势，库仑力和三阶项的力也用输出布居。能量本来就用输出电荷（与 DFTB+ 相同），不变。</p>
+      <h3>电荷复用</h3>
+      <p><code>PyDFTB(reuse_charges=True)</code>：若上一次计算的类型标签与这次相同，就把上一次的 <code>q_in</code> 作为这次 SCC 的初值；混合器每次计算新建，与 DFTB+ 每步重置混合器相同。默认关闭：PTBP 用 ASE + DFTB+ 时每个结构都是一个新的 DFTB+ 进程，从中性原子开始。</p>
+      <h3>对照方式</h3>
+      <ul>
+        <li>新模块 <code>validation/dynamics.py</code>：算例登记（引用已有单点算例的结构和哈密顿量设置）、DFTB+ 驱动的输入与输出解析、pydftb 经 ASE 的同一任务、冻结的 JSON（<code>tests/data/ref_dynamics/</code>）和比较。</li>
+        <li>优化：起点是基础算例的结构经 pydftb + BFGS 预优化到 0.02 eV/Å 的结果（冻结在 JSON 中），这样两边精细收敛的是同一个极小点。DFTB+ 用 LBFGS 收敛到 <code>GradElem</code>；pydftb 用 ASE 的 BFGS 收敛到同样大小的 <code>fmax</code>（换算成 eV/Å；ASE 判据是每个原子力的模长，比最大分量更严）。比较终点的 Mermin 能、结构（分子先做 Kabsch 叠合，周期体系比较分数坐标）和晶格参数。</li>
+        <li>MD：初速度由 ASE 按 Maxwell-Boltzmann 分布生成（固定随机种子，去掉质心平动和整体转动），写进 DFTB+ 的输入；两边都走 40 步、0.5 fs。逐帧比较位置、Mermin 能和动能。</li>
+        <li>两边的单位常数不同（ASE 用 CODATA 2014，DFTB+ 用自己的一组），相对差约 1e-7。除了 ASE 的 <code>VelocityVerlet</code>，再用 DFTB+ 的常数在原子单位下跑同一个速度 Verlet（<code>verlet_dftbplus_units</code>），两条路径分别比较。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="details">
+      <summary><span class="tag">开发细节</span><span class="title">四、DFTB+ 源码位置与文件格式</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>内容</th><th>文件与例程</th></tr></thead>
+          <tbody>
+            <tr><td>GeometryOptimisation 的输入</td><td><code>dftbplus/input/geoopt.F90</code>：<code>readGeoOptInput</code>、<code>readOptTolerance</code>（默认值）、<code>readFilterInput</code>（<code>LatticeOpt</code>）</td></tr>
+            <tr><td>收敛判据</td><td><code>dftbplus/main.F90</code>（<code>econv</code>、<code>gconv</code>、<code>dconv</code>）；默认值在 <code>geoopt/package.F90:TOptTolerance</code></td></tr>
+            <tr><td>晶格自由度</td><td><code>geoopt/filter.F90:transformDerivative</code>（σ = −Vσ<sub>stress</sub> − Σ g⊗r，乘 L<sup>−T</sup>）</td></tr>
+            <tr><td>速度 Verlet</td><td><code>md/velocityverlet.F90:VelocityVerlet_next</code></td></tr>
+            <tr><td>VelocityVerlet 的输入</td><td><code>dftbplus/parser.F90</code>（<code>KeepStationary</code> 默认 Yes、<code>MDRestartFrequency</code>、<code>Velocities</code>、<code>getInputMasses</code>）</td></tr>
+            <tr><td>md.out、xyz 的格式</td><td><code>dftbplus/mainio.F90:writeMdOut2</code>；<code>io/formatout.F90:writeXYZFormat_fid</code>（<code>F16.8</code>，速度换算 <code>Bohr__AA*1000/au__fs</code>）</td></tr>
+            <tr><td>混合器重置、电荷沿用</td><td><code>dftbplus/main.F90</code>（每个几何步 <code>chrgMixerReal%reset</code>；<code>qInput</code> 保留）</td></tr>
+            <tr><td>最少 SCC 轮数</td><td><code>dftbplus/initprogram.F90:getMinSccIters</code>（自旋 2，否则 1；只对第一个几何步）</td></tr>
+            <tr><td>力中的电荷</td><td><code>dftbplus/parser.F90</code>（<code>RecomputeAfterDensity</code> 默认 Yes）；<code>main.F90:processPotentials</code>、<code>getGradients</code></td></tr>
+          </tbody>
+        </table></div>
+        <h3>需要改动或新增的代码</h3>
+        <ul>
+          <li><code>calculator.py</code>：<code>_gradient</code> 用输出布居。</li>
+          <li><code>ase_calc.py</code>：<code>reuse_charges</code>。</li>
+          <li><code>validation/dftbplus.py</code>：<code>opt_driver</code>、<code>md_driver</code>、<code>parse_md_out</code>、<code>parse_xyz_frames</code>、<code>read_gen</code>；<code>run(driver=...)</code> 返回几何步数、终点结构和轨迹。</li>
+          <li><code>validation/dynamics.py</code>（新）与 <code>tests/test_md_opt.py</code>（新）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="probe">
+      <summary><span class="tag">开发细节</span><span class="title">五、探测实验记录</span></summary>
+      <div class="body">
+        <p>脚本在 scratchpad（<code>m2f/</code>，未进仓库），本机 DFTB+ 25.1。</p>
+        <ul>
+          <li><code>force_charges.py</code>：10 个单点算例，DFTB+ 与 pydftb 都用 <code>SCCTolerance = 1e-5</code>，pydftb 用 <code>fd_delta = 1.22e-4</code>。SCC 轮数全部相同；力差用输入电荷时为 1.6e-11 到 8.1e-7 Ha/Bohr（随 |q<sub>out</sub> − q<sub>in</sub>| 增大），用输出电荷时全部 ≤ 3.2e-11；应力差同样从 1.1e-9 降到 ≤ 1.8e-11。</li>
+          <li><code>probe_md.py</code>：给定速度的 VelocityVerlet 正常运行；<code>Steps = 6</code> 时 <code>md.out</code> 和 xyz 各有 7 帧（第 0 帧是初始结构），与 ASE 的记录方式相同。</li>
+          <li><code>probe_opt.py</code>：水二聚体（从扰动过的结构开始）用 <code>Optimiser = LBFGS {}</code>，第 12 步后步长从 0.2 增大到 0.8 Bohr，第 23 步的结构上 SCC 500 轮不收敛，程序报错退出。</li>
+          <li><code>optimisers.py</code>：从预优化的起点，DFTB+ 的 LBFGS、Rational、FIRE 到 GradElem = 1e-7 的步数：H₂O 9/63/65，甲醇 45/1918/125，能量全部相同。</li>
+          <li>Cu₄CO（测试用的 PTBP Cu 参数）：从算例结构出发，团簇在优化中塌缩，能量一路下降、力达到 10–80 eV/Å，三种优化器都收敛不了。这不是有意义的极小点，改用 Cu fcc 的晶格优化。</li>
+          <li>Li bcc 原胞的晶格优化：DFTB+ 的 LBFGS 沿一个非常软的剪切方向漂移，停在比对称极小点高 6.6e-9 Ha 的位置（两边在同一结构上的应力相差约 1e-14 Ha/Bohr³，力与应力本身一致）。<code>Isotropic = Yes</code> 也不行：它只收敛压强，而晶格步长沿 L<sup>−T</sup>，对非正交的原胞会剪切晶胞（停在高 2.7e-7 Ha 处）。改用立方惯用胞（2 个原子）做均匀缩放。</li>
+          <li><code>vv_au.py</code>：用 DFTB+ 的常数在原子单位下积分，四段 MD 与 DFTB+ 的轨迹相差 ≤ 1.5e-8 Å（xyz 只有 8 位小数）、能量 ≤ 5e-10 Ha；经 ASE 则为 ≤ 4.4e-8 Å、≤ 1.1e-8 Ha，差别来自单位常数。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">六、验证计划</span></summary>
+      <div class="body">
+        <h3>算例</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>任务</th><th>基于</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2o_opt</code></td><td>优化</td><td><code>h2o</code></td><td>最简单的分子</td></tr>
+            <tr><td><code>ch3oh_opt</code></td><td>优化</td><td><code>ch3oh</code></td><td>多种元素</td></tr>
+            <tr><td><code>water_dimer_opt</code></td><td>优化</td><td><code>water_dimer_hdamp</code></td><td>软的氢键（结构对力最敏感）</td></tr>
+            <tr><td><code>o2_triplet_opt</code></td><td>优化</td><td><code>o2_triplet_wmatrix</code></td><td>自旋</td></tr>
+            <tr><td><code>cuo_chain_opt</code></td><td>优化</td><td><code>cuo_chain_k422</code></td><td>周期体系、k 点（只动原子）</td></tr>
+            <tr><td><code>li_bcc_cellopt</code></td><td>晶格优化（均匀缩放）</td><td><code>li_bcc_cubic_k444_1000K</code>（新的单点算例）</td><td>应力驱动的晶格常数</td></tr>
+            <tr><td><code>cu_fcc_cellopt</code></td><td>晶格优化</td><td><code>cu_fcc_k6</code></td><td>金属、电子展宽（极小的是 Mermin 自由能）</td></tr>
+            <tr><td><code>h2o_md</code></td><td>MD 40 步</td><td><code>h2o</code></td><td>积分器、单位</td></tr>
+            <tr><td><code>water_dimer_md</code></td><td>MD 40 步</td><td><code>water_dimer_hdamp</code></td><td>分子间运动</td></tr>
+            <tr><td><code>o2_triplet_md</code></td><td>MD 40 步</td><td><code>o2_triplet_wmatrix</code></td><td>自旋、电荷复用</td></tr>
+            <tr><td><code>cuo_chain_md</code></td><td>MD 40 步</td><td><code>cuo_chain_k422</code></td><td>周期体系、展宽</td></tr>
+          </tbody>
+        </table></div>
+        <h3>另外要在报告中给出</h3>
+        <ul>
+          <li>较长的 NVE 运行（水二聚体约 1 ps）中两边的总能漂移；pydftb 的精确导数与有限差分导数各一条。</li>
+          <li>每个 MD 步的耗时（pydftb 与 DFTB+），以及 <code>reuse_charges</code> 带来的 SCC 轮数下降。</li>
+          <li>ASE 的 BFGS、LBFGS、FIRE 所需步数，与 DFTB+ 的优化器对比（只作参考，判据不同）。</li>
+          <li>力改用输出电荷后，所有单点参考算例和 PTBP 损失函数的对照（<code>tools/engine_parity.py</code>）不变差。</li>
+        </ul>
+        <h3>测试（<code>tests/test_md_opt.py</code>，不需要 DFTB+）</h3>
+        <ul>
+          <li>冻结的优化与 MD 参考逐个复现；</li>
+          <li><code>reuse_charges</code>：第二次计算的 SCC 轮数明显减少，结果不变；类型标签变了就不复用；</li>
+          <li>SCC 容差放宽时，力仍是能量的导数（与能量的有限差分比较），并且与“完全收敛”的力相差在容差量级。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>七、局限与不做的事</h2>
+      <ul>
+        <li>热浴（Andersen、Berendsen、NHC）、压浴、约束和 XL-BOMD 不在本阶段对照（XL-BOMD 在 M6）。</li>
+        <li>DFTB+ 旧式的优化驱动（已弃用）不对照。</li>
+        <li>pydftb 自己不实现优化器和积分器，全部交给 ASE。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M2e-bands.html">← M2e 能带报告</a><a href="../index.html">文档索引</a><a href="../reports/M2f-opt-md.html">M2f 优化与 MD 报告 →</a></nav>
+    <span>M2f</span>
+  </footer>
+</div>
+</body>
+</html>

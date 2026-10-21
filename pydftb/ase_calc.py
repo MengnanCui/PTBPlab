@@ -38,6 +38,10 @@ class PyDFTB(Calculator):
                Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
     repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
     threads : limit BLAS/OpenMP threads during the calculation (None = leave as is).
+    reuse_charges : start each SCC from the previous calculation's input populations
+            (same type labels), as DFTB+'s own drivers do between geometry steps; far
+            fewer SCC iterations in optimisations and MD.  Default off: every
+            calculation starts from neutral atoms, as ASE + DFTB+ (a new process each time).
     labels : optional type labels per atom (several parameter sets per element);
              default: chemical symbols.
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
@@ -59,7 +63,7 @@ class PyDFTB(Calculator):
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
                  spin: bool = False, unpaired_electrons: float = 0.0,
                  relax_total_spin: bool = False, spin_constants: dict | None = None,
-                 dispersion=None, **kwargs):
+                 dispersion=None, reuse_charges: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -75,7 +79,9 @@ class PyDFTB(Calculator):
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.labels = None if labels is None else list(labels)
+        self.reuse_charges = reuse_charges
         self.raw = None          # last pydftb.DFTBResult (atomic units)
+        self._raw_labels = None  # type labels of that result
 
     # ------------------------------------------------------------------
     def _kpoints(self, atoms, spec=None):
@@ -115,10 +121,13 @@ class PyDFTB(Calculator):
         # As in DFTB+, periodic force runs also give the stress (about 1 % extra
         # time), so ASE cell filters, which ask for forces and then stress, need one run.
         want_forces = "forces" in properties or (periodic and "stress" in properties)
+        q_init = None
+        if self.reuse_charges and self.raw is not None and self._raw_labels == list(labels):
+            q_init = self.raw.q_in        # DFTB+ keeps qInput between geometry steps
         run = lambda: calc.calculate(labels, a.positions / BOHR,       # noqa: E731
                                      a.cell.array / BOHR if periodic else None,
                                      a.pbc if periodic else None,
-                                     forces=want_forces)
+                                     forces=want_forces, q_init=q_init)
         if self.threads is None:
             r = run()
         else:
@@ -126,6 +135,7 @@ class PyDFTB(Calculator):
             with threadpool_limits(self.threads):
                 r = run()
         self.raw = r
+        self._raw_labels = list(labels)
         self.results["energy"] = r.energy * units.Hartree
         self.results["free_energy"] = r.free_energy * units.Hartree
         q0 = np.array([sk.occupation[lab].sum() for lab in labels])

@@ -106,6 +106,7 @@ class Case:
     regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
     dp_dos: list | None = None            # dp_dos curves to freeze: [(file, [arguments])]
     ewald_tolerance: float | None = None  # DFTB+ EwaldTolerance (default 1e-9)
+    scc_tol: float = 1e-10                # SCC tolerance of both codes
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
@@ -195,6 +196,10 @@ def _oh():
 
 def _li_bcc():
     return bulk("Li", "bcc", a=3.50)     # every shell >= 4e-3 Bohr from a grid node
+
+
+def _li_bcc_cubic():
+    return bulk("Li", "bcc", a=3.50, cubic=True)
 
 
 def _li_bcc_node():
@@ -348,5 +353,20 @@ CASES = [
                  ("c.2.0.out", ["-w", "-f", "fermi", "-b", "0.2", "-g", "0.05"]),
                  ("o.out", ["-w", "-f", "mp", "-o", "2", "-g", "0.05"])],
          tol=TOL_BANDS, note="molecular PDOS from the SCC run's projections; dp_dos curves"),
+    # --- geometry optimisation and MD (milestone M2f; the driver cases are in dynamics.py) ---
+    Case("li_bcc_cubic_k444_1000K", _li_bcc_cubic, skf_set="orbit", kgrid=(4, 4, 4),
+         filling=("fermi", 1000.0), tol={"energy": 1e-8, "forces": 1e-9, "charges": 1e-9},
+         note="conventional cubic cell (2 atoms), base of the isotropic lattice optimisation"),
+    # --- loose SCC tolerance, as PTBP uses (milestone M2f): forces from the output charges ---
+    Case("ch3oh_loose_scc", _meoh, scc_tol=1e-5,
+         note="SCC tolerance 1e-5: DFTB+ takes the force charges from the last output charges "
+              "(RecomputeAfterDensity); input charges would differ by 1.4e-7 Ha/Bohr"),
+    Case("water_dimer_dftb3_loose_scc", _water_dimer, scc_tol=1e-5,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_3OB},
+         note="as ch3oh_loose_scc, with DFTB3 (input charges: 8.1e-7 Ha/Bohr)"),
+    Case("cuo_chain_spin_loose_scc", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, scc_tol=1e-5,
+         ewald_tolerance=1e-12, tol={"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "stress": 1e-9},
+         note="as ch3oh_loose_scc, periodic with spin; also the stress"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

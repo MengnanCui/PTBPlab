@@ -69,6 +69,21 @@ e, d = st.pdos(atoms=[0], shell=2)                          # d shell of atom 0
 `pydftb.SCC.states()` does the same in atomic units; `pydftb.bands.klines` turns a DFTB+ `Klines`
 block into k-points.  Details: [`docs/reports/M2e-bands.html`](docs/reports/M2e-bands.html).
 
+### Geometry optimisation and MD
+
+`PyDFTB` works with ASE's optimisers, cell filters and integrators.  For optimisations and MD,
+`reuse_charges=True` starts each SCC from the previous step's charges, as DFTB+'s own drivers do:
+
+```python
+from ase.optimize import BFGS
+atoms.calc = PyDFTB("path/to/skf", reuse_charges=True)
+BFGS(atoms).run(fmax=0.01)
+```
+
+Comparisons with DFTB+'s `GeometryOptimisation` and `VelocityVerlet`:
+`python -m pydftb.validation.dynamics --check`; details in
+[`docs/reports/M2f-opt-md.html`](docs/reports/M2f-opt-md.html).
+
 ## Tests and validation
 
 ```bash
@@ -76,4 +91,5 @@ PYTHONPATH=. pytest pydftb/tests                    # offline, uses frozen DFTB+
 python -m pydftb.validation.refgen --check          # table of deviations from DFTB+
 python -m pydftb.validation.refgen --regenerate     # needs dftb+; rewrites the references
 python -m pydftb.validation.refgen --live           # fresh comparison with dftb+
+python -m pydftb.validation.dynamics --check        # optimisation and MD vs DFTB+'s drivers
 ```

@@ -1,0 +1,100 @@
+{
+ "schema": 1,
+ "case": "h2o_opt",
+ "base": "h2o",
+ "kind": "opt",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08409450883754098,
+    0.02268228460837757,
+    0.1641248825270186
+   ],
+   [
+    -0.053752554425807925,
+    0.7876916566228993,
+    -0.6081287663237274
+   ],
+   [
+    0.08446747087444442,
+    -0.8357517254923017,
+    -0.5163616838576228
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 7
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_dyn_sess4raf/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "n_scc": [
+   8,
+   5,
+   5,
+   4,
+   4,
+   4,
+   4,
+   4,
+   4
+  ],
+  "geometry_steps": 9,
+  "wall": 0.07065727799999877,
+  "free_energy": -3.9275421256,
+  "positions": [
+   [
+    0.08409067161,
+    0.02278916848,
+    0.1641716286
+   ],
+   [
+    -0.05376734473,
+    0.7878889534,
+    -0.6081198234
+   ],
+   [
+    0.0844860984,
+    -0.8360559062,
+    -0.5164173729
+   ]
+  ],
+  "cell": null
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}
