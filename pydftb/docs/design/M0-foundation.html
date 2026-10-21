@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M0 底座设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M0</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M0 · 设计文档</p>
+    <h1>底座整理</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>dc9d59e</code></dd></div><div><dt>配套</dt><dd><a href="../reports/M0-foundation.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">原型已经证明 pydftb 能与 DFTB+ 算得一样。M0 不加新物理，只为后面所有阶段打底座。</p>
+    <ul>
+      <li>计算拆成 <code>_setup</code>、<code>_scc</code>、<code>_energies</code>、<code>_gradient</code> 四段，新功能各有落脚点，结果逐位不变。</li>
+      <li>与硬件相关的操作集中到 <code>backend/ops.py</code>（函数式的 <code>scatter_add</code>），为 PyTorch/GPU 后端做准备。</li>
+      <li><code>System</code> 同时记录类型标签和元素，<code>ParamSet</code> 负责“标签 → SKF 文件”，约定与 DFTB+ 的 <code>Type2FileNames</code> 相同。</li>
+      <li>参考结果冻结为 JSON（<code>pydftb.validation</code>），测试和 CI 都不需要 DFTB+。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">12</span><span class="lbl">计划的 DFTB+ 对照算例</span></li>
+      <li><span class="num">4 段</span><span class="lbl">_setup → _scc → _energies → _gradient</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">目标</a></li>
+      <li><a href="#sec-2">设计决定</a></li>
+      <li><a href="#sec-3">测试计划</a> <span class="dev-mark">开发细节</span></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<section id="sec-1">
+<h2>目标</h2>
+<p>原型阶段已经证明 pydftb 能和 DFTB+ 算得一样。M0 不加新物理，而是为后面所有阶段打底座，满足三点：</p>
+<ol type="1">
+<li><strong>加新功能有固定的位置</strong>，不必每次都改同一个大函数。</li>
+<li><strong>以后换成 GPU / PyTorch 时不需要重写物理代码。</strong></li>
+<li><strong>每个功能都能和 DFTB+ 对照</strong>，而且测试不依赖 DFTB+。</li>
+</ol>
+</section>
+<section id="sec-2">
+<h2>设计决定</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>问题</th>
+<th>决定</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>目录结构</td>
+<td>保持扁平（<code>pydftb/*.py</code>），只新增文件</td>
+<td>代码只有约 2 千行，搬进 <code>core/</code>、<code>physics/</code> 只会打断引用，没有收益（采纳计划审查意见）</td>
+</tr>
+<tr>
+<td>与硬件相关的操作</td>
+<td>新增 <code>backend/ops.py</code>，只放 <code>scatter_add</code>、<code>segment_sum</code>、本征分解、Cholesky、线性求解；<code>scatter_add</code> 是<strong>函数式</strong>的（返回新数组）</td>
+<td>PyTorch 的自动求导要求不原地修改；其余标准操作直接用数组库</td>
+</tr>
+<tr>
+<td>一个大函数 <code>calculate()</code></td>
+<td>拆成 <code>_setup</code>、<code>_scc</code>、<code>_energies</code>、<code>_gradient</code> 四段，数学完全不变</td>
+<td>DFTB3、自旋、应力等功能各有落脚点；拆分后结果逐位相同</td>
+</tr>
+<tr>
+<td>“元素”与“参数”混在一起</td>
+<td><code>System</code> 同时记录<strong>类型标签</strong>和<strong>元素</strong>；<code>ParamSet</code> 负责“标签 → SKF 文件”</td>
+<td>为“同一元素多套参数”（M5）打基础；标签约定与 DFTB+/ASE 的 <code>Type2FileNames</code> 相同（<code>O2-H.skf</code>），可以直接和 DFTB+ 对照</td>
+</tr>
+<tr>
+<td>对外接口</td>
+<td>PySCF 风格的 <code>pydftb.SCC(system, params).kernel()</code></td>
+<td>状态保存在对象里，用户熟悉；原有的 <code>DFTB</code>、<code>SKSet</code>、<code>PyDFTB</code> 保持不变</td>
+</tr>
+<tr>
+<td>邻居表</td>
+<td>整数配对表（i, j, 平移）与键矢量分开（<code>pair_vectors</code>）</td>
+<td>以后求应力或换后端时，只需重新计算矢量</td>
+</tr>
+<tr>
+<td>与 DFTB+ 一致的数值约定</td>
+<td>新增 <code>constants.py</code> 中的 <code>MIN_HUB_DIFF</code> 等容差，γ 函数中“两个 U 相等”的判据与 DFTB+ 相同</td>
+<td>原判据（|Δτ|&lt;1e-8）与 DFTB+ 不同，在 M5 的平滑切换中会造成不连续</td>
+</tr>
+<tr>
+<td>测试数据</td>
+<td>两套 SKF（H/C/O/Cu、H/O/Li）以 gzip 格式放进 <code>tests/data/skf</code>，并附来源和 sha256；pydftb 直接读取 <code>.skf.gz</code></td>
+<td>原先依赖 <code>/tmp</code> 里的临时文件，无法复现</td>
+</tr>
+<tr>
+<td>与 DFTB+ 对照</td>
+<td>新增 <code>pydftb.validation</code> 子包：<code>cases.py</code>（算例登记）、<code>dftbplus.py</code>（运行 DFTB+）、<code>refgen.py</code>（<code>--regenerate</code> / <code>--check</code> / <code>--live</code>）；参考结果写成 JSON，记录精确坐标、设置、HSD 文本和 DFTB+ 版本</td>
+<td>测试只需 pydftb，CI 可以直接运行</td>
+</tr>
+</tbody>
+</table></div>
+</section>
+<details class="dev" id="sec-3"><summary><span class="tag">开发细节</span><span class="title">测试计划</span></summary><div class="body">
+<h2>测试计划</h2>
+<ul>
+<li>重构前后，3 个代表体系的结果<strong>逐位相同</strong>（能量、电荷完全一致，力只因求和顺序不同而相差 1e-17）。</li>
+<li>12 个对照算例全部在容差内：
+<ul>
+<li>原型阶段的 8 个体系；</li>
+<li>新增 4 个：非 SCC、金属 T=0、Li 参数集，以及<strong>多类型标签（<code>O2</code>）经 DFTB+ <code>Type2FileNames</code></strong>。</li>
+</ul></li>
+<li>新接口与底层 <code>DFTB</code> 的结果一致；带类型标签的计算与普通计算逐位相同。</li>
+</ul>
+</div></details>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a><a href="../reports/M0-foundation.html">M0 底座报告 →</a></nav>
+    <span>由 Markdown 原稿转换（design/M0-foundation.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -7,9 +7,9 @@
 | 阶段 | 内容 | 状态 | 文档 |
 |---|---|---|---|
 | 原型 | SCC-DFTB 原型、加速实验、调研报告 | ✅ 完成 | `../RESEARCH.md` |
-| M0 | 底座整理：ops 分发层、`System`/`ParamSet`/`SCC` 接口、四段式计算、冻结的 DFTB+ 参考数据、文档骨架 | ✅ 完成 | `design/M0-foundation.md`，`reports/M0-foundation.md` |
-| M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | ✅ 完成（损失函数相对差 < 1e-7，DFTB 阶段快 1.8 倍） | `design/M1-ptbp-integration.md`，`reports/M1-ptbp-integration.md` |
-| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 进行中：M2a 应力 ✅（与 DFTB+ 差 ≤ 3e-9 Ha/Bohr³，顺带修正 SKF 表格末端）；M2b DFTB3 ✅（顺带修正 U 接近时 γ 的数值崩溃）；M2c 共线自旋 ✅（SCC 轮数与 DFTB+ 全部相同）；M2d 色散 ✅（UFF、SK、D3、SimpleD3、D4，色散部分与 DFTB+ 差 ≤ 1e-10；发现 DFTB+ 原生 D4 的三处问题；仓库改为 MIT 许可）；下一步能带/DOS | `design/M2a-stress.md`、`reports/M2a-stress.md`；`design/M2b-dftb3.md`、`reports/M2b-dftb3.md`；`design/M2c-spin.md`、`reports/M2c-spin.md`；`design/M2d-dispersion.md`、`reports/M2d-dispersion.md` |
+| M0 | 底座整理：ops 分发层、`System`/`ParamSet`/`SCC` 接口、四段式计算、冻结的 DFTB+ 参考数据、文档骨架 | ✅ 完成 | `design/M0-foundation.html`，`reports/M0-foundation.html` |
+| M1 | 接入 PTBP：`--engine pydftb`、`--smearing` 开关、MP/Gaussian 展宽、Broyden 混合、排斥势开关、PTBP 损失函数等价性 | ✅ 完成（损失函数相对差 < 1e-7，DFTB 阶段快 1.8 倍） | `design/M1-ptbp-integration.html`，`reports/M1-ptbp-integration.html` |
+| M2 | DFTB+ 功能补齐·第一波：应力、DFTB3、自旋、色散、能带/DOS、结构优化/MD、f 轨道 | 进行中：M2a 应力 ✅（与 DFTB+ 差 ≤ 3e-9 Ha/Bohr³，顺带修正 SKF 表格末端）；M2b DFTB3 ✅（顺带修正 U 接近时 γ 的数值崩溃）；M2c 共线自旋 ✅（SCC 轮数与 DFTB+ 全部相同）；M2d 色散 ✅（UFF、SK、D3、SimpleD3、D4，色散部分与 DFTB+ 差 ≤ 1e-10；发现 DFTB+ 原生 D4 的三处问题；仓库改为 MIT 许可）；下一步能带/DOS | `design/M2a-stress.html`、`reports/M2a-stress.html`；`design/M2b-dftb3.html`、`reports/M2b-dftb3.html`；`design/M2c-spin.html`、`reports/M2c-spin.html`；`design/M2d-dispersion.html`、`reports/M2d-dispersion.html` |
 | M3 | 计算策略推荐器 v1（CPU）+ 结构/k 点并行分发 + DFTB+ 配置顾问 | 计划 | — |
 | M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |

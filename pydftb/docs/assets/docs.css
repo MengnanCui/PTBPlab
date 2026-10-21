@@ -1,0 +1,210 @@
+/* pydftb development docs: one reading column of a validation dossier.  Every page
+   opens with a tinted "关键信息" card; development details sit in collapsible blocks;
+   wide tables and code scroll inside their own boxes. */
+:root {
+  --paper: #f3f6f6;        /* page ground, cool grey with a teal bias */
+  --sheet: #ffffff;        /* cards, table heads */
+  --ink: #142228;
+  --ink-soft: #52636a;
+  --rule: #d3dcdf;
+  --accent: #0a6a74;       /* plotter-ink teal: links, labels */
+  --accent-wash: #e1eff0;
+  --flag: #94520a;         /* problems found in DFTB+, warnings */
+  --flag-wash: #faeedd;
+  --pass: #2a743b;
+  --pass-wash: #e2f1e5;
+  --code-bg: #e8eeef;
+  --font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --font-body: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB",
+               "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --step--1: 0.8125rem;
+  --step-0: 1rem;
+  --step-1: 1.1875rem;
+  --step-2: 1.4375rem;
+  --step-3: 2rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e1619; --sheet: #142126; --ink: #dbe6e9; --ink-soft: #98aab0; --rule: #2a3b41;
+    --accent: #5ec3cd; --accent-wash: #12343a; --flag: #e7a85a; --flag-wash: #392a16;
+    --pass: #78cf8a; --pass-wash: #173324; --code-bg: #1a292e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0e1619; --sheet: #142126; --ink: #dbe6e9; --ink-soft: #98aab0; --rule: #2a3b41;
+  --accent: #5ec3cd; --accent-wash: #12343a; --flag: #e7a85a; --flag-wash: #392a16;
+  --pass: #78cf8a; --pass-wash: #173324; --code-bg: #1a292e;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.75;
+  -webkit-text-size-adjust: 100%;
+}
+.page {
+  max-width: 50rem;
+  margin: 0 auto;
+  padding-block: 1.5rem 4rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+.page > * { min-width: 0; }
+
+a { color: var(--accent); text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+/* ---- header ---------------------------------------------------------- */
+.crumbs { font-size: var(--step--1); color: var(--ink-soft); }
+.crumbs a { color: inherit; }
+.doc-head { display: flex; flex-direction: column; gap: 0.5rem; }
+.eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+h1, h2, h3, h4 { font-family: var(--font-display); line-height: 1.35; text-wrap: balance; }
+h1 { margin: 0; font-size: var(--step-3); font-weight: 700; }
+.meta {
+  display: flex; flex-wrap: wrap; gap: 0.35rem 1.5rem;
+  margin: 0.25rem 0 0; font-size: var(--step--1); color: var(--ink-soft);
+}
+.meta div { display: flex; gap: 0.4rem; align-items: baseline; }
+.meta dt { font-weight: 500; }
+.meta dd { margin: 0; color: var(--ink); }
+.chip {
+  display: inline-block; padding: 0 0.55em; border-radius: 999px;
+  font-size: var(--step--1); line-height: 1.7; font-weight: 500; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.chip.done { background: var(--pass-wash); color: var(--pass); }
+.chip.wip { background: var(--accent-wash); color: var(--accent); }
+.chip.plan { border-color: var(--rule); color: var(--ink-soft); }
+
+/* ---- key information card --------------------------------------------- */
+.key {
+  background: var(--accent-wash);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1.25rem 1.25rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.75rem;
+}
+.key h2 {
+  margin: 0; font-family: var(--font-mono); font-size: var(--step--1); font-weight: 500;
+  letter-spacing: 0.1em; color: var(--accent);
+}
+.key .lead { margin: 0; font-size: var(--step-1); line-height: 1.6; font-weight: 500; }
+.key ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 0.35rem; }
+.key li::marker { color: var(--accent); }
+.key .figures {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.6rem;
+  margin: 0.25rem 0 0; padding: 0; list-style: none;
+}
+.figures li {
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 0.55rem 0.75rem; display: flex; flex-direction: column; gap: 0.1rem;
+}
+.figures .num {
+  font-family: var(--font-mono); font-size: var(--step-2); line-height: 1.2;
+  font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.figures .lbl { font-size: var(--step--1); color: var(--ink-soft); line-height: 1.45; }
+
+/* ---- table of contents ----------------------------------------------- */
+.toc { font-size: var(--step--1); color: var(--ink-soft); }
+.toc ol { margin: 0.25rem 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+.toc .dev-mark { font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-soft); }
+
+/* ---- document body --------------------------------------------------- */
+.doc { display: flex; flex-direction: column; gap: 0.25rem; }
+.doc h2 {
+  font-size: var(--step-2); margin: 1.5rem 0 0.25rem; padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+.doc h3 { font-size: var(--step-1); margin: 1.1rem 0 0.1rem; }
+.doc h4 { font-size: var(--step-0); margin: 0.9rem 0 0; }
+.doc p, .doc ul, .doc ol { margin: 0.35rem 0; max-width: 46rem; }
+.doc li + li { margin-top: 0.15rem; }
+.doc strong { font-weight: 700; }
+.doc blockquote {
+  margin: 0.5rem 0; padding: 0.6rem 0.9rem; background: var(--sheet);
+  border: 1px solid var(--rule); border-radius: 8px; color: var(--ink-soft);
+}
+.doc blockquote p { margin: 0.2rem 0; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em; background: var(--code-bg);
+  padding: 0.08em 0.35em; border-radius: 4px; overflow-wrap: anywhere;
+}
+pre {
+  margin: 0.5rem 0; padding: 0.8rem 1rem; background: var(--code-bg); border-radius: 8px;
+  overflow-x: auto; line-height: 1.55; font-size: var(--step--1);
+}
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.table-wrap { overflow-x: auto; margin: 0.5rem 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); }
+table {
+  border-collapse: collapse; width: 100%; font-size: var(--step--1); line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--rule); }
+th { font-weight: 700; background: var(--code-bg); white-space: nowrap; }
+td code { overflow-wrap: normal; white-space: nowrap; }   /* tables scroll instead of splitting names */
+tbody tr:last-child td { border-bottom: none; }
+
+/* ---- development details --------------------------------------------- */
+details.dev {
+  margin: 1rem 0 0.25rem; border: 1px dashed var(--rule); border-radius: 10px;
+  background: var(--sheet);
+}
+details.dev > summary {
+  cursor: pointer; padding: 0.65rem 1rem; list-style: none;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem;
+}
+details.dev > summary::-webkit-details-marker { display: none; }
+details.dev > summary::before {
+  content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch;
+}
+details.dev[open] > summary::before { content: "−"; }
+details.dev > summary .tag {
+  font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.06em; color: var(--ink-soft);
+}
+details.dev > summary .title { font-family: var(--font-display); font-weight: 700; font-size: var(--step-1); }
+details.dev > .body { padding: 0 1rem 0.9rem; display: flex; flex-direction: column; gap: 0.25rem; }
+details.dev > .body > h2 { display: none; }   /* the summary already names the section */
+
+/* ---- callouts --------------------------------------------------------- */
+.callout { border-radius: 8px; padding: 0.7rem 0.9rem; margin: 0.5rem 0; }
+.callout.flag { background: var(--flag-wash); color: var(--ink); }
+.callout.flag strong:first-child { color: var(--flag); }
+.callout.note { background: var(--accent-wash); }
+
+/* ---- index page ------------------------------------------------------- */
+.stage-table td:first-child { font-family: var(--font-mono); white-space: nowrap; }
+.stage-table td:nth-child(3) { white-space: nowrap; }
+.links { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; white-space: nowrap; }
+
+/* ---- footer ----------------------------------------------------------- */
+.doc-foot {
+  border-top: 1px solid var(--rule); padding-top: 1rem; font-size: var(--step--1);
+  color: var(--ink-soft); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem;
+}
+.doc-foot nav { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; }
+
+@media (max-width: 30rem) {
+  :root { --step-3: 1.6rem; --step-2: 1.25rem; }
+  .key { padding: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+}

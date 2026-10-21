@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2b DFTB3 报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M2b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2b · 完成报告</p>
+    <h1>DFTB3</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>3531752</code></dd></div><div><dt>配套</dt><dd><a href="../design/M2b-dftb3.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">DFTB3 完成：8 个新对照算例全部通过，SCC 轮数与 DFTB+ 完全相同，能量差 ≤ 6e-9 Ha。</p>
+    <ul>
+      <li><strong>重要发现：</strong>两个原子的 U 只差 3e-6 到 1e-3 时，DFTB+ 的 γ 闭式公式数值崩溃，DFTB3 下总能量错 0.5 eV。pydftb 改用 Hermite–Genocchi 积分形式，相对误差 ≤ 4e-12。</li>
+      <li>查清了 M0 以来水分子 1.2e-6 Ha/Bohr 力差的来源：H–H 距离离 SK 表格第 153 个节点只有 4e-6 Bohr。</li>
+      <li>费米能级的“带隙中点”捷径会让力与能量差约 5e-7 Ha/Bohr（DFTB+ 相同）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">8</span><span class="lbl">新参考算例</span></li>
+      <li><span class="num">0.5 eV</span><span class="lbl">U 接近时 DFTB+ 的能量误差</span></li>
+      <li><span class="num">≤ 4e-12</span><span class="lbl">pydftb 修正后的相对误差</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-2">二、验证结果</a></li>
+      <li><a href="#sec-3">三、发现的问题与学到的东西</a></li>
+      <li><a href="#sec-4">四、与计划的偏差</a></li>
+      <li><a href="#sec-5">五、下一步</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<details class="dev" id="sec-1"><summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary><div class="body">
+<h2>一、做了什么</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>位置</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>thirdorder.py</code>（新）</td>
+<td>照搬 DFTB+ <code>thirdorder.F90</code> 的 Γ 函数族（向量化）；<code>ThirdOrder</code> 类：Γ 存成稠密矩阵，提供 <code>energy_shift</code>（E₃ 与三阶势）和 <code>gradient</code>（力和维里）；照搬 DFTB+ 的三阶截断算法 <code>expGammaCutoff</code></td>
+</tr>
+<tr>
+<td><code>coulomb.py</code></td>
+<td>H–X 阻尼：含 H 的原子对，短程函数乘以 exp(−((U_a+U_b)/2)^ζ r²)；U 接近时改用稳定的积分形式（见第三节第 1 条）</td>
+</tr>
+<tr>
+<td><code>calculator.py</code></td>
+<td>新参数 <code>third_order</code>、<code>hubbard_derivs</code>、<code>h_damping</code>；SCC 循环里把三阶势加到二阶势上；新增 <code>DFTBResult.e_3rd</code>；力和应力加上三阶项</td>
+</tr>
+<tr>
+<td><code>ase_calc.py</code></td>
+<td><code>PyDFTB</code> 透传上述三个参数</td>
+</tr>
+<tr>
+<td><code>validation/</code></td>
+<td>算例可带 DFTB3 设置，自动写入 DFTB+ 的 <code>ThirdOrderFull</code>、<code>HubbardDerivs</code>、<code>HCorrection</code>；新增 8 个参考算例</td>
+</tr>
+<tr>
+<td><code>tests/test_dftb3.py</code></td>
+<td>17 个测试，不需要 DFTB+</td>
+</tr>
+</tbody>
+</table></div>
+<p>用法：</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">from</span> pydftb.ase_calc <span class="im">import</span> PyDFTB</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a>atoms.calc <span class="op">=</span> PyDFTB(<span class="st">"path/to/skf"</span>, third_order<span class="op">=</span><span class="st">"full"</span>, h_damping<span class="op">=</span><span class="fl">4.0</span>,</span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>                    hubbard_derivs<span class="op">=</span>{<span class="st">"O"</span>: <span class="op">-</span><span class="fl">0.1575</span>, <span class="st">"H"</span>: <span class="op">-</span><span class="fl">0.1857</span>, <span class="st">"C"</span>: <span class="op">-</span><span class="fl">0.1492</span>})</span></code></pre></div>
+</div></details>
+<section id="sec-2">
+<h2>二、验证结果</h2>
+<section id="sec-2-1">
+<h3>2.1 与 DFTB+ 对照</h3>
+<p>Uᵈ 用 3ob 的公开值（H −0.1857、C −0.1492、O −0.1575），Cu 取检验用的值。这里只检验程序与 DFTB+ 一致，不涉及参数的物理质量。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>算例</th>
+<th>内容</th>
+<th>|ΔE| (Ha)</th>
+<th>|ΔF| (Ha/Bohr)</th>
+<th>|Δσ| (Ha/Bohr³)</th>
+<th>SCC 轮数 pydftb/DFTB+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>h2o_dftb3</code></td>
+<td>完整三阶 + 阻尼（3ob 设置）</td>
+<td>3.4e-11</td>
+<td>1.0e-6 *</td>
+<td>—</td>
+<td>9/9</td>
+</tr>
+<tr>
+<td><code>ch3oh_dftb3</code></td>
+<td>同上</td>
+<td>2.0e-11</td>
+<td>1.3e-8</td>
+<td>—</td>
+<td>12/12</td>
+</tr>
+<tr>
+<td><code>water_dimer_dftb3_nodamp</code></td>
+<td>完整三阶，不阻尼</td>
+<td>2.9e-11</td>
+<td>1.0e-8</td>
+<td>—</td>
+<td>12/12</td>
+</tr>
+<tr>
+<td><code>water_dimer_hdamp</code></td>
+<td>只有阻尼（DFTB2）</td>
+<td>3.1e-11</td>
+<td>1.0e-8</td>
+<td>—</td>
+<td>11/11</td>
+</tr>
+<tr>
+<td><code>h2o_dftb3_onsite</code></td>
+<td>只有原子自身的三阶项</td>
+<td>3.7e-11</td>
+<td>1.1e-6 *</td>
+<td>—</td>
+<td>8/8</td>
+</tr>
+<tr>
+<td><code>cu4co_dftb3_shell</code></td>
+<td>按壳层分辨，s/p/d 各自的 Uᵈ</td>
+<td>5.7e-12</td>
+<td>1.7e-8</td>
+<td>—</td>
+<td>19/19</td>
+</tr>
+<tr>
+<td><code>water_box_dftb3</code></td>
+<td>周期水盒子，完整三阶 + 阻尼</td>
+<td>2.2e-7 **</td>
+<td>5.6e-8</td>
+<td>1.3e-9</td>
+<td>18/18</td>
+</tr>
+<tr>
+<td><code>cuo_chain_dftb3_k422</code></td>
+<td>CuO 链，k 点，完整三阶</td>
+<td>5.4e-9</td>
+<td>8.7e-9</td>
+<td>2.1e-10</td>
+<td>14/14</td>
+</tr>
+</tbody>
+</table></div>
+<p>* 这个水分子中 H–H 距离离 SK 表格第 153 个节点只有 4e-6 Bohr，DFTB+ 的数值求导（步长 1.22e-4）跨过了节点。M0 以来一直记录的“水分子 DFTB+ 力误差 1.2e-6”，原因至此查清，与 M2a 报告第三节第 2 条是同一现象。</p>
+<p>** DFTB+ 默认的 Ewald 精度（1e-9）所致。设成 1e-12 后，差异降到 1.2e-9。</p>
+</section>
+<section id="sec-2-2">
+<h3>2.2 自洽检验（<code>tests/test_dftb3.py</code>）</h3>
+<ul>
+<li>三阶势 V₃ 与 E₃ 对电荷的数值导数一致，相对误差 &lt; 1e-7；</li>
+<li>Γ 对距离的导数与有限差分一致，阻尼与不阻尼、U 相等与不等的情形都检验了；</li>
+<li>收敛后的力与能量的有限差分一致（&lt; 1e-8 Ha/Bohr），应力与应变差分一致（维里 &lt; 5e-8 Ha）；</li>
+<li><code>"onsite"</code> 的三阶能量严格等于 Σ (Uᵈ/6) ΔQ³。</li>
+</ul>
+</section>
+</section>
+<section id="sec-3">
+<h2>三、发现的问题与学到的东西</h2>
+<section id="sec-3-1">
+<h3>1. DFTB+ 的 γ 公式在“U 几乎相等”时数值崩溃（pydftb 已修正）</h3>
+<p>两个不同 U 的位点之间，短程函数 S 的闭式公式里有 1/(τ_a² − τ_b²)ⁿ 这样的项（τ = 3.2U），彼此几乎完全抵消。U 很接近时，双精度浮点数保不住有效数字。DFTB+ 只在 |U_a − U_b| &lt; 3.125e-6 时改用“U 相等”的公式，在这个阈值之上，公式要么精度很差，要么完全失效。与 50 位精度的计算（mpmath）对比：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>|ΔU|</th>
+<th>S 的相对误差（二阶）</th>
+<th>∂γ/∂U 的相对误差（三阶）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1e-5</td>
+<td>6e-4</td>
+<td><strong>24</strong>（即 2400%）</td>
+</tr>
+<tr>
+<td>3e-5</td>
+<td>7e-6</td>
+<td>6e-2</td>
+</tr>
+<tr>
+<td>1e-4</td>
+<td>4e-7</td>
+<td>1e-3</td>
+</tr>
+<tr>
+<td>1e-3</td>
+<td>1e-10</td>
+<td>6e-8</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>1e-13</td>
+<td>1e-11</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>实测后果：</strong> 水二聚体中第二个 O 用一份复制的参数，只把它的 U 改动 ΔU：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>ΔU</th>
+<th>E₃ DFTB+</th>
+<th>E₃ pydftb</th>
+<th>总能量差（DFTB+ − pydftb，Ha）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>−0.0085602</td>
+<td>−0.0085602</td>
+<td>−3e-11</td>
+</tr>
+<tr>
+<td>4e-6</td>
+<td><strong>−0.0879073</strong></td>
+<td>−0.0084863</td>
+<td><strong>−1.8e-2（0.5 eV）</strong></td>
+</tr>
+<tr>
+<td>1e-5</td>
+<td>−0.0084529</td>
+<td>−0.0084862</td>
+<td>+3.4e-5</td>
+</tr>
+<tr>
+<td>3e-5</td>
+<td>−0.0084900</td>
+<td>−0.0084859</td>
+<td>−3.1e-6</td>
+</tr>
+<tr>
+<td>1e-4</td>
+<td>−0.0084847</td>
+<td>−0.0084847</td>
+<td>−3.6e-8</td>
+</tr>
+<tr>
+<td>1e-3</td>
+<td>−0.0084694</td>
+<td>−0.0084694</td>
+<td>+1.6e-12</td>
+</tr>
+</tbody>
+</table></div>
+<p>只用 DFTB2（不加三阶项）时，DFTB+ 的误差最大是 1.3e-6 Ha（ΔU = 4e-6 时），影响小得多。</p>
+<p><strong>修正方法：</strong> S 其实可以写成一个光滑函数的“均差”：</p>
+<pre><code>S = −A²B² · E[A, A, B, B],   A = τ_a²,  B = τ_b²,  E(y) = exp(−√y·r) / (y·r)</code></pre>
+<p>再用 Hermite–Genocchi 公式把均差变成一个积分：</p>
+<pre><code>S = −A²B² ∫₀¹ s(1−s) E‴(A + s(B−A)) ds</code></pre>
+<p>这个积分里没有任何相减抵消，A、B 接近时被积函数几乎是常数，12 个 Gauss 点就足够。E‴、E⁗ 及其对 r 的导数用 sympy 推出，都是“exp × 多项式”的简单形式。U 相差不到 5% 时用这个积分形式，其余情形仍用 DFTB+ 的闭式公式。</p>
+<p><strong>修正后：</strong> 在 τ 从 0.3 到 2.5、r 从 0.5 到 15 Bohr、ΔU 取所有值的网格上，S 的相对误差 ≤ 1e-14，∂S/∂τ ≤ 4e-12。原有 22 个和新增 8 个参考算例的结果完全不变。实际参数集中 U 相差不到 5% 的只有 O 的 p 壳层和 Cu 的 d 壳层，额外开销可以忽略。</p>
+<p><strong>意义：</strong> 同一元素的两套参数（M5），或者两个 U 恰好接近的元素，用 DFTB+ 都可能得到错误结果，而且没有任何警告。pydftb 现在没有这个问题。</p>
+</section>
+<section id="sec-3-2">
+<h3>2. Γ 在“U 恰好相等”时大一倍：照搬 DFTB+ 的约定</h3>
+<p>对称性要求 ∂S/∂τ_a（偏导）等于 dS/dτ（对共同 τ 的全导数）的一半，数值验证比值是 0.5000。DFTB+ 在 U 相等时用的是全导数，不相等时用偏导，所以两个原子的 U 从“相等”变成“相差 4e-6”时，它们之间的 Γ 减半。上表中 pydftb 的 E₃ 从 −0.0085602 变为 −0.0084863，差的 7.4e-5 Ha 就是这一项。</p>
+<p>3ob 等参数集是按这个约定拟合的，所以 pydftb 照搬，以保持兼容。将来做多套参数时，如果需要处处连续的 DFTB3，可以加一个“始终用偏导”的选项。</p>
+</section>
+<section id="sec-3-3">
+<h3>3. 费米能级的捷径会让力与能量差 5e-7（DFTB+ 也一样）</h3>
+<p>DFTB+ 找费米能级时，先试“带隙中点”，只要电子数误差 ≤ 1e-7 就接受（pydftb 照搬，见 M1）。按壳层分辨 SCC 的 Cu₄CO 在 300 K 下带隙只有 1e-4 Ha，比 kT 还小，中点给出的电子数差 8.0e-8，在容差内被接受。于是自由能对位置并不严格驻定，力与能量的数值导数相差 4.6e-7 Ha/Bohr。同一体系在 1000 K、或不按壳层分辨时，电子数误差 ≤ 7e-13，两者一致到 2e-9。</p>
+<p>这个量级在实际计算中可以忽略，但它说明：<strong>“力与能量自洽”依赖于电子数守恒</strong>。如果将来需要严格自洽（例如能量守恒的长时间 MD），可以给 pydftb 加一个“总是精确求费米能级”的选项。</p>
+</section>
+<section id="sec-3-4">
+<h3>4. 有限差分检验要避开网格节点</h3>
+<p>自洽检验最初在水分子上失败，力与能量差分相差 6e-7。原因与第 2.1 节的注解相同：H–H 距离离网格节点只有 4e-6 Bohr，差分步长大于这个距离就会跨过节点。步长减到 1e-6 后，差异降到 2e-9。M2a 中提到的 SK 插值“折角”，在这里又出现了一次。</p>
+</section>
+</section>
+<section id="sec-4">
+<h2>四、与计划的偏差</h2>
+<ul>
+<li><strong>计划外：</strong> 发现并修正了 U 接近时的数值崩溃（第三节第 1 条），这也是本阶段最重要的收获；查清了“费米能级捷径”对力的影响（第三节第 3 条）；解释了 M0 以来水分子力误差的来源。</li>
+<li><strong>原计划“用 DFTB+ 实测 Γ 的跳变”：</strong> 实测发现 DFTB+ 在跳变附近的数值本身就不可靠，于是改为用高精度计算和稳定公式来说明，结论见第三节第 1、2 条。</li>
+<li><strong>验收：</strong> 能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³ 均满足。</li>
+</ul>
+</section>
+<section id="sec-5">
+<h2>五、下一步</h2>
+<p>按 M2 表格继续：共线自旋极化（<code>dftb/spin.F90</code>，自旋常数 W）。</p>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M2b-dftb3.html">← M2b DFTB3 设计</a><a href="../index.html">文档索引</a><a href="../design/M2c-spin.html">M2c 自旋设计 →</a></nav>
+    <span>由 Markdown 原稿转换（reports/M2b-dftb3.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

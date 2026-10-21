@@ -215,7 +215,7 @@ def test_d4_forces_and_periodic_limits():
     shift = pos - pos.mean(0) + box / 2
     per = d4.evaluate(labels, shift, np.eye(3) * box, np.ones(3, bool)).energy
     assert per == pytest.approx(mol, abs=1e-8)           # periodic EEQ -> molecular limit
-    # supercell invariance; DFTB+'s own D4 fails it (docs/design/M2d-dispersion.md).  The
+    # supercell invariance; DFTB+'s own D4 fails it (docs/design/M2d-dispersion.html).  The
     # library's periodic EEQ charges converge to ~1e-10 here, but only to ~1e-6 Ha in elongated
     # cells such as the 2x1x1 CuO chain; without charge dependence the sums are exact
     a = _water_box()

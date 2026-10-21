@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<!-- 标题：阶段编号 + 主题 + 文档类型，如“M2e 能带设计”“M2e 能带报告” -->
+<title>Mxx 主题设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<!--
+  新文档模板。复制到 design/ 或 reports/，按注释填写，然后：
+  - 在 index.html 的阶段表里加上链接；
+  - 上一份文档页脚的“下一份”链接指向本页。
+  状态标签：<span class="chip done">已完成</span> / <span class="chip wip">进行中</span> / <span class="chip plan">计划</span>
+-->
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / Mxx</nav>
+  <header class="doc-head">
+    <p class="eyebrow">Mxx · 设计文档</p>
+    <h1>主题</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip wip">进行中</span></dd></div>
+      <div><dt>日期</dt><dd>YYYY-MM-DD</dd></div>
+      <div><dt>提交</dt><dd><code>xxxxxxx</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/Mxx-topic.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <!-- 第一屏：结论和关键数字。设计文档写目标与关键决定，报告写结果与发现。 -->
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">一两句话说清楚这一阶段做什么（或做成了什么）。</p>
+    <ul>
+      <li>关键决定或关键结果，带数字。</li>
+      <li>与 DFTB+ 的差异及其原因。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">0</span><span class="lbl">数字的含义</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、正文小节</a></li>
+      <li><a href="#sec-2">二、开发细节小节</a> <span class="dev-mark">开发细节</span></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="sec-1">
+      <h2>一、正文小节</h2>
+      <p>通俗中文。宽表格放进 <code>&lt;div class="table-wrap"&gt;</code>。</p>
+      <div class="callout flag"><strong>DFTB+ 的问题：</strong>对照中发现的 DFTB+ 自身问题用这种提示框。</div>
+    </section>
+
+    <!-- 实现清单、DFTB+ 源码位置、实验记录、复现命令、测试计划：放进折叠块 -->
+    <details class="dev" id="sec-2">
+      <summary><span class="tag">开发细节</span><span class="title">二、开发细节小节</span></summary>
+      <div class="body">
+        <p>内容。</p>
+      </div>
+    </details>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a></nav>
+    <span>Mxx</span>
+  </footer>
+</div>
+</body>
+</html>

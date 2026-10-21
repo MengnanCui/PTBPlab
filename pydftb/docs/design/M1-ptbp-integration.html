@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M1 PTBP 接入设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M1 · 设计文档</p>
+    <h1>接入 PTBP</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>0fcf574</code></dd></div><div><dt>配套</dt><dd><a href="../reports/M1-ptbp-integration.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">在 PTBP 中加开关 <code>--engine pydftb</code>：参数优化的每一步改由 pydftb 计算，默认设置下损失函数要与 DFTB+ 一致。</p>
+    <ul>
+      <li>先查清 PTBP 实际让 DFTB+ 算了什么：ASE 写的 <code>ParserVersion = 1</code> 让 DFTB+ 悄悄改用按壳层分辨的 SCC、力用 0.01 Bohr 差分；展宽关键字写错位置被忽略，实际是 T = 0。</li>
+      <li>pydftb 侧补齐：多项式排斥势、<code>fd_delta</code>、Fermi/MP/Gaussian 展宽、改进 Broyden 混合、<code>PyDFTB</code> 的 ASE 访问器。</li>
+      <li>PTBP 侧以 <code>utils/engines.py</code> 作为唯一的引擎分发点，新增 <code>--engine</code>、<code>--smearing</code>、<code>--pydftb-forces</code>。</li>
+      <li>验收：损失函数相对差 < 1e-4，端到端可以跑通。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">< 1e-4</span><span class="lbl">损失函数相对差（验收标准）</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">目标</a></li>
+      <li><a href="#sec-2">先弄清 PTBP 实际让 DFTB+ 算了什么</a></li>
+      <li><a href="#sec-3">pydftb 侧（本阶段第一部分，已完成）</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-4">PTBP 侧（本阶段第二部分）</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-5">验收</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<section id="sec-1">
+<h2>目标</h2>
+<p>在 PTBP 中加一个开关 <code>--engine pydftb</code>。打开后，参数优化的每一步不再调用 DFTB+，而是调用 pydftb。在默认设置下，损失函数值要与 DFTB+ 一致。</p>
+</section>
+<section id="sec-2">
+<h2>先弄清 PTBP 实际让 DFTB+ 算了什么</h2>
+<p>PTBP 并不自己写 DFTB+ 的输入，而是通过 ASE 的 <code>Dftb</code> 计算器。ASE 写的输入带有 <code>ParserVersion = 1</code>，这时 DFTB+ 会按“老版本兼容规则”悄悄改写好几处设置。从 DFTB+ 处理后的输入 <code>dftb_pin.hsd</code> 和它的源码中确认了以下几点：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>设置</th>
+<th>PTBP 代码里写的</th>
+<th>DFTB+ 实际使用的</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>电子温度</td>
+<td>2000 K、MP 2 阶</td>
+<td><strong>Fermi，T = 0</strong>（关键字放错了位置，被忽略）</td>
+<td><code>test/orbit/Li2.out</code>，<code>dftb_pin.hsd</code></td>
+</tr>
+<tr>
+<td>SCC 类型</td>
+<td>未写</td>
+<td><strong>按壳层分辨（ShellResolvedSCC = Yes）</strong></td>
+<td><code>oldcompat.F90:182</code>：老版本输入自动加入 <code>OrbitalResolvedSCC = Yes</code></td>
+</tr>
+<tr>
+<td>力的数值求导</td>
+<td>未写</td>
+<td><strong>有限差分，步长 0.01 Bohr</strong>（现在的默认是 1.2e-4）</td>
+<td><code>oldcompat.F90:368</code></td>
+</tr>
+<tr>
+<td>排斥势</td>
+<td><code>PolynomialRepulsive = Yes</code></td>
+<td>多项式系数全为 0，所以<strong>排斥能为 0</strong>（排斥能在 Python 里由 physrep 另算）</td>
+<td>SKF 文件</td>
+</tr>
+<tr>
+<td>混合器</td>
+<td>未写</td>
+<td>改进 Broyden，参数为默认值</td>
+<td><code>dftb_pin.hsd</code></td>
+</tr>
+<tr>
+<td>k 点</td>
+<td>PTBP 的 <code>monkhorstpack2kptdensity</code>（向下取整）</td>
+<td><code>SupercellFolding</code>，偶数网格偏移 0.5，并按时间反演约化</td>
+<td><code>dftb_pin.hsd</code></td>
+</tr>
+<tr>
+<td>最高角动量</td>
+<td>ASE 自动选取</td>
+<td>占据数不为 0 的最高 l</td>
+<td>ASE 源码</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>结论：已发表的 PTBP 参数是在“按壳层分辨的 SCC、T = 0、力用 0.01 Bohr 差分”下拟合的。</strong> 这一点 PTBP 自己的文档里没有写，ASE + DFTB+ 的其他用户也同样会受影响。</p>
+</section>
+<details class="dev" id="sec-3"><summary><span class="tag">开发细节</span><span class="title">pydftb 侧（本阶段第一部分，已完成）</span></summary><div class="body">
+<h2>pydftb 侧（本阶段第一部分，已完成）</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>功能</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>repulsive="polynomial"</code></td>
+<td>对应 DFTB+ 的 <code>PolynomialRepulsive = Yes</code></td>
+</tr>
+<tr>
+<td><code>shell_resolved=True</code></td>
+<td>已有，与 DFTB+ 对照验证过</td>
+</tr>
+<tr>
+<td><code>fd_delta=0.01</code></td>
+<td>按 DFTB+ 的方式用有限差分求力，可以与 DFTB+ 逐位对照；不设时用精确导数</td>
+</tr>
+<tr>
+<td>Fermi / MP / Gaussian 展宽</td>
+<td>照搬 DFTB+ 的费米能级搜索（先试带隙中点，再按 DFTB+ 的方式二分）和 TS 约定；另提供变分版 TS</td>
+</tr>
+<tr>
+<td>改进 Broyden 混合</td>
+<td>照搬 DFTB+ 的默认混合器，SCC 迭代轮数与 DFTB+ 完全一致</td>
+</tr>
+<tr>
+<td>不收敛时的行为</td>
+<td>照常返回结果并发出警告，对应 <code>ConvergentSCCOnly = No</code></td>
+</tr>
+<tr>
+<td><code>PyDFTB</code>（ASE 计算器）</td>
+<td>MP 网格（与 <code>SupercellFolding</code> 一致）、显式 k 点、自动最高角动量、线程限制、类型标签；提供能带工具需要的 ASE 访问器；单位换算与 ASE 的 <code>Dftb</code> 相同</td>
+</tr>
+<tr>
+<td>γ 函数按原子做邻居搜索</td>
+<td>壳层分辨时，Cu 的 p 壳层 U 很小，短程项的截断距离长达约 126 Bohr。改为“按原子搜邻居、每一对 U 用各自的截断”后，PTBP 最大 k 网格的结构从 7.9 秒降到 2.0 秒</td>
+</tr>
+</tbody>
+</table></div>
+</div></details>
+<details class="dev" id="sec-4"><summary><span class="tag">开发细节</span><span class="title">PTBP 侧（本阶段第二部分）</span></summary><div class="body">
+<h2>PTBP 侧（本阶段第二部分）</h2>
+<ul>
+<li>新增 <code>utils/engines.py</code>，提供 <code>make_calculator(mole, dftb_args, engine=None)</code>：
+<ul>
+<li><code>engine="dftbplus"</code> 时走原来的代码，原样不动；</li>
+<li><code>engine="pydftb"</code> 时返回 <code>PyDFTB</code>，设置与上表一致：<code>shell_resolved=True</code>、<code>repulsive="polynomial"</code>、<code>scc_tol=1e-5</code>、<code>max_scc=1000</code>、T = 0、PTBP 的 k 网格、每进程 1 个线程。</li>
+</ul></li>
+<li><code>dftbplus_calculator</code> 保留为原名，内部转交给 <code>make_calculator</code>。</li>
+<li>新增选项：
+<ul>
+<li><code>--engine {dftbplus,pydftb}</code>，默认 dftbplus；</li>
+<li><code>--smearing {none,fermi,mp,gaussian}</code>、<code>--smearing-temperature</code>、<code>--mp-order</code>，两个引擎上都真正生效；DFTB+ 一侧改为正确写入 <code>Filling</code>，并在运行后检查实际的电子温度；</li>
+<li><code>--pydftb-forces {dftbplus,exact}</code>，默认 dftbplus，即按 0.01 Bohr 差分求力，与已发表的流程逐位一致；选 exact 时用精确导数。</li>
+</ul></li>
+<li>损失函数等价性检验：<code>tools/engine_parity.py</code> 在固定的几组参数下调用 <code>Loss.EnergyGeometry</code>，比较两个引擎的损失值。</li>
+</ul>
+</div></details>
+<section id="sec-5">
+<h2>验收</h2>
+<ul>
+<li>19 个 DFTB+ 对照算例全部通过（已完成）。</li>
+<li>PTBP 实际路径（ASE + DFTB+，ParserVersion 1）与 <code>PyDFTB</code> 在 <code>dft/dft.xyz</code> 上对比：能量差 ≤ 2e-7 eV，力差 ≤ 3e-6 eV/Å（已完成抽查）。</li>
+<li>在 dataset 和 energygeometry 两种模式下，损失函数相对差异 &lt; 1e-4。</li>
+<li>端到端 <code>ptbp optimize --engine pydftb</code> 可以完整跑通。</li>
+</ul>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M0-foundation.html">← M0 底座报告</a><a href="../index.html">文档索引</a><a href="../reports/M1-ptbp-integration.html">M1 PTBP 接入报告 →</a></nav>
+    <span>由 Markdown 原稿转换（design/M1-ptbp-integration.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

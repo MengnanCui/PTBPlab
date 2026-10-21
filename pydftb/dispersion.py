@@ -15,7 +15,7 @@ Every model returns :class:`DispersionTerms`: the energy (Ha), the gradient dE/d
 ``calculator.DFTB._gradient``.  The energy depends on the geometry only, so it is
 evaluated once per calculation, outside the SCC loop.  Parameters are in DFTB+'s
 default units (Bohr, Hartree).  Formulas, the DFTB+ source they follow and where
-DFTB+ itself goes wrong: ``docs/design/M2d-dispersion.md``.
+DFTB+ itself goes wrong: ``docs/design/M2d-dispersion.html``.
 """
 from __future__ import annotations
 
@@ -537,7 +537,7 @@ class DFTD4(Dispersion):
     library's real-space cutoffs are fixed (pairs 60, triples 40, coordination
     numbers 30 Bohr; DFTB+ defaults to 64, 40, 40): other values are refused.
     DFTB+ evaluates D4 natively, and its periodic EEQ charges and three-body
-    term are wrong; see ``docs/design/M2d-dispersion.md``.
+    term are wrong; see ``docs/design/M2d-dispersion.html``.
     """
 
     LIBRARY_CUTOFFS = {"cutoff_inter": 60.0, "cutoff_three": 40.0, "cutoff_cn": 30.0}

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M1 PTBP 接入报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M1 · 完成报告</p>
+    <h1>接入 PTBP</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>b5b133a</code></dd></div><div><dt>配套</dt><dd><a href="../design/M1-ptbp-integration.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead"><code>ptbp optimize ... --engine pydftb</code> 可以用了：与 PTBP 实际调用的 DFTB+ 算得一样，损失函数相对差在 1e-7 以内，DFTB 阶段快 1.8 倍。</p>
+    <ul>
+      <li>已发表的 PTBP 参数是在“按壳层分辨 SCC、T = 0、力用 0.01 Bohr 差分”下拟合的，原因是 ASE 写的老版本输入格式（第一节）。</li>
+      <li>新增 <code>--smearing</code>，让展宽真正生效：DFTB+ 一侧正确写入 <code>Filling</code>，并在运行后核对。</li>
+      <li>19 个对照算例的 SCC 轮数与 DFTB+ 完全相同；用 <code>fd_delta</code> 证明残余的力差全部来自 DFTB+ 的数值求导。</li>
+      <li>附带发现：在已发表的 Cu 参数下，PTBP 的损失值异常大（约 9e5），两个引擎一致，属于 PTBP 流程本身的问题，待查。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">< 1e-7</span><span class="lbl">损失函数相对差</span></li>
+      <li><span class="num">1.8×</span><span class="lbl">DFTB 阶段提速（104 s 对 187 s）</span></li>
+      <li><span class="num">19</span><span class="lbl">DFTB+ 参考算例</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、最重要的发现：PTBP 实际让 DFTB+ 算了什么</a></li>
+      <li><a href="#sec-2">二、完成的内容</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-3">三、验证结果</a></li>
+      <li><a href="#sec-4">四、学到的东西</a></li>
+      <li><a href="#sec-5">五、下一步</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<section id="sec-1">
+<h2>一、最重要的发现：PTBP 实际让 DFTB+ 算了什么</h2>
+<p>PTBP 通过 ASE 调用 DFTB+。ASE 写的输入带有 <code>ParserVersion = 1</code>，DFTB+ 因此按“老版本兼容规则”悄悄改了几处设置。这几处从 DFTB+ 处理后的输入 <code>dftb_pin.hsd</code> 和它的源码中都可以核实：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>设置</th>
+<th>PTBP 代码里写的</th>
+<th>DFTB+ 实际用的</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>电子温度</td>
+<td>2000 K、MP 2 阶</td>
+<td><strong>T = 0</strong>（Fermi）。关键字放在 <code>Filling</code> 之外，被静默忽略</td>
+</tr>
+<tr>
+<td>SCC</td>
+<td>未写</td>
+<td><strong>按壳层分辨</strong>：s、p、d 各用自己的 Hubbard U（<code>oldcompat.F90:182</code>）</td>
+</tr>
+<tr>
+<td>力的求导</td>
+<td>未写</td>
+<td><strong>有限差分，步长 0.01 Bohr</strong>，是现在默认步长的 80 倍（<code>oldcompat.F90:368</code>）</td>
+</tr>
+<tr>
+<td>排斥能</td>
+<td><code>PolynomialRepulsive = Yes</code></td>
+<td>多项式系数全为 0，所以<strong>排斥能为 0</strong>，之后由 physrep 在 Python 里另算</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>影响：</strong> 已发表的 PTBP 参数是在“按壳层分辨 SCC、T = 0、力用粗差分”的条件下拟合的。其中第二条最容易被忽略，所有通过 ASE 用 DFTB+ 的人都会碰到。</p>
+<p><strong>处理：</strong></p>
+<ul>
+<li>默认完全保持现状，保证可复现。</li>
+<li>新增 <code>--smearing</code> 开关，让展宽<strong>真正生效</strong>。DFTB+ 一侧改为正确写入 <code>Filling</code>；因为 <code>ParserVersion = 1</code> 时 DFTB+ 会把 MP 阶数减 1，写入的是阶数 +1。每次计算后还会读取 DFTB+ 实际使用的展宽，不符就报错。已在 MP、Fermi、Gaussian 三种方式上验证：两个引擎的能量差约 1e-9 eV，力差约 3e-6 eV/Å。</li>
+</ul>
+</section>
+<details class="dev" id="sec-2"><summary><span class="tag">开发细节</span><span class="title">二、完成的内容</span></summary><div class="body">
+<h2>二、完成的内容</h2>
+<section id="sec-2-1">
+<h3>pydftb 侧（第一部分）</h3>
+<ul>
+<li>展宽：Fermi / Gaussian / Methfessel-Paxton，照搬 DFTB+ 的费米能级搜索和熵（TS）约定。另提供“变分”熵：只有用它，MP 展宽下的 Mermin 能量才与力严格自洽。实测按 DFTB+ 的约定，力与能量导数相差 1.6e-4 Ha/Bohr；改用变分约定后只差 2e-9。</li>
+<li>改进 Broyden 混合（DFTB+ 默认）：19 个对照算例中，<strong>SCC 迭代轮数与 DFTB+ 完全相同</strong>。</li>
+<li>排斥势开关 <code>repulsive="polynomial"</code>，对应 DFTB+ 的 <code>PolynomialRepulsive</code>，用一套多项式系数不为零的 SKF 验证过。</li>
+<li><code>fd_delta</code>：按 DFTB+ 的方式用有限差分求力。用上之后，与 DFTB+ 的力差从 1.2e-6 降到 1.2e-12 Ha/Bohr，<strong>证明此前残余的差异全部来自 DFTB+ 的数值求导</strong>。</li>
+<li>γ 函数改为按原子搜邻居、每对 U 各用自己的截断：PTBP 最大 k 网格的结构从 7.9 秒降到 2.0 秒（DFTB+ 为 3.9 秒）。</li>
+<li><code>PyDFTB</code>（ASE 计算器）：PTBP 的 k 网格、显式 k 点、自动确定最高角动量、线程限制、类型标签，以及能带工具需要的访问器。</li>
+</ul>
+</section>
+<section id="sec-2-2">
+<h3>PTBP 侧（第二部分）</h3>
+<ul>
+<li><strong><code>utils/engines.py</code></strong>：唯一的引擎分发点。<code>dftbplus_calculator</code> 保留原名，内部转交给它，DFTB+ 分支原有代码不变。</li>
+<li><strong>新增选项</strong>：<code>--engine</code>、<code>--smearing</code>、<code>--smearing-temperature</code>、<code>--mp-order</code>、<code>--pydftb-forces</code>。命令行、YAML（<code>ptbp_run.yaml</code>）和老式命令行都已接通；TUI 向导第 6 步可以选择引擎。</li>
+<li><strong>测试</strong>：<code>tests/test_engines.py</code> 共 9 个，覆盖引擎分发、两种 DFTB+ 写法、<code>Filling</code> 校验、命令行和 YAML 传递、TUI，以及在 <code>dft/dft.xyz</code> 上实际运行两个引擎的等价性测试（没有 dftb+ 时自动跳过）。</li>
+<li><strong><code>tools/engine_parity.py</code></strong>：在固定参数下计算 PTBP 的真实损失函数，对比两个引擎（结果见第三节）。</li>
+<li><strong>文档</strong>：README 新增“4b. DFTB engine”一节；<a href="../../RESEARCH.md"><code>RESEARCH.md</code></a> 文首加了更正说明。</li>
+</ul>
+</section>
+</div></details>
+<section id="sec-3">
+<h2>三、验证结果</h2>
+<section id="sec-3-1">
+<h3>3.1 与 DFTB+ 的 19 个对照算例（<code>refgen --check</code>）</h3>
+<p>全部通过。SCC 轮数全部一致；能量差 ≤ 1.3e-7 Ha（这一项来自 DFTB+ 默认的 Ewald 精度 1e-9，把它调到 1e-12 后差异降到 1.6e-9）。</p>
+</section>
+<section id="sec-3-2">
+<h3>3.2 PTBP 实际路径上逐个结构对比（<code>dft/dft.xyz</code>，默认设置）</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>结构</th>
+<th>k 网格</th>
+<th>能量差 (eV)</th>
+<th>力差 (eV/Å)</th>
+<th>最大受力 (eV/Å)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0（强压缩）</td>
+<td>3×4×4</td>
+<td>−2.1e-09</td>
+<td>2.4e-06</td>
+<td>7.75</td>
+</tr>
+<tr>
+<td>7</td>
+<td>3×3×3</td>
+<td>−3.3e-10</td>
+<td>9.2e-09</td>
+<td>0.53</td>
+</tr>
+<tr>
+<td>20</td>
+<td>8×8×5</td>
+<td>−1.2e-09</td>
+<td>1.2e-07</td>
+<td>0.01</td>
+</tr>
+<tr>
+<td>65</td>
+<td>14×14×14</td>
+<td>+2.0e-07</td>
+<td>4.5e-16</td>
+<td>0.00</td>
+</tr>
+</tbody>
+</table></div>
+<p>如果 pydftb 用精确导数（<code>--pydftb-forces exact</code>），结构 0 的力差为 1.7e-2 eV/Å。这是 DFTB+ 0.01 Bohr 粗差分本身的误差，而不是 pydftb 的误差。</p>
+</section>
+<section id="sec-3-3">
+<h3>3.3 PTBP 损失函数（<code>tools/engine_parity.py</code>）</h3>
+<p>在三组参数和两种模式下，用两个引擎分别计算 PTBP 的真实损失函数。每次计算都走完整流程：hotcent 生成 SKF → 对全部 66 个结构做 DFTB → physrep 拟合排斥势 → 计算损失。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>模式</th>
+<th>(r0_w, r0_d)</th>
+<th>DFTB+</th>
+<th>pydftb</th>
+<th>相对差</th>
+<th>单次耗时 DFTB+ / pydftb</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dataset</td>
+<td>(3.000, 6.000)</td>
+<td>53211.18153</td>
+<td>53211.18205</td>
+<td>9.8e-09</td>
+<td>168 s / 125 s</td>
+</tr>
+<tr>
+<td>dataset</td>
+<td>(2.749, 12.036)（已发表的 Cu 参数）</td>
+<td>901629.832</td>
+<td>901629.821</td>
+<td>1.2e-08</td>
+<td>163 s / 124 s</td>
+</tr>
+<tr>
+<td>energygeometry</td>
+<td>(2.749, 12.036)</td>
+<td>3837.92402</td>
+<td>3837.92365</td>
+<td>9.6e-08</td>
+<td>178 s / 141 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>损失函数的相对差在 1e-7 以内，比验收目标 1e-4 好三个数量级以上。</strong> 单次耗时中 hotcent 生成 SKF 占了很大一部分，这部分两边相同。</p>
+<blockquote>
+<p>附带观察：在已发表的 Cu 参数下，dataset 模式的损失值高达 9e5，EOS 模式为 3.8e3，而论文中 Cu 的损失为 0.288。两个引擎给出的数值一致，说明这是 PTBP 自身流程的问题（可能与 E0 或惩罚项的设置有关）。这不在本阶段范围内，建议另行检查。</p>
+</blockquote>
+</section>
+<section id="sec-3-4">
+<h3>3.4 PTBP 的 DFTB 阶段耗时（<code>pydftb/bench/throughput.py</code>，真实设置）</h3>
+<p>把 <code>dft/dft.xyz</code> 的 66 个结构逐个交给 <code>utils.calculator.dftbplus_calculator</code>。设置与 PTBP 实际运行完全相同：PTBP 的 k 网格、<code>PolynomialRepulsive = Yes</code>、SCC 容差 1e-5、T = 0、按壳层分辨 SCC。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>引擎</th>
+<th>66 个结构总耗时</th>
+<th>与 DFTB+ 的最大差异</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DFTB+（经 ASE）</td>
+<td>186.8 s</td>
+<td>—</td>
+</tr>
+<tr>
+<td>pydftb</td>
+<td><strong>104.2 s（快 1.8 倍）</strong></td>
+<td>能量 5.6e-7 eV，力 1.1e-5 eV/Å</td>
+</tr>
+</tbody>
+</table></div>
+<p>（M2a 之后重测：DFTB+ 181.4 s，pydftb 103.8 s，差异不变，见 <a href="M2a-stress.html"><code>M2a-stress.html</code></a> 2.4 节。）</p>
+<p>更正：原型阶段报告里“两者打平（21 s 对 21.5 s）”的测试，用的不是 PTBP 的真实设置，既没有按壳层分辨 SCC，k 网格的取整方式也不同。在真实设置下，按壳层分辨 SCC 让两边都更慢，因为 Cu 的 p 壳层 U 很小，短程 γ 的截断很长。pydftb 已针对这一点做了优化（见第二节），所以领先。</p>
+</section>
+<section id="sec-3-5">
+<h3>3.5 端到端</h3>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="ex">ptbp</span> optimize dft/dft.xyz <span class="at">--mode</span> dataset <span class="at">--engine</span> pydftb <span class="at">--optimizer</span> pso <span class="at">--n-particles</span> 2 <span class="at">--n-calls</span> 4</span></code></pre></div>
+<p>完整跑通：4 次评估后得到 <code>result.pkl</code>、<code>results.tgz</code>、<code>convergence.png</code>。生成的 <code>ptbp_run.yaml</code> 中记录了 <code>engine: pydftb</code> 和展宽设置，可以用 <code>--config</code> 原样复现。</p>
+</section>
+</section>
+<section id="sec-4">
+<h2>四、学到的东西</h2>
+<ol type="1">
+<li><strong>“写了”不等于“生效了”。</strong> ASE 默认的 <code>IgnoreUnprocessedNodes = Yes</code> 会吞掉写错位置的关键字。现在对展宽做了“运行后核对”。</li>
+<li><strong>老版本兼容规则会悄悄改变物理设置。</strong> 按壳层分辨的 SCC 和力的步长都是这样被改的。核对时一定要看 DFTB+ 处理后的输入 <code>dftb_pin.hsd</code>，而不是自己写进去的 <code>dftb_in.hsd</code>。</li>
+<li><strong>对照到 1e-12 才算真正搞懂。</strong> 把剩下的差异逐一归因（Ewald 精度、有限差分、SCC 收敛容差），等于把 DFTB+ 的这几块重新学了一遍。</li>
+</ol>
+</section>
+<section id="sec-5">
+<h2>五、下一步</h2>
+<ul>
+<li>按 M2 表格推进：应力、DFTB3、共线自旋、色散、能带/DOS、结构优化/MD、f 轨道。</li>
+<li>PTBP 吞吐的进一步提速：同一个 BO 步只解析一次 SKF、进程内批量处理（M4，需要 PyTorch 后端）。</li>
+</ul>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M1-ptbp-integration.html">← M1 PTBP 接入设计</a><a href="../index.html">文档索引</a><a href="../design/M2a-stress.html">M2a 应力设计 →</a></nav>
+    <span>由 Markdown 原稿转换（reports/M1-ptbp-integration.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

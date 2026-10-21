@@ -12,9 +12,9 @@
 > **2026-10-20 更正（M1 阶段核实后）：**
 > 1. PTBP 代码里写的「2000 K、MP 2 阶展宽」从未生效：ASE 把这两个关键字写在 `Filling` 之外，被 DFTB+ 静默忽略，实际是 T = 0。本报告中「PTBP 目前在用 MP 展宽」的说法是错的。
 > 2. PTBP 经 ASE 调用 DFTB+ 时，输入格式版本为 1，DFTB+ 会自动启用**按壳层分辨的 SCC**，并且力用 0.01 Bohr 的有限差分计算。
-> 3. 第三节第 4 小节的吞吐测试用的不是 PTBP 的真实设置。按真实设置的复测见 `docs/reports/M1-ptbp-integration.md`。
+> 3. 第三节第 4 小节的吞吐测试用的不是 PTBP 的真实设置。按真实设置的复测见 `docs/reports/M1-ptbp-integration.html`。
 >
-> 详见 `docs/design/M1-ptbp-integration.md`。
+> 详见 `docs/design/M1-ptbp-integration.html`。
 
 ---
 

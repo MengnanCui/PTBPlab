@@ -6,7 +6,7 @@ and the electronic smearing are process-wide settings, set once by
 ``cli/run.py`` via :func:`configure`; forked worker processes inherit them.
 
 What PTBP's DFTB+ runs really use (ASE writes ``ParserVersion = 1``, which
-makes DFTB+ apply its legacy defaults; see ``pydftb/docs/design/M1-ptbp-integration.md``):
+makes DFTB+ apply its legacy defaults; see ``pydftb/docs/design/M1-ptbp-integration.html``):
 
 * shell-resolved SCC (``OrbitalResolvedSCC = Yes`` injected by DFTB+),
 * Fermi filling at T = 0 -- the ``Fermi``/``MethfesselPaxton`` blocks written

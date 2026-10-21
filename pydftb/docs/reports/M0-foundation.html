@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M0 底座报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M0</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M0 · 完成报告</p>
+    <h1>底座整理</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>dc9d59e</code></dd></div><div><dt>配套</dt><dd><a href="../design/M0-foundation.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">底座整理完成：12 个 DFTB+ 对照算例全部通过，27 个测试和 CI 就位。</p>
+    <ul>
+      <li>最大能量差 1.3e-7 Ha 来自 DFTB+ 默认的 Ewald 精度；水分子 1.2e-6 Ha/Bohr 的力差来自 DFTB+ 的数值求导，pydftb 的力与自身能量差分只差约 3e-9。</li>
+      <li>修复了多项式排斥势系数错位一列的潜伏错误（SKF 格式为 <code>mass c2…c9 rcut</code>）。</li>
+      <li>DFTB+ 的 <code>ParserVersion</code> 低于 14 时会把 MP 展宽阶数悄悄减 1，对照工具固定写 14。</li>
+      <li>当时 SCC 轮数与 DFTB+ 不同（混合器不同），M1 改为照搬 DFTB+ 的改进 Broyden 后完全一致。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">12</span><span class="lbl">DFTB+ 参考算例</span></li>
+      <li><span class="num">27</span><span class="lbl">离线测试</span></li>
+      <li><span class="num">1.3e-7 Ha</span><span class="lbl">最大能量差</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、原型阶段回顾（已完成的物理）</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-2">二、本阶段完成的内容</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-3">三、验证结果（python -m pydftb.validation.refgen --check）</a></li>
+      <li><a href="#sec-4">四、发现的问题和学到的东西</a></li>
+      <li><a href="#sec-5">五、留给用户的问题</a></li>
+      <li><a href="#sec-6">六、下一步（M1）</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<details class="dev" id="sec-1"><summary><span class="tag">开发细节</span><span class="title">一、原型阶段回顾（已完成的物理）</span></summary><div class="body">
+<h2>一、原型阶段回顾（已完成的物理）</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>实现方式</th>
+<th>与 DFTB+ 的关系</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SKF 读取与插值</td>
+<td>8 点多项式插值，尾部 5 阶多项式衰减；每个窗口的多项式系数预先算好</td>
+<td>与 DFTB+ <code>slakoeqgrid.F90</code> 逐点一致</td>
+</tr>
+<tr>
+<td>Slater-Koster 旋转</td>
+<td>用实球谐旋转矩阵统一处理 s/p/d，不手写 100 多个表项</td>
+<td>结果与教科书公式（以及 DFTB+ <code>sk.F90</code>）相同，单元测试逐项核对</td>
+</tr>
+<tr>
+<td>H0/S 导数</td>
+<td>复步长法（解析精度）</td>
+<td><strong>比 DFTB+ 更准</strong>：DFTB+ 用数值差分，误差约 1e-6 Ha/Bohr</td>
+</tr>
+<tr>
+<td>SCC + Ewald</td>
+<td>γ 函数短程部分 + Ewald 长程部分，按原子或按壳层</td>
+<td>与 DFTB+ 一致</td>
+</tr>
+<tr>
+<td>力</td>
+<td>能带项 + SCC 项 + 排斥项，全部解析</td>
+<td>与能量的数值差分相差约 3e-9</td>
+</tr>
+</tbody>
+</table></div>
+</div></details>
+<details class="dev" id="sec-2"><summary><span class="tag">开发细节</span><span class="title">二、本阶段完成的内容</span></summary><div class="body">
+<h2>二、本阶段完成的内容</h2>
+<ul>
+<li><strong><code>backend/ops.py</code></strong>：分发层，函数式的 <code>scatter_add</code>；所有 <code>np.add.at</code>、<code>bincount</code>、本征分解调用都已改为经过这一层。</li>
+<li><strong>四段式计算</strong>：<code>_setup</code>、<code>_scc</code>、<code>_energies</code>、<code>_gradient</code>。结果新增 DFTB+ 风格的能量名称（<code>e_total</code>、<code>e_mermin</code>、<code>e_zero</code>、<code>terms</code>）以及壳层和轨道布居。</li>
+<li><strong><code>System</code> / <code>ParamSet</code> / <code>SCC</code></strong>：PySCF 风格接口；类型标签可以不同于元素（<code>O2</code>、<code>Li1</code>、<code>Li_el</code>、<code>Li@cat</code>）。</li>
+<li><strong><code>write_typed_copies</code></strong>：为新类型生成 SKF 副本，并自动处理“同一份同核文件用于两个不同类型时要改成异核格式”。这是 M5 的核心文件操作。</li>
+<li><strong><code>max_l_from_skf</code></strong>：与 ASE/PTBP 完全相同的最高角动量规则，在所有测试文件上与 ASE 的结果一致。</li>
+<li><strong>SKF 读取</strong>：支持 <code>.skf.gz</code>；按（路径、修改时间、大小）缓存，PTBP 每步重写文件后会自动重新读取。</li>
+<li><strong><code>pydftb.validation</code></strong>：12 个算例，参考结果冻结为 JSON（124 KB）。</li>
+<li><strong>测试</strong>：移到 <code>pydftb/tests/</code>，共 27 个，全部通过；没有 dftb+ 时，需要它的测试会自动跳过。</li>
+<li><strong>CI</strong>：新增 GitHub Actions 工作流 <code>.github/workflows/pydftb-tests.yml</code>，只装 numpy/scipy/ase 即可跑全部离线测试。</li>
+<li><strong>打包</strong>：<code>pyproject.toml</code> 增加可选依赖组 <code>torch</code>、<code>dispersion</code>、<code>mpi</code>、<code>dev</code>，<code>threadpoolctl</code> 改为核心依赖。</li>
+<li><strong>文档</strong>：<a href="../WHY.md"><code>WHY.md</code></a>、<a href="../ROADMAP.md"><code>ROADMAP.md</code></a>、<a href="../glossary.md"><code>glossary.md</code></a>、<a href="../dftbplus_map.md"><code>dftbplus_map.md</code></a> 和本阶段的设计文档。</li>
+</ul>
+</div></details>
+<section id="sec-3">
+<h2>三、验证结果（<code>python -m pydftb.validation.refgen --check</code>）</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>算例</th>
+<th>原子数</th>
+<th>能量差 (Ha)</th>
+<th>最大力差 (Ha/Bohr)</th>
+<th>电荷差 (e)</th>
+<th>SCC 轮数 pydftb / DFTB+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>h2o</td>
+<td>3</td>
+<td>1.8e-11</td>
+<td>1.2e-06 ※</td>
+<td>3.8e-12</td>
+<td>10 / 8</td>
+</tr>
+<tr>
+<td>h2o_nonscc</td>
+<td>3</td>
+<td>9.7e-12</td>
+<td>6.9e-07 ※</td>
+<td>2.2e-15</td>
+<td>1 / 1</td>
+</tr>
+<tr>
+<td>ch3oh</td>
+<td>6</td>
+<td>9.3e-12</td>
+<td>1.4e-08</td>
+<td>6.4e-11</td>
+<td>15 / 12</td>
+</tr>
+<tr>
+<td>cu4co_300K</td>
+<td>6</td>
+<td>1.6e-11</td>
+<td>1.6e-08</td>
+<td>2.5e-09</td>
+<td>11 / 11</td>
+</tr>
+<tr>
+<td>cu4co_shell_resolved</td>
+<td>6</td>
+<td>1.6e-08</td>
+<td>1.5e-08</td>
+<td>2.4e-08</td>
+<td>27 / 19</td>
+</tr>
+<tr>
+<td>cu_fcc_k6</td>
+<td>1</td>
+<td>4.6e-10</td>
+<td>—</td>
+<td>1.6e-15</td>
+<td>1 / 1</td>
+</tr>
+<tr>
+<td>cu8_distorted_k355</td>
+<td>8</td>
+<td>8.3e-10</td>
+<td>4.7e-07 ※</td>
+<td>2.5e-09</td>
+<td>11 / 9</td>
+</tr>
+<tr>
+<td>water_box_gamma</td>
+<td>24</td>
+<td>1.3e-07</td>
+<td>4.3e-08</td>
+<td>1.8e-07</td>
+<td>23 / 19</td>
+</tr>
+<tr>
+<td>cuo_chain_k422</td>
+<td>4</td>
+<td>3.8e-09</td>
+<td>8.9e-09</td>
+<td>4.5e-08</td>
+<td>18 / 16</td>
+</tr>
+<tr>
+<td><strong>water_dimer_typed</strong>（第二个 O 用类型 <code>O2</code>）</td>
+<td>6</td>
+<td>1.8e-11</td>
+<td>1.0e-08</td>
+<td>2.6e-11</td>
+<td>15 / 11</td>
+</tr>
+<tr>
+<td>li2h2_orbit（第二套参数，Li 只用 s）</td>
+<td>4</td>
+<td>4.8e-11</td>
+<td>2.3e-09</td>
+<td>1.4e-11</td>
+<td>13 / 10</td>
+</tr>
+<tr>
+<td>cu_fcc_k6_T0（金属，T=0）</td>
+<td>1</td>
+<td>1.3e-10</td>
+<td>—</td>
+<td>3.6e-14</td>
+<td>1 / 1</td>
+</tr>
+</tbody>
+</table></div>
+<p>※ 这几项的力差来自 DFTB+ 自身的数值求导。pydftb 的力与它自己能量的数值差分只差约 3e-9。</p>
+<p><strong>换算成常用单位</strong>：最大能量差 1.3e-7 Ha ≈ 3.5e-6 eV，最大力差 1.2e-6 Ha/Bohr ≈ 6e-5 eV/Å，两个程序的答案可以认为相同。</p>
+</section>
+<section id="sec-4">
+<h2>四、发现的问题和学到的东西</h2>
+<ol type="1">
+<li><strong>修复了一个潜伏的 bug。</strong> 多项式排斥势的系数错位了一列。SKF 格式是 <code>mass c2…c9 rcut</code>，原代码取成了 c3…c9 加上 rcut。PTBP 的多项式系数全为零，而且测试文件都有样条，所以一直没有暴露。M1 的“多项式排斥势”开关依赖这一项，已改正，将在 M1 与 DFTB+ 对照。</li>
+<li><strong>DFTB+ 的 ParserVersion 陷阱。</strong> 版本低于 14 时，MP 展宽的阶数会被悄悄减 1。原型阶段写的是 12，ASE 写的是 1。现在固定写 14。</li>
+<li><strong>Richardson 求导反而更差。</strong> 计划审查建议参考数据用 DFTB+ 的 Richardson 求导，实测在这些 SKF 上误差反而变大（水分子力误差从 1.2e-6 升到 1.2e-5），因此改回默认差分，并在代码里记录了原因。</li>
+<li><strong>γ 函数判据与 DFTB+ 对齐。</strong> “两个 U 相等”的判据改为 DFTB+ 的 |ΔU| &lt; 3.125e-6，并在相等时用平均 τ。原判据在两种公式的切换处不连续，M5 的平滑切换会碰到这个问题。</li>
+<li><strong>DFTB+ 新版输入格式的几处变化</strong>：<code>Analysis{CalculateForces}</code> 改名为 <code>PrintForces</code>；非 SCC 计算不能出现 <code>SCCTolerance</code> 等关键字；numpy 2 的浮点数 <code>repr</code> 形如 <code>np.float64(…)</code>，DFTB+ 读不了。这些都已在对照工具里处理。</li>
+<li><strong>SCC 轮数不同。</strong> pydftb 用 Pulay 型混合，DFTB+ 用改进 Broyden，收敛结果一致但轮数不同。PTBP 设 <code>ConvergentSCCOnly = No</code>，结果在理论上依赖混合路径，所以 M1 会补上 Broyden。</li>
+</ol>
+</section>
+<section id="sec-5">
+<h2>五、留给用户的问题</h2>
+<ul>
+<li><strong>仓库没有 LICENSE 文件。</strong> 如果要像 PySCF 一样开源，需要选一个许可证（常见的有 Apache-2.0、BSD-3、MIT）。注意：DFTB+ 是 LGPL-3，pydftb 是按公式独立实现、没有复制它的代码，所以选择不受它约束。（2026-10 更新：已选定 MIT，覆盖整个仓库，见根目录 <code>LICENSE</code>。）</li>
+</ul>
+</section>
+<section id="sec-6">
+<h2>六、下一步（M1）</h2>
+<ul>
+<li>pydftb 侧：排斥势开关与 DFTB+ <code>PolynomialRepulsive</code> 对照；显式 k 点；<code>max_scc</code> 和不收敛告警；ASE 访问器；按 DFTB+ 的方式实现 Fermi / MP / Gaussian 展宽和费米能级搜索；改进 Broyden 混合。</li>
+<li>PTBP 侧：<code>--engine</code>、<code>--smearing</code> 开关，修正 DFTB+ 的 Filling 写法，损失函数等价性检验，端到端运行。</li>
+</ul>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M0-foundation.html">← M0 底座设计</a><a href="../index.html">文档索引</a><a href="../design/M1-ptbp-integration.html">M1 PTBP 接入设计 →</a></nav>
+    <span>由 Markdown 原稿转换（reports/M0-foundation.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

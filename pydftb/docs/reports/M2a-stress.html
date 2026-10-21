@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2a 应力报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M2a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2a · 完成报告</p>
+    <h1>应力</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>6ea6a30</code></dd></div><div><dt>配套</dt><dd><a href="../design/M2a-stress.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">周期体系的应力完成：11 个周期算例中 10 个与 DFTB+ 差 ≤ 3e-9 Ha/Bohr³（约 0.09 MPa），ASE 的晶胞过滤器可以直接做晶格优化。</p>
+    <ul>
+      <li>修正 SKF 表格末端：DFTB+ 只用表头行数的前 n−1 行，pydftb 原先多用一行（Li₂ 在 14.5 Bohr 处两者的力甚至反号）。</li>
+      <li>DFTB+ 的数值求导跨过 SK 网格节点时会出错（3.45 Å 的 Li bcc 应力偏差 1.2e-8），pydftb 默认精确求导。</li>
+      <li>SK 表格的分段插值让能量-体积曲线有微小折角（DFTB+ 相同），“应力为零”与 E-V 拟合定出的晶格常数可差约 1e-3 Å。</li>
+      <li>0 K 下金属的应力没有唯一定义；对金属求应力或做晶格优化时请加电子温度。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 3e-9</span><span class="lbl">应力差，Ha/Bohr³</span></li>
+      <li><span class="num">+1.5%</span><span class="lbl">顺带算应力的额外耗时</span></li>
+      <li><span class="num">22</span><span class="lbl">参考算例（新增 3 个）</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-2">二、验证结果</a></li>
+      <li><a href="#sec-3">三、发现的问题与学到的东西</a></li>
+      <li><a href="#sec-4">四、与计划的偏差</a></li>
+      <li><a href="#sec-5">五、怎么用</a></li>
+      <li><a href="#sec-6">六、下一步</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<details class="dev" id="sec-1"><summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary><div class="body">
+<h2>一、做了什么</h2>
+<section id="sec-1-1">
+<h3>物理</h3>
+<p>把晶体按应变 ε 均匀变形（原子坐标和晶胞一起变），应力就是能量对应变的导数除以体积：σ = −(1/V) ∂E/∂ε（DFTB+ 的符号）。各项来源见设计文档 <a href="../design/M2a-stress.html"><code>design/M2a-stress.html</code></a>：</p>
+<ul>
+<li>能带项和 SCC 移位项：每个原子对的 ∂E/∂R 乘以键矢量，求力时已经算出；</li>
+<li>排斥势：同上；</li>
+<li>SCC 短程 γ 和 Ewald 实空间项：同上；</li>
+<li>Ewald 倒空间项和中性化背景项：单独的解析公式。</li>
+</ul>
+</section>
+<section id="sec-1-2">
+<h3>代码</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>位置</th>
+<th>改动</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coulomb.py: Coulomb.gradient(dq, virial=True)</code></td>
+<td>一遍同时算出 SCC 能量对原子坐标和对应变的导数</td>
+</tr>
+<tr>
+<td><code>calculator.py: DFTB._gradient(virial=True)</code></td>
+<td>能带、SCC 移位、排斥势三项的维里；最后对称化</td>
+</tr>
+<tr>
+<td><code>calculator.py: DFTB.calculate(stress=...)</code></td>
+<td><code>DFTBResult.stress</code>（Hartree/Bohr³，DFTB+ 符号）。周期体系算力时默认同时算应力，与 DFTB+ 相同</td>
+</tr>
+<tr>
+<td><code>ase_calc.py: PyDFTB</code></td>
+<td>ASE 的 <code>stress</code>：单位 eV/Å³，ASE 符号，Voigt 顺序，换算方式与 <code>ase.calculators.dftb.Dftb</code> 相同</td>
+</tr>
+<tr>
+<td><code>skf.py: SKFile.read</code></td>
+<td>与 DFTB+ 一样只用表头行数的前 n−1 行（见第三节第 1 条）</td>
+</tr>
+<tr>
+<td><code>validation/</code></td>
+<td>对照工具读取并比较 DFTB+ 的应力；新增 3 个 Li 算例；9 个周期算例的参考数据重新生成，加入应力</td>
+</tr>
+<tr>
+<td><code>tests/test_stress.py</code></td>
+<td>应变有限差分、ASE 符号约定、晶格优化，共 4 个测试</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>一个工程细节：力和应力在同一遍里算。</strong> 第一版把 SCC 的维里写成单独的函数，它要把短程 γ 的导数再算一遍。在 PTBP 的铜结构上（按壳层分辨 SCC，Cu 的 p 壳层截断很长），这让总时间多了 21%。合并之后只多 1.5%。所以周期体系算力时默认顺带算应力：ASE 的晶胞过滤器先要力、再要应力，一次计算就够了，晶格优化的每一步只需要一次 pydftb 计算。</p>
+</section>
+</div></details>
+<section id="sec-2">
+<h2>二、验证结果</h2>
+<section id="sec-2-1">
+<h3>2.1 与 DFTB+ 对照（<code>refgen --check</code>）</h3>
+<p>DFTB+ 的应力从 <code>results.tag</code> 中按全精度读取。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>算例</th>
+<th>说明</th>
+<th>最大应力 (Ha/Bohr³)</th>
+<th>|Δσ| 精确导数</th>
+<th>|Δσ| 模拟 DFTB+ 差分</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cu_fcc_k6</code></td>
+<td>Cu fcc，1000 K</td>
+<td>1.2e-3</td>
+<td>1.3e-10</td>
+<td>1.6e-11</td>
+</tr>
+<tr>
+<td><code>cu_fcc_k6_T0</code></td>
+<td>同上，0 K</td>
+<td>1.2e-3</td>
+<td>1.5e-10</td>
+<td>5.9e-15</td>
+</tr>
+<tr>
+<td><code>cu_fcc_k6_mp1_3000K</code></td>
+<td>同上，MP 1 阶，3000 K</td>
+<td>1.2e-3</td>
+<td>1.4e-10</td>
+<td>1.0e-11</td>
+</tr>
+<tr>
+<td><code>cu8_distorted_k355</code></td>
+<td>畸变的 8 原子铜晶胞（应力有非对角分量），1000 K</td>
+<td>1.2e-3</td>
+<td>2.6e-9</td>
+<td>2.4e-10</td>
+</tr>
+<tr>
+<td><code>cu8_distorted_k355_mp2_2000K</code></td>
+<td>同上，MP 2 阶，2000 K</td>
+<td>1.2e-3</td>
+<td>2.6e-9</td>
+<td>2.4e-10</td>
+</tr>
+<tr>
+<td><code>cu8_distorted_k355_gauss_1000K</code></td>
+<td>同上，Gaussian，1000 K</td>
+<td>1.2e-3</td>
+<td>2.6e-9</td>
+<td>2.4e-10</td>
+</tr>
+<tr>
+<td><code>cuo_chain_k422</code></td>
+<td>CuO 链（有电荷转移，Ewald 项重要），500 K</td>
+<td>6.6e-4</td>
+<td>2.2e-10</td>
+<td>1.1e-11</td>
+</tr>
+<tr>
+<td><code>water_box_gamma</code></td>
+<td>24 原子水盒子，Γ 点</td>
+<td>2.7e-3</td>
+<td>7.8e-10</td>
+<td>7.5e-10</td>
+</tr>
+<tr>
+<td><code>water_box_mp1_1000K</code></td>
+<td>同上，MP 1 阶，1000 K</td>
+<td>2.7e-3</td>
+<td>7.8e-10</td>
+<td>7.5e-10</td>
+</tr>
+<tr>
+<td><code>li_bcc_k666_1000K</code></td>
+<td>Li bcc，a = 3.50 Å，1000 K</td>
+<td>3.3e-5</td>
+<td>1.0e-11</td>
+<td>7.1e-13</td>
+</tr>
+<tr>
+<td><code>li_bcc_k666_node</code></td>
+<td>Li bcc，a = 3.45 Å（见第三节第 2 条）</td>
+<td>6.8e-5</td>
+<td>1.2e-8</td>
+<td>5.6e-13</td>
+</tr>
+</tbody>
+</table></div>
+<p>单位换算：1e-9 Ha/Bohr³ ≈ 0.03 MPa。验收标准是 1e-7 Ha/Bohr³。“模拟 DFTB+ 差分”一列表示 pydftb 改用 DFTB+ 的有限差分步长（<code>fd_delta</code>）计算 H0、S 的导数。这一列的数字越小，说明剩下的差异越确定来自 DFTB+ 的数值求导，而不是 pydftb 的问题。水盒子剩下的 7.5e-10 来自 DFTB+ 默认的 Ewald 精度（1e-9），与 M1 报告中能量上 1.3e-7 Ha 的差异同源。</p>
+</section>
+<section id="sec-2-2">
+<h3>2.2 与能量的数值导数对照</h3>
+<p>能量对应变做中心差分（步长 1e-5），与解析的维里比较：</p>
+<ul>
+<li>CuO 链（4×2×2 k 点，500 K）：六个分量中最大差异 1.6e-8 Ha，换算成应力为 2.0e-11 Ha/Bohr³（维里本身最大 0.54 Ha）；</li>
+<li>水盒子（Γ 点）：最大差异 1.4e-8 Ha，换算成应力为 8.6e-12 Ha/Bohr³（维里本身最大 4.4 Ha）。</li>
+</ul>
+<p>Li bcc（1000 K）上，把差分步长从 1e-3 逐步减到 1e-5，解析值与差分值之差按步长的平方缩小：6.4e-6 → 3.6e-7 → 4.0e-8 → 3.6e-9 → 4.0e-10 Ha。这说明解析应力是精确的，剩下的差异只是差分本身的截断误差。</p>
+</section>
+<section id="sec-2-3">
+<h3>2.3 ASE 晶格优化</h3>
+<p>Li bcc（<code>orbit</code> 参数集，Fermi 1000 K，6×6×6 k 点）从 a = 3.40 Å 出发，用 <code>BFGS(FrechetCellFilter(atoms))</code> 优化：</p>
+<ul>
+<li>4 步收敛，共调用 pydftb 5 次（开始 1 次，之后每步 1 次），得到 a = 3.5560 Å，剩余应力 2.7e-7 eV/Å³；</li>
+<li>在优化结果 ±0.04 Å 范围内扫描 9 个点，能量最低的正好是优化结果本身；四次多项式拟合的极小值与它相差 6.6e-4 Å（原因见第三节第 3 条）；</li>
+<li>实验值为 3.51 Å。这套 <code>orbit</code> 参数并没有专门拟合金属 Li，这里的数字只用来验证程序，不代表物理精度。</li>
+</ul>
+<p>设计文档原计划用 Cu fcc 做这项测试。但测试用的 <code>ptbp_hcocu</code> 参数集在这些原子间距上排斥势几乎为零，铜的能量-体积曲线在 3.3–3.7 Å 之间没有极小值（极小值约在 3.82 Å），压到 3.3 Å 时能量反而更低。这套参数只适合做程序验证，不适合演示物理结果，所以改用 Li。</p>
+</section>
+<section id="sec-2-4">
+<h3>2.4 PTBP 上的影响（<code>pydftb/bench/throughput.py</code>）</h3>
+<p>用 PTBP 的真实设置重测 <code>dft/dft.xyz</code> 的 66 个结构。这时周期体系算力时已经顺带算应力，SKF 表格末端也已修正：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>DFTB+</th>
+<th>pydftb</th>
+<th>能量最大差</th>
+<th>力最大差</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M2a 之后</td>
+<td>181.4 s</td>
+<td>103.8 s</td>
+<td>5.9e-7 eV</td>
+<td>1.1e-5 eV/Å</td>
+</tr>
+<tr>
+<td>M1 报告</td>
+<td>186.8 s</td>
+<td>104.2 s</td>
+<td>5.6e-7 eV</td>
+<td>1.1e-5 eV/Å</td>
+</tr>
+</tbody>
+</table></div>
+<p>顺带算应力在这里没有带来可测的额外耗时。表格末端的修正也不影响 PTBP 已有的铜结果，因为铜的积分在 14 Bohr 处已经极小。</p>
+</section>
+</section>
+<section id="sec-3">
+<h2>三、发现的问题与学到的东西</h2>
+<section id="sec-3-1">
+<h3>1. pydftb 的 SKF 表格多用了一行（已修正）</h3>
+<p>SKF 文件第一行写着“网格间距、行数”，例如 <code>0.02, 719</code>，文件里也确实有 719 行。但 DFTB+ 读取时执行了 <code>nGrid = nGrid - 1</code>（<code>type/oldskdata.F90:145</code>），<strong>只用前 718 行</strong>。pydftb 原来用了全部 719 行，于是：</p>
+<ul>
+<li>表格终点：DFTB+ 是 14.36 Bohr，pydftb 是 14.38 Bohr；</li>
+<li>最后几个插值窗口和其后 1 Bohr 的衰减尾巴都不一样。</li>
+</ul>
+<p>Cu、H、O、C 的积分到这么远时已经极小，原有 19 个对照算例都看不出差别。Li 的 2s 轨道很弥散，问题就暴露了。下表是 Li₂ 二聚体的能量差（DFTB+ − pydftb，Ha）：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>距离 (Bohr)</th>
+<th>14.0</th>
+<th>14.3</th>
+<th>14.37</th>
+<th>14.5</th>
+<th>14.9</th>
+<th>15.2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>修正前</td>
+<td>−4.6e-11</td>
+<td>−2.6e-11</td>
+<td>−1.6e-9</td>
+<td>−1.2e-7</td>
+<td>−2.5e-7</td>
+<td>−1.9e-8</td>
+</tr>
+<tr>
+<td>修正后</td>
+<td>−4.6e-11</td>
+<td>−2.6e-11</td>
+<td>+4.2e-11</td>
+<td>−3.2e-12</td>
+<td>+2.2e-11</td>
+<td>−2.1e-11</td>
+</tr>
+</tbody>
+</table></div>
+<p>修正前，14.5 Bohr 处两者的力甚至反号（DFTB+ +7.7e-7，pydftb −4.0e-7 Ha/Bohr）。修正后剩下的约 1e-11 是 DFTB+ 输出文件的打印精度（10 位小数）。</p>
+<p>为了防止以后退回去，新增三个参考算例，容差收紧到旧代码一定通不过的程度（已实际验证旧代码三个都失败）：</p>
+<ul>
+<li><code>li2_sk_tail</code>：Li₂ 在 14.8 Bohr，落在衰减尾巴里；</li>
+<li><code>li_bcc_k666_1000K</code>：Li bcc，a = 3.50 Å，两层邻居在尾巴里；</li>
+<li><code>li_bcc_k666_node</code>：见下一条。</li>
+</ul>
+<p><strong>发现经过：</strong> 拿 Li bcc 的应力与 DFTB+ 对照时，看到一个固定的 6.8e-9 Ha/Bohr³ 偏差；按能量项拆开，偏差集中在能带能量；再用 Li₂ 按距离扫描，问题就定位到了表格末端。这正是“对照到 1e-12 才算真正搞懂”的又一个例子。</p>
+</section>
+<section id="sec-3-2">
+<h3>2. DFTB+ 的数值求导跨过网格节点时会出错</h3>
+<p>DFTB+ 用中心差分求 H0、S 的导数，步长 1.22e-4 Bohr。如果某个原子间距离离最近的网格节点（每 0.02 Bohr 一个）比这个步长还近，差分的两端就落在两个不同的插值多项式上，导数会有误差。</p>
+<p>在 a = 3.45 Å 的 Li bcc 中，第三层邻居（a√2，12 个原子）离第 461 个节点只有 4.3e-5 Bohr，DFTB+ 的应力因此偏差 1.2e-8 Ha/Bohr³。pydftb 用 DFTB+ 的步长（<code>fd_delta</code>）后，与 DFTB+ 的差异降到 6e-13，证明这 1.2e-8 来自 DFTB+ 自己的数值求导。pydftb 默认用复步长精确求导，没有这个问题。这个算例保留为 <code>li_bcc_k666_node</code>，测试中检查“模拟 DFTB+ 差分后与 DFTB+ 一致”。</p>
+</section>
+<section id="sec-3-3">
+<h3>3. 能量-体积曲线不是处处光滑（DFTB+ 也一样）</h3>
+<p>SKF 表格在相邻 8 个节点之间用多项式插值，每越过一个节点就换一个多项式。数值是连续的，但斜率会有极小的跳变，所以能量随晶格常数变化的曲线有许多微小的“折角”。</p>
+<ul>
+<li>在 Li bcc 上，折角出现在某一层邻居的距离恰好等于网格节点的位置。例如 a = 3.556071 Å 时，第二层邻居距离正好是 336 × 0.02 = 6.72 Bohr；</li>
+<li>dE/da 在这里跳变约 3e-4 eV/Å。约 2e-4 Å 之后，最近邻和第五层邻居同时越过节点，从 dE/da 曲线推算跳变约 1.5e-3 eV/Å；</li>
+<li>DFTB+ 在折角两侧给出的应力与 pydftb 相同（差 1e-11），说明这是插值方案本身的性质。</li>
+</ul>
+<p><strong>影响：</strong> 用“应力为零”定出的晶格常数，与拟合能量-体积曲线得到的极小值，可能相差约 1e-3 Å。实际应用中可以忽略，但测试要把它考虑进去。以后如果需要处处光滑的能量（例如做高精度弹性常数），可以提供样条插值作为选项，代价是不再与 DFTB+ 逐位一致。</p>
+</section>
+<section id="sec-3-4">
+<h3>4. 0 K 下金属的应力没有唯一定义</h3>
+<p>把 Li bcc（a = 3.40 Å）放在 0 K 计算时，费米能级正好落在 12 个对称等价的 k 点上，每个 k 点分到 1.333 个电子。任何应变都会让这 12 个能级分裂，电子流向变低的那部分，所以 E(ε) 在 ε = 0 处有一个折角：</p>
+<ul>
+<li>向右和向左的数值导数分别是 −0.0235 和 −0.0058 Ha；</li>
+<li>解析值 −0.0138 Ha 对应“12 个能级平分电子”的情形。DFTB+ 报告的也是这个值，两者应力差 1.2e-11。</li>
+</ul>
+<p>温度升到 100 K 以上时，解析值与数值导数的差异降到 5e-10 Ha。<strong>建议：对金属计算应力或做晶格优化时，加电子温度（<code>--smearing</code> 或 <code>smearing=("fermi", T)</code>）。</strong></p>
+</section>
+<section id="sec-3-5">
+<h3>5. 测试要先想清楚“该相等的到底是什么”</h3>
+<p>最初的晶格测试假设“3.4 Å 的铜是压缩态，所以应力为负”，结果失败了。查下来，程序没有问题，是这套参数集的铜根本没有合理的平衡点。改为直接验证“ASE 应力 = 能量对体积的数值导数”之后，测试不再依赖对参数的猜测。</p>
+</section>
+</section>
+<section id="sec-4">
+<h2>四、与计划的偏差</h2>
+<ul>
+<li>晶格优化改用 Li bcc，原因见 2.3 节。</li>
+<li>应变有限差分检验在 CuO 链和水盒子上做。Cu8 畸变晶胞的非对角分量由 DFTB+ 对照覆盖。</li>
+<li>计划外的收获：修正了 SKF 表格末端的不一致，查清了 DFTB+ 数值求导跨节点和 0 K 金属应力两个问题，新增 3 个参考算例。参考算例从 19 个增加到 22 个。</li>
+<li>与 DFTB+ 对照的验收标准原定为 1e-7 Ha/Bohr³，实际差异 ≤ 3e-9；唯一较大的 1.2e-8 来自 DFTB+ 的数值求导，已解释。</li>
+</ul>
+</section>
+<section id="sec-5">
+<h2>五、怎么用</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">from</span> ase.build <span class="im">import</span> bulk</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="im">from</span> ase.filters <span class="im">import</span> FrechetCellFilter</span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="im">from</span> ase.optimize <span class="im">import</span> BFGS</span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a><span class="im">from</span> pydftb.ase_calc <span class="im">import</span> PyDFTB</span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a>atoms <span class="op">=</span> bulk(<span class="st">"Li"</span>, <span class="st">"bcc"</span>, a<span class="op">=</span><span class="fl">3.4</span>)</span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a>atoms.calc <span class="op">=</span> PyDFTB(<span class="st">"path/to/skf"</span>, kpts<span class="op">=</span>(<span class="dv">6</span>, <span class="dv">6</span>, <span class="dv">6</span>), smearing<span class="op">=</span>(<span class="st">"fermi"</span>, <span class="fl">1000.0</span>))</span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a><span class="bu">print</span>(atoms.get_stress())                       <span class="co"># eV/Å³，ASE 约定，顺序 xx yy zz yz xz xy</span></span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a>BFGS(FrechetCellFilter(atoms)).run(fmax<span class="op">=</span><span class="fl">1e-4</span>)   <span class="co"># 同时优化原子位置和晶胞</span></span></code></pre></div>
+<p>底层接口：<code>DFTB(...).calculate(..., stress=True).stress</code> 给出 3×3 应力，单位 Hartree/Bohr³，符号同 DFTB+。</p>
+</section>
+<section id="sec-6">
+<h2>六、下一步</h2>
+<p>按 M2 表格继续：DFTB3（Hubbard 导数、完整三阶项、H–X 阻尼）。</p>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M2a-stress.html">← M2a 应力设计</a><a href="../index.html">文档索引</a><a href="../design/M2b-dftb3.html">M2b DFTB3 设计 →</a></nav>
+    <span>由 Markdown 原稿转换（reports/M2a-stress.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

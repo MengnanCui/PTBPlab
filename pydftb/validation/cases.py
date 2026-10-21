@@ -42,7 +42,7 @@ D3BJ_3OB = {"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719, "a2": 3.6
 D4_3OB = {"model": "dftd4", "s6": 1.0, "s8": 0.6635015, "s9": 1.0, "a1": 0.5523240,
           "a2": 4.3537076}
 # periodic D4 against DFTB+: two-body only and no charge dependence, because DFTB+'s periodic
-# EEQ charges and three-body sum are wrong (docs/design/M2d-dispersion.md)
+# EEQ charges and three-body sum are wrong (docs/design/M2d-dispersion.html)
 D4_3OB_2BODY_Q0 = {"model": "dftd4", "s6": 1.0, "s8": 0.4727337, "s9": 0.0, "a1": 0.5467502,
                    "a2": 4.4955068, "charge_scale": 0.0}
 # Slater-Kirkwood test values in atomic units (Bohr^3, Bohr, e), patterned on Elstner's table,

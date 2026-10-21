@@ -6,8 +6,7 @@ It lives inside PTBPlab as an independent sub-package.
 - **Why it exists:** [`docs/WHY.md`](docs/WHY.md)
 - **Roadmap and DFTB+ feature checklist:** [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Learning map** (each module next to the DFTB+ source file that implements the same physics): [`docs/dftbplus_map.md`](docs/dftbplus_map.md)
-- **Design notes:** [`docs/design/`](docs/design)
-- **Milestone reports:** [`docs/reports/`](docs/reports)
+- **Development docs (HTML, open in a browser):** [`docs/index.html`](docs/index.html): every stage's design notes and report, key results first, development details folded
 - **Glossary** (Chinese, plain language): [`docs/glossary.md`](docs/glossary.md)
 - **Prototype research report** (performance experiments): [`RESEARCH.md`](RESEARCH.md)
 - **License:** MIT, like the rest of PTBPlab (see [`LICENSE`](../LICENSE)). The optional D3/D4 dispersion packages (`dftd3`, `dftd4`) are LGPL-3.0 and are only imported at run time.
@@ -51,7 +50,7 @@ mf = pydftb.SCC(system, params, dispersion=d3)
 
 Lennard-Jones/UFF and Slater-Kirkwood are built in.  D3 and D4 call the reference libraries, which are
 optional: `conda install -c conda-forge dftd3-python dftd4-python` (or `pip install dftd3 dftd4`).
-Models, defaults and the differences found in DFTB+'s own D4: [`docs/design/M2d-dispersion.md`](docs/design/M2d-dispersion.md).
+Models, defaults and the differences found in DFTB+'s own D4: [`docs/design/M2d-dispersion.html`](docs/design/M2d-dispersion.html).
 
 ## Tests and validation
 

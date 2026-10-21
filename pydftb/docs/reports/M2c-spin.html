@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2c 自旋报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M2c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2c · 完成报告</p>
+    <h1>共线自旋</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>3ca9697</code></dd></div><div><dt>配套</dt><dd><a href="../design/M2c-spin.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">共线自旋完成：7 个新对照算例全部通过，SCC 迭代轮数全部与 DFTB+ 相同；分子能量差 ≤ 5e-11 Ha。</p>
+    <ul>
+      <li>开自旋时 DFTB+ 第一轮不混合电荷（<code>getNextInputCharges</code>），照做后迭代轮数一致。</li>
+      <li>修正“能级已全部占满”的判断：要按“能级数 × 自旋通道数”判断，否则共用费米能级的 O₂ 总能量错 3.5 Ha。</li>
+      <li>0 K 下简并能级半填充时，最后几轮迭代是噪声，OH 自由基算例改用 300 K。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">7</span><span class="lbl">新参考算例</span></li>
+      <li><span class="num">≤ 5e-11 Ha</span><span class="lbl">分子能量差</span></li>
+      <li><span class="num">7 / 7</span><span class="lbl">SCC 轮数一致的算例</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-2">二、验证结果</a></li>
+      <li><a href="#sec-3">三、发现的问题与学到的东西</a></li>
+      <li><a href="#sec-4">四、与计划的偏差</a></li>
+      <li><a href="#sec-5">五、下一步</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<details class="dev" id="sec-1"><summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary><div class="body">
+<h2>一、做了什么</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>位置</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>solvers.py</code></td>
+<td>拆出 <code>eig(h)</code>（只对角化）；填充可以用自旋因子 1，以便两个自旋通道共用或分用费米能级</td>
+</tr>
+<tr>
+<td><code>calculator.py</code></td>
+<td>新参数 <code>spin</code>、<code>unpaired_electrons</code>、<code>relax_total_spin</code>、<code>spin_constants</code>。两个自旋通道沿 k 点方向“堆叠”，能带能量、Mulliken 布居和力的大部分代码不变。力中的自旋势项用“磁化密度” ρ↑ − ρ↓，通过带符号的权重求得。结果新增 <code>e_spin</code>、每个原子的磁矩 <code>magmoms</code>、↑/↓ 布居 <code>q_spin</code> 和两个费米能级 <code>fermi_spin</code></td>
+</tr>
+<tr>
+<td><code>occupations.py</code></td>
+<td>修正“所有能级都已占满”的判断（见第三节第 3 条）</td>
+</tr>
+<tr>
+<td><code>ase_calc.py</code>、<code>api.py</code></td>
+<td>ASE 的 <code>magmom</code>/<code>magmoms</code>、<code>get_number_of_spins</code>，按自旋取本征值和占据数，<code>get_fermi_levels</code>；<code>SCC</code> 重启时带上自旋布居</td>
+</tr>
+<tr>
+<td><code>validation/</code></td>
+<td>自动写入 DFTB+ 的 <code>SpinPolarisation</code> 和 <code>SpinConstants</code>（仅在原子分辨 SCC 时写 <code>ShellResolvedSpin</code>，否则 DFTB+ 会报错）；7 个新参考算例</td>
+</tr>
+<tr>
+<td><code>tests/test_spin.py</code></td>
+<td>8 个测试，不需要 DFTB+</td>
+</tr>
+</tbody>
+</table></div>
+<p>用法：</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a>atoms.calc <span class="op">=</span> PyDFTB(<span class="st">"path/to/skf"</span>, spin<span class="op">=</span><span class="va">True</span>, unpaired_electrons<span class="op">=</span><span class="dv">2</span>,</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a>                    spin_constants<span class="op">=</span>{<span class="st">"O"</span>: [[<span class="op">-</span><span class="fl">0.035</span>, <span class="op">-</span><span class="fl">0.030</span>], [<span class="op">-</span><span class="fl">0.030</span>, <span class="op">-</span><span class="fl">0.028</span>]], <span class="st">"H"</span>: <span class="op">-</span><span class="fl">0.072</span>})</span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>atoms.get_magnetic_moments()</span></code></pre></div>
+</div></details>
+<section id="sec-2">
+<h2>二、验证结果</h2>
+<section id="sec-2-1">
+<h3>2.1 与 DFTB+ 对照</h3>
+<p>自旋常数：H、O 取常见的 PBE 值；Cu 取检验用的值。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>算例</th>
+<th>内容</th>
+<th>|ΔE| (Ha)</th>
+<th>|ΔF| (Ha/Bohr)</th>
+<th>SCC 轮数 pydftb/DFTB+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>o2_triplet</code></td>
+<td>O₂ 三重态，每种原子一个 W（<code>ShellResolvedSpin = No</code>）</td>
+<td>1.6e-11</td>
+<td>1.4e-8</td>
+<td>2/2</td>
+</tr>
+<tr>
+<td><code>o2_triplet_wmatrix</code></td>
+<td>同上，W 矩阵</td>
+<td>8.1e-12</td>
+<td>1.4e-8</td>
+<td>5/5</td>
+</tr>
+<tr>
+<td><code>o2_triplet_shell</code></td>
+<td>同上，壳层分辨 SCC</td>
+<td>3.8e-11</td>
+<td>1.4e-8</td>
+<td>6/6</td>
+</tr>
+<tr>
+<td><code>oh_radical</code></td>
+<td>OH 自由基（双重态），300 K</td>
+<td>4.5e-11</td>
+<td>1.2e-8</td>
+<td>11/11</td>
+</tr>
+<tr>
+<td><code>o2_relaxed_spin</code></td>
+<td>共用一个费米能级（<code>RelaxTotalSpin = Yes</code>），300 K</td>
+<td>8.1e-12</td>
+<td>1.4e-8</td>
+<td>5/5</td>
+</tr>
+<tr>
+<td><code>oh_radical_dftb3</code></td>
+<td>自旋 + DFTB3 + H–X 阻尼</td>
+<td>3.2e-11</td>
+<td>1.2e-8</td>
+<td>10/10</td>
+</tr>
+<tr>
+<td><code>cuo_chain_spin_k422</code></td>
+<td>周期 CuO 链，k 点，500 K</td>
+<td>5.2e-9</td>
+<td>8.8e-9</td>
+<td>23/23</td>
+</tr>
+</tbody>
+</table></div>
+<p>周期链的应力差为 2.0e-10 Ha/Bohr³。</p>
+</section>
+<section id="sec-2-2">
+<h3>2.2 自洽检验</h3>
+<ul>
+<li>自旋常数全部为 0 时，结果与不加自旋的计算一致：能量差 &lt; 1e-11，力差 &lt; 1e-10；</li>
+<li>固定自旋时，各原子磁矩之和严格等于 <code>UnpairedElectrons</code>，E_spin = ½ Σ W M²；</li>
+<li>力与能量差分一致（&lt; 1e-8，含壳层分辨和 DFTB3 组合），周期体系的应力与应变差分一致；</li>
+<li>共用费米能级时，两个通道的费米能级相同。</li>
+</ul>
+</section>
+</section>
+<section id="sec-3">
+<h2>三、发现的问题与学到的东西</h2>
+<section id="sec-3-1">
+<h3>1. 开自旋时，DFTB+ 第一轮不混合电荷</h3>
+<p>O₂ 三重态在 DFTB+ 中 2 轮就收敛，pydftb 最初要 4 轮。查 DFTB+ 的 SCC 输出：第 2 轮的误差是 1.9e-14，说明第 2 轮的输入就等于第 1 轮的输出。对应源码（<code>dftbplus/main.F90:getNextInputCharges</code>）：</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode fortran"><code class="sourceCode fortranfixed"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="kw">if</span> ((iSCCIter <span class="kw">+</span> iGeoStep) <span class="op">==</span> <span class="dv">1</span> <span class="op">.and.</span> (nSpin <span class="op">&gt;</span> <span class="dv">1</span> <span class="op">.or.</span> tMixBlockCharges) <span class="op">.and.</span> <span class="op">.not.</span> tReadChrg) <span class="kw">then</span></span>
+<span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a>  qInpRed(:) <span class="kw">=</span> qOutRed        <span class="co">! 不混合，直接用输出</span></span></code></pre></div>
+<p>原因是自旋的初始猜测（每个轨道的磁矩 = 参考布居 × n/N）很粗糙，不值得混进去。pydftb 照此处理后，7 个算例的迭代轮数全部一致。</p>
+</section>
+<section id="sec-3-2">
+<h3>2. 混合向量的形式要与 DFTB+ 完全相同</h3>
+<p>DFTB+ 交给 Broyden 的是“↑/↓ 表示、按壳层求和”的布居。即使 SCC 不按壳层分辨，开自旋后也是按壳层：自旋模块的等价关系是逐壳层的，与 SCC 的等价关系取交集后就成了逐壳层。Broyden 的权重依赖向量的范数，换成“电荷/磁矩”表示虽然只差一个常数因子，迭代路径也会不同。</p>
+</section>
+<section id="sec-3-3">
+<h3>3. pydftb 的“能级已全部占满”判断有误（已修正）</h3>
+<p>共用费米能级的 O₂ 算例最初总能量错了 3.5 Ha。原因是 <code>occupations.fill</code> 判断“电子数不少于能级数，所以全部占满”时，只比较了一个 k 点（一行）的能级数。把两个自旋通道当作两行 k 点堆叠后，每行 8 个能级，而电子有 12 个，于是被误判为“全部占满”。DFTB+ 的判断是“能级数 × 自旋通道数”（<code>dftb/etemp.F90:Efilling</code>）。修正为“能级数 × 权重之和”，因为 k 点权重在每个自旋通道内归一。</p>
+</section>
+<section id="sec-3-4">
+<h3>4. 0 K 下简并能级半填充时，最后几轮迭代是噪声</h3>
+<p>OH 是线性分子，π 能级二重简并，自旋向下的通道只有 1 个电子落在其中。在 0 K 下：</p>
+<ul>
+<li>两个程序的 SCC 误差序列直到 4e-9 都完全相同；</li>
+<li>之后 DFTB+ 自己在 1e-9 附近来回波动（1e-10 → 1.3e-9 → 1e-10），收敛轮数因此成了偶然。</li>
+</ul>
+<p>改用 300 K 后，两边每一轮都相同，第 10 轮同时收敛到 2.1e-12。所以这两个参考算例取 300 K。</p>
+</section>
+</section>
+<section id="sec-4">
+<h2>四、与计划的偏差</h2>
+<ul>
+<li>原计划用“初始磁矩全为零”的极限检验，改为“自旋常数全为 0”的极限，因为 DFTB+ 的初始磁矩由未配对电子数决定，不能单独设为零（<code>InitialSpins</code> 尚未实现）。</li>
+<li>尚未实现：<code>InitialSpins</code>（逐原子的初始磁矩）、非共线自旋（M6）。</li>
+<li>验收：能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³ 均满足，迭代轮数也全部一致。</li>
+</ul>
+</section>
+<section id="sec-5">
+<h2>五、下一步</h2>
+<p>按 M2 表格继续：色散（UFF/Lennard-Jones、Slater-Kirkwood，D3/D4 通过现成库）。</p>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M2c-spin.html">← M2c 自旋设计</a><a href="../index.html">文档索引</a><a href="../design/M2d-dispersion.html">M2d 色散设计 →</a></nav>
+    <span>由 Markdown 原稿转换（reports/M2c-spin.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

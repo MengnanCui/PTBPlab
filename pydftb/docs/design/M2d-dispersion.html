@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2d 色散设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M2d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2d · 设计文档</p>
+    <h1>色散</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-21</dd></div><div><dt>提交</dt><dd><code>814ccb6</code></dd></div><div><dt>配套</dt><dd><a href="../reports/M2d-dispersion.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">在总能量上加只依赖原子位置的色散修正，覆盖 DFTB+ 的 LennardJones、SlaterKirkwood、DftD3、SimpleDftD3、DftD4。</p>
+    <ul>
+      <li>UFF/LJ 与 Slater-Kirkwood 原生实现，周期体系用与 DFTB+ 参数相同的 r⁻⁶ Ewald 和；D3、D4 调用参考库（参考数据属于 LGPL 代码库，不复制进 MIT 代码）。</li>
+      <li>探测实验：D3 与 DFTB+ 逐位一致；DFTB+ 的 D4 是原生实现，与参考库有三处不同（第 11/12 族多一个参考体系、周期 EEQ 电荷错误、周期三体项计数错误）。</li>
+      <li>dftd4 库的截断固定为 60/40/30 Bohr，对照时让 DFTB+ 用相同的值。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">5</span><span class="lbl">色散模型</span></li>
+      <li><span class="num">3 处</span><span class="lbl">DFTB+ 原生 D4 的问题</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">目标与用途</a></li>
+      <li><a href="#sec-2">DFTB+ 的六种色散，pydftb 怎么做</a></li>
+      <li><a href="#sec-3">先做的探测实验</a></li>
+      <li><a href="#sec-4">各模型的公式与 DFTB+ 细节</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-5">接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-6">验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-7">局限</a></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<section id="sec-1">
+<h2>目标与用途</h2>
+<p>DFTB 的能量项都来自短程的原子轨道重叠，缺少长程的范德华吸引（色散），所以分子晶体、层状材料、物理吸附、生物分子的结构和结合能会有系统性偏差。通常的做法是在总能量上加一个只依赖原子位置的经验修正 E_disp。它不改变电子结构，也不参与 SCC 循环。</p>
+<p>DFTB+ 的输入写在 <code>Hamiltonian</code> 块里，例如：</p>
+<pre><code>Dispersion = DftD3 {
+  Damping = BeckeJohnson { a1 = 0.5719  a2 = 3.6017 }
+  s6 = 1.0
+  s8 = 0.5883
+}</code></pre>
+<p>pydftb 中对应的写法：<code>DFTB(..., dispersion={"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719, "a2": 3.6017, "s6": 1.0, "s8": 0.5883})</code>。键名与 DFTB+ 的关键字一一对应（小写、下划线），单位与 DFTB+ 的默认单位相同（原子单位：Bohr、Hartree）。</p>
+</section>
+<section id="sec-2">
+<h2>DFTB+ 的六种色散，pydftb 怎么做</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>DFTB+ 关键字</th>
+<th>DFTB+ 的实现</th>
+<th>pydftb</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LennardJones</code>（UFF）</td>
+<td>原生（<code>dftb/dispuff.F90</code>）</td>
+<td>原生 NumPy，按同样的公式和截断规则</td>
+</tr>
+<tr>
+<td><code>SlaterKirkwood</code></td>
+<td>原生（<code>dftb/dispslaterkirkw.F90</code>）</td>
+<td>原生 NumPy</td>
+</tr>
+<tr>
+<td><code>DftD3</code></td>
+<td>调用 s-dftd3 库（<code>extlibs/sdftd3.F90</code>）</td>
+<td>调用同一个库的 Python 绑定 <code>dftd3</code>（1.0.0，与 DFTB+ 链接的版本相同）</td>
+</tr>
+<tr>
+<td><code>SimpleDftD3</code></td>
+<td>原生 D3(BJ) 二体项（<code>dftb/simpledftd3.F90</code>）</td>
+<td>映射到同一个 <code>dftd3</code> 库：BJ 阻尼、无三体项、截断照 DFTB+</td>
+</tr>
+<tr>
+<td><code>DftD4</code></td>
+<td><strong>原生</strong>（<code>dftb/dispdftd4.F90</code>，不调用 dftd4 库）</td>
+<td>调用参考实现 dftd4 库的 Python 绑定 <code>dftd4</code>（3.6.0）</td>
+</tr>
+<tr>
+<td><code>Ts</code>、<code>Mbd</code></td>
+<td>libmbd</td>
+<td>暂缓</td>
+</tr>
+</tbody>
+</table></div>
+<p>为什么 D3/D4 用库：</p>
+<ul>
+<li>D3 和 D4 的参考数据（C6 表、参考体系的极化率）量很大，而且属于 LGPL-3 的代码库，不能复制进 MIT 许可的 pydftb。</li>
+<li>两个库都是作者组维护的参考实现。<code>dftd3</code>/<code>dftd4</code> 是可选依赖，只在运行时导入，没装时给出安装提示。</li>
+</ul>
+<p>代价：这两项暂时不能放到 GPU 上，也不能对色散参数自动求导（M4 再考虑）。</p>
+</section>
+<section id="sec-3">
+<h2>先做的探测实验</h2>
+<p>动手实现之前，先在 scratchpad 里直接比较了 DFTB+ 和两个库。DFTB+ 的色散能量取“加色散”与“不加色散”两次计算的差，力和应力同理（电子部分完全相同，可以逐位相减）。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>模型</th>
+<th>体系</th>
+<th>能量差 (Ha)</th>
+<th>力差 (Ha/Bohr)</th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DftD3</code>（BJ / 零阻尼 / 三体项）</td>
+<td>水二聚体、甲醇、水盒子、CuO 链</td>
+<td>≤ 6e-14</td>
+<td>≤ 1e-14</td>
+<td>同一个库，逐位一致</td>
+</tr>
+<tr>
+<td><code>SimpleDftD3</code> → <code>dftd3</code> 库</td>
+<td>同上</td>
+<td>≤ 6e-11</td>
+<td>≤ 7e-11</td>
+<td>一致（参考数据舍入）</td>
+</tr>
+<tr>
+<td><code>DftD4</code></td>
+<td>只含 H、C、O 的分子</td>
+<td>≤ 1e-11</td>
+<td>≤ 6e-11</td>
+<td>一致</td>
+</tr>
+<tr>
+<td><code>DftD4</code></td>
+<td>Cu₄CO 分子</td>
+<td>2.1e-3</td>
+<td>8e-5</td>
+<td><strong>不一致</strong>，见下文 1</td>
+</tr>
+<tr>
+<td><code>DftD4</code></td>
+<td>周期体系（默认参数）</td>
+<td>4e-4 – 1e-3</td>
+<td>1e-5 – 3e-4</td>
+<td><strong>不一致</strong>，见下文 2、3</td>
+</tr>
+<tr>
+<td><code>DftD4</code></td>
+<td>周期体系，<code>ChargeScale = 0</code>、<code>s9 = 0</code>、截断对齐</td>
+<td>1e-10（水盒子）</td>
+<td>1e-10</td>
+<td>一致</td>
+</tr>
+</tbody>
+</table></div>
+<section id="sec-3-1">
+<h3>1. Cu、Zn、Ag、Cd、Au、Hg：DFTB+ 多用一个参考体系</h3>
+<p>逐项比较了 DFTB+ 的 <code>external/dftd4refs/dftd4_references.fh</code> 和 dftd4 3.6.0 的 <code>src/dftd4/reference.inc</code>：3366 项共同数据全部相同，只有 6 项不同，即上述 6 种元素的参考体系数 <code>refn</code> 不同（DFTB+ 为 3，库为 2）。</p>
+<ul>
+<li>第 3 个参考体系（Cu：CN = 2.9，电荷与缩放取整数值）在库的数据里仍然存在，但没有启用。</li>
+<li>所以 Cu 的配位数在 1.5 以上时两者差别很大（Cu₃：1e-7 Ha；Cu₄CO：2e-3 Ha，约为色散能本身）；双原子分子（CN ≤ 1）则完全一致。</li>
+<li>pydftb 跟随参考实现（库）。与 DFTB+ 对照的 D4 算例不含这 6 种元素。</li>
+</ul>
+</section>
+<section id="sec-3-2">
+<h3>2. DFTB+ 周期体系的 EEQ 电荷有错</h3>
+<p>D4 的 C6 依赖原子电荷，电荷由 EEQ 模型求得；周期体系中 EEQ 的库仑矩阵要用 Ewald 求和。</p>
+<ul>
+<li>把水二聚体放进越来越大的盒子：
+<ul>
+<li>库的结果收敛到分子值（L = 40 Å 时差 4e-9 Ha）；</li>
+<li>DFTB+ 不收敛，差值约按 1/L 衰减（12、20、40 Å 时分别为 4.4e-5、2.4e-5、1.1e-5 Ha）。</li>
+</ul></li>
+<li>DFTB+ 的结果随 EEQ 的 Ewald 劈分参数变化（<code>EwaldParameter</code> 取自动、0.15、0.3 时分别为 −7.83e-4、−8.34e-4、−9.09e-4 Ha）。正确的 Ewald 和不可能依赖这个参数。</li>
+<li><code>ChargeScale = 0</code>（关掉电荷依赖）后两者一致到 4e-12。</li>
+<li>源码中可疑的地方：<code>dftb/encharges.F90:addEwaldContribs</code> 的内层循环从 <code>iAt2f = iAt1</code> 开始，并且对 <code>aMat(iAt2f, iAt1)</code> 和 <code>aMat(iAt1, iAt2f)</code> 各加一次。对角元因此加了两次倒空间项，自能修正也只有 −α/√π，而不是 −2α/√π。</li>
+</ul>
+</section>
+<section id="sec-3-3">
+<h3>3. DFTB+ 周期体系的 D4 三体项计数有错</h3>
+<ul>
+<li><strong>超胞检验：</strong> 同一个 CuO 链晶体，用 1×1×1、2×1×1、1×2×1 晶胞计算，每 4 个原子的三体能量：
+<ul>
+<li>库：都是 3.333770e-4 Ha；</li>
+<li>DFTB+：2.760e-4、2.787e-4、3.054e-4 Ha。 DFTB+ 的结果随所选晶胞变化，随超胞增大逐渐接近库的值。</li>
+</ul></li>
+<li><strong>原因（源码）：</strong>
+<ul>
+<li>DFTB+ 的近邻表只存“像原子的中心胞编号 ≥ 本原子”的近邻（<code>dftb/periodic.F90:updateNeighbourList</code>）。</li>
+<li>三体循环（<code>dispdftd4.F90:threeBodyDispersionGradient</code>）从编号最小的原子出发枚举三元组，再按 <code>tripleScale</code> 打折扣。</li>
+<li>对“两个原子是同一原子的不同像”的三元组，这个折扣与实际枚举次数不符：
+<ul>
+<li>(i, j′, j″) 只被枚举一次，却乘了 ½；</li>
+<li>(i, i′, i″) 枚举 3 次、每次乘 1/6，合计 ½。</li>
+</ul></li>
+<li>梯度和应力不乘这个折扣，所以力与能量也不自洽。</li>
+<li>另外，截断只判断从编号最小原子出发的两条边，结果依赖原子编号顺序。</li>
+</ul></li>
+<li><strong>库的做法：</strong> 三条边都在截断内才计入，按枚举次数配权，超胞检验通过。</li>
+</ul>
+</section>
+<section id="sec-3-4">
+<h3>4. 截断</h3>
+<p>dftd4 3.6 的实空间截断写死在代码里：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>双体</th>
+<th>三体</th>
+<th>配位数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dftd4 3.6（C/Python 接口都不能改）</td>
+<td>60 Bohr</td>
+<td>40 Bohr</td>
+<td>30 Bohr</td>
+</tr>
+<tr>
+<td>DFTB+ 默认</td>
+<td>64 Bohr</td>
+<td>40 Bohr</td>
+<td>40 Bohr</td>
+</tr>
+</tbody>
+</table></div>
+<p>对分子没有影响。对稠密周期体系，双体截断的差别约为 1e-7 Ha/原子（水盒子 24 个原子：3e-6 Ha）。参考算例中 DFTB+ 一律写成库的值（<code>CutoffInter = 60</code>、<code>CoordinationNumber = Cov { Cutoff = 30 }</code>），pydftb 给出与库不同的截断时报错。</p>
+</section>
+<section id="sec-3-5">
+<h3>小结：D4 与 DFTB+ 如何对照</h3>
+<ul>
+<li>分子（不含第 11、12 族元素）：完整模型对照。</li>
+<li>周期体系：用 <code>ChargeScale = 0</code>、<code>s9 = 0</code> 对照二体部分（配位数、参考体系权重、C6、BJ 阻尼、周期求和、应力）。</li>
+<li>完整模型的周期行为改由 pydftb 的单元测试检查物理一致性：大盒子收敛到分子极限、超胞不变性。</li>
+</ul>
+</section>
+</section>
+<details class="dev" id="sec-4"><summary><span class="tag">开发细节</span><span class="title">各模型的公式与 DFTB+ 细节</span></summary><div class="body">
+<h2>各模型的公式与 DFTB+ 细节</h2>
+<section id="sec-4-1">
+<h3>Lennard-Jones / UFF（<code>dftb/dispuff.F90</code>、<code>dispuffdata.F90</code>）</h3>
+<ul>
+<li><strong>参数：</strong> 每种原子一个距离 x_i 和阱深 D_i。UFF 表来自 Rappé 等，JACS 114, 10024 (1992) 表 1（103 种元素，Å 与 kcal/mol）。换算用 DFTB+ 的常数：1 Bohr = 0.529177249 Å，1 kcal/mol = 0.0015946683859874898 Ha。表中 103 号元素在 DFTB+ 里写作 “Lw”，pydftb 用 “Lr”。</li>
+<li><strong>组合规则：</strong> d = √(dᵢdⱼ)，r = √(rᵢrⱼ)；c6 = 2 d r⁶，c12 = d r¹²。r &gt; r0 = 2^(−1/6) r 时 E = c12/R¹² − c6/R⁶。</li>
+<li><strong>短程“墙”：</strong> R ≤ r0 时改用 E = U0 − U5 R⁵ − U10 R¹⁰，其中 U0 = 396/25·d，U5 = 2^(5/6)·672/25·d/r⁵，U10 = −2^(2/3)·552/25·d/r¹⁰。它在 r0 处与 LJ 的值和斜率都连续（两者都为 0 和 −24d/r0），避免 r⁻¹² 在极短距离发散。</li>
+<li><strong>分子：</strong> 截断取 (max c6 / 1e-9)^(1/6) 以内的所有原子对。</li>
+<li><strong>周期：</strong>
+<ul>
+<li>实空间只算 c12/R¹² 和短程墙；墙的区域要把 Ewald 已经减掉的 −c6/R⁶ 加回来。截断取 (max c12 / 1e-11)^(1/12)。</li>
+<li>全部 −c6/R⁶ 项用 r⁻⁶ 的 Ewald 和（见下文）。</li>
+</ul></li>
+<li><strong>类型标签：</strong>
+<ul>
+<li>DFTB+ 按物种名的前两个字母查 UFF 表（<code>O2</code> 查不到，<code>Li1</code> 会查成 Li）；</li>
+<li>pydftb 用 <code>element_of_label</code> 映射到元素，也可以逐标签给数值；</li>
+<li>参考算例中，类型标签一律写显式数值。</li>
+</ul></li>
+</ul>
+</section>
+<section id="sec-4-2">
+<h3>Slater-Kirkwood（<code>dftb/dispslaterkirkw.F90</code>）</h3>
+<ul>
+<li><strong>参数：</strong>
+<ul>
+<li>每个原子给极化率 α、范德华半径 R、有效电子数 N（<code>PolarRadiusCharge</code>，逐原子）；</li>
+<li>或者每种原子给共价半径和 13 个值（<code>HybridDependentPol</code>：6 个极化率、6 个半径、1 个电子数）。13 个值按邻居数 n 选取：n ≤ 4 取第 n+1 个，n ≥ 5 取第 6 个。距离不超过两原子共价半径之和的原子算邻居，包括周期像。</li>
+<li>DFTB+ 只在读入时按输入结构定一次，pydftb 每次计算按当前结构定。单点结果相同；只有在结构优化中邻居数发生变化时才不同。</li>
+</ul></li>
+<li><strong>公式：</strong>
+<ul>
+<li>C6 = 1.5 αᵢαⱼ / (√(αᵢ/Nᵢ) + √(αⱼ/Nⱼ))，R0 = (Rᵢ³ + Rⱼ³)/(Rᵢ² + Rⱼ²)；</li>
+<li>E = −C6 [1 − exp(−3 (R/R0)⁷)]⁴ / R⁶；</li>
+<li>α 或 R 为 0 的原子不参与。</li>
+</ul></li>
+<li><strong>分子：</strong> 截断取 (max C6 / 1e-9)^(1/6)。</li>
+<li><strong>周期：</strong>
+<ul>
+<li>先对全部原子对做纯 −C6/R⁶ 的 Ewald 和；</li>
+<li>再在“阻尼截断”内加上修正 +C6 (1 − f⁴)/R⁶。阻尼截断由 1 − f⁴ &lt; 1e-10 求出，R0 取所有原子对中最大的。</li>
+</ul></li>
+</ul>
+</section>
+<section id="sec-4-3">
+<h3>r⁻⁶ 的 Ewald 求和（<code>dftb/dispcommon.F90</code>）</h3>
+<p>E = −½ Σᵢⱼ Σ_L′ C6ᵢⱼ / |rᵢⱼ + L|⁶ 收敛很慢，用 Ewald 方法拆成三部分（x = R/η）：</p>
+<ul>
+<li><strong>实空间：</strong> −½ Σ C6 e^(−x²)(1 + x² + x⁴/2)/R⁶；</li>
+<li><strong>倒空间：</strong> −π^(3/2)/(24V) Σ_{G≠0} |G|³ h(|G|η/2) Σᵢⱼ C6ᵢⱼ cos(G·rᵢⱼ)，其中 h(b) = √π erfc(b) + (1/(2b²) − 1) e^(−b²)/b；</li>
+<li><strong>自能和 G = 0 项：</strong> + Σᵢ C6ᵢᵢ/(12η⁶) − π^(3/2) Σᵢⱼ C6ᵢⱼ/(6Vη³)。</li>
+</ul>
+<p>参数选取照 DFTB+：</p>
+<ul>
+<li>η = η_opt/√2，η_opt = √(a·V/(π |a×b|))，a、b 是最短的两个晶格矢量；</li>
+<li>实空间、倒空间截断用二分法（最多 30 轮），使误差估计低于 1e-9 Ha。</li>
+</ul>
+<p>这样两边截取的是同一组 L 和 G，结果一致到舍入误差。</p>
+<p>应变导数（应力）：</p>
+<ul>
+<li>实空间项与普通对势相同；</li>
+<li>倒空间项 = −E_rec δ_ab + π^(3/2)/(24V) Σ_G S(G)·3|G|·(√π erfc(b) − e^(−b²)/b)·G_a G_b；</li>
+<li>G = 0 项 ∝ 1/V。</li>
+</ul>
+</section>
+<section id="sec-4-4">
+<h3>DftD3（库）与 HHRepulsion（原生）</h3>
+<ul>
+<li><strong>参数逐项照 DFTB+（<code>extlibs/sdftd3.F90</code>）：</strong>
+<ul>
+<li>BJ 阻尼：a1、a2，三体项 alp = 14；</li>
+<li>零阻尼：rs6 = sr6、rs8 = 1、alp = alpha6；</li>
+<li>修正零阻尼另有 beta。</li>
+<li><code>Threebody = Yes/No</code> 对应 s9 = 1/0（DFTB+ 默认关）。</li>
+<li>截断：<code>set_realspace_cutoff(disp2 = Cutoff, disp3 = CutoffCN, cn = CutoffCN)</code>，默认 Cutoff = √9000 Bohr、CutoffCN = 40 Bohr。</li>
+</ul></li>
+<li><strong>HHRepulsion（D3H5 的 H–H 排斥）：</strong>
+<ul>
+<li>10 Bohr 以内的每对氢原子加 E = k [1 − 1/(1 + exp(−e (R/r0 − 1)))]，k = 0.30 kcal/mol，e = 14.31，r0 = 2.35 Å；</li>
+<li>pydftb 原生实现。</li>
+<li>DFTB+ 对“氢原子与自己的周期像”这类原子对，能量按两次计（近邻表同时含 +L 和 −L），应力却按一半计。只有晶胞小于 10 Bohr 时才会出现；pydftb 按物理正确的方式计数，参考算例避开这种情况。</li>
+</ul></li>
+<li>类型标签用 <code>atomic_numbers={label: Z}</code>，对应 DFTB+ 的 <code>AtomicNumbers</code>。</li>
+</ul>
+</section>
+<section id="sec-4-5">
+<h3>SimpleDftD3 → 同一个 D3 库</h3>
+<ul>
+<li>DFTB+ 的 SimpleDftD3 就是 D3(BJ) 的二体项：s6 = 1，s8、a1、a2 必填，s10 = 0，<code>CutoffInter = 64</code>，<code>WeightingFactor = 4</code>，<code>CoordinationNumber = Exp { Cutoff = 40 }</code>。</li>
+<li>用库计算：BJ 阻尼、s9 = 0、disp2 = CutoffInter、cn = CN 截断。</li>
+<li>库不支持的设置直接报错：s10 ≠ 0、WeightingFactor ≠ 4、CN 不是 Exp、CutCN ≠ 0。</li>
+</ul>
+</section>
+<section id="sec-4-6">
+<h3>DftD4（库）</h3>
+<ul>
+<li><strong>参数：</strong>
+<ul>
+<li>s6（默认 1），s8、s9、a1、a2 必填，alpha（默认 16）；</li>
+<li>WeightingFactor、ChargeSteepness、ChargeScale 对应库的 wf、gc、ga（默认 6、2、3），不等于默认值时用库的 <code>custom_d4_model</code>；</li>
+<li>s10 必须为 0。</li>
+</ul></li>
+<li><strong>EEQ 电荷：</strong> 需要体系的总电荷，pydftb 把 <code>DFTB(charge=...)</code> 传进去。DFTB+ 的 <code>ChargeModel = SelfConsistent</code>（用 DFTB 布居代替 EEQ 电荷并与 SCC 耦合）暂缓。</li>
+<li><strong>截断：</strong> 见上文“截断”一节。</li>
+<li><strong>常用参数：</strong> 库的参数表中，3ob 的 D4（含三体项）为 s8 = 0.6635015、a1 = 0.5523240、a2 = 4.3537076、s9 = 1；mio 为 s8 = 1.2916225、a1 = 0.5965326、a2 = 4.8778602。</li>
+</ul>
+</section>
+</div></details>
+<details class="dev" id="sec-5"><summary><span class="tag">开发细节</span><span class="title">接口</span></summary><div class="body">
+<h2>接口</h2>
+<p>新模块 <code>pydftb/dispersion.py</code>：</p>
+<ul>
+<li>每个模型提供 <code>evaluate(labels, pos, cell, pbc, grad=True, charge=0.0)</code>，返回 <code>DispersionTerms(energy, gradient, virial)</code>：
+<ul>
+<li>gradient = dE/dR；</li>
+<li>virial = dE/dε，与 <code>calculator.py:_repulsive_gradient</code> 的约定相同。库返回的 sigma 也是 dE/dε。</li>
+</ul></li>
+<li><code>make_dispersion(spec)</code>：spec 是 dict（<code>"model"</code> 取 DFTB+ 关键字的小写形式）、模型对象或 None。</li>
+<li>原生模型只支持非周期或三维周期；部分周期的体系只能用库模型。</li>
+</ul>
+<p>接入 <code>calculator.py</code>：</p>
+<ul>
+<li>色散在 <code>_setup</code> 中按几何结构算一次（它与 SCC 无关），存进 <code>_Setup.disp</code>；</li>
+<li><code>_energies</code> 把 <code>e_disp</code> 加进总能量（与 DFTB+ 相同，Total、Mermin、Extrapolated 都含色散），<code>terms["dispersion"]</code>；</li>
+<li><code>_gradient</code> 加上梯度和维里。</li>
+</ul>
+<p><code>PyDFTB(dispersion=...)</code> 和 <code>pydftb.SCC(..., dispersion=...)</code> 透传。</p>
+</div></details>
+<details class="dev" id="sec-6"><summary><span class="tag">开发细节</span><span class="title">验证计划</span></summary><div class="body">
+<h2>验证计划</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>算例</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>water_dimer_uff</code>、<code>water_box_uff</code>、<code>cuo_chain_uff_k422</code></td>
+<td>UFF：分子、周期（应力）、k 点</td>
+</tr>
+<tr>
+<td><code>water_dimer_sk</code>、<code>ch3oh_sk_hybrid</code>、<code>water_box_sk_hybrid</code></td>
+<td>SK：逐原子参数；按邻居数选参数（含 α = 0 的原子）</td>
+</tr>
+<tr>
+<td><code>ch3oh_d3bj</code>、<code>water_box_d3bj_3body</code>、<code>cuo_chain_d3bj_k422</code></td>
+<td>D3(BJ)，含三体项和周期</td>
+</tr>
+<tr>
+<td><code>water_dimer_d3zero_3body</code>、<code>water_dimer_d3_hhrep</code>、<code>water_dimer_typed_d3</code></td>
+<td>零阻尼 + 三体项；HHRepulsion；类型标签 + AtomicNumbers</td>
+</tr>
+<tr>
+<td><code>ch3oh_simple_d3</code>、<code>water_box_simple_d3</code></td>
+<td>SimpleDftD3</td>
+</tr>
+<tr>
+<td><code>water_dimer_d4</code>、<code>ch3oh_d4</code>、<code>water_box_d4_2body</code></td>
+<td>D4：分子完整模型；周期二体（ChargeScale = 0、s9 = 0）</td>
+</tr>
+<tr>
+<td><code>h2o_dftb3_d3bj</code>、<code>o2_triplet_d3bj</code></td>
+<td>与 DFTB3、自旋组合</td>
+</tr>
+</tbody>
+</table></div>
+<p>单元测试（<code>tests/test_dispersion.py</code>）：</p>
+<ul>
+<li>各模型的力、应力与能量差分一致；</li>
+<li>Ewald 结果与 η 无关；</li>
+<li>超胞不变性；</li>
+<li>D4 大盒子收敛到分子极限；</li>
+<li>UFF 参数抽查、标签映射、选项校验。</li>
+</ul>
+<p>没装库或库版本与参考 JSON 记录不同时，D3/D4 算例跳过，并写明原因。</p>
+</div></details>
+<section id="sec-7">
+<h2>局限</h2>
+<ul>
+<li>不支持 TS/MBD；D4 的自洽电荷变体（<code>ChargeModel = SelfConsistent</code>）暂缓。</li>
+<li>D3/D4 依赖库，不能放到 GPU 上，也不能对参数自动求导。</li>
+<li>D4 截断固定为库的值。</li>
+</ul>
+</section>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M2c-spin.html">← M2c 自旋报告</a><a href="../index.html">文档索引</a><a href="../reports/M2d-dispersion.html">M2d 色散报告 →</a></nav>
+    <span>由 Markdown 原稿转换（design/M2d-dispersion.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>

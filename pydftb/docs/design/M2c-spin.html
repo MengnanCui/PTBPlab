@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2c 自旋设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M2c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2c · 设计文档</p>
+    <h1>共线自旋</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div><div><dt>日期</dt><dd>2026-10-20</dd></div><div><dt>提交</dt><dd><code>3ca9697</code></dd></div><div><dt>配套</dt><dd><a href="../reports/M2c-spin.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">共线自旋极化：↑、↓ 电子各占各的轨道，用于自由基、三重态分子和磁性材料。</p>
+    <ul>
+      <li>E_spin = ½ Σ W m m，自旋势 ±½S(V^s_μ + V^s_ν) 分别加到两个自旋通道的哈密顿量上。</li>
+      <li>支持固定未配对电子数（两个费米能级）和 <code>RelaxTotalSpin</code>（共用一个费米能级）。</li>
+      <li>混合向量与 DFTB+ 完全相同（各壳层的 q↑、q↓），这样才能逐轮一致。</li>
+      <li>两个自旋通道沿 k 点方向堆叠，复用能带、布居和力的代码。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">W</span><span class="lbl">自旋常数：每种原子一个数，或壳层 × 壳层矩阵</span></li>
+    </ul>
+  </section>
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#sec-1">目标与用途</a></li>
+      <li><a href="#sec-2">物理（通俗版）</a></li>
+      <li><a href="#sec-3">与 DFTB+ 逐轮一致的细节</a></li>
+      <li><a href="#sec-4">DFTB+ 中的对应代码</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-5">实现要点</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#sec-6">测试计划</a> <span class="dev-mark">开发细节</span></li>
+    </ol>
+  </nav>
+  <main class="doc">
+<section id="sec-1">
+<h2>目标与用途</h2>
+<p>自旋向上（↑）和向下（↓）的电子分别占据各自的轨道，可以描述自由基、三重态分子（如 O₂）和磁性材料。对应 DFTB+ 的输入：</p>
+<pre><code>SpinPolarisation = Colinear {
+  UnpairedElectrons = 2       # N↑ − N↓
+  RelaxTotalSpin = No         # No：两个费米能级，固定 N↑、N↓；Yes：共用一个费米能级，总自旋自由变化
+}
+SpinConstants {
+  ShellResolvedSpin = Yes     # 原子分辨 SCC 时默认 No（每种原子一个 W）；壳层分辨 SCC 时必须是 Yes
+  O = -0.035 -0.030 -0.030 -0.028    # 每种原子一个 W 矩阵（壳层 × 壳层）
+  H = -0.072
+}</code></pre>
+</section>
+<section id="sec-2">
+<h2>物理（通俗版）</h2>
+<ul>
+<li><p>每个壳层 l 的自旋磁矩：m_l = q_l↑ − q_l↓。</p></li>
+<li><p>自旋能量：E_spin = ½ Σ_A Σ_{l,l'} W_{A,ll'} m_{Al} m_{Al'}。W 是自旋常数，为负值，所以有未配对电子时能量降低。</p></li>
+<li><p>自旋势：V^s_{Al} = Σ_{l'} W_{A,ll'} m_{Al'}，分别加到两个自旋通道上：</p>
+<pre><code>H↑ = H0 + ½S(V_μ + V_ν) + ½S(V^s_μ + V^s_ν)
+H↓ = H0 + ½S(V_μ + V_ν) − ½S(V^s_μ + V^s_ν)</code></pre>
+<p>其中 V 是 DFTB2/DFTB3 的电荷势，用总电荷（↑ + ↓）计算。</p></li>
+<li><p><strong>填充：</strong></p>
+<ul>
+<li>默认（<code>RelaxTotalSpin = No</code>）：N↑ = (N + n)/2，N↓ = (N − n)/2，n = <code>UnpairedElectrons</code>，两个通道各有一个费米能级；</li>
+<li><code>RelaxTotalSpin = Yes</code>：两个通道共用一个费米能级，每个能级最多容纳 1 个电子。</li>
+</ul></li>
+<li><p><strong>初始猜测：</strong> 与 DFTB+ 相同，每个轨道的磁矩 m = q0 · n / N。</p></li>
+<li><p><strong>能量：</strong> E = Σ_σ Tr(ρ^σ H0) + E_SCC(q) + E_3rd(q) + E_spin(m) + E_rep − TS，用输出电荷计算。</p></li>
+<li><p><strong>力：</strong> 自旋能量只依赖同一原子上的磁矩，没有显式的位置依赖。力里只多出能带项中的自旋势部分：½S′(V^s_μ+V^s_ν)(ρ↑ − ρ↓)。应力同理。</p></li>
+</ul>
+</section>
+<section id="sec-3">
+<h2>与 DFTB+ 逐轮一致的细节</h2>
+<ul>
+<li><strong>混合向量：</strong> DFTB+ 把电荷换成“↑/↓”表示，再按“等价轨道”求和后交给 Broyden。开了自旋后等价单位是壳层（<code>spin.F90:Spin_getOrbitalEquiv</code> 与 SCC 的等价关系合并），所以混合向量是 [各壳层 q↑, 各壳层 q↓]。即使 SCC 不按壳层分辨也是如此。收敛判据是这个向量的最大差。</li>
+<li><strong>能量和势用输出电荷</strong>（M2b 已核实：<code>RecomputeAfterDensity</code>）。</li>
+</ul>
+</section>
+<details class="dev" id="sec-4"><summary><span class="tag">开发细节</span><span class="title">DFTB+ 中的对应代码</span></summary><div class="body">
+<h2>DFTB+ 中的对应代码</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>内容</th>
+<th>DFTB+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自旋势、自旋能量</td>
+<td><code>dftb/spin.F90</code>：<code>getSpinShift</code>、<code>getEnergySpin_*</code>；<code>dftb/getenergies.F90</code>（½ m·V^s）</td>
+</tr>
+<tr>
+<td>↑/↓ 与电荷/磁矩的换算</td>
+<td><code>spin.F90</code>：<code>qm2ud</code>、<code>ud2qm</code></td>
+</tr>
+<tr>
+<td>等价轨道（混合单位）</td>
+<td><code>spin.F90:Spin_getOrbitalEquiv</code>，<code>dftb/orbitalequiv.F90</code>，<code>dftbplus/main.F90:reduceCharges</code></td>
+</tr>
+<tr>
+<td>电子数、初始磁矩</td>
+<td><code>dftbplus/initprogram.F90</code>：<code>initElectronNumber</code>、<code>initializeCharges</code></td>
+</tr>
+<tr>
+<td>填充（一个或两个费米能级）</td>
+<td><code>dftbplus/main.F90:getFillingsAndBandEnergies</code></td>
+</tr>
+<tr>
+<td>输入</td>
+<td><code>dftbplus/parser.F90</code>：<code>readSpinPolarisation</code>、<code>readSpinConstants</code></td>
+</tr>
+</tbody>
+</table></div>
+</div></details>
+<details class="dev" id="sec-5"><summary><span class="tag">开发细节</span><span class="title">实现要点</span></summary><div class="body">
+<h2>实现要点</h2>
+<ol type="1">
+<li><p>求解器拆出 <code>eig(h)</code>（只对角化）。填充和密度矩阵放到外面，以便两个自旋通道共用或分用费米能级。SP2 求解器不支持自旋。</p></li>
+<li><p>两个自旋通道沿 k 点方向“堆叠”：ρ、W 的形状为 (2·nk, N, N)，权重为 [w_k, w_k]。这样能带能量、Mulliken 布居和力的大部分代码不用改。力中的自旋势项需要“磁化密度” ρ↑ − ρ↓，用带符号的权重 [w_k, −w_k] 求得。</p></li>
+<li><p>新参数：</p>
+<ul>
+<li><code>spin=False | True</code>；</li>
+<li><code>unpaired_electrons=0</code>；</li>
+<li><code>relax_total_spin=False</code>；</li>
+<li><code>spin_constants={label: W}</code>，W 为一个数（各壳层相同）或壳层 × 壳层矩阵。</li>
+</ul>
+<p>结果中新增每个原子的磁矩，以及 ↑/↓ 两个费米能级。<code>PyDFTB</code> 提供 ASE 的 <code>magmoms</code>/<code>magmom</code>。</p></li>
+</ol>
+</div></details>
+<details class="dev" id="sec-6"><summary><span class="tag">开发细节</span><span class="title">测试计划</span></summary><div class="body">
+<h2>测试计划</h2>
+<ul>
+<li><p><strong>与 DFTB+ 对照（新参考算例）：</strong></p>
+<ul>
+<li>O₂ 三重态：原子分辨 SCC + 每种原子一个 W；原子分辨 SCC + W 矩阵；壳层分辨 SCC；</li>
+<li>OH 自由基（双重态）；</li>
+<li>O₂，<code>RelaxTotalSpin = Yes</code>；</li>
+<li>周期 CuO 链：k 点 + 自旋，含应力；</li>
+<li>OH 自由基 + DFTB3（3ob 设置），检验组合。</li>
+</ul>
+<p>W 用 DFTB+ 手册推荐的 PBE 值（H、O）；Cu 取检验用的值。</p></li>
+<li><p><strong>自洽：</strong></p>
+<ul>
+<li>自旋势等于自旋能量对磁矩的导数；</li>
+<li>力和应力与能量差分一致；</li>
+<li>不加自旋（W = 0 或 n = 0 且初始磁矩为零）时结果与无自旋计算相同。</li>
+</ul></li>
+</ul>
+</div></details>
+  </main>
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M2b-dftb3.html">← M2b DFTB3 报告</a><a href="../index.html">文档索引</a><a href="../reports/M2c-spin.html">M2c 自旋报告 →</a></nav>
+    <span>由 Markdown 原稿转换（design/M2c-spin.md，见 git 历史）</span>
+  </footer>
+</div>
+</body>
+</html>
