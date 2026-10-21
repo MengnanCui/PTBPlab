@@ -39,6 +39,15 @@ mf = pydftb.SCC(pydftb.System.from_ase(atoms, labels=labels), params)
 
 `pydftb.skf.write_typed_copies` creates the files for a new type from existing ones.
 
+### f orbitals
+
+Parameter sets with f electrons (lanthanides, actinides) use DFTB+'s extended SKF format
+(first line `@`); simple and extended files can be mixed.  `max_l` is read from the files
+as before (an f shell counts when its occupation is non-zero), or given explicitly, e.g.
+`max_l={"Gd": 3, "O": 1}`.  The test set `tests/data/skf/hotcent_gdo` (Gd, O; no repulsive)
+is made by `python -m pydftb.validation.make_f_set`; details in
+[`docs/reports/M2g-f-orbitals.html`](docs/reports/M2g-f-orbitals.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

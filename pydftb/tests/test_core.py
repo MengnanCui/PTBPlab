@@ -10,7 +10,7 @@ import pytest
 
 from pydftb.calculator import DFTB
 from pydftb.kpoints import monkhorst_pack, reduce_time_reversal
-from pydftb.skf import SKFile, SKSet
+from pydftb.skf import SIMPLE_COLUMNS, SKFile, SKSet
 from pydftb.slako import bond_frames, rotation_blocks, sk_block
 
 SKDIR = os.path.join(os.path.dirname(__file__), "data", "skf", "orbit")
@@ -46,11 +46,11 @@ def test_slater_koster_table_entries():
     rng = np.random.default_rng(0)
     vec = rng.normal(size=(5, 3))
     l, m, n = (vec / np.linalg.norm(vec, axis=1)[:, None]).T
-    integ = np.zeros((5, 20))
-    integ[:, :10] = rng.normal(size=10)        # H columns, same for every pair
+    integ = np.zeros((5, 40))
+    integ[:, SIMPLE_COLUMNS] = rng.normal(size=10)    # spd H integrals, same for every pair
     dm = rotation_blocks(bond_frames(vec), 2)
     blk = sk_block(vec, integ, integ, [0, 1, 2], [0, 1, 2], 0, dm)
-    hdd0, hdd1, hdd2, hpd0, hpd1, hpp0, hpp1, hsd0, hsp0, hss0 = integ[0, :10]
+    hdd0, hdd1, hdd2, hpd0, hpd1, hpp0, hpp1, hsd0, hsp0, hss0 = integ[0, SIMPLE_COLUMNS]
     # s-p_x ; p_x-p_x ; p_x-p_y ; s-d_xy ; p_x-d_xy ; d_xy-d_xy (orbital order s|y z x|xy yz z2 xz x2-y2)
     assert np.allclose(blk[:, 0, 3], l * hsp0)
     assert np.allclose(blk[:, 3, 3], l * l * hpp0 + (1 - l * l) * hpp1)

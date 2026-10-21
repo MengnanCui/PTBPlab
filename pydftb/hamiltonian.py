@@ -11,7 +11,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from .backend import ops
-from .skf import SKSet
+from .skf import N_INTEGRALS, SKSet
 from .slako import bond_frames, rotation_blocks, sk_block
 from .neighbors import neighbor_list
 
@@ -94,10 +94,12 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                 d = np.sqrt((v * v).sum(1))
                 rot = bond_frames(v)
                 dm = rotation_blocks(rot, max(max(shells_a), max(shells_b)))
-                iab = sk.files[(a, b)].evaluate(d)
-                iba = sk.files[(b, a)].evaluate(d)
-                hb = sk_block(v, iab, iba, shells_a, shells_b, 0, dm)
-                sb = sk_block(v, iab, iba, shells_a, shells_b, 10, dm)
+                fab, fba = sk.files[(a, b)], sk.files[(b, a)]
+                iab = fab.evaluate(d, full=False)
+                iba = fba.evaluate(d, full=False)
+                cab, cba = fab.colmap, fba.colmap
+                hb = sk_block(v, iab, iba, shells_a, shells_b, 0, dm, cab, cba)
+                sb = sk_block(v, iab, iba, shells_a, shells_b, N_INTEGRALS, dm, cab, cba)
                 return hb, sb
 
             v = vec[sel]

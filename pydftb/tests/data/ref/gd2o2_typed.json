@@ -1,0 +1,122 @@
+{
+ "schema": 1,
+ "case": "gd2o2_typed",
+ "note": "type copies of extended-format files (write_typed_copies)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "hotcent_gdo",
+ "skf_sha256": {
+  "Gd-Gd.skf": "5be335af1f5564daa60aa799f97859d35febd6b2c6b5bcb463dd64fad5ac33f4",
+  "Gd-O.skf": "a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826",
+  "O-Gd.skf": "85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35",
+  "O-O.skf": "d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   1000.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "polynomial",
+  "typed": {
+   "Gd": "Gd",
+   "Gd2": "Gd",
+   "O": "O"
+  },
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Gd",
+   "Gd2",
+   "O",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    3.4,
+    0.1,
+    0.2
+   ],
+   [
+    1.7,
+    1.3,
+    -0.1
+   ],
+   [
+    1.6,
+    -1.2,
+    0.15
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Gd": 3,
+   "Gd2": 3,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_aymivmqe/typed/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Gd = \"f\"\n    Gd2 = \"f\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  PolynomialRepulsive = SetForAll { Yes }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -12.8813219836,
+  "free_energy": -12.9208415135,
+  "e_zero": -12.9010817485,
+  "e_rep": 0.0,
+  "e_scc": 0.0006411443,
+  "e_band": -12.8819631278,
+  "fermi": -0.312058809260586,
+  "forces": [
+   [
+    0.137948255780232,
+    -0.0258117322841462,
+    0.00480539138824828
+   ],
+   [
+    -0.10097506662439,
+    0.0165885409792504,
+    -0.0124133492952687
+   ],
+   [
+    0.0111370967855738,
+    -0.0904508669661989,
+    0.0150739148695369
+   ],
+   [
+    -0.0481102859414153,
+    0.0996740582710946,
+    -0.00746595696251646
+   ]
+  ],
+  "charges_net": [
+   0.0542054357089872,
+   0.0345504362934048,
+   -0.0455042291291112,
+   -0.043251642873277
+  ],
+  "n_scc": 12
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}

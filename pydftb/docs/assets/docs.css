@@ -153,6 +153,10 @@ pre {
   overflow-x: auto; line-height: 1.55; font-size: var(--step--1);
 }
 pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.formula {
+  font-family: var(--font-mono); text-align: center; overflow-x: auto;
+  padding: 0.35rem 0.5rem; background: var(--code-bg); border-radius: 6px;
+}
 .table-wrap { overflow-x: auto; margin: 0.5rem 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); }
 table {
   border-collapse: collapse; width: 100%; font-size: var(--step--1); line-height: 1.55;

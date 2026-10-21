@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2g f 轨道报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M2g</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2g · 完成报告</p>
+    <h1>f 轨道与扩展 SKF 格式</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M2g-f-orbitals.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在支持 f 轨道，读 DFTB+ 的扩展 SKF 格式（可与简单格式混用）。用 hotcent 生成的 Gd/O 测试参数做的 8 个对照算例全部与 DFTB+ 一致：能量差 ≤ 4.1e-11 Ha，电荷差 ≤ 2.6e-11 e，本征值差 ≤ 8.3e-11 Ha，SCC 轮数逐个相同。M2 至此全部完成。</p>
+    <ul>
+      <li>改动集中在读文件（<code>skf.py</code>）和旋转（<code>slako.py</code>）两处。f 轨道的旋转矩阵由三阶无迹对称张量构造，与 DFTB+ <code>sk.F90</code> 的 sf、pf、df、ff 公式相差 ≤ 1.8e-15。</li>
+      <li>力和应力：pydftb 的精确导数与 DFTB+ 的数值差分相差 1–3e-8 Ha/Bohr；pydftb 改用 DFTB+ 的差分步长后，力差 ≤ 8.2e-13 Ha/Bohr，应力差 5.5e-13 Ha/Bohr³。残差全部来自 DFTB+ 的数值导数。</li>
+      <li>测试参数 <code>tests/data/skf/hotcent_gdo</code>（436 KB）由新脚本 <code>validation/make_f_set.py</code> 按 PTBP 的流程生成，约 80 秒，重新生成的文件逐字节相同；O–O 的积分与 PTBP 的 <code>ptbp_hcocu</code> 逐字节相同。</li>
+      <li>修正 <code>write_typed_copies</code>：对扩展格式会删掉 <code>dr, n</code> 一行，而不是在位行。</li>
+      <li>顺带提速：旋转和三矩阵乘积原来用 <code>einsum(optimize=True)</code>，每次调用都要搜索收缩路径，在小数组上比计算本身还慢。改成批量矩阵乘法后，单点计算快 8–45%（Cu₄CO 从 49.5 ms 降到 27.3 ms），结果不变。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">8 / 8</span><span class="lbl">f 轨道对照算例通过（共 74 个单点参考）</span></li>
+      <li><span class="num">≤ 4.1e-11 Ha</span><span class="lbl">与 DFTB+ 的能量差</span></li>
+      <li><span class="num">≤ 8.2e-13</span><span class="lbl">用 DFTB+ 的差分时的力差（Ha/Bohr）</span></li>
+      <li><span class="num">1.8×</span><span class="lbl">Cu₄CO 单点计算提速</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#results">二、与 DFTB+ 的对照</a></li>
+      <li><a href="#tests">三、单元测试</a></li>
+      <li><a href="#findings">四、发现的问题与学到的东西</a></li>
+      <li><a href="#perf">五、性能</a></li>
+      <li><a href="#deviations">六、与计划的偏差</a></li>
+      <li><a href="#repro">七、复现命令与实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>skf.py</code></td><td>读扩展格式（<code>@</code>，在位行 13 个数，表格 40 列）；积分按 DFTB+ 的 20 个编号（<code>SK_COLUMN</code>、<code>N_INTEGRALS</code>、简单格式的 <code>SIMPLE_COLUMNS</code>）；表格只存文件里有的列（<code>SKFile.columns</code>、<code>colmap</code>），<code>evaluate(full=True)</code> 给出 40 列，<code>full=False</code> 只给存下的列；在位能、U、占据数按 s、p、d、f 存；<code>write_typed_copies</code> 的修正</td></tr>
+            <tr><td><code>slako.py</code></td><td>f 轨道的三阶无迹对称张量和 D³；d、f 的旋转矩阵改为 (Q ⊗ R ⊗ … ) 的批量矩阵乘法；<code>bond_matrix</code>、<code>sk_block</code> 接受各文件的 <code>colmap</code></td></tr>
+            <tr><td><code>hamiltonian.py</code></td><td>用存下的列和 <code>colmap</code> 建块；重叠积分从第 20 列开始</td></tr>
+            <tr><td><code>validation/make_f_set.py</code>（新）</td><td>用 hotcent 生成 <code>hotcent_gdo</code>，打印 Gd 的自旋常数</td></tr>
+            <tr><td><code>validation/cases.py</code></td><td>参数集 <code>hotcent_gdo</code>；<code>MAXL</code> 加 Gd；Gd 的 4×4 自旋常数；8 个 f 轨道算例</td></tr>
+            <tr><td><code>tests/test_forbitals.py</code>（新）</td><td>D³ 的正交性和组合性质；f 块与 DFTB+ 公式的数值表（<code>tests/data/sk_f_blocks.json</code>）；两种格式的读取；<code>max_l</code>；类型副本；力与能量差分</td></tr>
+            <tr><td><code>tests/test_reference.py</code>、<code>test_stress.py</code>、<code>test_core.py</code></td><td>DFTB+ 差分的模拟测试加 3 个 f 算例；应变差分测试加岩盐 GdO；20 列布局的旧测试改为新布局</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="results">
+      <h2>二、与 DFTB+ 的对照</h2>
+      <p>参数集 <code>hotcent_gdo</code>（Gd 有 s、p、d、f 四个壳层），Fermi 展宽 1000 K，多项式排斥势（全为 0）。“力差”一列是 pydftb 的精确导数与 DFTB+ 数值差分之差，括号里是 pydftb 也用 DFTB+ 的差分时的值。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>检验什么</th><th>能量差 (Ha)</th><th>力差 (Ha/Bohr)</th><th>电荷差 (e)</th><th>SCC 轮数 py/DFTB+</th></tr></thead>
+        <tbody>
+          <tr><td><code>gdo2_nonscc</code></td><td>只有 H0、S</td><td>9.8e-12</td><td>1.9e-8（6.5e-13）</td><td>5.2e-14</td><td>1/1</td></tr>
+          <tr><td><code>gdo2_atom</code></td><td>原子分辨 SCC</td><td>2.0e-11</td><td>1.9e-8（6.8e-13）</td><td>4.2e-14</td><td>9/9</td></tr>
+          <tr><td><code>gdo2_shell</code></td><td>壳层分辨 SCC（U<sub>f</sub>）</td><td>2.3e-12</td><td>2.6e-8（8.2e-13）</td><td>3.2e-13</td><td>25/25</td></tr>
+          <tr><td><code>gdo2_dftb3_shell</code></td><td>DFTB3，f 壳层的 U<sub>d</sub></td><td>7.6e-12</td><td>2.5e-8（8.0e-13）</td><td>1.3e-13</td><td>29/29</td></tr>
+          <tr><td><code>gdo_spin</code></td><td>自旋，8 个未配对电子，4×4 的 W</td><td>1.9e-11</td><td>1.1e-8（6.4e-13）</td><td>2.6e-14</td><td>36/36</td></tr>
+          <tr><td><code>gdo_rocksalt_k444</code></td><td>k 点、展宽、应力</td><td>3.7e-11</td><td>3.6e-9（1.5e-13）</td><td>2.6e-11</td><td>7/7</td></tr>
+          <tr><td><code>gd2o2_typed</code></td><td>扩展格式的类型副本</td><td>4.1e-11</td><td>7.9e-9（8.1e-13）</td><td>5.7e-14</td><td>12/12</td></tr>
+          <tr><td><code>gdo_rocksalt_bands</code></td><td>能带与 s/p/d/f 投影</td><td>3.2e-11</td><td>—</td><td>2.6e-11</td><td>7/7</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>岩盐 GdO 的应力差 1.6e-10 Ha/Bohr³，用 DFTB+ 的差分时 5.5e-13。</li>
+        <li>能带算例：SCC 网格（32 个 k 点）和 Γ–X–W–L–Γ–K 路径（42 个 k 点、20 条能带）上的本征值差 ≤ 8.3e-11 Ha，费米能级差 7.7e-12 Ha；Gd 四个壳层的投影权重差 ≤ 5.0e-7，即区域文件 6 位小数的舍入。</li>
+        <li>原有 66 个单点参考、11 个优化/MD 参考在新的积分表布局下全部照常通过，差异没有变化。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>三、单元测试</h2>
+      <ul>
+        <li>D³ 正交到 1e-14，D³(R₁R₂) = D³(R₁)D³(R₂) 到 1e-14。</li>
+        <li>sf、pf、df、ff 块在 3 个方向上与 DFTB+ 公式的数值表一致到 1e-13（数值表由 <code>sk.F90</code> 的表达式算出后存成 JSON，测试不需要 DFTB+ 的源码）。</li>
+        <li>扩展格式：网格节点上的插值等于文件中这一行的 40 个数；在位行按 s、p、d、f 读对。简单格式：f 的 20 列中 10 列为 0，其余 10 列的位置与 DFTB+ 相同；<code>full=False</code> 与 <code>full=True</code> 的对应列逐位相同。</li>
+        <li><code>max_l_from_skf</code> 对扩展格式给出 3；Gd 有 16 个轨道。</li>
+        <li>类型副本：<code>Gd-Gd2.skf</code> 去掉了在位行（不是 <code>dr, n</code> 行），Gd₂O₂ 中把一个 Gd 标成 Gd2 后能量、力与原来逐位相同（≤ 1e-12）。</li>
+        <li>含 f 的 GdO₂（原子分辨和壳层分辨 SCC）的力与能量的中心差分一致到 1e-7；岩盐 GdO 的维里与应变差分一致。</li>
+      </ul>
+      <p id="test-counts">离线测试：conda 环境 207 个全部通过（M2f 结束时 187 个）；最小环境（numpy、scipy、ase）191 个通过、16 个跳过（需要 D3/D4 库的算例）。74 个单点参考、11 个优化/MD 参考全部通过；PTBP 的测试除已知的 7 个界面冒烟测试外全部通过。</p>
+    </section>
+
+    <section id="findings">
+      <h2>四、发现的问题与学到的东西</h2>
+      <section id="f-format">
+        <h3>4.1 扩展格式的几个细节</h3>
+        <ul>
+          <li>DFTB+ 只看第一个字符是否为 <code>@</code>，这一行的其余内容被忽略，之后的内容整体下移一行。</li>
+          <li>简单格式的 10 个积分在 DFTB+ 内部被放进 20 个位置中的第 8、9、10、13、14、15、16、18、19、20 个（<code>iSKInterOld</code>），f 积分为 0。所以同一组参数里含 f 的元素用扩展格式、其余元素用简单格式，完全没有问题；hotcent 也正是这样写的（只在一对元素中有 f 轨道时用扩展格式）。</li>
+          <li><div class="callout flag"><strong>pydftb 的问题（已修正）：</strong><code>write_typed_copies</code> 把同核文件改成异核文件（例如由 <code>Gd-Gd.skf</code> 生成 <code>Gd-Gd2.skf</code>）时删第 2 行。对扩展格式，第 2 行是 <code>dr, n</code>，在位行是第 3 行。改正后按文件格式决定删哪一行。</div></li>
+        </ul>
+      </section>
+      <section id="f-input">
+        <h3>4.2 DFTB+ 的输入</h3>
+        <ul>
+          <li>hotcent 写出的文件没有 <code>Spline</code> 段，多项式系数全为 0。DFTB+ 找不到 <code>Spline</code> 就报错退出，必须写 <code>PolynomialRepulsive = SetForAll { Yes }</code>（pydftb 的 <code>repulsive="polynomial"</code>）。</li>
+          <li><code>HubbardDerivs</code> 每个元素要单独一行；壳层分辨 SCC 时不能写 <code>ShellResolvedSpin</code>。验证工具已有的 <code>dftb3_block</code>、<code>spin_block</code> 本来就是这样写的，探测时手写输入才碰到。</li>
+        </ul>
+      </section>
+      <section id="f-gd">
+        <h3>4.3 Gd 的 SCC</h3>
+        <p>Gd 的 4f 壳层半满（7 个电子），f 能级正落在费米能级上，必须用电子展宽。U 的差别很大：U<sub>s</sub> = 0.207、U<sub>f</sub> = 1.067 Ha。原子分辨 SCC 对所有壳层用 U<sub>s</sub>（DFTB+ 的规则），GdO₂ 中 Gd 只带 +0.11；壳层分辨时 f 壳层“很硬”，Gd 带 +1.19，SCC 轮数也从 9 增加到 25。这是参数本身的性质，两边一致。</p>
+      </section>
+      <section id="f-einsum">
+        <h3>4.4 <code>einsum</code> 的路径搜索</h3>
+        <p>剖析 Cu₄CO 时发现，<code>sk_block</code> 中三个矩阵连乘用的 <code>np.einsum(..., optimize=True)</code> 每调用一次都要先搜索最优的收缩顺序（<code>einsum_path</code>）。每个原子对的数组只有几个到几十个元素，搜索的开销比乘法本身还大，Cu₄CO 一次单点计算有一半时间花在这里。改成批量矩阵乘法（<code>D @ M @ Dᵀ</code>）；d、f 的旋转矩阵也改成先构造 R⊗R（9×9）或 R⊗R⊗R（27×27），再与张量相乘。数学上完全相同，与 DFTB+ 公式的差仍在 2e-15 以内，复步长求导照常可用。</p>
+      </section>
+    </section>
+
+    <section id="perf">
+      <h2>五、性能</h2>
+      <p>同一台机器上交替运行旧代码（提交 <code>86547fa</code>）和新代码 5 轮，每轮每个算例取 7 次中最快的一次，下表是 5 轮的中位数（能量 + 力，单线程）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>原子数</th><th>旧</th><th>新</th><th>变化</th></tr></thead>
+        <tbody>
+          <tr><td><code>cu4co_300K</code></td><td>6</td><td>49.5 ms</td><td>27.3 ms</td><td>−45%</td></tr>
+          <tr><td><code>ch3oh</code></td><td>6</td><td>31.9 ms</td><td>21.6 ms</td><td>−32%</td></tr>
+          <tr><td><code>cuo_chain_k422</code></td><td>4（8 个 k 点）</td><td>81.2 ms</td><td>66.7 ms</td><td>−18%</td></tr>
+          <tr><td><code>cu_fcc_k6</code></td><td>1（108 个 k 点）</td><td>37.8 ms</td><td>34.8 ms</td><td>−8%</td></tr>
+          <tr><td><code>water_box_gamma</code></td><td>24</td><td>93.4 ms</td><td>80.6 ms</td><td>−14%</td></tr>
+        </tbody>
+      </table></div>
+      <p>改成 40 列布局本身不应变慢：表格只存文件里有的列，插值只算这些列，建块时再按 <code>colmap</code> 查位置。第一版曾把结果复制进 40 列的数组，插值慢了约一倍，所以改成了现在的做法。<span id="ptbp-timing">PTBP 的实际运行（dataset 模式，66 个 Cu 结构）看不出差别：交替运行两轮，旧代码 136.8、126.6 s，新代码 126.9、135.6 s，在噪声以内。这些结构多是 k 点很密的小晶胞，时间花在各 k 点的对角化上，不在建块。损失值相对变了 2.7e-11（旋转的求和顺序变了，舍入不同）。</span></p>
+    </section>
+
+    <section id="deviations">
+      <h2>六、与计划的偏差</h2>
+      <ul>
+        <li>测试参数只生成 Gd 和 O，没有 H：GdO₂、GdO、Gd₂O₂ 和岩盐 GdO 已经用到全部 20 种积分（Gd–Gd 一对就包含 ss 到 ff），也覆盖了 l<sub>a</sub> &gt; l<sub>b</sub> 时取 B-A 文件的路径（Gd 的 f 与 O 的 s、p）。计划中的 GdH₃ 换成了 GdO₂。</li>
+        <li>Gd 的 U 和 W 用 hotcent 的解析值（交换关联核的矩阵元），不是由本征值对占据数求差分。对测试参数来说两者都可以，解析值更快、可复现。</li>
+        <li>加了非 SCC 算例 <code>gdo2_nonscc</code>，单独检验 f 积分和旋转。</li>
+        <li>计划外：去掉 <code>einsum</code> 的路径搜索（4.4）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">七、复现命令与实验记录</span></summary>
+      <div class="body">
+<pre><code>python -m pydftb.validation.make_f_set              # 需要 hotcent、pylibxc；约 80 s
+python -m pydftb.validation.refgen --regenerate gdo2_nonscc gdo2_atom gdo2_shell \
+    gdo2_dftb3_shell gdo_spin gdo_rocksalt_k444 gd2o2_typed gdo_rocksalt_bands
+python -m pydftb.validation.refgen --check          # 74 个单点参考</code></pre>
+        <h3>实验脚本（scratchpad <code>m2g/</code>，未进仓库）</h3>
+        <ul>
+          <li><code>sk_formulas.py</code>：把 <code>sk.F90</code> 的赋值语句转成 Python 表达式（只用于核对和生成 <code>tests/data/sk_f_blocks.json</code>）；<code>check_rot.py</code>：张量构造与这些公式的比较。</li>
+          <li><code>hot/gd_atom.py</code>、<code>hot/gen_probe.py</code>：hotcent 的自由原子和积分表（耗时、文件大小、O–O 与 <code>ptbp_hcocu</code> 的比较）。</li>
+          <li><code>probe/probe.py</code>、<code>probe/probe3.py</code>：DFTB+ 能否收敛（设计文档第五节的表）。</li>
+          <li><code>timing_eval.py</code>、<code>ab_timing.py</code>、<code>prof.py</code>：插值和单点计算的计时、新旧代码交替对比、剖析（第五节）。</li>
+          <li><code>regen_check/</code>：重新生成的参数集，与提交的文件逐字节相同。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li>M2 全部完成。下一阶段是 M3：计算策略推荐器、结构和 k 点的并行分发、DFTB+ 配置顾问。</li>
+        <li>PTBP 的参数生成器支持 f 轨道（<code>utils/hotpy.py</code> 给 f 壳层赋在位能和 U，参数表加镧系元素）。<code>make_f_set.py</code> 已经示范了需要的 hotcent 调用。</li>
+        <li>待确认后修正：PTBP 损失函数的惩罚项一直用默认的共价半径 0.5 Bohr（见<a href="../index.html#issues">索引页的已知问题</a>）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M2g-f-orbitals.html">← M2g f 轨道设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M2g</span>
+  </footer>
+</div>
+</body>
+</html>

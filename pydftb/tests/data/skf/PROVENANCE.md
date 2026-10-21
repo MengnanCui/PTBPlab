@@ -1,6 +1,6 @@
 # Test parameter sets: provenance
 
-Both sets are stored gzip-compressed (`*.skf.gz`); pydftb reads them directly.
+All sets are stored gzip-compressed (`*.skf.gz`); pydftb reads them directly.
 DFTB+ needs plain files: `pydftb.validation` decompresses them to a temporary
 directory before running it. The sha256 sums below are of the **uncompressed** files.
 
@@ -49,4 +49,27 @@ There is no Li–O pair, so Li can only be combined with H.
 6e6cbd2eb8e1173f10df93cc1cb24e5b4e927e9d3186ff51a5935af2a8722b86  Li-Li.skf
 55253ae92db1a6a3c508071544267592e20be798853cbab59af9b6e7d33d3028  O-H.skf
 f2412d7d1a09cc6993f43e2fc88904b3d04816fd0a337071b3a25b27a029226a  O-O.skf
+```
+
+## `hotcent_gdo/` — Gd (s, p, d, f basis) and O, for f orbitals (milestone M2g)
+
+Generated with `python -m pydftb.validation.make_f_set` (the script holds every setting):
+
+- hotcent 2.1.0 (git `685bf7de3297d7b7465e217a6c62a6cec6e02043`), pylibxc 7.1.2, conda-forge
+- PTBP's recipe: PBE, scalar-relativistic atoms, density superposition, power confinement
+  (p = 2), grid 0.4 + 0.02 n Bohr (700 points)
+- O: PTBP's published confinement (r_wave 2.011, r_dens 2.664 Bohr) and atomic values; the
+  integrals of `O-O.skf` are identical to those of `ptbp_hcocu/O-O.skf`
+- Gd: valence 6s 6p 5d 4f, `[Xe] 4f7 5d1 6s2`, r_wave 6.0 and r_dens 9.0 Bohr (chosen for
+  testing); on-site energies, Hubbard values and spin constants of the free atom (hotcent's
+  analytical U and W)
+- Files with Gd are in the extended format (`@`), `O-O.skf` in the simple format
+- No repulsive: all polynomial coefficients are zero and there is no spline, so DFTB+ needs
+  `PolynomialRepulsive = SetForAll { Yes }`. For testing only, not a physical parametrisation.
+
+```
+5be335af1f5564daa60aa799f97859d35febd6b2c6b5bcb463dd64fad5ac33f4  Gd-Gd.skf
+a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826  Gd-O.skf
+85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35  O-Gd.skf
+d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8  O-O.skf
 ```

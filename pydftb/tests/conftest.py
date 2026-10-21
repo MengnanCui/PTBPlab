@@ -9,6 +9,7 @@ import pytest
 DATA = os.path.join(os.path.dirname(__file__), "data")
 SKF_ORBIT = os.path.join(DATA, "skf", "orbit")
 SKF_HCOCU = os.path.join(DATA, "skf", "ptbp_hcocu")
+SKF_GDO = os.path.join(DATA, "skf", "hotcent_gdo")
 
 
 def pytest_configure(config):

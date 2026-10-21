@@ -11,12 +11,12 @@
 
 | 物理步骤（通俗说明） | pydftb | DFTB+ 源文件 | 关键子程序 / 类型 | 备注 |
 |---|---|---|---|---|
-| 读 SKF 参数表 | `skf.py: SKFile.read` | `type/oldskdata.F90` | `TOldSKData`, `readFromFile`, `readSplineRep` | 首字符 `@` 表示扩展格式（f 轨道）；pydftb 暂不支持。表头写 n 行时 DFTB+ 只用前 n−1 行（`oldskdata.F90:145`），pydftb 自 M2a 起相同 |
-| 按物种对读取所有 SKF | `skf.py: SKSet`, `params.py: ParamSet` | `dftbplus/parser.F90` | `readSKFiles`, `getFullTable` | DFTB+ 按“物种名”找文件（`Type2FileNames`），所以 `O2-H.skf` 这类自定义类型可以直接用 |
+| 读 SKF 参数表 | `skf.py: SKFile.read` | `type/oldskdata.F90` | `TOldSKData`, `readFromFile`, `readSplineRep` | 首字符 `@` 表示扩展格式（f 轨道，M2g 起支持，见坑 29）。表头写 n 行时 DFTB+ 只用前 n−1 行（`oldskdata.F90:145`），pydftb 自 M2a 起相同 |
+| 按物种对读取所有 SKF | `skf.py: SKSet`, `params.py: ParamSet` | `dftbplus/parser.F90` | `readSKFiles`, `getFullTable`（`skMap`） | DFTB+ 按“物种名”找文件（`Type2FileNames`），所以 `O2-H.skf` 这类自定义类型可以直接用。20 个积分的编号与 `skMap` 相同（`skf.py: SK_COLUMN`）；l₁ ≤ l₂ 取 A-B 文件，否则取 B-A 文件 |
 | 表格插值（8 点多项式 + 尾部 5 阶衰减） | `skf.py: SKFile.evaluate` | `dftb/slakoeqgrid.F90`, `math/interpolation.F90` | `TSlakoEqGrid`, `getSKIntegrals`, `polyInterUniform`, `poly5ToZero` | pydftb 预先算好每个插值窗口的多项式系数，所以导数是解析的 |
 | 排斥势（样条 / 多项式） | `skf.py: Repulsive` | `dftb/repulsive/*.F90` | `TSplineRep`, `TPolyRep`, `TTwoBodyRep` | `PolynomialRepulsive = Yes` 对应 pydftb 的 `repulsive="polynomial"` |
 | 最高角动量规则 | `skf.py: max_l_from_skf` | （ASE `read_max_angular_momentum`） | — | DFTB+ 由输入指定；ASE 和 PTBP 取“占据数不为 0 的最高 l” |
-| Slater-Koster 旋转（键方向 → 实验室坐标） | `slako.py` | `dftb/sk.F90` | `rotateH0`, `ss/sp/sd/pp/pd/dd` | DFTB+ 手写了每个 (l1,l2) 的公式；pydftb 用实球谐旋转矩阵统一处理，结果相同 |
+| Slater-Koster 旋转（键方向 → 实验室坐标） | `slako.py` | `dftb/sk.F90` | `rotateH0`, `ss/sp/sd/sf/pp/pd/pf/dd/df/ff` | DFTB+ 手写了每个 (l1,l2) 的公式（ff 一项就有 49 个表达式）；pydftb 用无迹对称张量构造实球谐旋转矩阵（d 二阶、f 三阶，M2g），统一处理，与 DFTB+ 的公式差 ≤ 2e-15 |
 | 邻居表（含周期镜像） | `neighbors.py` | `dftb/periodic.F90`, `type/dynneighlist.F90` | `TNeighbourList`, `updateNeighbourListAndSpecies`, `getCellTranslations` | pydftb 用 k-d 树 |
 | H0 和 S 的构建及其导数 | `hamiltonian.py: build_pairs` | `dftb/nonscc.F90` | `buildH0`, `buildS`, `getFirstDerivFiniteDiff` | **DFTB+ 用数值差分（中心差分，默认步长 1.22e-4，老版本输入为 0.01）**，pydftb 默认用复步长法（解析精度）；设 `fd_delta` 后可以逐位复现 DFTB+ 的力（差异 1e-12） |
 | 稀疏存储 → 稠密 / k 点矩阵 | `hamiltonian.py: fold, fold_all` | `dftb/sparse2dense.F90` | `getSparseDescriptor`, `unpackHS`, `unpackHS_cmplx_kpts` | 相位因子是 exp(2πi k·T) |
@@ -94,3 +94,6 @@
 26. **MD 输出的精度。** `geo_end.xyz` 的坐标和速度是 `F16.8`（1e-8 Å、1e-8 Å/ps），`md.out` 的能量是 Hartree 的 10 位小数。
 27. **单位常数。** DFTB+ 用自己的一组常数（Bohr 0.529177249 Å、Hartree 27.2113845 eV、au__fs 0.02418884326505、amu__au = 1/5.4857990945e-4），ASE 用 CODATA 2014，相对差约 1e-7。经 ASE 跑的 40 步 MD 因此与 DFTB+ 相差约 4e-8 Å；用 DFTB+ 的常数则相差 ≤ 1.5e-8 Å（xyz 的精度）。
 28. **插值在网格节点处有折点。** `slakoeqgrid.F90` 的 8 点插值每过一个网格节点就换一组插值点，插值函数的导数在节点处跳变。表格光滑时跳变可忽略；PTBP 用 hotcent 生成的表格有约 1e-7 Ha 的数值噪声，跳变中位数 5e-6、最大 1e-3 Ha/Bohr。DFTB+ 默认用步长 1.22e-4 Bohr 的中心差分求 H0、S 的导数（`nonscc.F90`），原子对距离落在节点一个步长之内时差分跨过跳变，力的误差可达 1.3e-4 Ha/Bohr（水二聚体 MD 中 2% 的步）。pydftb 的复步长导数是插值函数在该点所在分段上的精确导数；要与 DFTB+ 逐位比较力，pydftb 用同样的差分（`fd_delta`）。
+29. **扩展 SKF 格式（f 轨道）。** 第 1 行以 `@` 开头（DFTB+ 只看第一个字符），其余内容整体下移一行；同核文件的在位行是 13 个数（E、U、占据数各 4 个，按 f d p s，中间是 SPE）；积分表每行先 20 个 H 再 20 个 S，顺序 ff0–3、df0–2、dd0–2、pf0–1、pd0–1、pp0–1、sf0、sd0、sp0、ss0。简单格式的 10 个积分放进第 8、9、10、13、14、15、16、18、19、20 个位置（`iSKInterOld`），所以两种格式可以混用。把同核文件改成异核文件（类型副本）时要删的在位行，在扩展格式里是第 3 行。
+30. **没有 Spline 段的 SKF。** `readSplineRep` 找不到 `Spline` 就报错退出，只有多项式（哪怕全为 0）的文件要配 `PolynomialRepulsive = SetForAll { Yes }`。hotcent 直接写出的文件就是这样（M2g 的 Gd/O 测试参数）。
+31. **两处输入写法。** `HubbardDerivs` 的每个元素要单独一行，写在同一行会报 “Superfluous data”；壳层分辨 SCC 时不能写 `SpinConstants` 中的 `ShellResolvedSpin`（被忽略的节点会让 DFTB+ 报错退出）。

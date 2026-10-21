@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M2g f 轨道设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M2g</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M2g · 设计文档</p>
+    <h1>f 轨道与扩展 SKF 格式</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-21</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M2g-f-orbitals.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">让 pydftb 能用含 f 轨道的参数（镧系、锕系元素），读 DFTB+ 的扩展 SKF 格式，结果与 DFTB+ 逐项一致。这是 M2 的最后一项。</p>
+    <ul>
+      <li>只需要改两处：读文件（<code>skf.py</code>）和双中心积分的旋转（<code>slako.py</code>）。基组、SCC、自旋、DFTB3、库仑项、能带都已经按壳层数写成通用的。</li>
+      <li>旋转：d 轨道已经用二阶无迹对称张量构造旋转矩阵，f 轨道推广到三阶。在 50 个随机方向、随机积分值下，与 DFTB+ <code>sk.F90</code> 的 sf、pf、df、ff 公式相差 ≤ 6e-15。</li>
+      <li>积分表内部统一用 DFTB+ 的 20 个积分的排列，简单格式的 10 列按 DFTB+ 的映射放到对应位置，f 列为 0。文件里没有的列不存，spd 体系的插值计算量不变。</li>
+      <li>本机没有含 f 的 SKF。新脚本 <code>validation/make_f_set.py</code> 按 PTBP 的流程用 hotcent 生成 Gd、O 一组测试参数（约 1.5 分钟，压缩后 436 KB）；O–O 的积分与 <code>ptbp_hcocu</code> 中的逐字节相同。排斥势为 0，只检验电子部分。</li>
+      <li>DFTB+ 探测：GdO₂（原子分辨、壳层分辨 SCC）、GdO（自旋，8 个未配对电子）、DFTB3、岩盐 GdO（4×4×4 k 点）全部能收敛，7–52 轮。</li>
+      <li>验收与前几个阶段相同：能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³，预期实际差异在 1e-10 量级。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 6e-15</span><span class="lbl">张量旋转与 DFTB+ f 公式之差</span></li>
+      <li><span class="num">8</span><span class="lbl">计划的 DFTB+ 对照算例</span></li>
+      <li><span class="num">436 KB</span><span class="lbl">Gd/O 测试参数（gzip）</span></li>
+    </ul>
+  </section>
+
+  <div class="callout note"><strong>实施中的变化</strong>（详见<a href="../reports/M2g-f-orbitals.html#deviations">完成报告第六节</a>）：旋转和三矩阵乘积改用批量矩阵乘法，去掉了 <code>einsum</code> 每次调用时的路径搜索，单点计算快 8–45%；积分表只存文件里有的列，建块时按 <code>colmap</code> 查位置（第一版把结果复制进 40 列，插值慢了约一倍）。</div>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与用途</a></li>
+      <li><a href="#dftbplus">二、DFTB+ 怎么处理 f 轨道</a></li>
+      <li><a href="#design">三、pydftb 的做法</a></li>
+      <li><a href="#details">四、DFTB+ 源码位置与文件格式</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#probe">五、探测实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">六、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">七、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与用途</h2>
+      <p>DFTB 的基组是每个原子的价层原子轨道：s（1 个）、p（3 个）、d（5 个）。镧系和锕系元素还有部分填充的 f 壳层（7 个轨道），化学性质（磁性、配位、价态）主要由它决定。DFTB+ 支持 f 轨道，参数文件用“扩展 SKF 格式”；pydftb 到 M2f 为止只支持到 d，遇到扩展格式直接报错。</p>
+      <p>本阶段让 pydftb 读扩展格式、构造含 f 的哈密顿量和重叠矩阵，并用 DFTB+ 逐项对照。PTBP 自己的参数生成器目前不支持 f（见第七节），所以这一步先保证“拿到含 f 的参数就能算对”。</p>
+    </section>
+
+    <section id="dftbplus">
+      <h2>二、DFTB+ 怎么处理 f 轨道</h2>
+      <h3>扩展 SKF 格式</h3>
+      <ul>
+        <li>第 1 行以 <code>@</code> 开头（其余内容忽略），之后的内容整体下移一行。</li>
+        <li>同核文件的在位行有 13 个数：E<sub>f</sub> E<sub>d</sub> E<sub>p</sub> E<sub>s</sub> SPE U<sub>f</sub> U<sub>d</sub> U<sub>p</sub> U<sub>s</sub> f<sub>f</sub> f<sub>d</sub> f<sub>p</sub> f<sub>s</sub>（简单格式是 10 个，没有 f）。</li>
+        <li>积分表每行 40 个数：先 20 个哈密顿积分，再 20 个重叠积分，顺序为 ff0–3、df0–2、dd0–2、pf0–1、pd0–1、pp0–1、sf0、sd0、sp0、ss0（数字是 |m|，0 = σ、1 = π、2 = δ、3 = φ）。</li>
+        <li>简单格式的 10 个积分（dd0–2、pd0–1、pp0–1、sd0、sp0、ss0）被 DFTB+ 放进这 20 个位置中的第 8、9、10、13、14、15、16、18、19、20 个（<code>iSKInterOld</code>），其余为 0。所以同一组参数里可以混用两种格式。</li>
+      </ul>
+      <h3>积分的选取和旋转</h3>
+      <ul>
+        <li>原子 A 的壳层 l<sub>1</sub> 与原子 B 的壳层 l<sub>2</sub>：l<sub>1</sub> ≤ l<sub>2</sub> 时取 <code>A-B.skf</code> 的 (l<sub>1</sub>, l<sub>2</sub>) 积分，否则取 <code>B-A.skf</code> 的 (l<sub>2</sub>, l<sub>1</sub>) 积分，转置后乘 (−1)<sup>l<sub>1</sub>+l<sub>2</sub></sup>。这与 pydftb 现有的做法相同。</li>
+        <li>旋转公式在 <code>sk.F90</code> 中逐项写出（sf 7 项、pf 21 项、df 35 项、ff 49 项）。f 轨道的顺序是 m = −3 … 3 的实球谐函数：y(3x²−y²)、xyz、yz²、z³、xz²、z(x²−y²)、x(x²−3y²)。</li>
+      </ul>
+      <h3>其余部分</h3>
+      <p><code>MaxAngularMomentum</code> 写 <code>"f"</code> 时，这个元素有 s、p、d、f 四个壳层。壳层分辨的 U、自旋常数（4×4）、DFTB3 的 U<sub>d</sub>（每个壳层一个）都按壳层数处理，不针对 f 做特殊处理。</p>
+    </section>
+
+    <section id="design">
+      <h2>三、pydftb 的做法</h2>
+      <h3>读文件（<code>skf.py</code>）</h3>
+      <ul>
+        <li><code>SKFile.read</code> 识别 <code>@</code>：在位行读 4 个壳层，表格读 40 列。</li>
+        <li>积分统一按 DFTB+ 的 20 个积分编号（H 为 0–19 列，S 为 20–39 列）。表格只存文件里有的列，另记每一列在 40 列中的位置；<code>evaluate</code> 只插值存下的列，再放进 40 列的结果里。这样 spd 体系的插值计算量不变。</li>
+        <li>在位能、U、占据数改为按 s、p、d、f 的顺序存 4 个数（简单格式的 f 为 0），<code>SKSet</code> 取前 l<sub>max</sub>+1 个。</li>
+        <li><code>write_typed_copies</code>：同核文件转成异核文件时要删掉在位行。扩展格式的在位行是第 3 行，不是第 2 行（原来的代码会删掉 <code>dr, n</code> 这一行）。</li>
+      </ul>
+      <h3>旋转（<code>slako.py</code>）</h3>
+      <p>l 阶实球谐函数可以写成 l 阶无迹对称张量 T（例如 xyz 对应 T<sub>xyz</sub> 及其排列）。把 7 个 f 轨道的张量按 Frobenius 内积归一化后，旋转矩阵是</p>
+      <p class="formula">D<sup>3</sup><sub>ab</sub>(R) = Σ T<sub>a,ijk</sub> R<sub>ip</sub> R<sub>jq</sub> R<sub>kr</sub> T<sub>b,pqr</sub></p>
+      <p>与 d 轨道的 D<sup>2</sup><sub>ab</sub> = ⟨Q<sub>a</sub>, R Q<sub>b</sub> Rᵀ⟩ 是同一个构造。实验室坐标系中的块仍是 D<sup>l<sub>1</sub></sup> · M(键) · D<sup>l<sub>2</sub></sup>ᵀ，M 在键坐标系中按 m 对角、值取 |m| 对应的积分。全部是对复数也成立的数组运算（实施时用批量矩阵乘法），复步长求导照常可用，力和应力不需要另写。</p>
+      <h3>测试参数</h3>
+      <p><code>validation/make_f_set.py</code> 生成 <code>tests/data/skf/hotcent_gdo/</code>：</p>
+      <ul>
+        <li>流程与 PTBP 的 <code>utils/hotpy.py</code> 相同：PBE、标量相对论原子、密度叠加、幂函数约束，网格 0.4 + 0.02 n Bohr（700 点）。</li>
+        <li>O 用 PTBP 已发表的约束参数和原子值，所以 O–O 的积分与 <code>ptbp_hcocu/O-O.skf</code> 逐字节相同。</li>
+        <li>Gd（价层 6s 6p 5d 4f，组态 [Xe] 4f⁷ 5d¹ 6s²）没有 PTBP 参数，约束半径取 r<sub>wave</sub> = 6、r<sub>dens</sub> = 9 Bohr（仅供测试）。在位能、U 和自旋常数 W（4×4）取自由原子的值（hotcent 的解析 U、W）。</li>
+        <li>含 Gd 的文件是扩展格式，O–O 是简单格式，正好检验两种格式混用。多项式排斥势系数全为 0，DFTB+ 需要 <code>PolynomialRepulsive = SetForAll { Yes }</code>（没有 Spline 段时 DFTB+ 报错）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="details">
+      <summary><span class="tag">开发细节</span><span class="title">四、DFTB+ 源码位置与文件格式</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>内容</th><th>文件与例程</th></tr></thead>
+          <tbody>
+            <tr><td>扩展格式的识别与读取</td><td><code>type/oldskdata.F90:TOldSKData_readFromFile</code>（第 1 个字符是 <code>@</code> 时 <code>nShell = 4</code>；只读 <code>nGrid − 1</code> 行）</td></tr>
+            <tr><td>简单格式到 20 个积分的映射</td><td><code>type/oldskdata.F90</code>：<code>iSKInterOld = [8, 9, 10, 13, 14, 15, 16, 18, 19, 20]</code></td></tr>
+            <tr><td>按壳层对挑选积分</td><td><code>dftbplus/parser.F90:getFullTable</code>（<code>skMap(m, l<sub>max</sub>, l<sub>min</sub>)</code>；l<sub>1</sub> ≤ l<sub>2</sub> 用 A-B 文件，否则 B-A 文件）</td></tr>
+            <tr><td>旋转</td><td><code>dftb/sk.F90:rotateH0</code>（l<sub>1</sub> &gt; l<sub>2</sub> 时转置并乘 (−1)<sup>l<sub>1</sub>+l<sub>2</sub></sup>），<code>sf</code>、<code>pf</code>、<code>df</code>、<code>ff</code></td></tr>
+            <tr><td>样条排斥势是否必须</td><td><code>type/oldskdata.F90:TOldSKData_readSplineRep</code>（找不到 <code>Spline</code> 就报错）</td></tr>
+          </tbody>
+        </table></div>
+        <h3>20 个积分的编号（0 起）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>壳层对</th><th>|m| = 0</th><th>1</th><th>2</th><th>3</th></tr></thead>
+          <tbody>
+            <tr><td>ff</td><td>0</td><td>1</td><td>2</td><td>3</td></tr>
+            <tr><td>df</td><td>4</td><td>5</td><td>6</td><td></td></tr>
+            <tr><td>dd</td><td>7</td><td>8</td><td>9</td><td></td></tr>
+            <tr><td>pf</td><td>10</td><td>11</td><td></td><td></td></tr>
+            <tr><td>pd</td><td>12</td><td>13</td><td></td><td></td></tr>
+            <tr><td>pp</td><td>14</td><td>15</td><td></td><td></td></tr>
+            <tr><td>sf、sd、sp、ss</td><td>16、17、18、19</td><td></td><td></td><td></td></tr>
+          </tbody>
+        </table></div>
+        <h3>需要改动或新增的代码</h3>
+        <ul>
+          <li><code>skf.py</code>：<code>SK_COLUMN</code> 改为 20 个积分的编号；<code>SKFile</code> 增加 <code>columns</code>，读两种格式；在位能、U、占据数按 s、p、d、f 存；<code>write_typed_copies</code> 的修正。</li>
+          <li><code>slako.py</code>：三阶张量和 <code>rotation_blocks</code> 的 l = 3；<code>bond_matrix</code> 的重叠积分偏移由 10 改为 20（<code>hamiltonian.py</code> 同改）。</li>
+          <li><code>validation/cases.py</code>：<code>MAXL</code> 加 Gd；新参数集 <code>hotcent_gdo</code>；Gd 的自旋常数。</li>
+          <li><code>validation/make_f_set.py</code>（新）；<code>tests/test_forbitals.py</code>（新）；<code>tests/test_core.py</code> 中按旧的 20 列布局写的测试改为新布局。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="probe">
+      <summary><span class="tag">开发细节</span><span class="title">五、探测实验记录</span></summary>
+      <div class="body">
+        <p>脚本在 scratchpad（<code>m2g/</code>，未进仓库），本机 DFTB+ 25.1、hotcent 2.1.0。</p>
+        <ul>
+          <li><code>sk_formulas.py</code>、<code>check_rot.py</code>：把 <code>sk.F90</code> 的赋值语句转成 Python 表达式，在 50 个随机方向、随机积分值下与张量构造比较。ss…ff 十种壳层对的最大差 6.2e-15；D³ 的正交性 1.2e-15，D³(R₁R₂) = D³(R₁)D³(R₂) 到 4.4e-16。</li>
+          <li><code>gd_atom.py</code>：自由 Gd 原子（PBE、标量相对论）0.9 s。本征值 6s −0.152、6p −0.049、5d −0.093、4f −0.320 Ha；解析 U 分别为 0.207、0.138、0.310、1.067 Ha；W 为对称的 4×4 矩阵，对角元 −0.0106、−0.0130、−0.0087、−0.0136 Ha。</li>
+          <li><code>gen_probe.py</code>：Gd–Gd、Gd–O、O–O 三张表共 75 s；文件 589、137 + 305、114 KB，gzip 后 230、49 + 116、42 KB。O–O 的积分行与 <code>ptbp_hcocu/O-O.skf</code> 逐字节相同（后者另有 physrep 的样条）。</li>
+          <li><code>probe.py</code>、<code>probe3.py</code>：DFTB+（Fermi 1000 K，多项式排斥势）的 SCC 轮数与 Gd 的电荷：
+            <div class="table-wrap"><table>
+              <thead><tr><th>体系</th><th>设置</th><th>SCC 轮数</th><th>Gd 的电荷</th></tr></thead>
+              <tbody>
+                <tr><td>GdO₂（弯曲，不共面）</td><td>原子分辨 SCC</td><td>9</td><td>+0.11</td></tr>
+                <tr><td>GdO₂</td><td>壳层分辨 SCC</td><td>26</td><td>+1.19</td></tr>
+                <tr><td>GdO₂</td><td>DFTB3（壳层分辨，U<sub>d</sub> 每壳层一个）</td><td>30</td><td>+1.32</td></tr>
+                <tr><td>GdO</td><td>自旋，8 个未配对电子，壳层分辨</td><td>36</td><td>+0.58</td></tr>
+                <tr><td>GdO</td><td>自旋，8 个未配对电子，原子分辨</td><td>17</td><td>+0.21</td></tr>
+                <tr><td>岩盐 GdO，a = 4.8 Å</td><td>4×4×4 k 点，原子分辨 / 壳层分辨</td><td>7 / 30</td><td>+0.11 / +0.79</td></tr>
+              </tbody>
+            </table></div>
+          </li>
+          <li>两个 DFTB+ 输入细节：<code>HubbardDerivs</code> 每个元素要单独一行（写在同一行时报 “Superfluous data”）；壳层分辨 SCC 时不能写 <code>ShellResolvedSpin</code>（被忽略并报错）。验证工具中已有的 <code>dftb3_block</code>、<code>spin_block</code> 已经这样处理。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">六、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 对照算例（参数集 <code>hotcent_gdo</code>，Fermi 1000 K）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>体系</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>gdo2_nonscc</code></td><td>GdO₂，非 SCC</td><td>只有 H0、S：f 积分和旋转本身</td></tr>
+            <tr><td><code>gdo2_atom</code></td><td>GdO₂，原子分辨 SCC</td><td>f 轨道进入 Mulliken 电荷和 SCC</td></tr>
+            <tr><td><code>gdo2_shell</code></td><td>GdO₂，壳层分辨 SCC</td><td>U<sub>f</sub></td></tr>
+            <tr><td><code>gdo2_dftb3_shell</code></td><td>GdO₂，DFTB3，壳层分辨</td><td>f 壳层的 U<sub>d</sub></td></tr>
+            <tr><td><code>gdo_spin</code></td><td>GdO，自旋（8 个未配对电子）</td><td>4×4 的自旋常数</td></tr>
+            <tr><td><code>gdo_rocksalt_k444</code></td><td>岩盐 GdO，O 稍偏离格点</td><td>k 点、展宽、力、应力，含 Gd–Gd 的全部 20 种积分</td></tr>
+            <tr><td><code>gd2o2_typed</code></td><td>Gd₂O₂，一个 Gd 标为 <code>Gd2</code></td><td>扩展格式的类型副本（<code>write_typed_copies</code>）</td></tr>
+            <tr><td><code>gdo_rocksalt_bands</code></td><td>岩盐 GdO 的能带与 f 壳层 PDOS</td><td>与 M2e 的能带流程衔接</td></tr>
+          </tbody>
+        </table></div>
+        <p>分子都放在不共面的一般方向上，让旋转矩阵的每个元素都参与。</p>
+        <h3>单元测试（<code>tests/test_forbitals.py</code>，不需要 DFTB+）</h3>
+        <ul>
+          <li>D³ 正交，D³(R₁R₂) = D³(R₁)D³(R₂)。</li>
+          <li>sf、pf、df、ff 块与 DFTB+ 公式的数值表（3 个随机方向，由 <code>sk.F90</code> 的公式算出后存成 JSON）一致。</li>
+          <li>简单格式文件的 f 列为 0；扩展格式的 H、S 各 20 列读对；<code>max_l_from_skf</code> 对扩展格式给出 3。</li>
+          <li><code>write_typed_copies</code> 处理扩展格式：类型副本给出与原参数完全相同的结果。</li>
+          <li>含 f 的体系：力和应力与能量的有限差分一致。</li>
+        </ul>
+        <h3>其他</h3>
+        <ul>
+          <li>原有 66 个单点参考、11 个优化/MD 参考照常通过（积分表布局改变不能影响 spd 体系）。</li>
+          <li>记录 spd 体系的耗时，确认插值没有变慢。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>七、局限与不做的事</h2>
+      <ul>
+        <li>PTBP 的参数生成器不支持 f：<code>utils/hotpy.py</code> 只给 s、p、d 赋在位能和 U，参数表中也没有镧系元素。本阶段只让 pydftb 能用含 f 的参数；PTBP 生成 f 参数是后续工作。</li>
+        <li>测试参数不是物理参数化：Gd 的约束半径随手取，没有排斥势，只用来检验与 DFTB+ 的一致性。</li>
+        <li>自旋-轨道耦合、DFTB+U 等对 f 电子常用的修正不在本阶段。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M2f-opt-md.html">← M2f 优化与 MD 报告</a><a href="../index.html">文档索引</a><a href="../reports/M2g-f-orbitals.html">M2g f 轨道报告 →</a></nav>
+    <span>M2g</span>
+  </footer>
+</div>
+</body>
+</html>

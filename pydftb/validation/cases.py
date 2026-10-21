@@ -22,9 +22,10 @@ SKF_SETS = {
     "ptbp_hcocu": os.path.join(DATA, "skf", "ptbp_hcocu"),
     "orbit": os.path.join(DATA, "skf", "orbit"),
     "orbit_poly": os.path.join(DATA, "skf", "orbit_poly"),   # make_poly_set.py
+    "hotcent_gdo": os.path.join(DATA, "skf", "hotcent_gdo"), # make_f_set.py (f orbitals)
 }
 REF_DIR = os.path.join(DATA, "ref")
-MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0}
+MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0, "Gd": 3}
 # DFTB+'s finite-difference H0/S derivative error at this water geometry is 1.2e-6 Ha/Bohr:
 # the H-H distance lies 4e-6 Bohr from SK grid node 153, inside DFTB+'s step of 1.22e-4
 # (pydftb's exact forces agree with its own energy finite differences to 2e-9 at h = 1e-6)
@@ -34,7 +35,16 @@ UD_3OB = {"H": -0.1857, "C": -0.1492, "O": -0.1575}
 DFTB3_3OB = {"third_order": "full", "hubbard_derivs": UD_3OB, "h_damping": 4.0}
 # spin constants W (Ha): typical PBE values for H and O; Cu values are for testing only
 W_SPIN = {"H": -0.072, "O": [[-0.035, -0.030], [-0.030, -0.028]],
-          "Cu": [[-0.016, -0.012, -0.004], [-0.012, -0.040, -0.002], [-0.004, -0.002, -0.017]]}
+          "Cu": [[-0.016, -0.012, -0.004], [-0.012, -0.040, -0.002], [-0.004, -0.002, -0.017]],
+          # free-atom values of the hotcent_gdo Gd (make_f_set.py), shells s p d f
+          "Gd": [[-0.010552, -0.008687, -0.006723, -0.000704],
+                 [-0.008687, -0.013022, -0.004158, -0.000290],
+                 [-0.006723, -0.004158, -0.008679, -0.001912],
+                 [-0.000704, -0.000290, -0.001912, -0.013626]]}
+# f orbitals (milestone M2g): the hotcent Gd/O set has no repulsive (zero polynomial), and the
+# half-filled 4f shell needs a smeared Fermi level; Ud per shell for testing only
+GDO = {"skf_set": "hotcent_gdo", "filling": ("fermi", 1000.0), "repulsive": "polynomial"}
+UD_GDO = {"Gd": [-0.05, -0.03, -0.08, -0.20], "O": [-0.1575, -0.12]}
 # dispersion (milestone M2d).  D3(BJ) and D4 parameters of DFTB3/3ob from the parameter tables of
 # s-dftd3 ("dftb3") and dftd4 ("dftb_3ob", with and without the three-body term)
 D3BJ_3OB = {"model": "dftd3", "damping": "beckejohnson", "a1": 0.5719, "a2": 3.6017,
@@ -196,6 +206,30 @@ def _oh():
 
 def _li_bcc():
     return bulk("Li", "bcc", a=3.50)     # every shell >= 4e-3 Bohr from a grid node
+
+
+def _gdo2():
+    # bent and off every symmetry plane, so that all elements of the f rotations matter
+    return Atoms("GdO2", positions=[[0, 0, 0], [1.85, 0.12, -0.07], [-0.55, 1.75, 0.20]])
+
+
+def _gdo():
+    return Atoms("GdO", positions=[[0, 0, 0], [0.3, -0.2, 1.80]])
+
+
+def _gd2o2():
+    return Atoms("Gd2O2", positions=[[0, 0, 0], [3.4, 0.1, 0.2], [1.7, 1.3, -0.1],
+                                     [1.6, -1.2, 0.15]])
+
+
+def _gdo_rocksalt():
+    return bulk("GdO", "rocksalt", a=4.9)    # hypothetical rock-salt GdO
+
+
+def _gdo_rocksalt_displaced():
+    a = _gdo_rocksalt()
+    a.positions[1] += [0.03, 0.01, -0.02]    # off the lattice site: non-zero forces
+    return a
 
 
 def _li_bcc_cubic():
@@ -368,5 +402,22 @@ CASES = [
          spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, scc_tol=1e-5,
          ewald_tolerance=1e-12, tol={"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "stress": 1e-9},
          note="as ch3oh_loose_scc, periodic with spin; also the stress"),
+    # --- f orbitals (milestone M2g), extended SKF format ---
+    Case("gdo2_nonscc", _gdo2, scc=False, **GDO, note="H0 and S only: f integrals and rotations"),
+    Case("gdo2_atom", _gdo2, **GDO, note="f orbitals in the Mulliken charges and the SCC"),
+    Case("gdo2_shell", _gdo2, shell_resolved=True, **GDO, note="U of the f shell"),
+    Case("gdo2_dftb3_shell", _gdo2, shell_resolved=True, **GDO,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_GDO}, note="Ud of the f shell"),
+    Case("gdo_spin", _gdo, shell_resolved=True, **GDO,
+         spin={"unpaired_electrons": 8, "spin_constants": W_SPIN}, note="4x4 spin constants"),
+    Case("gdo_rocksalt_k444", _gdo_rocksalt_displaced, kgrid=(4, 4, 4), ewald_tolerance=1e-12,
+         **GDO, note="k-points, smearing, forces and stress; Gd-Gd uses all 20 integrals"),
+    Case("gd2o2_typed", _gd2o2, typed={"Gd": "Gd", "Gd2": "Gd", "O": "O"},
+         labels=lambda a: ["Gd", "Gd2", "O", "O"], **GDO,
+         note="type copies of extended-format files (write_typed_copies)"),
+    Case("gdo_rocksalt_bands", _gdo_rocksalt, kgrid=(4, 4, 4), ewald_tolerance=1e-12, **GDO,
+         klines=path(FCC, "GXWLGK", [10, 5, 7, 9, 10]),
+         regions=[{"label": "gd", "atoms": [0], "shell_resolved": True}], tol=TOL_BANDS,
+         note="band run with f bands; s/p/d/f projections of Gd"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

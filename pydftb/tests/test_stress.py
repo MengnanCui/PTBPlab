@@ -12,7 +12,7 @@ from pydftb.validation import refgen
 from .conftest import SKF_ORBIT
 
 
-@pytest.mark.parametrize("name", ["cuo_chain_k422", "water_box_gamma"])
+@pytest.mark.parametrize("name", ["cuo_chain_k422", "water_box_gamma", "gdo_rocksalt_k444"])
 def test_virial_matches_strain_finite_differences(name):
     case = refgen.CASES_BY_NAME[name]
     inp = refgen._inputs(case)

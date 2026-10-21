@@ -1,0 +1,151 @@
+{
+ "schema": 1,
+ "case": "gdo_spin",
+ "note": "4x4 spin constants",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "hotcent_gdo",
+ "skf_sha256": {
+  "Gd-Gd.skf": "5be335af1f5564daa60aa799f97859d35febd6b2c6b5bcb463dd64fad5ac33f4",
+  "Gd-O.skf": "a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826",
+  "O-Gd.skf": "85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35",
+  "O-O.skf": "d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   1000.0
+  ],
+  "shell_resolved": true,
+  "repulsive": "polynomial",
+  "typed": null,
+  "dftb3": null,
+  "spin": {
+   "unpaired_electrons": 8,
+   "spin_constants": {
+    "H": -0.072,
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ],
+    "Cu": [
+     [
+      -0.016,
+      -0.012,
+      -0.004
+     ],
+     [
+      -0.012,
+      -0.04,
+      -0.002
+     ],
+     [
+      -0.004,
+      -0.002,
+      -0.017
+     ]
+    ],
+    "Gd": [
+     [
+      -0.010552,
+      -0.008687,
+      -0.006723,
+      -0.000704
+     ],
+     [
+      -0.008687,
+      -0.013022,
+      -0.004158,
+      -0.00029
+     ],
+     [
+      -0.006723,
+      -0.004158,
+      -0.008679,
+      -0.001912
+     ],
+     [
+      -0.000704,
+      -0.00029,
+      -0.001912,
+      -0.013626
+     ]
+    ]
+   }
+  },
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Gd",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.3,
+    -0.2,
+    1.8
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Gd": 3,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_drzgaqw8/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Gd = \"f\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  PolynomialRepulsive = SetForAll { Yes }\n  SpinPolarisation = Colinear {\n    UnpairedElectrons = 8.0\n    RelaxTotalSpin = No\n  }\n  SpinConstants {\n    O = -0.035 -0.03 -0.03 -0.028\n    Gd = -0.010552 -0.008687 -0.006723 -0.000704 -0.008687 -0.013022 -0.004158 -0.00029 -0.006723 -0.004158 -0.008679 -0.001912 -0.000704 -0.00029 -0.001912 -0.013626\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -6.4528366152,
+  "free_energy": -6.4528591618,
+  "e_zero": -6.4528478885,
+  "e_rep": 0.0,
+  "e_scc": 0.0492309601,
+  "e_band": -6.1667586663,
+  "fermi": -0.111599368747153,
+  "forces": [
+   [
+    0.0357660293099647,
+    -0.0238440195179569,
+    0.214596188386066
+   ],
+   [
+    -0.0357660293099647,
+    0.0238440195179569,
+    -0.214596188386066
+   ]
+  ],
+  "charges_net": [
+   0.578119256336893,
+   -0.578119256336892
+  ],
+  "n_scc": 36
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}

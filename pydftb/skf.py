@@ -2,9 +2,12 @@
 
 Format reference: https://dftb.org/fileadmin/DFTB/public/misc/slakoformat.pdf
 
-Integral table columns (20):
-    Hdd0 Hdd1 Hdd2 Hpd0 Hpd1 Hpp0 Hpp1 Hsd0 Hsp0 Hss0
-    Sdd0 Sdd1 Sdd2 Spd0 Spd1 Spp0 Spp1 Ssd0 Ssp0 Sss0
+Integrals are numbered as in DFTB+ (``type/oldskdata.F90``): 20 per shell pair table,
+    ff0 ff1 ff2 ff3 df0 df1 df2 dd0 dd1 dd2 pf0 pf1 pd0 pd1 pp0 pp1 sf0 sd0 sp0 ss0
+(the digit is |m|), H in columns 0-19 and S in columns 20-39 of :meth:`SKFile.evaluate`.
+The extended format (first line starting with ``@``, for f electrons) stores all 40; the
+simple format stores the 10 spd integrals of H and of S, which go to the same places as in
+DFTB+ (``iSKInterOld``), the f integrals being zero.
 Row ``i`` (1-based) of the table is the integral at distance ``i * dr``;
 like DFTB+, only the first ``ngrid - 1`` rows of the header's count are used.
 
@@ -31,13 +34,19 @@ N_RIGHT = 4          # points right of the evaluation point
 DIST_FUDGE = 1.0     # tail length (Bohr) beyond the last grid point
 DELTA_R = 1e-5       # displacement used by DFTB+ for tail derivatives
 
-# (l1, l2, m) -> column index of the 10 H (or S) integrals, l1 <= l2
+N_INTEGRALS = 20     # H (or S) integrals per table; the S columns start here
+# (l1, l2, |m|) -> column of the H integral, l1 <= l2 (DFTB+ parser.F90:getFullTable, skMap)
 SK_COLUMN = {
-    (2, 2, 0): 0, (2, 2, 1): 1, (2, 2, 2): 2,
-    (1, 2, 0): 3, (1, 2, 1): 4,
-    (1, 1, 0): 5, (1, 1, 1): 6,
-    (0, 2, 0): 7, (0, 1, 0): 8, (0, 0, 0): 9,
+    (3, 3, 0): 0, (3, 3, 1): 1, (3, 3, 2): 2, (3, 3, 3): 3,
+    (2, 3, 0): 4, (2, 3, 1): 5, (2, 3, 2): 6,
+    (2, 2, 0): 7, (2, 2, 1): 8, (2, 2, 2): 9,
+    (1, 3, 0): 10, (1, 3, 1): 11,
+    (1, 2, 0): 12, (1, 2, 1): 13,
+    (1, 1, 0): 14, (1, 1, 1): 15,
+    (0, 3, 0): 16, (0, 2, 0): 17, (0, 1, 0): 18, (0, 0, 0): 19,
 }
+# where the 10 integrals of the simple format go (dd0-2 pd0-1 pp0-1 sd0 sp0 ss0; iSKInterOld)
+SIMPLE_COLUMNS = np.array([7, 8, 9, 12, 13, 14, 15, 17, 18, 19])
 
 
 def _open_text(path: str):
@@ -96,7 +105,8 @@ def write_typed_copies(src_dir: str, dst_dir: str, base_of: dict[str, str],
             with _open_text(src) as fh:
                 lines = fh.read().splitlines(keepends=True)
             if base_a == base_b and a != b:
-                del lines[1]                      # homonuclear -> heteronuclear
+                # homonuclear -> heteronuclear: drop the on-site line (after "@" if extended)
+                del lines[2 if lines[0].lstrip().startswith("@") else 1]
             dst = os.path.join(dst_dir, template.format(a=a, b=b).removesuffix(".gz"))
             with open(dst, "w") as fh:
                 fh.writelines(lines)
@@ -164,11 +174,12 @@ class Repulsive:
 class SKFile:
     """Content of one ``A-B.skf`` file (atomic units)."""
     dr: float
-    table: np.ndarray                  # (ngrid, 20)
+    table: np.ndarray                  # (ngrid, ncol): the H and S integrals the file stores
     homo: bool
-    onsite: np.ndarray | None = None   # Ed, Ep, Es
-    hubbard: np.ndarray | None = None  # Ud, Up, Us
-    occupation: np.ndarray | None = None  # fd, fp, fs
+    columns: np.ndarray | None = None  # (ncol,) column of each stored integral in evaluate()
+    onsite: np.ndarray | None = None   # Es, Ep, Ed, Ef (Ef = 0 in the simple format)
+    hubbard: np.ndarray | None = None  # Us, Up, Ud, Uf
+    occupation: np.ndarray | None = None  # fs, fp, fd, ff
     mass: float = 0.0
     repulsive: Repulsive | None = None       # spline if present, else polynomial
     poly_repulsive: Repulsive | None = None  # polynomial part only (DFTB+ PolynomialRepulsive)
@@ -195,8 +206,9 @@ class SKFile:
     def read(cls, path: str, homo: bool | None = None) -> "SKFile":
         with _open_text(path) as fh:
             lines = fh.read().splitlines()
-        if lines[0].lstrip().startswith("@"):
-            raise NotImplementedError("Extended SKF format (f-electrons) not supported yet")
+        extended = lines[0].lstrip().startswith("@")
+        if extended:
+            lines = lines[1:]
         if homo is None:
             a, b = _pair_from_filename(path)
             homo = a == b
@@ -205,10 +217,13 @@ class SKFile:
         pos = 1
         onsite = hubbard = occ = None
         if homo:
+            # E (f) d p s, SPE, U (f) d p s, occupations (f) d p s
             vals = _expand_fortran(lines[1])
-            onsite = np.array(vals[0:3])
-            hubbard = np.array(vals[4:7])
-            occ = np.array(vals[7:10])
+            ns = 4 if extended else 3
+            onsite, hubbard, occ = np.zeros(4), np.zeros(4), np.zeros(4)
+            onsite[:ns] = vals[0:ns][::-1]
+            hubbard[:ns] = vals[ns + 1:2 * ns + 1][::-1]
+            occ[:ns] = vals[2 * ns + 1:3 * ns + 1][::-1]
             pos = 2
         # mass, c2..c9, rcut, d1..d10 (d's unused)
         mass_line = _expand_fortran(lines[pos])
@@ -220,7 +235,11 @@ class SKFile:
         # last row too would move the end of the table and its tail by one step.
         rows = [_expand_fortran(lines[pos + k]) for k in range(ngrid - 1)]
         pos += ngrid - 1
-        table = np.array(rows, dtype=float)[:, :20]
+        if extended:
+            columns = np.arange(2 * N_INTEGRALS)
+        else:
+            columns = np.concatenate([SIMPLE_COLUMNS, SIMPLE_COLUMNS + N_INTEGRALS])
+        table = np.array(rows, dtype=float)[:, :len(columns)]
         rep = None
         rest = lines[pos:]
         for i, ln in enumerate(rest):
@@ -230,8 +249,8 @@ class SKFile:
         poly_rep = Repulsive(cutoff=rcut_poly, poly=poly) if rcut_poly > 0.0 else None
         if rep is None:
             rep = poly_rep
-        return cls(dr=dr, table=table, homo=homo, onsite=onsite, hubbard=hubbard,
-                   occupation=occ, mass=mass, repulsive=rep,
+        return cls(dr=dr, table=table, homo=homo, columns=columns, onsite=onsite,
+                   hubbard=hubbard, occupation=occ, mass=mass, repulsive=rep,
                    poly_repulsive=poly_rep)
 
     # ------------------------------------------------------------------
@@ -264,8 +283,21 @@ class SKFile:
         self._coef = coef
         return coef
 
-    def evaluate(self, r: np.ndarray, deriv: bool = False):
-        """Interpolated integrals, shape (len(r), 20) (and d/dr)."""
+    @property
+    def colmap(self) -> np.ndarray:
+        """For each of the 40 integrals (H then S, DFTB+'s order) its stored column, or -1."""
+        cols = np.arange(self.table.shape[1]) if self.columns is None else self.columns
+        cmap = np.full(2 * N_INTEGRALS, -1)
+        cmap[cols] = np.arange(len(cols))
+        return cmap
+
+    def evaluate(self, r: np.ndarray, deriv: bool = False, full: bool = True):
+        """Interpolated integrals (and d/dr).
+
+        ``full``: shape (len(r), 40), H then S in DFTB+'s order, zero for the integrals the
+        file does not store (f integrals of the simple format).  Otherwise only the stored
+        columns, located with :attr:`colmap` (faster: nothing is copied).
+        """
         r = np.atleast_1d(np.asarray(r))
         coef = self._coefficients()
         n = self.ngrid
@@ -302,7 +334,15 @@ class SKFile:
             out[tail] = ((ff * xr + ee) * xr + dd) * xr ** 3
             if deriv:
                 dout[tail] = ((5 * ff * xr + 4 * ee) * xr + 3 * dd) * xr ** 2 / dx
+        if full and self.columns is not None:
+            out = self._full_layout(out)
+            dout = self._full_layout(dout) if deriv else None
         return (out, dout) if deriv else out
+
+    def _full_layout(self, a: np.ndarray) -> np.ndarray:
+        full = np.zeros(a.shape[:-1] + (2 * N_INTEGRALS,), dtype=a.dtype)
+        full[..., self.columns] = a
+        return full
 
     def _tail_data(self):
         n = self.ngrid
@@ -383,14 +423,14 @@ class SKSet:
         for a in self.elements:
             f = self.files[(a, a)]
             lmax = self.max_l[a]
-            # SKF stores (d, p, s); we use shells ordered s, p, d
-            self.onsite[a] = f.onsite[::-1][: lmax + 1].copy()
-            u = f.hubbard[::-1][: lmax + 1].copy()
+            # shells ordered s, p, d, f
+            self.onsite[a] = f.onsite[: lmax + 1].copy()
+            u = f.hubbard[: lmax + 1].copy()
             if not shell_resolved:
                 # DFTB+ (non orbital-resolved SCC) uses one U per atom
                 u[:] = u[0] if hubbard_from == "s" else u[lmax]
             self.hubbard[a] = u
-            self.occupation[a] = f.occupation[::-1][: lmax + 1].copy()
+            self.occupation[a] = f.occupation[: lmax + 1].copy()
             self.mass[a] = f.mass
 
     def file_name(self, a: str, b: str) -> str:

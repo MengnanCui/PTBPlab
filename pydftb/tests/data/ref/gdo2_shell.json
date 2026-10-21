@@ -1,0 +1,105 @@
+{
+ "schema": 1,
+ "case": "gdo2_shell",
+ "note": "U of the f shell",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "hotcent_gdo",
+ "skf_sha256": {
+  "Gd-Gd.skf": "5be335af1f5564daa60aa799f97859d35febd6b2c6b5bcb463dd64fad5ac33f4",
+  "Gd-O.skf": "a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826",
+  "O-Gd.skf": "85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35",
+  "O-O.skf": "d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   1000.0
+  ],
+  "shell_resolved": true,
+  "repulsive": "polynomial",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Gd",
+   "O",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    1.85,
+    0.12,
+    -0.07
+   ],
+   [
+    -0.55,
+    1.75,
+    0.2
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Gd": 3,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_80h3efss/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Gd = \"f\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  PolynomialRepulsive = SetForAll { Yes }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -9.5384030339,
+  "free_energy": -9.5609727744,
+  "e_zero": -9.5496879042,
+  "e_rep": 0.0,
+  "e_scc": 0.0897569414,
+  "e_band": -9.6281599753,
+  "fermi": -0.152467041809423,
+  "forces": [
+   [
+    0.147086929683402,
+    0.22318104722794,
+    0.0158729506993811
+   ],
+   [
+    -0.19996685366889,
+    -0.0225857242964713,
+    0.00660147497290545
+   ],
+   [
+    0.0528799239854881,
+    -0.200595322931469,
+    -0.0224744256722866
+   ]
+  ],
+  "charges_net": [
+   1.17583958118821,
+   -0.589017698072359,
+   -0.586821883115857
+  ],
+  "n_scc": 25
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}

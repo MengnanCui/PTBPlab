@@ -1,0 +1,119 @@
+{
+ "schema": 1,
+ "case": "gdo2_dftb3_shell",
+ "note": "Ud of the f shell",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "hotcent_gdo",
+ "skf_sha256": {
+  "Gd-Gd.skf": "5be335af1f5564daa60aa799f97859d35febd6b2c6b5bcb463dd64fad5ac33f4",
+  "Gd-O.skf": "a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826",
+  "O-Gd.skf": "85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35",
+  "O-O.skf": "d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   1000.0
+  ],
+  "shell_resolved": true,
+  "repulsive": "polynomial",
+  "typed": null,
+  "dftb3": {
+   "third_order": "full",
+   "hubbard_derivs": {
+    "Gd": [
+     -0.05,
+     -0.03,
+     -0.08,
+     -0.2
+    ],
+    "O": [
+     -0.1575,
+     -0.12
+    ]
+   }
+  },
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Gd",
+   "O",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    1.85,
+    0.12,
+    -0.07
+   ],
+   [
+    -0.55,
+    1.75,
+    0.2
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Gd": 3,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_zcq_76tj/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Gd = \"f\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  PolynomialRepulsive = SetForAll { Yes }\n  ThirdOrderFull = Yes\n  HubbardDerivs {\n    Gd = -0.05 -0.03 -0.08 -0.2\n    O = -0.1575 -0.12\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -9.5514571064,
+  "free_energy": -9.5736526627,
+  "e_zero": -9.5625548845,
+  "e_rep": 0.0,
+  "e_scc": 0.1080221747,
+  "e_band": -9.6448460776,
+  "fermi": -0.174365629953752,
+  "forces": [
+   [
+    0.150100916868597,
+    0.227238289686819,
+    0.0161464262012965
+   ],
+   [
+    -0.202795218965146,
+    -0.0237922764277134,
+    0.00660582902223745
+   ],
+   [
+    0.0526943020965491,
+    -0.203446013259106,
+    -0.022752255223534
+   ]
+  ],
+  "charges_net": [
+   1.30464496738219,
+   -0.653444666149386,
+   -0.651200301232792
+  ],
+  "n_scc": 29
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}
