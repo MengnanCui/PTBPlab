@@ -332,7 +332,8 @@ def load(name: str) -> dict:
         return json.load(fh)
 
 
-def check(names=None) -> bool:
+def check(names=None, **overrides) -> bool:
+    """``overrides``: PyDFTB options, e.g. ``backend="torch"`` (milestone M4)."""
     all_ok = True
     print(f"{'case':18s} {'kind':4s} {'|dE| Ha':>9s} {'|dr| A':>9s} {'|da| A':>9s} "
           f"{'steps py/ref':>12s} {'t_py':>7s} {'t_ref':>7s}  ok")
@@ -349,7 +350,7 @@ def check(names=None) -> bool:
         if why:
             print(f"{case.name:18s} skipped: {why}")
             continue
-        r = compare(doc)
+        r = compare(doc, **overrides)
         d, res, ref = r["dev"], r["result"], doc["reference"]
         all_ok &= r["ok"]
         steps = (f"{res['steps']}/{ref['geometry_steps']}" if case.kind == "opt"
@@ -366,11 +367,16 @@ def main(argv=None):
     g.add_argument("--regenerate", action="store_true", help="run dftb+ and write reference JSON")
     g.add_argument("--check", action="store_true", help="compare pydftb with the frozen JSON")
     ap.add_argument("cases", nargs="*", help="case names (default: all)")
+    ap.add_argument("--backend", default=None, help="numpy (default) or torch")
+    ap.add_argument("--device", default=None, help="torch device, e.g. cpu or cuda")
+    ap.add_argument("--dtype", default=None, help="float64 (default) or float32")
     a = ap.parse_args(argv)
     if a.regenerate:
         regenerate(a.cases)
     else:
-        sys.exit(0 if check(a.cases) else 1)
+        opts = {k: v for k, v in (("backend", a.backend), ("device", a.device),
+                                  ("dtype", a.dtype)) if v is not None}
+        sys.exit(0 if check(a.cases, **opts) else 1)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,10 @@
 | M3b | BO 步的其余部分：hotcent 按行分片并回放（逐字节相同）、physrep 向量化（逐位相同） | ✅ 完成（4 核一个 BO 步：pydftb 122 → 27 s、DFTB+ 132 → 40 s，对 M3 之前快 5.4 倍；运行目录、`log.out`、`par.out` 逐字节相同；hotcent 原来把单元素的表算了三遍；σ_rep 搜索的 74 次评估中 41 次白算，未改） | `design/M3b-hotcent-physrep.html`，`reports/M3b-hotcent-physrep.html` |
 | M3c | 计算策略推荐器 v1（CPU）：成本模型、内存估计、`ptbp plan`、`plan.json` | ✅ 完成（成本模型按轨道数、k 点数和截断内的原子对估计 pydftb、DFTB+ 单点的耗时和内存：耗时中位误差 12%/7%，排序秩相关 0.99，pydftb 内存中位误差 2%；Cu 数据集一个 BO 步的预计耗时与实测相差 2–4%；方案只调不改变数值的设置，运行目录与 M3b 逐字节相同；发现大晶胞的耗时和内存主要在库仑部分：最小的 Hubbard U 决定截断，Cu 的 4p 为 96 Bohr，64 个原子的晶胞 pydftb 要 2.2 GB，DFTB+ 0.3 GB；DFTB+ 的 OpenMP 线程在 500 个轨道以下反而更慢） | `design/M3c-recommender.html`，`reports/M3c-recommender.html` |
 | M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | ✅ 完成（18 条规则，各有出处；11 次冻结的 DFTB+ 25.1 运行上结论全部符合预期；PTBP 的历史输入被查出 5 条：ParserVersion 1 带来的壳层分辨 SCC 和 0.01 Bohr 差分步长、写在 Filling 外被忽略的展宽（实际 T = 0）、8 MB 的栈、默认 Ewald 容差，前两项标为预期；PTBP 用 DFTB+ 时自动检查第一个运行和失败的运行，只报告，结果逐字节相同） | `design/M3d-advisor.html`，`reports/M3d-advisor.html` |
-| M4 | PyTorch 后端：GPU、自动求导、批量 | 计划 | — |
+| M4a | PyTorch 后端（前向）：k 点折叠、Cholesky、本征分解、密度矩阵、布居、能量的迹和力用到的实空间密度在 torch 设备上算；`backend="torch"`、`device`、`dtype`；NumPy 路径逐字节不变（golden 工具） | ✅ 完成（74 个单点和 11 个优化/MD 的 DFTB+ 参考在 torch 上全部通过，SCC 轮数与 DFTB+ 相同；与 NumPy 的最大差能量 3.6e-14 Ha、力 4.1e-14 Ha/Bohr、电荷 1.4e-13 e；float32 下能量差 ≤ 4.3e-6 Ha；发现 threadpoolctl 管不到 torch 的 MKL，fork 后子进程会卡死，已修正） | `design/M4a-torch-backend.html`，`reports/M4a-torch-backend.html` |
+| M4b | 自动求导：两种后端通用的核函数、`pydftb.autodiff`（可微参数、密度矩阵的差商反向、SCC 隐式微分、HF 替代能量），与有限差分对照 | 计划 | — |
+| M4c | PTBP 损失对 r0_w、r0_d 的梯度（自动求导 × hotcent 有限差分），可选的梯度优化器，与 BO 对比 | 计划 | — |
+| M4d | 设备选择、GPU 自检脚本、PTBP 的 `--pydftb_backend torch --device` | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
 | M6 | DFTB+ 功能补齐·第二波（按需）：自旋轨道耦合、DFTB+U、长程校正、溶剂、外场、TD-DFTB、XL-BOMD | 计划 | — |
 | M7 | 大体系：GPU 混合精度 SP2、Chebyshev、分治多机 | 计划（CPU 原型见 `RESEARCH.md`） | — |
@@ -63,4 +66,5 @@
 | 输运 | NEGF | — 调用 libNEGF / 按需 |
 | 求解器 | LAPACK 本征分解、批量 | ✅ |
 | | SP2 纯化（稠密、混合精度、稀疏线性标度） | ✅ 原型 |
-| | GPU、分治、多机 | ⬜ M4/M7 |
+| | PyTorch 后端（CPU 已验证；GPU 待自检脚本实测） | ✅ M4a |
+| | GPU 实测、分治、多机 | ⬜ M4d/M7 |

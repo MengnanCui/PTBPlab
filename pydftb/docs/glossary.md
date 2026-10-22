@@ -81,7 +81,7 @@
 | 短程 γ 截断 | γ 的短程部分随距离指数衰减，小于 1e-10 Ha 的原子对就不再计算。pydftb 自 M2e 起与 DFTB+ 在同一距离截断。 |
 | dp_dos | DFTB+ 附带的 Python 小工具（dptools），把 `band.out` 或区域文件展宽成 DOS/PDOS 曲线；pydftb 的 `dos()` 用相同的规则。 |
 | 可选依赖 | 只有用到某个功能时才需要安装的软件包。pydftb 的 D3/D4 色散需要 `dftd3`、`dftd4`，不用这两种色散时不必安装。 |
-| ops 分发层 | 物理代码通过它调用少数几个与硬件相关的操作（累加、本征分解等），换成 GPU 时只需替换这一层。 |
+| ops 分发层 | 物理代码通过它调用少数几个与硬件相关的操作（累加、本征分解等），换成 GPU 时只需替换这一层。`ops.namespace()` 按输入的类型返回 NumPy 或“NumPy 名字的 torch”，同一段代码可以在两个后端上运行（M4a）。 |
 | SP2 纯化 | 只用矩阵自乘（约 20 次）代替对角化的方法，适合 GPU。 |
 | 稀疏矩阵 / 线性标度 | 只存储、只计算非零元素，计算量随原子数一次方增长，而不是三次方。 |
 | FP64 / FP32、混合精度 | 双精度（约 16 位有效数字）和单精度（约 7 位，快约 2 倍）。先用单精度算，再用双精度修正。 |
@@ -112,6 +112,10 @@
 | 状态方程（EOS）拟合 | 用一组不同体积下的能量拟合 Birch–Murnaghan 曲线，得到平衡体积和体弹模量。PTBP 的 energygeometry 损失比较 DFT 与 DFTB 的这两个量。 |
 | 进程组 | 可以一起收到信号的一组进程。PTBP 的每个工作进程自成一组，结束时连同它启动的 DFTB+ 一起结束，不会留下孤儿进程。 |
 | ParserVersion | DFTB+ 输入格式的版本号。版本过低时，DFTB+ 会按旧规则悄悄改写某些设置。 |
-| PyTorch | 一个支持 GPU 和自动求导的 Python 数值库，计划作为 pydftb 的加速后端。 |
+| PyTorch | 一个支持 GPU 和自动求导的 Python 数值库，pydftb 的第二个后端（M4a 起，可选安装）。 |
+| 后端（backend） | pydftb 做数组运算用的库：NumPy（默认）或 PyTorch。`DFTB(backend="torch", device=..., dtype=...)` 把每轮 SCC 中最重的部分（k 点折叠、本征分解、密度矩阵、布居）放到 torch 上，其余仍用 NumPy（M4a）。 |
+| 设备（device） | torch 做运算的硬件：`cpu`、`cuda`（NVIDIA，AMD 的 ROCm 版也用这个名字）、`mps`（Apple）、`xpu`（Intel）。 |
+| golden 检查 | 改动 NumPy 路径时的验收工具（`python -m pydftb.validation.golden --base 提交`）：在工作区和旧提交里各跑一遍同样的计算，逐字节比较所有结果和中间量，必须完全相同。 |
+| torch 的线程数与 MKL | torch 自带一份静态链接的 MKL，threadpoolctl 看不到它。只改 OpenMP 的线程数会让 MKL 仍按原来的线程数开并行区；在多线程跑过 torch 的父进程 fork 出的子进程里，这会卡死。所以 pydftb 总是用 `torch.set_num_threads` 设线程数（M4a）。 |
 | 自动求导 | 程序在计算结果的同时，自动算出结果对每个输入参数的导数。 |
 | 贝叶斯优化（BO） | PTBP 目前用的参数搜索方法。不需要导数，但每试一组参数都要重算全部结构。 |

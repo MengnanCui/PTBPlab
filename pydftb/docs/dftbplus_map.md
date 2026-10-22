@@ -28,6 +28,7 @@
 | 电荷混合 | `mixer.py: BroydenMixer`（默认），`AndersonMixer`（Pulay 型） | `mixer/broydenmixer.F90` | `modifiedBroydenMixing` | 照搬 DFTB+ 的改进 Broyden（M1）：19 个对照算例的 SCC 轮数与 DFTB+ 完全相同 |
 | 占据数与费米能级 | `occupations.py` | `dftb/etemp.F90`，`dftbplus/main.F90:getFillingsAndBandEnergies` | `Efilling`, `electronCount`, `electronFill`, `middleGap` | M1 已照搬：先试带隙中点，再按 DFTB+ 的方式二分；T 不低于 1e-8 Ha；Gaussian 即 MP 0 阶；另提供变分熵。玻尔兹曼常数与 DFTB+ 25.1 相同（M2e，坑 17）；带隙中点的搜索允许权重累加的舍入（M2e，坑 18） |
 | 本征求解与密度矩阵 | `solvers.py` | `math/eigensolver.F90`, `dftb/densitymatrix.F90` | `hegvd`, `getDensityMatrix`, `getEDensityMatrix` | pydftb 另有 SP2 纯化和批量求解器 |
+| 同一套计算在 PyTorch 上（M4a） | `backend/torch_solver.py`、`backend/spec.py` | （无对应：DFTB+ 的 GPU 版用 MAGMA / ELPA-GPU） | — | Cholesky + 三角求解化为标准问题，与 `hegvd` 同一算法；74 个单点、11 个优化/MD 参考在 torch 后端上用同样的容差通过，SCC 轮数与 DFTB+ 相同 |
 | 力 | `calculator.py: DFTB._gradient` | `dftb/forces.F90`, `dftbplus/main.F90` | `derivative_shift`, `getGradients` | 电荷项和势用最后一轮的输出电荷（M2f 起，见坑 22） |
 | DFTB3 三阶项（M2b） | `thirdorder.py: ThirdOrder`, `dgamma_du`, `dgamma_du_onsite` | `dftb/thirdorder.F90`，`dftb/chargepenalty.F90`（`ThirdOrder`） | `gamma3`, `gamma2pU`, `gamma2pUpR`, `dGdUr0`, `updateCharges`, `getShifts`, `addGradientDc`, `addStressDc` | U 几乎相等时 pydftb 改用稳定的积分形式（见第 3 节第 6 条） |
 | H–X 阻尼（M2b） | `coulomb.py: Coulomb._sp_short`，`thirdorder.py: dgamma_du` | `dftb/shortgammafuncs.F90`，`dftbplus/initprogram.F90` | `expGammaDamped`, `expGammaDampedPrime`, `hh`, `hpU`；被阻尼的是质量 < 3.5 amu 的原子 | — |

@@ -38,9 +38,12 @@ class PyDFTB(Calculator):
     smearing : ("fermi", T) | ("gaussian", T) | ("mp", T, order); T in K.
                Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
     repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
-    threads : limit BLAS/OpenMP threads during the calculation (None = leave as is).
+    threads : limit BLAS/OpenMP threads during the calculation (None = leave as is); with
+            the torch backend also torch's intra-op threads.
     k_threads : threads over chunks of k-points (int or "auto"; see :mod:`pydftb.parallel`);
             bitwise identical results for any number, BLAS on one thread while they run.
+    backend, device, dtype : "numpy" (default) or "torch" on a torch device, in "float64"
+            or "float32" (see :class:`pydftb.DFTB` and :mod:`pydftb.backend.spec`).
     reuse_charges : start each SCC from the previous calculation's input populations
             (same type labels), as DFTB+'s own drivers do between geometry steps; far
             fewer SCC iterations in optimisations and MD.  Default off: every
@@ -66,7 +69,8 @@ class PyDFTB(Calculator):
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
                  spin: bool = False, unpaired_electrons: float = 0.0,
                  relax_total_spin: bool = False, spin_constants: dict | None = None,
-                 dispersion=None, reuse_charges: bool = False, k_threads=1, **kwargs):
+                 dispersion=None, reuse_charges: bool = False, k_threads=1,
+                 backend=None, device: str | None = None, dtype: str | None = None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -78,7 +82,8 @@ class PyDFTB(Calculator):
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,
                                 hubbard_derivs=hubbard_derivs, h_damping=h_damping, spin=spin,
                                 unpaired_electrons=unpaired_electrons,
-                                relax_total_spin=relax_total_spin, spin_constants=spin_constants)
+                                relax_total_spin=relax_total_spin, spin_constants=spin_constants,
+                                backend=backend, device=device, dtype=dtype)
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.k_threads = as_kthreads(k_threads)       # one pool for all calculations
@@ -136,7 +141,8 @@ class PyDFTB(Calculator):
             r = run()
         else:
             from threadpoolctl import threadpool_limits
-            with threadpool_limits(self.threads):
+            # torch's count first: it is read before threadpoolctl changes OpenMP's
+            with calc.backend.threads(self.threads), threadpool_limits(self.threads):
                 r = run()
         self.raw = r
         self._raw_labels = list(labels)

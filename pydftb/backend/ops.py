@@ -16,8 +16,23 @@ import scipy.linalg as sla
 
 
 def namespace(*arrays):
-    """Array namespace of the inputs (NumPy only for now)."""
+    """Array namespace of the inputs: the numpy module, or NumPy names over torch
+    (:mod:`pydftb.backend.torch_xp`) if any input is a torch tensor.  Decided from the
+    types alone, so NumPy-only code never imports torch."""
+    for a in arrays:
+        if type(a).__module__.startswith("torch"):
+            from . import torch_xp
+            return torch_xp
     return np
+
+
+def to_host(x):
+    """A torch tensor as a NumPy array (float64/complex128); anything else unchanged."""
+    if type(x).__module__.startswith("torch"):
+        import torch
+        t = x.detach().resolve_conj()
+        return t.to(torch.complex128 if t.is_complex() else torch.float64).cpu().numpy()
+    return x
 
 
 def scatter_add(target: np.ndarray, index, values) -> np.ndarray:

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4a torch 后端设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M4a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4a · 设计文档</p>
+    <h1>torch 后端（前向计算）</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M4a-torch-backend.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M4 的第一步：pydftb 的重计算（k 点折叠、Cholesky、本征分解、密度矩阵、Mulliken 布居、能量的迹、力用到的实空间密度）可以放到 PyTorch 上，在 CPU 或 GPU 上算；几何、参数、γ、混合器和费米能级搜索仍是 NumPy。用 <code>DFTB(backend="torch", device=..., dtype=...)</code> 打开，默认仍是 NumPy，NumPy 路径的结果逐位不变。</p>
+    <ul>
+      <li><strong>为什么先做前向</strong>：M4b 的自动求导和 M4d 的 GPU 都建立在它上面；也先得到 torch 与 NumPy、与 74 个 DFTB+ 参考的对照基线。</li>
+      <li><strong>对照的门槛</strong>：torch（CPU、float64）与 NumPy 在 SCC 收敛到 1e-12 时，能量 ≤ 1e-10 Ha，力和电荷 ≤ 1e-9，本征值 ≤ 1e-10 Ha，SCC 轮数相同；74 个参考用原来的容差全部通过。NumPy 路径用新的 golden 工具与 M4 之前的提交逐字节比较中间量和结果。</li>
+      <li><strong>先说清楚的预期</strong>：4 核上 PTBP 一个 BO 步里 DFTB 阶段只占 27.1 s 中的 10.0 s（energygeometry）和 18.0 s 中的 10.3 s（dataset），即使 GPU 把它降到 0，一个 BO 步最多快 1.6 倍和 2.3 倍。torch 在 CPU 上单线程和 NumPy 差不多（探测：k 点堆叠的本征分解快 10–25%）。</li>
+      <li><strong>fork 的坑（实测）</strong>：父进程用多线程跑过 torch 后再 fork，子进程只要不先设线程数就全部卡死（4/4）。规则：父进程保持 1 个线程，子进程先设线程数再算。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">~1e-15</span><span class="lbl">torch 与 NumPy 本征值的相对差（探测）</span></li>
+      <li><span class="num">237</span><span class="lbl">golden 逐字节比较的计算（41,519 个量）</span></li>
+      <li><span class="num">0</span><span class="lbl">NumPy 路径允许改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与现状</a></li>
+      <li><a href="#design">二、设计</a></li>
+      <li><a href="#modules">三、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#probes">四、探测实验记录</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与现状</h2>
+      <p>M0 的设计目标是“换 PyTorch 时不需要重写物理代码”，为此建了 <code>backend/ops.py</code>。实际情况是 <code>ops.namespace()</code> 没有任何调用者，约 2,600 行数值核心直接调用 NumPy（约 630 处 <code>np.</code>），输入处 <code>np.asarray(..., float)</code>、输出处 <code>float()</code>。M4 因此分四步：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>子阶段</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><strong>M4a（本文）</strong></td><td>设备上的线性代数；setup 全部仍用 NumPy</td></tr>
+          <tr><td>M4b</td><td>核函数（SK 插值与旋转、γ、Ewald、三阶、排斥势）改成与数组库无关；<code>pydftb.autodiff</code>：可微参数、密度矩阵的差商反向、SCC 隐式微分</td></tr>
+          <tr><td>M4c</td><td>PTBP 损失对 r0_w、r0_d 的梯度，可选的梯度优化器</td></tr>
+          <tr><td>M4d</td><td>设备选择、GPU 自检脚本、PTBP 的后端选项</td></tr>
+        </tbody>
+      </table></div>
+      <p>M4a 只动计算流程里“每轮 SCC 都要做、而且随 k 点数和轨道数增长最快”的部分。这样 NumPy 路径只改约 150 行，而且都是“把 <code>np.</code> 换成 <code>xp.</code>”或“在边界处转换”，逐位不变容易保证。</p>
+    </section>
+
+    <section id="design">
+      <h2>二、设计</h2>
+      <h3>1. 后端对象</h3>
+      <p><code>Backend(name, device, dtype)</code>：<code>name</code> 为 <code>"numpy"</code>（默认）或 <code>"torch"</code>；<code>device</code> 为 torch 的设备名（M4a 测 <code>"cpu"</code>，M4d 再做 GPU 的选择与检查）；<code>dtype</code> 为 <code>"float64"</code>（默认）或 <code>"float32"</code>。<code>DFTB</code>、<code>PyDFTB</code>、<code>pydftb.SCC</code> 都加这三个选项。NumPy 后端下它的各个转换函数都是原样返回，所以 NumPy 路径上的每个运算仍是同一个 NumPy 调用。</p>
+
+      <h3>2. 数据流：哪些在设备上</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步骤</th><th>位置</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>setup：邻居表、SK 块及其导数、onsite、γ、Ewald、三阶、色散</td><td>主机 NumPy</td><td>与原来完全相同</td></tr>
+          <tr><td>折叠到 k 点</td><td>实空间块在主机累加；相位矩阵在主机算；相位 GEMM 在设备上</td><td>主机部分与 NumPy 逐位相同，所以两个后端的 H0(k)、S(k) 只差在一次矩阵乘法</td></tr>
+          <tr><td>Cholesky 与 L⁻¹</td><td>设备，float64</td><td><code>cholesky_ex</code> + <code>solve_triangular</code>（不用批量 LU：pytorch#142815）；与 SciPy 的 <code>driver="gvd"</code> 是同一个算法</td></tr>
+          <tr><td>每轮 SCC：电势</td><td>主机</td><td>γ·Δq（和三阶、自旋）是长度为位点数的小向量，传到设备</td></tr>
+          <tr><td>每轮 SCC：H = H0 + ½S∘(v<sub>μ</sub>+v<sub>ν</sub>)、本征分解、密度矩阵 ρ 与 W、Mulliken 布居</td><td>设备</td><td>同一段代码，<code>xp</code> 为 numpy 或 torch</td></tr>
+          <tr><td>每轮 SCC：占据数与费米能级</td><td>主机</td><td>本征值每轮拷回一次，沿用 DFTB+ 的规则（<code>occupations.fill</code>）；占据数再传到设备</td></tr>
+          <tr><td>每轮 SCC：混合与收敛判断</td><td>主机</td><td>Broyden 与原来相同，所以 SCC 轮数可以与 NumPy 一致</td></tr>
+          <tr><td>能量</td><td>设备上算 Σ<sub>k</sub> w<sub>k</sub> Tr(ρ<sub>k</sub>H0<sub>k</sub>)，其余主机</td><td>结果是 Python float</td></tr>
+          <tr><td>力与应力</td><td>设备上按平移 T 把 ρ、W 折回实空间并取出原子对上的元素；之后的收缩在主机</td><td>只传回与原子对元素个数相同的两个向量</td></tr>
+        </tbody>
+      </table></div>
+      <p><code>DFTB.calculate</code> 对两个后端都是 NumPy 输入、NumPy/float 输出，PTBP 和 ASE 看到的类型不变。</p>
+
+      <h3>3. float32</h3>
+      <p>H、本征分解、密度矩阵和布居用 float32（k 点时 complex64）；S 的 Cholesky 和 L⁻¹ 仍在 float64 下算，再转成 float32；主机上的一切（电势、费米能级、混合器、能量的累加）都是 float64。float32 下 SCC 容差小于 1e-6 时给出警告。精度只报告，不作承诺。</p>
+
+      <h3>4. 线程</h3>
+      <p>torch 的线程数不受 threadpoolctl 控制。<code>PyDFTB(threads=n)</code>（PTBP 默认 1）在 torch 后端下用一个上下文在计算期间设 <code>torch.set_num_threads(n)</code>，结束后恢复。torch 后端不用 k 点线程（<code>k_threads &gt; 1</code> 时警告并忽略）。fork 的规则见关键信息：PTBP 的工作进程在算之前先设线程数（M4c、M4d 接入时落实）。</p>
+
+      <h3>5. NumPy 逐位不变</h3>
+      <ul>
+        <li>只做 <code>np.</code> → <code>xp.</code> 的替换，不改运算的结合顺序；NumPy 专用的写法（SciPy 的 COO、<code>np.add.at</code>、<code>bincount</code>、<code>einsum</code> 的路径）原样保留在 NumPy 分支。</li>
+        <li><code>python -m pydftb.validation.golden --base 65115d1</code>：在工作区和基准提交的 git worktree 里各跑一遍同样的计算（每个参考算例用 <code>eigh</code>、<code>batched</code> 两个求解器和 DFTB+ 的差分步长，各动力学参考的前几步，PTBP 设置下的 Cu 晶胞），逐字节比较所有结果字段和中间量；两个 Python 环境都跑。</li>
+        <li><code>import pydftb</code> 和 NumPy 后端的计算不导入 torch（有测试）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="modules">
+      <summary><span class="tag">开发细节</span><span class="title">三、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/backend/spec.py</code>（新）</td><td><code>Backend</code>：<code>xp</code>、<code>asarray</code>（实/复按输入）、<code>index</code>（整数索引，torch 下缓存成设备上的 long）、<code>to_host</code>（float32 时升为 float64）、<code>threads(n)</code> 上下文；<code>make_backend(name, device, dtype)</code> 检查 torch 是否可用</td></tr>
+            <tr><td><code>pydftb/backend/torch_xp.py</code>（新，只在 torch 后端导入）</td><td>NumPy 名字到 torch 的薄适配：<code>einsum</code>、<code>concatenate</code>、<code>conj</code>、<code>swapaxes</code>、<code>zeros</code> 等本阶段用到的函数</td></tr>
+            <tr><td><code>pydftb/backend/torch_solver.py</code>（新）</td><td><code>TorchSolver</code>：<code>prepare(S)</code>（float64 Cholesky、L⁻¹）、<code>eig(H)</code>、<code>solve(H, kw, nelec, smearing, need_w)</code>，接口与 <code>BatchedSolver</code> 相同</td></tr>
+            <tr><td><code>pydftb/backend/ops.py</code></td><td><code>namespace()</code> 开始真正使用；<code>to_host</code></td></tr>
+            <tr><td><code>pydftb/hamiltonian.py</code></td><td><code>fold</code>、<code>fold_all</code> 加 <code>backend</code> 参数：主机部分不变，相位 GEMM 和对角线加法在设备上</td></tr>
+            <tr><td><code>pydftb/solvers.py</code></td><td><code>_density</code> 改为 <code>xp</code> 写法（NumPy 下同一组调用）</td></tr>
+            <tr><td><code>pydftb/calculator.py</code></td><td><code>backend</code>、<code>device</code>、<code>dtype</code> 选项；<code>_Setup</code> 记录后端与设备上的 k 点权重；<code>_scc</code>、<code>_solve</code>、<code>_populations</code>、<code>_energies</code>、<code>_gradient</code> 的设备部分；SP2 与 torch 同用时报错</td></tr>
+            <tr><td><code>pydftb/ase_calc.py</code>、<code>pydftb/api.py</code></td><td>同名选项透传；torch 下 <code>threads</code> 设 torch 的线程数</td></tr>
+            <tr><td><code>pydftb/bands.py</code></td><td>torch 后端的引擎给出明确的错误（能带、DOS 在 NumPy 上算）</td></tr>
+            <tr><td><code>pydftb/validation/refgen.py</code>、<code>dynamics.py</code></td><td><code>--backend</code>、<code>--device</code>、<code>--dtype</code></td></tr>
+            <tr><td><code>pydftb/validation/golden.py</code>（新）</td><td>见上节</td></tr>
+            <tr><td><code>.github/workflows/pydftb-tests.yml</code></td><td>新增 <code>torch-cpu</code> 作业（Python 3.12，CPU wheel，pip 缓存）；最小环境作业不变</td></tr>
+            <tr><td><code>pyproject.toml</code></td><td><code>torch&gt;=2.14</code>（测试用 2.14.1）</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="probes">
+      <summary><span class="tag">开发细节</span><span class="title">四、探测实验记录</span></summary>
+      <div class="body">
+        <p><strong>环境</strong>：4 核、15 GB，无 GPU。torch 2.14.1+cpu（MKL 2024.2、OpenMP）装进 conda 环境（Python 3.11，numpy 2.4.6 + OpenBLAS），另建“最小环境 + torch”的 venv（Python 3.13，numpy 2.5.3）。<code>import torch</code> 1.0 s，常驻内存 279 MB。</p>
+        <p><strong>广义本征问题</strong>（随机厄米 H、κ(S) ≈ 10，一个线程，三次取最快；<code>scratchpad/m4a/probe_eigh.py</code>）：</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>N</th><th>k 点</th><th>类型</th><th>|Δε| NumPy 批量 vs SciPy gvd</th><th>|Δε| torch vs NumPy</th><th>|ΔP| torch vs NumPy</th><th>SciPy gvd</th><th>NumPy 批量</th><th>torch</th></tr></thead>
+          <tbody>
+            <tr><td>18</td><td>1</td><td>f64</td><td>5.8e-16</td><td>1.2e-15</td><td>3.0e-15</td><td>0.1 ms</td><td>0.1 ms</td><td>0.1 ms</td></tr>
+            <tr><td>288</td><td>1</td><td>f64</td><td>4.8e-16</td><td>4.8e-16</td><td>2.0e-15</td><td>10.2 ms</td><td>16.3 ms</td><td>10.0 ms</td></tr>
+            <tr><td>9</td><td>512</td><td>c128</td><td>1.2e-15</td><td>1.5e-15</td><td>5.1e-15</td><td>18.7 ms</td><td>9.1 ms</td><td>7.2 ms</td></tr>
+            <tr><td>18</td><td>1688</td><td>c128</td><td>1.9e-15</td><td>1.7e-15</td><td>1.2e-14</td><td>128.0 ms</td><td>133.0 ms</td><td>116.5 ms</td></tr>
+            <tr><td>36</td><td>256</td><td>c128</td><td>1.2e-15</td><td>1.4e-15</td><td>3.9e-15</td><td>75.1 ms</td><td>75.2 ms</td><td>56.4 ms</td></tr>
+            <tr><td>72</td><td>64</td><td>c128</td><td>1.2e-15</td><td>1.4e-15</td><td>3.8e-15</td><td>76.6 ms</td><td>77.9 ms</td><td>61.8 ms</td></tr>
+            <tr><td>144</td><td>16</td><td>c128</td><td>8.3e-16</td><td>8.3e-16</td><td>5.9e-15</td><td>71.5 ms</td><td>112.7 ms</td><td>80.4 ms</td></tr>
+          </tbody>
+        </table></div>
+        <p>本征值的相对差 ~1e-15（相对最大本征值），密度矩阵 ~1e-14：torch 与 NumPy 的差和 NumPy 自己两种算法的差同一量级。PTBP 最大的 Cu₂ 结构（N = 18，1,688 个 k 点）一次本征分解 torch 117 ms、NumPy 133 ms。</p>
+        <p><strong>fork 与 OpenMP</strong>（<code>scratchpad/m4a/probe_fork.py</code>，父进程算完再 fork 4 个子进程各算 5 次 N = 256 的本征分解）：</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>情形</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td>A：父进程 1 个线程</td><td>4 个子进程 0.12 s 内全部完成</td></tr>
+            <tr><td>B：父进程 4 个线程跑过并行区，子进程先 <code>set_num_threads(1)</code></td><td>全部完成（0.29 s）</td></tr>
+            <tr><td>C：同 B，但子进程不设线程数</td><td><strong>4 个全部卡死</strong>（60 s 超时）</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>golden 基线</strong>：同一提交两次运行逐字节相同。conda 环境 237 次计算、41,519 个量，每侧 44 s；最小环境 198 次（D3/D4 算例跳过）、36,176 个量，每侧约 20 s。</p>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>G0（NumPy 不变）</strong>：golden 两个环境逐字节相同；<code>pytest pydftb/tests</code>；<code>refgen --check</code>（74）；<code>dynamics --check</code>（11）；<code>test_kthreads</code>。</li>
+          <li><strong>G1（PTBP 不变）</strong>：<code>pytest tests</code>；<code>test_dftb_stage_parallel.py</code>；<code>tools/engine_parity.py --compare-serial</code> 在已发表的 Cu 点两种模式，损失逐位不变。</li>
+          <li><strong>G2（torch）</strong>：<code>refgen --check --backend torch</code> 和 <code>dynamics --check --backend torch</code> 用原来的容差；<code>pydftb/tests/test_torch_backend.py</code>（水、Cu fcc 含 T≈0、Cu8 MP2、CuO 自旋、DFTB3、GdO f 轨道、D3 作为常数项；SCC 1e-12 时 E ≤ 1e-10 Ha、F 和 q ≤ 1e-9、ε ≤ 1e-10、SCC 轮数相同）；<code>test_reference.py</code> 按后端参数化（SCC 轮数 ±1）；<code>test_torch_fork.py</code>（子进程里探测，带超时）；<code>test_import_hygiene.py</code>。最小环境（无 torch）下 torch 测试跳过；venv 和 conda 环境都跑。</li>
+          <li><strong>float32</strong>：同一组算例的能量、力、电荷、SCC 轮数与 float64 的差，只报告。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、局限与不做的事</h2>
+      <ul>
+        <li>setup 仍是 NumPy：大体系的 H0 在主机建好再传到设备（M4b 起核函数可在 torch 上算，M7 再考虑大体系）。</li>
+        <li>torch 后端不支持 SP2、能带和 DOS、k 点线程。</li>
+        <li>torch 与 NumPy 不逐位相同（MKL 与 OpenBLAS），只承诺上面的容差；同一 torch 版本、同一线程数下可复现。</li>
+        <li>GPU 在这里测不了，留给 M4d 的自检脚本；本阶段的代码不假设设备是 CPU。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M3d-advisor.html">← M3d 报告</a><a href="../index.html">文档索引</a><a href="../reports/M4a-torch-backend.html">M4a 报告 →</a></nav>
+    <span>M4a</span>
+  </footer>
+</div>
+</body>
+</html>

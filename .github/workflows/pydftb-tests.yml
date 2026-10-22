@@ -21,3 +21,20 @@ jobs:
         run: pip install numpy scipy ase threadpoolctl pytest
       - name: Run pydftb tests against the frozen DFTB+ references
         run: PYTHONPATH=. pytest -q pydftb/tests -o addopts="-ra"
+
+  # milestone M4: the same tests with the CPU build of PyTorch (torch backend tests run)
+  torch-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install minimal dependencies and PyTorch (CPU wheel)
+        run: |
+          pip install numpy scipy ase threadpoolctl pytest
+          pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+      - name: Run pydftb tests, including the torch backend
+        run: PYTHONPATH=. pytest -q pydftb/tests -o addopts="-ra"

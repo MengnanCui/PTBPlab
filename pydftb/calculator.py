@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .backend import ops
+from .backend.spec import make_backend
 from .coulomb import Coulomb
 from .dispersion import DispersionTerms, make_dispersion
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
@@ -117,6 +118,24 @@ class _Setup:
     spin: "_Spin | None" = None
     disp: DispersionTerms | None = None
     eps0: np.ndarray | None = None   # on-site energies per orbital
+    dev: "_Device | None" = None     # torch backend: device copies (h0, smat above are on it)
+
+    @property
+    def kw_dev(self):
+        """k-point weights next to the density matrices (the device with torch)."""
+        return self.kw if self.dev is None else self.dev.kw
+
+    @property
+    def smat_precise(self):
+        """The overlap stack in double precision (for the Cholesky factor)."""
+        return self.smat if self.dev is None else self.dev.smat_precise
+
+
+@dataclass
+class _Device:
+    """Torch backend: what the SCC loop needs on the device besides h0 and smat."""
+    kw: object                  # k-point weights (working precision)
+    smat_precise: object        # overlap stack in double precision
 
 
 @dataclass
@@ -200,6 +219,13 @@ class DFTB:
                           eigensolver and density matrices (:mod:`pydftb.parallel`);
                           bitwise identical results for any number.  With more than one,
                           BLAS runs on one thread during the calculation.
+    backend : str | Backend  "numpy" (default) or "torch": the folding to k-points, the
+                          eigensolver, density matrices, populations, energy traces and the
+                          real-space densities of the forces run on a torch ``device``
+                          (:mod:`pydftb.backend.spec`); the rest stays NumPy.
+    device : str          torch device ("cpu", "cuda", ...); torch backend only.
+    dtype : str           "float64" (default) or "float32" (torch backend only: H, the
+                          eigensolver and the densities in single precision).
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
@@ -210,7 +236,8 @@ class DFTB:
                  third_order: str | None = None, hubbard_derivs: dict | None = None,
                  h_damping: float | None = None, spin: bool = False,
                  unpaired_electrons: float = 0.0, relax_total_spin: bool = False,
-                 spin_constants: dict | None = None, dispersion=None, k_threads=1):
+                 spin_constants: dict | None = None, dispersion=None, k_threads=1,
+                 backend=None, device: str | None = None, dtype: str | None = None):
         if spin and not scc:
             raise ValueError("spin polarisation needs SCC")
         if spin and spin_constants is None:
@@ -248,6 +275,19 @@ class DFTB:
         self.spin_constants = spin_constants
         self.dispersion = make_dispersion(dispersion)
         self.k_threads = as_kthreads(k_threads)
+        self.backend = make_backend(backend, device, dtype)
+        if self.backend.is_torch:
+            if solver not in ("eigh", "batched"):
+                raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
+                                 f"or 'batched', not {solver!r}")
+            if self.k_threads.n > 1:
+                warnings.warn("k-point threads are not used with the torch backend",
+                              RuntimeWarning, stacklevel=2)
+                self.k_threads = as_kthreads(1)
+            if self.backend.dtype == "float32" and scc and scc_tol < 1e-6:
+                warnings.warn(f"scc_tol = {scc_tol:g} is below what float32 can resolve "
+                              "(about 1e-6); the SCC may not converge", RuntimeWarning,
+                              stacklevel=2)
 
     @property
     def kt(self) -> float:
@@ -333,14 +373,20 @@ class DFTB:
         else:
             kpts, kw = np.zeros((1, 3)), np.ones(1)
         gamma_only = len(kpts) == 1 and not np.any(kpts[0])
+        b = self.backend
+        dev = None
         if not matrices:
             h0 = smat = None
         elif gamma_only:
             h0 = fold(pb, pb.h, norb, None, eps0)[None]
             smat = fold(pb, pb.s, norb, None, np.ones(norb))[None]
         else:
-            h0 = fold_all(pb, pb.h, norb, kpts, eps0)
-            smat = fold_all(pb, pb.s, norb, kpts, np.ones(norb))
+            h0 = fold_all(pb, pb.h, norb, kpts, eps0, backend=b)
+            smat = fold_all(pb, pb.s, norb, kpts, np.ones(norb), backend=b)
+        if b.is_torch and matrices:
+            s_precise = b.asarray(smat, precise=True)
+            dev = _Device(kw=b.asarray(kw), smat_precise=s_precise)
+            h0, smat = b.cast(b.asarray(h0, precise=True)), b.cast(s_precise)
         timings["build"] = time.perf_counter() - t0
         coul = third = spin = None
         if self.scc:
@@ -367,7 +413,7 @@ class DFTB:
                                             charge=self.charge)
             timings["dispersion"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
-                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0)
+                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev)
 
     def _site_hubbard_derivs(self, basis: Basis) -> np.ndarray:
         """Ud of every charge site: one value per type, or per shell (orbital-resolved SCC)."""
@@ -446,16 +492,17 @@ class DFTB:
         e, c = solver.eig(h)
         nk = len(st.kw)
         threads = getattr(solver, "threads", None)
+        b = self.backend
         if st.spin.shared_ef:
             rho, wdm, evals, mu, ts, occ = _density(e, c, np.tile(st.kw, 2), st.nelec,
                                                     self.smearing, need_w, spin_factor=1.0,
-                                                    threads=threads)
+                                                    threads=threads, backend=b)
             return rho, wdm, evals, (mu, mu), ts, list(occ)
         parts = [_density(e[s], c[s], st.kw, n, self.smearing, need_w, spin_factor=1.0,
-                          threads=threads)
+                          threads=threads, backend=b)
                  for s, n in ((slice(0, nk), st.spin.n_up), (slice(nk, 2 * nk), st.spin.n_down))]
-        rho = np.concatenate([p[0] for p in parts])
-        wdm = np.concatenate([p[1] for p in parts]) if need_w else None
+        rho = b.xp.concatenate([p[0] for p in parts])
+        wdm = b.xp.concatenate([p[1] for p in parts]) if need_w else None
         evals = np.concatenate([p[2] for p in parts])
         occ = list(parts[0][5]) + list(parts[1][5])
         return rho, wdm, evals, (parts[0][3], parts[1][3]), parts[0][4] + parts[1][4], occ
@@ -465,19 +512,40 @@ class DFTB:
         nk = len(st.kw)
         # q_mu = sum_k w_k Re (rho_k S_k)_{mu mu}
         if st.spin is None:
-            q_orb = np.einsum("k,kij,kji->i", st.kw, rho, st.smat).real
+            q_orb = self._mulliken(st, rho)
             return q_orb, ops.segment_sum(q_orb, st.site_of_orb, len(st.q0))
-        q_up = np.einsum("k,kij,kji->i", st.kw, rho[:nk], st.smat).real
-        q_dn = np.einsum("k,kij,kji->i", st.kw, rho[nk:], st.smat).real
+        q_up = self._mulliken(st, rho[:nk])
+        q_dn = self._mulliken(st, rho[nk:])
         shells, nsh = st.basis.orb_shell, len(st.basis.shell_l)
         return q_up + q_dn, np.concatenate([ops.segment_sum(q_up, shells, nsh),
                                             ops.segment_sum(q_dn, shells, nsh)])
 
+    def _mulliken(self, st: _Setup, rho) -> np.ndarray:
+        """sum_k w_k Re (rho_k S_k)_{mu mu} per orbital, as a host array."""
+        if not self.backend.is_torch:
+            return np.einsum("k,kij,kji->i", st.kw, rho, st.smat).real
+        b = self.backend
+        prod = b.widen(rho * st.smat.mT)                 # sums in double precision
+        return b.to_host((b.widen(st.kw_dev)[:, None, None] * prod).sum(dim=(0, 2)).real)
+
+    def _trace(self, st: _Setup, rho, m) -> float:
+        """sum_k w_k Re Tr(rho_k M_k)."""
+        if not self.backend.is_torch:
+            return float(np.einsum("k,kij,kji->", st.kw, rho, m).real)
+        b = self.backend
+        return float((b.widen(st.kw_dev)[:, None, None] * b.widen(rho * m.mT)).sum().real)
+
     def _scc(self, st: _Setup, q_init, forces, timings) -> _SCCState:
-        solver = (self.solver if not isinstance(self.solver, str)
-                  else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
+        b = self.backend
+        if b.is_torch:
+            from .backend.torch_solver import TorchSolver
+            solver = TorchSolver(b)
+        else:
+            solver = (self.solver if not isinstance(self.solver, str)
+                      else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
         t1 = time.perf_counter()
-        solver.prepare(st.smat if st.spin is None else np.concatenate([st.smat, st.smat]))
+        s = st.smat_precise
+        solver.prepare(s if st.spin is None else b.xp.concatenate([s, s]))
         t_diag = time.perf_counter() - t1
         mixer = make_mixer(self.mixer, self.mixing)
         q_in = (np.asarray(q_init, float).copy() if q_init is not None
@@ -487,10 +555,12 @@ class DFTB:
         diff = 0.0
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
-            h = st.h0 + 0.5 * st.smat * (v_orb[:, None] + v_orb[None, :])
+            v = b.asarray(v_orb)
+            h = st.h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
             if vs_orb is not None:
-                hs = 0.5 * st.smat * (vs_orb[:, None] + vs_orb[None, :])
-                h = np.concatenate([h + hs, h - hs])          # up, down
+                vs = b.asarray(vs_orb)
+                hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
+                h = b.xp.concatenate([h + hs, h - hs])          # up, down
             t1 = time.perf_counter()
             rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=False)
             t_diag += time.perf_counter() - t1
@@ -523,7 +593,7 @@ class DFTB:
 
     def _energies(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         nk = len(st.kw)
-        e_band = sum(float(np.einsum("k,kij,kji->", st.kw, sc.rho[s:s + nk], st.h0).real)
+        e_band = sum(self._trace(st, sc.rho[s:s + nk], st.h0)
                      for s in range(0, len(sc.rho), nk))       # Tr(rho H0), summed over spins
         dq, m = self._charge_and_magnetisation(st, sc.q_out)
         e_scc = st.coulomb.energy_shift(dq)[0] if self.scc else 0.0
@@ -564,26 +634,34 @@ class DFTB:
         sgn = np.repeat([1.0, -1.0][:nspin], nk)          # up - down: magnetisation density
         # real-space (energy-weighted) density at the pair elements, summed over spins:
         # P_e = Re sum_k w_k rho_k[nu, mu] exp(2 pi i k.T)
+        # with the torch backend the densities are on the device: only the pair elements
+        # come back to the host (b.* are identities for NumPy)
+        b = self.backend
+        ci, ri = b.index(pb.cols), b.index(pb.rows)
         p_m = None
         if st.gamma_only:
-            rho_e = sc.rho[:, pb.cols, pb.rows].real
-            p_e = kw @ rho_e
-            w_e = kw @ sc.wdm[:, pb.cols, pb.rows].real
+            kwd = b.asarray(kw)
+            rho_e = sc.rho[:, ci, ri].real
+            p_e = b.to_host(kwd @ rho_e)
+            w_e = b.to_host(kwd @ sc.wdm[:, ci, ri].real)
             if nspin == 2:
-                p_m = (kw * sgn) @ rho_e
+                p_m = b.to_host(b.asarray(kw * sgn) @ rho_e)
         else:
             # group by translation T: R_T = sum_k w_k e^{2 pi i k.T} rho_k  (nT GEMM)
             shifts, t_of = shift_index(pb)
             ph = (np.exp(2j * np.pi * (np.tile(st.kpts, (nspin, 1)) @ shifts.T)) * kw[:, None]).T
             norb = st.basis.norb
             n2 = norb * norb
+            ti = b.index(t_of)
+            phd = b.asarray(ph)
             rho2 = sc.rho.reshape(len(kw), n2)
-            r_t = (ph @ rho2).reshape(-1, norb, norb)
-            w_t = (ph @ sc.wdm.reshape(len(kw), n2)).reshape(-1, norb, norb)
-            p_e = r_t[t_of, pb.cols, pb.rows].real
-            w_e = w_t[t_of, pb.cols, pb.rows].real
+            r_t = (phd @ rho2).reshape(-1, norb, norb)
+            w_t = (phd @ sc.wdm.reshape(len(kw), n2)).reshape(-1, norb, norb)
+            p_e = b.to_host(r_t[ti, ci, ri].real)
+            w_e = b.to_host(w_t[ti, ci, ri].real)
             if nspin == 2:
-                p_m = ((ph * sgn[None, :]) @ rho2).reshape(-1, norb, norb)[t_of, pb.cols, pb.rows].real
+                p_m = b.to_host((b.asarray(ph * sgn[None, :]) @ rho2)
+                                .reshape(-1, norb, norb)[ti, ci, ri].real)
         vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
         coef_s = p_e * vsum - w_e
         if p_m is not None:

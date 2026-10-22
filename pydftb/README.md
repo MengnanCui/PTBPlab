@@ -159,6 +159,31 @@ severity (default `error`).  Frozen DFTB+ 25.1 runs for every rule are in
 `tests/data/advisor/` (`python -m pydftb.validation.advisor_cases --regenerate`); see
 [`docs/reports/M3d-advisor.html`](docs/reports/M3d-advisor.html).
 
+### PyTorch backend
+
+`backend="torch"` (for `pydftb.DFTB`, `PyDFTB` and `pydftb.SCC`) runs the heavy linear
+algebra of every SCC iteration on a torch device: the folding to k-points, the Cholesky
+factor of S, the eigensolver, the density matrices, the Mulliken populations, the traces of
+the energy and the real-space densities of the forces.  Geometry, parameters, gamma, the
+mixer and the Fermi level stay NumPy; results come back as NumPy arrays and floats.  torch is
+optional (`pip install "torch>=2.14" --index-url https://download.pytorch.org/whl/cpu`);
+`import pydftb` never imports it.
+
+```python
+atoms.calc = PyDFTB("path/to/skf", kpts=(8, 8, 8), backend="torch")                 # CPU
+atoms.calc = PyDFTB("path/to/skf", kpts=(8, 8, 8), backend="torch", device="cuda")  # GPU
+atoms.calc = PyDFTB("path/to/skf", kpts=(8, 8, 8), backend="torch", dtype="float32")
+```
+
+On the 74 frozen DFTB+ references it passes with the same tolerances and the same SCC
+iteration counts as DFTB+; against the NumPy backend the largest differences are
+4e-14 Ha (energy), 4e-14 Ha/Bohr (forces) and 1.4e-13 e (charges).  `dtype="float32"` runs
+H, the eigensolver and the densities in single precision (the Cholesky factor of S stays
+double): energies within about 4e-6 Ha.  `threads` sets torch's thread count too; set it in
+processes forked from one that ran torch on several threads.  No GPU was available for
+M4a, so GPU speed-ups are not measured yet; see
+[`docs/reports/M4a-torch-backend.html`](docs/reports/M4a-torch-backend.html).
+
 ## Tests and validation
 
 ```bash
@@ -167,4 +192,6 @@ python -m pydftb.validation.refgen --check          # table of deviations from D
 python -m pydftb.validation.refgen --regenerate     # needs dftb+; rewrites the references
 python -m pydftb.validation.refgen --live           # fresh comparison with dftb+
 python -m pydftb.validation.dynamics --check        # optimisation and MD vs DFTB+'s drivers
+python -m pydftb.validation.refgen --check --backend torch    # the same on the torch backend
+python -m pydftb.validation.golden --base COMMIT    # NumPy path bitwise unchanged since COMMIT
 ```

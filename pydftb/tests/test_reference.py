@@ -4,6 +4,7 @@ The JSON files are produced by ``python -m pydftb.validation.refgen
 --regenerate`` (needs dftb+); this test only needs pydftb.
 """
 import glob
+import importlib.util
 import os
 
 import numpy as np
@@ -12,15 +13,19 @@ import pytest
 from pydftb.validation import refgen
 
 REFS = sorted(glob.glob(os.path.join(refgen.REF_DIR, "*.json")))
+# milestone M4: the same references with the torch backend (skipped without torch)
+BACKENDS = ["numpy", pytest.param("torch", marks=pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None, reason="needs torch"))]
 
 
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("path", REFS, ids=[os.path.basename(p)[:-5] for p in REFS])
-def test_against_dftbplus_reference(path):
+def test_against_dftbplus_reference(path, backend):
     doc = refgen.load(os.path.basename(path)[:-5])
     why = refgen.missing_requirement(doc)      # D3/D4 cases need the matching library
     if why:
         pytest.skip(why)
-    r = refgen.compare(doc)
+    r = refgen.compare(doc, backend=backend)
     assert r["ok"], f"{doc['case']}: deviations {r['dev']} exceed {doc['tolerances']}"
     # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path
     if r["n_scc_ref"] is not None:

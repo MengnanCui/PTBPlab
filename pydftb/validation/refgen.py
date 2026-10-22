@@ -109,9 +109,12 @@ def missing_requirement(doc: dict) -> str | None:
 
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
-               fd_delta: float | None = None, engine: bool = False, k_threads=1):
+               fd_delta: float | None = None, engine: bool = False, k_threads=1,
+               backend=None, device=None, dtype=None, **options):
     """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set.
-    ``engine``: also return the pydftb.DFTB object (for band structures)."""
+    ``engine``: also return the pydftb.DFTB object (for band structures).
+    ``backend``/``device``/``dtype``: the array backend (milestone M4, default NumPy);
+    ``options``: other DFTB settings that replace the case's (e.g. ``scc_tol``)."""
     tmp = None
     if skdir is None and case.typed:
         tmp = tempfile.mkdtemp(prefix="pydftb_case_")
@@ -126,10 +129,12 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
         kpts = None
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
-        calc = DFTB(sk, scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
+        opts = dict(scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
                     dispersion=inp.get("dispersion"), k_threads=k_threads,
+                    backend=backend, device=device, dtype=dtype,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
+        calc = DFTB(sk, **{**opts, **options})
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
                              np.ones(3, bool) if periodic else None)
@@ -317,16 +322,19 @@ def load(name: str) -> dict:
         return json.load(fh)
 
 
-def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None) -> dict:
+def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
+            **backend) -> dict:
     """Run pydftb on a frozen case; return the deviations and pass/fail.
 
     ``fd_delta`` = DFTB+'s finite-difference step (1.22e-4 by default in the
     reference runs) makes pydftb reproduce DFTB+'s approximate forces.
+    ``backend``: ``backend``/``device``/``dtype`` of :class:`pydftb.DFTB`.
     """
     case = CASES_BY_NAME[doc["case"]]
     inp = doc["input"]
     t0 = time.perf_counter()
-    res, engine = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, engine=True)
+    res, engine = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, engine=True,
+                             **backend)
     wall = time.perf_counter() - t0
     ref = doc["reference"]
     sk_q0 = _neutral_populations(case, inp)
@@ -360,7 +368,7 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
     return np.array([sk.occupation[base.get(lab, lab)].sum() for lab in inp["labels"]])
 
 
-def check(names=None, solver: str = "eigh") -> bool:
+def check(names=None, solver: str = "eigh", **backend) -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
           f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'|deps| Ha':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
@@ -377,7 +385,7 @@ def check(names=None, solver: str = "eigh") -> bool:
         if why:
             print(f"{case.name:26s} skipped: {why}")
             continue
-        r = compare(doc, solver)
+        r = compare(doc, solver, **backend)
         d = r["dev"]
         all_ok &= r["ok"]
         e_disp = f"{d['e_disp']:9.1e}" if "e_disp" in doc["reference"] else f"{'-':>9s}"
@@ -410,11 +418,15 @@ def main(argv=None):
     g.add_argument("--live", action="store_true", help="compare pydftb with a fresh dftb+ run")
     ap.add_argument("cases", nargs="*", help="case names (default: all)")
     ap.add_argument("--solver", default="eigh")
+    ap.add_argument("--backend", default=None, help="numpy (default) or torch")
+    ap.add_argument("--device", default=None, help="torch device, e.g. cpu or cuda")
+    ap.add_argument("--dtype", default=None, help="float64 (default) or float32")
     a = ap.parse_args(argv)
     if a.regenerate:
         regenerate(a.cases)
     elif a.check:
-        sys.exit(0 if check(a.cases, a.solver) else 1)
+        sys.exit(0 if check(a.cases, a.solver, backend=a.backend, device=a.device,
+                            dtype=a.dtype) else 1)
     else:
         live(a.cases)
 

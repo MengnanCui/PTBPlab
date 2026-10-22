@@ -19,6 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from .backend import ops
+from .backend.spec import NUMPY, Backend
 
 from .occupations import fill
 
@@ -32,21 +33,28 @@ def _stack(parts):
     return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
-def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0, threads=None):
-    occ, mu, ts = fill(evals, kw, nelec, smearing, spin_factor=spin_factor)   # all k at once
+def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0, threads=None,
+             backend: Backend = NUMPY):
+    """Densities rho = (C f) C^H and W = (C f eps) C^H.  The occupations and the Fermi level
+    are always found on the host (DFTB+'s rules); with the torch backend ``evals`` and
+    ``evecs`` live on the device and the eigenvalues are returned as host arrays."""
+    ev_host = backend.to_host(evals)
+    occ, mu, ts = fill(ev_host, kw, nelec, smearing, spin_factor=spin_factor)   # all k at once
     occ = np.array(occ)
+    occ_d = backend.asarray(occ)
+    xp = backend.xp
 
     def part(sl):
         c = evecs[sl]
-        cf = c * occ[sl, None, :]
-        rho = cf @ np.conj(np.swapaxes(c, 1, 2))
-        wdm = (cf * evals[sl, None, :]) @ np.conj(np.swapaxes(c, 1, 2)) if need_w else None
+        cf = c * occ_d[sl, None, :]
+        rho = cf @ xp.conj(xp.swapaxes(c, 1, 2))
+        wdm = (cf * evals[sl, None, :]) @ xp.conj(xp.swapaxes(c, 1, 2)) if need_w else None
         return rho, wdm
 
     parts = _kmap(threads, part, len(evecs), evecs.shape[-1])
     rho = _stack([p[0] for p in parts])
     wdm = _stack([p[1] for p in parts]) if need_w else None
-    return rho, wdm, evals, mu, ts, occ
+    return rho, wdm, ev_host, mu, ts, occ
 
 
 class EighSolver:

@@ -11,6 +11,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from .backend import ops
+from .backend.spec import NUMPY, Backend
 from .skf import N_INTEGRALS, SKSet
 from .slako import bond_frames, rotation_blocks, sk_block
 from .neighbors import neighbor_list
@@ -173,17 +174,22 @@ def shift_index(pb: PairBlocks):
 
 
 def fold_all(pb: PairBlocks, values: np.ndarray, norb: int, kpts: np.ndarray,
-             diag: np.ndarray | None = None) -> np.ndarray:
+             diag: np.ndarray | None = None, backend: Backend = NUMPY):
     """Bloch matrices for all k at once: M(k) = sum_T M(T) exp(2 pi i k.T).
 
     Elements are first summed into one small real-space matrix per
     translation T, then folded with a single (nk x nT) @ (nT x N^2) product.
+    With the torch backend only that product (and the diagonal) runs on the device,
+    in double precision; the real-space matrices and the phases are the same host arrays.
     """
     shifts, t_of = shift_index(pb)
     mt = np.zeros((len(shifts), norb, norb))
     mt = ops.scatter_add(mt, (t_of, pb.rows, pb.cols), values)
     phase = np.exp(2j * np.pi * (kpts @ shifts.T))                 # (nk, nT)
+    phase = backend.asarray(phase, precise=True)
+    mt = backend.asarray(mt, precise=True, complex_=True)
     m = (phase @ mt.reshape(len(shifts), -1)).reshape(len(kpts), norb, norb)
     if diag is not None:
-        m[:, np.arange(norb), np.arange(norb)] += diag
+        idx = backend.index(np.arange(norb))
+        m[:, idx, idx] += backend.asarray(diag, precise=True)
     return m
