@@ -349,7 +349,7 @@ just work.
 
 ### 4b. DFTB engine: DFTB+ or pydftb
 
-Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`. With PyTorch installed, pydftb also gives the derivatives of energies, charges and forces with respect to the Slater-Koster tables and the other parameters (`pydftb.autodiff`, checked against finite differences); PTBP uses them for the gradient of its loss (section 4e).
+Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`. With PyTorch installed, pydftb also gives the derivatives of energies, charges and forces with respect to the Slater-Koster tables and the other parameters (`pydftb.autodiff`, checked against finite differences); PTBP uses them for the gradient of its loss (section 4e). Beyond what PTBP needs, pydftb is being completed to cover DFTB+'s other features (so far non-collinear spin and spin-orbit coupling; see `pydftb/docs/ROADMAP.md`).
 
 ```bash
 ptbp optimize dft/dft.xyz --mode dataset --engine pydftb

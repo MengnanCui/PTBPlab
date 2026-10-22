@@ -23,6 +23,14 @@ from .params import ParamSet
 from .system import System
 
 
+def two_component(options: dict) -> bool:
+    """Whether :class:`pydftb.DFTB` options ask for a two-component calculation (non-collinear
+    spin or spin-orbit coupling, milestone M6a)."""
+    spin = options.get("spin")
+    return ((isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear"))
+            or options.get("spin_orbit") is not None)
+
+
 def make_kpoints(kpts, time_reversal: bool = True):
     """None | (n1, n2, n3) Monkhorst-Pack grid | (kpts, weights) | path points -> (kpts, weights)
     or None.
@@ -53,13 +61,17 @@ class SCC:
     Keyword arguments are passed to :class:`pydftb.calculator.DFTB`
     (``temperature``, ``scc_tol``, ``max_scc``, ``mixing``, ``solver``,
     ``repulsive``, ``dispersion`` ...).  ``kpts`` may be a Monkhorst-Pack grid ``(n1, n2, n3)``
-    or explicit ``(kpoints, weights)``.
+    or explicit ``(kpoints, weights)``.  ``time_reversal`` (default None: yes, except for
+    two-component calculations, which need the full grid) merges k and -k.
     """
 
     def __init__(self, system: System, params: ParamSet, *, kpts=None, scc: bool = True,
-                 time_reversal: bool = True, **options):
+                 time_reversal: bool | None = None, **options):
         self.system = system
         self.params = params
+        if time_reversal is None:
+            time_reversal = not two_component(options)
+        self.time_reversal = time_reversal
         self.kpts = make_kpoints(kpts, time_reversal) if system.periodic else None
         self.options = dict(options)
         self.scc = scc
@@ -101,7 +113,7 @@ class SCC:
             res = self._run(forces=True)
         return res.forces
 
-    def states(self, kpts=None, projections: bool = False, time_reversal: bool = True,
+    def states(self, kpts=None, projections: bool = False, time_reversal: bool | None = None,
                chunk: int | None = None) -> States:
         """Eigenstates at the converged charges (DFTB+'s band-structure run).
 
@@ -114,6 +126,8 @@ class SCC:
         s = self.system
         if kpts is not None and not s.periodic:
             raise ValueError("k-points need a periodic system")
+        if time_reversal is None:
+            time_reversal = self.time_reversal
         k = None if kpts is None else make_kpoints(kpts, time_reversal)
         return eigenstates(self._engine(), s.labels, s.positions, s.cell if s.periodic else None,
                            s.pbc if s.periodic else None, r.q_in, kpts=k,

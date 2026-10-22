@@ -1,5 +1,5 @@
-"""Self-consistent-charge DFTB driver (DFTB2, DFTB3, collinear spin, dispersion): energies,
-forces, stress.
+"""Self-consistent-charge DFTB driver (DFTB2, DFTB3, collinear and non-collinear spin,
+spin-orbit coupling, dispersion): energies, forces, stress.
 
 Reference implementation: clarity first, dense linear algebra, NumPy/SciPy.
 
@@ -15,6 +15,11 @@ physics (DFTB3, spin, stress, ...) has an obvious place to plug in:
 The matching DFTB+ routines are listed in ``pydftb/docs/dftbplus_map.md``.
 ``pydftb.bands`` reuses stage 1 and the potentials of stage 2 to diagonalise H(k) at
 frozen charges (band structures, DOS).
+
+Two-component calculations (non-collinear spin, spin-orbit coupling; milestone M6a) take
+separate branches (``st.pauli``): 2N x 2N spinor matrices, four Pauli components
+(q, m_x, m_y, m_z) per shell in the mixed vector, one Fermi level; see
+:mod:`pydftb.spinorbit`.
 """
 from __future__ import annotations
 
@@ -35,6 +40,7 @@ from .neighbors import neighbor_list
 from .parallel import as_kthreads
 from .solvers import SOLVERS, _density
 from .skf import SKSet
+from . import spinorbit as so
 from .thirdorder import ThirdOrder
 
 
@@ -43,7 +49,7 @@ class DFTBResult:
     """Results in atomic units (Hartree, Bohr).
 
     Energy names follow DFTB+'s ``detailed.out``:
-    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_rep + E_disp),
+    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_LS + E_rep + E_disp),
     ``free_energy`` = "Total Mermin free energy" (Total - TS),
     ``e_zero`` = "Extrapolated to 0" (Total - TS/2).
     """
@@ -68,14 +74,19 @@ class DFTBResult:
     stress: np.ndarray | None = None     # (3, 3) Hartree/Bohr^3, DFTB+ sign convention
     kpoints: np.ndarray | None = None    # fractional k-points used
     kweights: np.ndarray | None = None
-    # collinear spin: eigenvalues/occupations are stacked [up k-points..., down k-points...]
+    # collinear spin: eigenvalues/occupations are stacked [up k-points..., down k-points...];
+    # two-component (M6a): 2N levels per k-point, one Fermi level, fermi_spin None
     e_spin: float = 0.0
-    magmoms: np.ndarray | None = None    # (n_atom,) N_up - N_down per atom
-    q_spin: np.ndarray | None = None     # (2, n_shell) up / down populations per shell
+    magmoms: np.ndarray | None = None    # (n_atom,) N_up - N_down per atom; two-component:
+                                         # (n_atom, 3) magnetisation vectors
+    q_spin: np.ndarray | None = None     # (2, n_shell) up / down populations per shell;
+                                         # two-component: (4, n_shell) q, m_x, m_y, m_z
     fermi_spin: tuple | None = None      # (mu_up, mu_down); equal with relax_total_spin
     e_disp: float = 0.0                  # dispersion energy
     q_in: np.ndarray | None = None       # input populations of the last SCC iteration (the mixed
                                          # vector; what DFTB+ writes to charges.bin)
+    e_ls: float = 0.0                    # spin-orbit energy (DFTB+ "Energy L.S")
+    orbital_moments: np.ndarray | None = None   # (n_shell, 3) <L> per shell (spin-orbit)
 
     @property
     def e_total(self) -> float:
@@ -92,7 +103,8 @@ class DFTBResult:
     @property
     def terms(self) -> dict:
         return {"H0": self.e_band, "SCC": self.e_scc, "3rd": self.e_3rd, "spin": self.e_spin,
-                "repulsive": self.e_rep, "dispersion": self.e_disp, "-TS": -self.ts}
+                "LS": self.e_ls, "repulsive": self.e_rep, "dispersion": self.e_disp,
+                "-TS": -self.ts}
 
 
 @dataclass
@@ -119,6 +131,7 @@ class _Setup:
     disp: DispersionTerms | None = None
     eps0: np.ndarray | None = None   # on-site energies per orbital
     dev: "_Device | None" = None     # torch backend: device copies (h0, smat above are on it)
+    pauli: "_Pauli | None" = None    # two-component calculation (M6a)
 
     @property
     def kw_dev(self):
@@ -145,6 +158,17 @@ class _Spin:
     n_up: float
     n_down: float
     shared_ef: bool             # one Fermi level for both channels (DFTB+ RelaxTotalSpin)
+
+
+@dataclass
+class _Pauli:
+    """Two-component calculation (M6a): non-collinear spin and/or spin-orbit coupling."""
+    w: np.ndarray | None        # (n_shell, n_shell) spin constants; None: no spin polarisation
+    spins: np.ndarray           # (n_atom, 3) initial magnetisation per atom
+    lam: np.ndarray | None      # (3, N, N) Lambda^a = Im(xi/2 L_a); None: no spin-orbit coupling
+    dual: bool                  # dual (DFTB+ default) or onsite spin-orbit model
+    hso: np.ndarray | None      # H_SO(k), (nk or 1, 2N, 2N), constant during the SCC
+    s2: np.ndarray | None       # (nk, 2N, 2N) overlap S x 1
 
 
 @dataclass
@@ -204,8 +228,9 @@ class DFTB:
     h_damping : float     exponent zeta of the H-X damping of gamma (and Gamma),
                           DFTB+ ``HCorrection = Damping { Exponent = zeta }``;
                           damped are atoms lighter than 3.5 amu, as in DFTB+.
-    spin : bool           collinear spin polarisation (DFTB+ ``SpinPolarisation =
-                          Colinear``).
+    spin : bool | str     collinear spin polarisation (True or "colinear", DFTB+
+                          ``SpinPolarisation = Colinear``) or "noncolinear" (two-component,
+                          DFTB+ ``NonColinear``; milestone M6a).
     unpaired_electrons : float  N_up - N_down (DFTB+ ``UnpairedElectrons``); fixed,
                           with one Fermi level per spin, unless ``relax_total_spin``.
     relax_total_spin : bool  one Fermi level for both spins (DFTB+ ``RelaxTotalSpin``).
@@ -226,6 +251,17 @@ class DFTB:
     device : str          torch device ("cpu", "cuda", ...); torch backend only.
     dtype : str           "float64" (default) or "float32" (torch backend only: H, the
                           eigensolver and the densities in single precision).
+    initial_spins : (n_atom, 3)  initial magnetisation vector of every atom with
+                          ``spin="noncolinear"`` (DFTB+ ``InitialSpins``); default zero.
+    spin_orbit : dict     type label -> spin-orbit constant xi (Hartree) of every shell, zero
+                          for s shells (DFTB+ ``SpinOrbit``); types with only s shells may be
+                          left out.  Two-component: with ``spin="noncolinear"`` or without
+                          spin polarisation; with a k-point set that contains -k for every k.
+    spin_orbit_dual : bool  the dual model (default, DFTB+ ``Dual = Yes``), where the term
+                          acts through the overlap like a block potential, or the onsite model.
+
+    Two-component calculations are NumPy only (not ``backend="torch"``, the SP2 solver or
+    :mod:`pydftb.autodiff`).
     """
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
@@ -237,7 +273,26 @@ class DFTB:
                  h_damping: float | None = None, spin: bool = False,
                  unpaired_electrons: float = 0.0, relax_total_spin: bool = False,
                  spin_constants: dict | None = None, dispersion=None, k_threads=1,
-                 backend=None, device: str | None = None, dtype: str | None = None):
+                 backend=None, device: str | None = None, dtype: str | None = None,
+                 initial_spins=None, spin_orbit: dict | None = None,
+                 spin_orbit_dual: bool = True):
+        noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
+        if isinstance(spin, str) and not noncolinear:
+            if spin.lower() not in ("colinear", "collinear"):
+                raise ValueError(f"spin must be False, True, 'colinear' or 'noncolinear', "
+                                 f"not {spin!r}")
+            spin = True
+        if noncolinear:
+            spin = False
+            self._check_noncolinear(scc, spin_constants, solver, unpaired_electrons,
+                                    relax_total_spin)
+        elif initial_spins is not None:
+            raise ValueError("initial_spins needs spin='noncolinear'")
+        if spin_orbit is not None and spin:
+            raise ValueError("spin-orbit coupling needs spin='noncolinear' or no spin "
+                             "polarisation (as in DFTB+)")
+        if spin_orbit is not None and solver == "sp2":
+            raise ValueError("the SP2 solver does not support spin-orbit coupling")
         if spin and not scc:
             raise ValueError("spin polarisation needs SCC")
         if spin and spin_constants is None:
@@ -275,7 +330,16 @@ class DFTB:
         self.spin_constants = spin_constants
         self.dispersion = make_dispersion(dispersion)
         self.k_threads = as_kthreads(k_threads)
+        self.noncolinear = noncolinear
+        self.initial_spins = initial_spins
+        self.spin_orbit = None if spin_orbit is None else dict(spin_orbit)
+        self.spin_orbit_dual = bool(spin_orbit_dual)
+        if self.spin_orbit is not None:      # the types of this SK set (the rest at setup)
+            so.check_xi(self.spin_orbit, sk, [lab for lab in self.spin_orbit if lab in sk.onsite])
         self.backend = make_backend(backend, device, dtype)
+        if self.backend.is_torch and self.pauli:
+            raise ValueError("non-collinear spin and spin-orbit coupling are implemented for "
+                             "the NumPy backend only (milestone M6a)")
         if self.backend.is_torch:
             if solver not in ("eigh", "batched"):
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
@@ -288,6 +352,24 @@ class DFTB:
                 warnings.warn(f"scc_tol = {scc_tol:g} is below what float32 can resolve "
                               "(about 1e-6); the SCC may not converge", RuntimeWarning,
                               stacklevel=2)
+
+    @staticmethod
+    def _check_noncolinear(scc, spin_constants, solver, unpaired_electrons, relax_total_spin):
+        if not scc:
+            raise ValueError("spin polarisation needs SCC")
+        if spin_constants is None:
+            raise ValueError("spin polarisation needs spin_constants")
+        if solver == "sp2":
+            raise ValueError("the SP2 solver does not support spin polarisation")
+        if unpaired_electrons or relax_total_spin:
+            raise ValueError("unpaired_electrons and relax_total_spin are for collinear spin: "
+                             "a non-collinear calculation has one Fermi level and a free "
+                             "total magnetisation (set initial_spins instead)")
+
+    @property
+    def pauli(self) -> bool:
+        """Whether the calculation is two-component (non-collinear spin or spin-orbit)."""
+        return self.noncolinear or self.spin_orbit is not None
 
     @property
     def kt(self) -> float:
@@ -414,6 +496,9 @@ class DFTB:
         if self.spin:
             spin = _Spin(self._spin_matrix(basis), 0.5 * (nelec + self.unpaired_electrons),
                          0.5 * (nelec - self.unpaired_electrons), self.relax_total_spin)
+        pauli = None
+        if self.pauli:
+            pauli = self._pauli_setup(basis, smat, kpts, kw, periodic)
         disp = None
         if self.dispersion is not None and matrices:
             t1 = time.perf_counter()
@@ -422,7 +507,30 @@ class DFTB:
                                             charge=self.charge)
             timings["dispersion"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
-                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev)
+                      site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
+                      pauli=pauli)
+
+    def _pauli_setup(self, basis: Basis, smat, kpts, kw, periodic) -> _Pauli:
+        """Spin constants, initial spins, the spin-orbit Lambda^a and H_SO(k) (M6a)."""
+        natom = len(basis.species)
+        spins = (np.zeros((natom, 3)) if self.initial_spins is None
+                 else np.array(self.initial_spins, float))
+        if spins.shape != (natom, 3):
+            raise ValueError(f"initial_spins needs one (x, y, z) vector per atom, "
+                             f"shape ({natom}, 3), not {spins.shape}")
+        w = self._spin_matrix(basis) if self.noncolinear else None
+        lam = hso = s2 = None
+        if self.spin_orbit is not None:
+            if periodic and not so.closed_under_inversion(kpts, kw):
+                raise ValueError("spin-orbit coupling needs a k-point set with -k for every k "
+                                 "(H(-k) is not H(k)*): do not reduce the grid by time reversal")
+            lam = so.lambda_matrices(basis, so.check_xi(self.spin_orbit, self.sk,
+                                                        basis.species))
+        if smat is not None:
+            s2 = so.overlap2(smat)
+            if lam is not None:
+                hso = so.soc_hamiltonian(lam, smat if self.spin_orbit_dual else None)
+        return _Pauli(w, spins, lam, self.spin_orbit_dual, hso, s2)
 
     def _site_hubbard_derivs(self, basis: Basis) -> np.ndarray:
         """Ud of every charge site: one value per type, or per shell (orbital-resolved SCC)."""
@@ -462,6 +570,16 @@ class DFTB:
         """DFTB+ start: reference populations rescaled to the electron count; with spin
         every shell also gets m = q * (N_up - N_down) / N (DFTB+ initializeCharges)."""
         scale = st.nelec / st.q0.sum() if st.q0.sum() > 0 else 1.0
+        if st.pauli is not None:
+            # two-component: [q, m_x, m_y, m_z] per shell; an atom's initial spin vector is
+            # shared out in proportion to its shell populations (DFTB+ initializeCharges)
+            b = st.basis
+            q = np.array([self.sk.occupation[b.species[a]][l]
+                          for a, l in zip(b.shell_atom, b.shell_l)]) * scale
+            q_atom = ops.segment_sum(q, b.shell_atom, len(b.species))[b.shell_atom]
+            share = np.divide(q, q_atom, out=np.zeros_like(q), where=q_atom != 0)
+            m = st.pauli.spins[b.shell_atom].T * share
+            return np.concatenate([q, m.ravel()])
         if st.spin is None:
             return st.q0 * scale
         b = st.basis
@@ -471,7 +589,14 @@ class DFTB:
         return np.concatenate([0.5 * (q + m), 0.5 * (q - m)])
 
     def _charge_and_magnetisation(self, st: _Setup, qvec):
-        """Site population deviations dq and shell magnetisations m (None without spin)."""
+        """Site population deviations dq and shell magnetisations m (None without spin;
+        (3, n_shell) for two-component calculations)."""
+        if st.pauli is not None:
+            nsh = len(st.basis.shell_l)
+            q = qvec[:nsh]
+            if not self.sk.shell_resolved:
+                q = ops.segment_sum(q, st.basis.shell_atom, len(st.species))
+            return q - st.q0, qvec[nsh:].reshape(3, nsh)
         if st.spin is None:
             return qvec - st.q0, None
         nsh = len(st.basis.shell_l)
@@ -489,12 +614,33 @@ class DFTB:
         _, v_site = st.coulomb.energy_shift(dq)
         if st.third is not None:
             v_site = v_site + st.third.energy_shift(dq)[1]
+        if st.pauli is not None:        # (3, N): W m_a for a = x, y, z
+            w = st.pauli.w
+            return v_site[st.site_of_orb], None if w is None else (w @ m.T).T[:, st.basis.orb_shell]
         vs_orb = None if m is None else (st.spin.w @ m)[st.basis.orb_shell]
         return v_site[st.site_of_orb], vs_orb
 
+    @staticmethod
+    def _spinor_hamiltonian(h0, smat, v_orb, vs_orb, hso):
+        """The two-component H: H_q x 1 + sum_a H_a sigma_a + H_SO, with H_q = H0 +
+        S (v_mu + v_nu)/2 and H_a = S (v^a_mu + v^a_nu)/2 (DFTB+ unpackHPauli)."""
+        hq = h0 + 0.5 * smat * (v_orb[:, None] + v_orb[None, :])
+        if vs_orb is None:
+            h = so.spinor(hq, 0.0, 0.0, 0.0)
+        else:
+            h = so.spinor(hq, *(0.5 * smat * (v[:, None] + v[None, :]) for v in vs_orb))
+        return h if hso is None else h + hso
+
     def _solve(self, solver, st: _Setup, h, need_w):
         """Densities for H, stacked [up k-points, down k-points] with spin; one Fermi
-        level per spin channel, or a shared one (DFTB+ RelaxTotalSpin)."""
+        level per spin channel, or a shared one (DFTB+ RelaxTotalSpin).  Two-component:
+        one Fermi level, at most one electron per spinor level."""
+        if st.pauli is not None:
+            e, c = solver.eig(h)
+            rho, wdm, evals, mu, ts, occ = _density(e, c, st.kw, st.nelec, self.smearing, need_w,
+                                                    spin_factor=1.0,
+                                                    threads=getattr(solver, "threads", None))
+            return rho, wdm, evals, mu, ts, list(occ)
         if st.spin is None:
             rho, wdm, evals, mu, ts = solver.solve(h, st.kw, st.nelec, self.smearing, need_w=need_w)
             return rho, wdm, evals, mu, ts, getattr(solver, "last_occupations", None)
@@ -519,6 +665,10 @@ class DFTB:
     def _populations(self, st: _Setup, rho):
         """Mulliken populations per orbital (up + down) and the vector to mix."""
         nk = len(st.kw)
+        if st.pauli is not None:        # [q, m_x, m_y, m_z] per shell
+            q = [self._mulliken(st, c) for c in so.components(rho)]
+            shells, nsh = st.basis.orb_shell, len(st.basis.shell_l)
+            return q[0], np.concatenate([ops.segment_sum(x, shells, nsh) for x in q])
         # q_mu = sum_k w_k Re (rho_k S_k)_{mu mu}
         if st.spin is None:
             q_orb = self._mulliken(st, rho)
@@ -554,7 +704,10 @@ class DFTB:
                       else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
         t1 = time.perf_counter()
         s = st.smat_precise
-        solver.prepare(s if st.spin is None else b.xp.concatenate([s, s]))
+        if st.pauli is not None:
+            solver.prepare(st.pauli.s2)
+        else:
+            solver.prepare(s if st.spin is None else b.xp.concatenate([s, s]))
         t_diag = time.perf_counter() - t1
         mixer = make_mixer(self.mixer, self.mixing)
         q_in = (np.asarray(q_init, float).copy() if q_init is not None
@@ -562,14 +715,21 @@ class DFTB:
         converged = not self.scc
         nit = 0
         diff = 0.0
+        # DFTB+: the first input guess of a spin calculation is not mixed in, and a
+        # two-component SCC needs at least two iterations (unless charges are given)
+        first_out = (st.spin is not None or st.pauli is not None) and q_init is None
+        min_iter = 2 if st.pauli is not None and q_init is None else 1
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
-            v = b.asarray(v_orb)
-            h = st.h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
-            if vs_orb is not None:
-                vs = b.asarray(vs_orb)
-                hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
-                h = b.xp.concatenate([h + hs, h - hs])          # up, down
+            if st.pauli is not None:
+                h = self._spinor_hamiltonian(st.h0, st.smat, v_orb, vs_orb, st.pauli.hso)
+            else:
+                v = b.asarray(v_orb)
+                h = st.h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
+                if vs_orb is not None:
+                    vs = b.asarray(vs_orb)
+                    hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
+                    h = b.xp.concatenate([h + hs, h - hs])          # up, down
             t1 = time.perf_counter()
             rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=False)
             t_diag += time.perf_counter() - t1
@@ -579,10 +739,10 @@ class DFTB:
             diff = np.abs(q_out - q_in).max()
             if self.verbose:
                 print(f"SCC {nit:3d}  max dq = {diff:.3e}")
-            if diff < self.scc_tol:
+            if diff < self.scc_tol and nit >= min_iter:
                 converged = True
                 break
-            if nit == 1 and st.spin is not None and q_init is None:
+            if nit == 1 and first_out:
                 q_in = q_out            # DFTB+: the guessed spin is not mixed in (main.F90)
             else:
                 q_in = mixer.mix(q_in, q_out)
@@ -600,7 +760,51 @@ class DFTB:
         return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
                          converged, diff, vs_orb)
 
+    def _energies_pauli(self, st: _Setup, sc: _SCCState) -> DFTBResult:
+        """Energies and populations of a two-component calculation (from the last output,
+        as DFTB+): E_H0 = Tr(n H0), E_spin = 1/2 sum_a m_a W m_a, E_LS = Tr(rho H_SO)."""
+        p = st.pauli
+        comp = so.components(sc.rho)
+        e_band = self._trace(st, comp[0], st.h0)
+        dq, m = self._charge_and_magnetisation(st, sc.q_out)
+        e_scc = st.coulomb.energy_shift(dq)[0] if self.scc else 0.0
+        e_3rd = st.third.energy_shift(dq)[0] if st.third is not None else 0.0
+        e_spin = 0.5 * float(np.einsum("as,st,at->", m, p.w, m)) if p.w is not None else 0.0
+        e_ls, lmom = 0.0, None
+        if p.hso is not None:
+            e_ls = float(np.einsum("k,kij,kji->", st.kw, sc.rho,
+                                   np.broadcast_to(p.hso, sc.rho.shape)).real)
+            lmom = self._orbital_moments(st, comp)
+        e_rep = self._repulsive_energy(st)
+        e_disp = st.disp.energy if st.disp is not None else 0.0
+        energy = e_band + e_scc + e_3rd + e_spin + e_ls + e_rep + e_disp
+        b, natom = st.basis, len(st.species)
+        q_atom = ops.segment_sum(sc.q_orb, b.orb_atom, natom)
+        q_shell = ops.segment_sum(sc.q_orb, b.orb_shell, len(b.shell_l))
+        magmoms = np.stack([ops.segment_sum(m[a], b.shell_atom, natom) for a in range(3)], axis=1)
+        occ = None if sc.occ is None else [np.asarray(o) for o in sc.occ]
+        return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, sc.mu, q_atom,
+                          None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
+                          converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
+                          occupations=occ, scc_error=sc.error, kpoints=st.kpts,
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
+                          e_spin=e_spin, magmoms=magmoms, q_spin=sc.q_out.reshape(4, -1),
+                          e_ls=e_ls, orbital_moments=lmom)
+
+    def _orbital_moments(self, st: _Setup, comp) -> np.ndarray:
+        """<L> per shell from the imaginary part of the charge density's atom blocks (onsite
+        model, DFTB+ getLOnsite) or of its dual populations (dual model, getLDual)."""
+        b = st.basis
+        if st.pauli.dual:
+            x = [blk[0].imag for blk in so.block_populations(comp[:1], st.smat, st.kw, b)]
+        else:
+            n0 = np.einsum("k,kij->ij", st.kw, comp[0])
+            x = [n0[o:o + n, o:o + n].imag for o, n in zip(b.offsets, b.norb_atom)]
+        return so.orbital_moments(so.l_imag(b), x, b)
+
     def _energies(self, st: _Setup, sc: _SCCState) -> DFTBResult:
+        if st.pauli is not None:
+            return self._energies_pauli(st, sc)
         nk = len(st.kw)
         e_band = sum(self._trace(st, sc.rho[s:s + nk], st.h0)
                      for s in range(0, len(sc.rho), nk))       # Tr(rho H0), summed over spins
@@ -637,10 +841,20 @@ class DFTB:
         pb = st.pairs
         v_orb, vs_orb = self._potentials(st, sc.q_out)
         grad, w_rep = self._repulsive_gradient(st)
-        p_e, w_e, p_m = self._pair_densities(st, sc)
+        if st.pauli is not None:
+            p_e, w_e, p_m, c_soc = self._pauli_pair_densities(st, sc)
+        else:
+            p_e, w_e, p_m = self._pair_densities(st, sc)
         vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
         coef_s = p_e * vsum - w_e
-        if p_m is not None:
+        if st.pauli is not None:
+            # spin potentials of the three directions; the dual spin-orbit term's dS part
+            if p_m is not None:
+                for a in range(3):
+                    coef_s = coef_s + p_m[a] * 0.5 * (vs_orb[a][pb.rows] + vs_orb[a][pb.cols])
+            if c_soc is not None:
+                coef_s = coef_s + c_soc
+        elif p_m is not None:
             coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
         ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
         gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
@@ -705,6 +919,40 @@ class DFTB:
                 p_m = b.to_host((b.asarray(ph * sgn[None, :]) @ rho2)
                                 .reshape(-1, norb, norb)[ti, ci, ri].real)
         return p_e, w_e, p_m
+
+    def _pauli_pair_densities(self, st: _Setup, sc: _SCCState):
+        """Two-component densities at every pair element (host arrays): the charge density
+        p_e, the energy-weighted density w_e (Tr over spin), the magnetisation densities p_m
+        (3, n_elem) (None without spin polarisation) and, for the dual spin-orbit model, the
+        coefficient of dS: -1/2 sum_a (Lambda^a I^a(T) + I^a(T) Lambda^a)[nu, mu], where
+        I^a(T) = Im sum_k w_k e^{2 pi i k.T} m_a(k) (DFTB+ derivative_iBlock)."""
+        pb, p = st.pairs, st.pauli
+        comp = so.components(sc.rho)
+        need_m = p.w is not None
+        need_i = p.hso is not None and p.dual
+        mats = [comp[0], so.components(sc.wdm)[0]]
+        if need_m or need_i:
+            mats += [comp[1], comp[2], comp[3]]
+        ci, ri = pb.cols, pb.rows
+        norb = st.basis.norb
+        if st.gamma_only:
+            real_space = [np.einsum("k,kij->ij", st.kw, x)[None] for x in mats]
+            ti = np.zeros(len(ci), int)
+        else:
+            shifts, ti = shift_index(pb)
+            ph = (np.exp(2j * np.pi * (st.kpts @ shifts.T)) * st.kw[:, None]).T
+            real_space = [(ph @ x.reshape(len(st.kw), norb * norb)).reshape(-1, norb, norb)
+                          for x in mats]
+        p_e = real_space[0][ti, ci, ri].real
+        w_e = real_space[1][ti, ci, ri].real
+        p_m = np.stack([real_space[2 + a][ti, ci, ri].real for a in range(3)]) if need_m else None
+        c_soc = None
+        if need_i:
+            c_soc = np.zeros(len(ci))
+            for a in range(3):
+                im = real_space[2 + a].imag
+                c_soc -= 0.5 * (p.lam[a] @ im + im @ p.lam[a])[ti, ci, ri]
+        return p_e, w_e, p_m, c_soc
 
     # ------------------------------------------------------------------
     def _repulsive_pairs(self, st: _Setup):

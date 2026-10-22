@@ -50,6 +50,34 @@ as before (an f shell counts when its occupation is non-zero), or given explicit
 is made by `python -m pydftb.validation.make_f_set`; details in
 [`docs/reports/M2g-f-orbitals.html`](docs/reports/M2g-f-orbitals.html).
 
+### Non-collinear spin and spin-orbit coupling
+
+Two-component (spinor) calculations follow DFTB+'s `SpinPolarisation = NonColinear` and
+`SpinOrbit` blocks (NumPy engine only):
+
+```python
+mf = pydftb.SCC(system, params, temperature=300, spin="noncolinear",
+                initial_spins=[[0, 0, 1], [0, 0, 0]],          # a vector per atom
+                spin_constants={"O": -0.028, "H": -0.072},
+                spin_orbit={"O": [0.0, 0.0004]},              # xi per shell (Hartree), s = 0
+                mixer="pulay")                                 # see below
+mf.kernel()
+mf.result.magmoms, mf.result.e_ls, mf.result.orbital_moments  # (N, 3), E_LS, <L> per shell
+```
+
+`spin_orbit` also works without spin polarisation; `spin_orbit_dual=False` selects DFTB+'s
+onsite model instead of the dual one (its default).  Spin-orbit coupling needs the full
+k-point grid (`api.SCC` and `PyDFTB` use it automatically for two-component runs).  With
+`PyDFTB(spin="noncolinear")` the atoms' (N, 3) initial magnetic moments are the initial
+spins.
+
+The direction of free magnetic moments is a soft mode of the SCC: without spin-orbit
+coupling a global rotation costs nothing, and weak spin-orbit coupling hardly pins it.
+DFTB+'s (and pydftb's default) Broyden mixer can then diverge, e.g. above with the default
+mixer, or for periodic cells whose moments are not along a coordinate axis; the Pulay mixer
+(`mixer="pulay"`) converged in these cases.  Details:
+[`docs/reports/M6a-spin-orbit.html`](docs/reports/M6a-spin-orbit.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

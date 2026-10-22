@@ -25,6 +25,8 @@ def test_against_dftbplus_reference(path, backend):
     why = refgen.missing_requirement(doc)      # D3/D4 cases need the matching library
     if why:
         pytest.skip(why)
+    if backend == "torch" and not refgen.CASES_BY_NAME[doc["case"]].torch:
+        pytest.skip("NumPy-only physics (two-component, M6a)")
     r = refgen.compare(doc, backend=backend)
     assert r["ok"], f"{doc['case']}: deviations {r['dev']} exceed {doc['tolerances']}"
     # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path

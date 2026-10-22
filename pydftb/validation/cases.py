@@ -112,6 +112,10 @@ class Case:
     dftb3: dict | None = None             # third_order / hubbard_derivs / h_damping options
     spin: dict | None = None              # unpaired_electrons / relax_total_spin / spin_constants
     dispersion: dict | Callable[[list], dict] | None = None   # spec, or labels -> spec
+    noncolinear: dict | None = None       # initial_spins (per atom) / spin_constants (M6a)
+    spin_orbit: dict | None = None        # xi {label: per shell, Hartree} / dual (M6a)
+    time_reversal: bool = True            # reduce the Monkhorst-Pack grid by k -> -k
+    torch: bool = True                    # also checked on the torch backend (test_reference)
     klines: list | None = None            # band run on DFTB+ Klines [(n, (k1, k2, k3)), ...]
     regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
     dp_dos: list | None = None            # dp_dos curves to freeze: [(file, [arguments])]
@@ -120,10 +124,16 @@ class Case:
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
 
+    @property
+    def pauli(self) -> bool:
+        """Two-component (non-collinear spin or spin-orbit coupling)."""
+        return self.noncolinear is not None or self.spin_orbit is not None
+
     def kpoints(self):
         if self.kgrid is None:
             return None
-        return reduce_time_reversal(*monkhorst_pack(self.kgrid))
+        k = monkhorst_pack(self.kgrid)
+        return reduce_time_reversal(*k) if self.time_reversal else k
 
 
 def _water():
@@ -239,6 +249,19 @@ def _li_bcc_cubic():
 def _li_bcc_node():
     return bulk("Li", "bcc", a=3.45)     # the a*sqrt(2) shell is 4.3e-5 Bohr from grid node 461
 
+
+# non-collinear spin and spin-orbit coupling (milestone M6a): the xi (Hartree) are larger than
+# real ones so that every term is clearly non-zero; spins start along a tilted direction where
+# DFTB+ converges (its SCC diverges for periodic non-collinear moments off the axes, M6a design)
+TILT = [0.48, 0.6, 0.64]
+XI_CU4CO = {"Cu": [0.0, 0.0, 0.01], "C": [0.0, 0.004], "O": [0.0, 0.006]}
+XI_CUO = {"Cu": [0.0, 0.0, 0.01], "O": [0.0, 0.006]}
+XI_GDO = {"Gd": [0.0, 0.005, 0.005, 0.01], "O": [0.0, 0.006]}
+NC_O2 = {"initial_spins": [TILT, TILT], "spin_constants": {"O": -0.028}}
+NC_OH = {"initial_spins": [TILT, [0.0, 0.0, 0.0]], "spin_constants": W_SPIN}
+NC_GDO = {"initial_spins": [[7 * x for x in TILT], TILT], "spin_constants": W_SPIN}
+# magnetisation vectors to 1e-6 (results.tag), angular momenta to 1e-8 (detailed.out, 8 decimals)
+TOL_PAULI = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "moments": 1e-8}
 
 CASES = [
     Case("h2o", _water, tol=TOL_DFTBP_FD, note="force tolerance 2e-6, see TOL_DFTBP_FD"),
@@ -419,5 +442,57 @@ CASES = [
          klines=path(FCC, "GXWLGK", [10, 5, 7, 9, 10]),
          regions=[{"label": "gd", "atoms": [0], "shell_resolved": True}], tol=TOL_BANDS,
          note="band run with f bands; s/p/d/f projections of Gd"),
+    # --- non-collinear spin and spin-orbit coupling (milestone M6a), NumPy only ---
+    Case("o2_noncolinear_tilted", _o2, noncolinear=NC_O2, torch=False, tol=TOL_PAULI,
+         note="moments along (0.48, 0.6, 0.64): the energy of o2_triplet (rotation invariance)"),
+    Case("oh_noncolinear_tilted", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         torch=False, tol=TOL_PAULI),
+    Case("oh_noncolinear_soc", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, torch=False, tol=TOL_PAULI,
+         note="dual spin-orbit model (DFTB+ default); the moment turns to the bond axis"),
+    Case("oh_noncolinear_soc_onsite", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}, "dual": False}, torch=False, tol=TOL_PAULI),
+    Case("oh_noncolinear_soc_dftb3", _oh, filling=("fermi", 300.0), dftb3=DFTB3_3OB,
+         noncolinear=NC_OH, spin_orbit={"xi": {"O": [0.0, 0.01]}}, torch=False, tol=TOL_PAULI),
+    Case("o2_noncolinear_soc", _o2,
+         noncolinear={"initial_spins": [[0.0, 0.0, 1.0]] * 2, "spin_constants": {"O": -0.028}},
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, torch=False, tol=TOL_PAULI,
+         note="T = 0; the moments turn from z to the molecular axis"),
+    Case("o2_noncolinear_soc_onsite", _o2,
+         noncolinear={"initial_spins": [[0.0, 0.0, 1.0]] * 2, "spin_constants": {"O": -0.028}},
+         spin_orbit={"xi": {"O": [0.0, 0.01]}, "dual": False}, torch=False, tol=TOL_PAULI),
+    Case("cu4co_soc", _cu4co, filling=("fermi", 300.0), spin_orbit={"xi": XI_CU4CO},
+         torch=False, tol=TOL_PAULI, note="spin-orbit coupling without spin polarisation"),
+    Case("cu4co_soc_onsite", _cu4co, filling=("fermi", 300.0),
+         spin_orbit={"xi": XI_CU4CO, "dual": False}, torch=False, tol=TOL_PAULI),
+    Case("cu4co_soc_dftb3_shell", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         dftb3={"third_order": "full",
+                "hubbard_derivs": {"Cu": [-0.05, -0.03, -0.08], "C": [-0.1492, -0.12],
+                                   "O": [-0.1575, -0.14]}},
+         spin_orbit={"xi": XI_CU4CO}, torch=False, tol=TOL_PAULI),
+    Case("cu4co_soc_nonscc", _cu4co, scc=False, filling=("fermi", 300.0),
+         spin_orbit={"xi": XI_CU4CO}, torch=False, tol=TOL_PAULI),
+    Case("gdo_noncolinear_tilted", _gdo, shell_resolved=True, **GDO, noncolinear=NC_GDO,
+         torch=False, tol=TOL_PAULI, note="f orbitals, 4x4 spin constants"),
+    Case("gdo_noncolinear_soc", _gdo, shell_resolved=True, **GDO, noncolinear=NC_GDO,
+         spin_orbit={"xi": XI_GDO}, torch=False, tol=TOL_PAULI,
+         note="spin-orbit coupling of p, d and f shells (l = 3 operators); a long SCC"),
+    Case("cuo_chain_soc_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 500.0), spin_orbit={"xi": XI_CUO}, ewald_tolerance=1e-12,
+         torch=False, tol={**TOL_PAULI, "stress": 1e-9},
+         note="full k-point grid; forces and stress of the dual model"),
+    Case("cuo_chain_noncolinear_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 500.0),
+         noncolinear={"initial_spins": [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0]] * 2,
+                      "spin_constants": W_SPIN},
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_PAULI, "stress": 1e-9},
+         note="periodic two-component path (moments along z: DFTB+ converges)"),
+    Case("cu_fcc_soc_bands", _cu_fcc, kgrid=(6, 6, 6), time_reversal=False,
+         filling=("fermi", 1000.0), spin_orbit={"xi": {"Cu": [0.0, 0.0, 0.01]}},
+         klines=path(FCC, "GXWLGK", [10, 5, 7, 9, 10]),
+         regions=[{"label": "cu", "atoms": [0], "shell_resolved": True}],
+         dp_dos=[("band.out", ["-g", "0.05"])], ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_BANDS, "spins": 1e-6, "moments": 1e-8},
+         note="spinor bands (d bands split at Gamma), projections and DOS"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

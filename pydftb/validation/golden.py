@@ -233,12 +233,16 @@ def _components(field: str) -> set:
 
 def compare(base: dict, work: dict, allow_missing=()) -> tuple[int, list]:
     """(number of fields compared, problems).  A field present on one side only is a
-    problem unless one of the components of its dotted name is in ``allow_missing``."""
+    problem unless one of the components of its dotted name is in ``allow_missing``.
+    Calculations of the work tree only (references added since the base, e.g. M6a's
+    two-component cases) have nothing to compare with: see :func:`new_calculations`."""
     problems, n = [], 0
     allow = set(allow_missing)
     for key in sorted(set(base) | set(work)):
-        if key not in work or key not in base:
-            problems.append(f"{key}: only in {'base' if key in base else 'work tree'}")
+        if key not in base:
+            continue
+        if key not in work:
+            problems.append(f"{key}: only in base")
             continue
         fb, fw = base[key], work[key]
         for field in sorted(set(fb) | set(fw)):
@@ -252,6 +256,11 @@ def compare(base: dict, work: dict, allow_missing=()) -> tuple[int, list]:
             if why:
                 problems.append(f"{key}: {field}: {why}")
     return n, problems
+
+
+def new_calculations(base: dict, work: dict) -> list:
+    """Calculations of the work tree that the base commit does not have."""
+    return sorted(set(work) - set(base))
 
 
 def main(argv=None) -> int:
@@ -276,8 +285,12 @@ def main(argv=None) -> int:
     with open(out_w, "rb") as fh:
         work = pickle.load(fh)
     n, problems = compare(base, work, a.allow_new)
-    print(f"golden: {len(work)} calculations, {n} fields compared "
+    new = new_calculations(base, work)
+    print(f"golden: {len(work) - len(new)} calculations, {n} fields compared "
           f"(base {a.base} {tb:.0f} s, work tree {tw:.0f} s, {os.path.basename(a.python)})")
+    if new:
+        print(f"  {len(new)} new calculations, not in the base (not compared): "
+              f"{', '.join(sorted({k.split('/')[1] for k in new}))}")
     for p in problems[:40]:
         print("  " + p)
     if len(problems) > 40:

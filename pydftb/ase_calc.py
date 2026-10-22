@@ -49,6 +49,8 @@ class PyDFTB(Calculator):
             order, equal weights, as ASE + DFTB+; for a band structure after an SCC on a
             grid use :meth:`band_structure` instead).
     time_reversal : reduce k and -k (DFTB+ does this for SupercellFolding); never for paths.
+            Default (None): yes, except for two-component calculations (non-collinear spin,
+            spin-orbit coupling), which need the full grid.
     smearing : ("fermi", T) | ("gaussian", T) | ("mp", T, order); T in K.
                Default: Fermi at T = 0 (i.e. 1e-8 Ha, DFTB+ behaviour).
     repulsive : "skf" | "polynomial" | "none" (see :class:`pydftb.DFTB`).
@@ -67,24 +69,30 @@ class PyDFTB(Calculator):
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
     ``solver``, ``shell_resolved``, ``fd_delta``, for DFTB3 ``third_order``,
     ``hubbard_derivs``, ``h_damping``, for collinear spin ``spin``,
-    ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``, and
-    ``dispersion``) are passed to :class:`pydftb.DFTB`.  Dispersion parameters stay
-    in atomic units (Bohr, Hartree) as in DFTB+; the elements come from ``atoms``.
+    ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``, for two-component
+    calculations ``spin="noncolinear"``, ``initial_spins``, ``spin_orbit``,
+    ``spin_orbit_dual``, and ``dispersion``) are passed to :class:`pydftb.DFTB`.
+    Dispersion parameters stay in atomic units (Bohr, Hartree) as in DFTB+; the elements
+    come from ``atoms``.  With ``spin="noncolinear"`` and no ``initial_spins`` the atoms'
+    initial magnetic moments are used ((N, 3) vectors, or (N,) along z); ``magmoms`` are
+    then (N, 3) vectors and ``magmom`` the length of their sum.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms"]
 
-    def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool = True,
+    def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool | None = None,
                  smearing=None, temperature: float | None = None, scc: bool = True,
                  scc_tol: float = 1e-6, max_scc: int = 200, mixer: str = "broyden",
                  mixing: float = 0.2, repulsive: str = "skf", solver: str = "batched",
                  shell_resolved: bool = False, threads: int | None = None, labels=None,
                  fd_delta: float | None = None, third_order: str | None = None,
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
-                 spin: bool = False, unpaired_electrons: float = 0.0,
+                 spin: bool | str = False, unpaired_electrons: float = 0.0,
                  relax_total_spin: bool = False, spin_constants: dict | None = None,
                  dispersion=None, reuse_charges: bool = False, k_threads=1,
-                 backend=None, device: str | None = None, dtype: str | None = None, **kwargs):
+                 backend=None, device: str | None = None, dtype: str | None = None,
+                 initial_spins=None, spin_orbit: dict | None = None,
+                 spin_orbit_dual: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -97,7 +105,9 @@ class PyDFTB(Calculator):
                                 hubbard_derivs=hubbard_derivs, h_damping=h_damping, spin=spin,
                                 unpaired_electrons=unpaired_electrons,
                                 relax_total_spin=relax_total_spin, spin_constants=spin_constants,
-                                backend=backend, device=device, dtype=dtype)
+                                backend=backend, device=device, dtype=dtype,
+                                initial_spins=initial_spins, spin_orbit=spin_orbit,
+                                spin_orbit_dual=spin_orbit_dual)
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.k_threads = as_kthreads(k_threads)       # one pool for all calculations
@@ -107,6 +117,13 @@ class PyDFTB(Calculator):
         self._raw_labels = None  # type labels of that result
 
     # ------------------------------------------------------------------
+    @property
+    def two_component(self) -> bool:
+        """Non-collinear spin or spin-orbit coupling (M6a)."""
+        o = self.engine_opts
+        return (isinstance(o["spin"], str) and o["spin"].lower() in ("noncolinear", "noncollinear")
+                or o["spin_orbit"] is not None)
+
     def _kpoints(self, atoms, spec=None):
         spec = self.kpts_spec if spec is None else spec
         if not atoms.pbc.any() or spec is None:
@@ -121,7 +138,8 @@ class PyDFTB(Calculator):
         else:
             grid = kptdensity2monkhorstpack(atoms, spec, even=False) if np.isscalar(spec) else spec
             k, w = monkhorst_pack(tuple(int(n) for n in grid))
-        if self.time_reversal:
+        reduce = not self.two_component if self.time_reversal is None else self.time_reversal
+        if reduce:
             k, w = reduce_time_reversal(k, w)
         return k, w / w.sum()
 
@@ -132,8 +150,14 @@ class PyDFTB(Calculator):
         disp = self.dispersion
         if disp is not None:
             disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, atoms.numbers)})
+        opts = dict(self.engine_opts)
+        spin = opts["spin"]
+        if (isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
+                and opts["initial_spins"] is None):
+            m = np.asarray(atoms.get_initial_magnetic_moments(), float)
+            opts["initial_spins"] = m if m.ndim == 2 else np.outer(m, [0.0, 0.0, 1.0])
         calc = DFTB(sk, kpts=self._kpoints(atoms), charge=float(atoms.get_initial_charges().sum()),
-                    dispersion=disp, k_threads=self.k_threads, **self.engine_opts)
+                    dispersion=disp, k_threads=self.k_threads, **opts)
         return calc, labels, sk
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
@@ -212,7 +236,8 @@ class PyDFTB(Calculator):
             self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
         magmoms = np.zeros(len(labels)) if r.magmoms is None else r.magmoms
         self.results["magmoms"] = magmoms
-        self.results["magmom"] = float(magmoms.sum())
+        self.results["magmom"] = (float(magmoms.sum()) if magmoms.ndim == 1
+                                  else float(np.linalg.norm(magmoms.sum(axis=0))))
 
     # ---- ASE accessors used by band-structure / DOS tools -------------
     def _raw(self):

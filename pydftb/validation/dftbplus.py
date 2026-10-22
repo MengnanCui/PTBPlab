@@ -129,6 +129,51 @@ def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     return "\n".join(lines) + "\n"
 
 
+def noncolinear_block(opts, labels=None, shell_resolved_scc=False) -> str:
+    """HSD for non-collinear spin (M6a): ``SpinPolarisation = NonColinear`` with every atom's
+    initial magnetisation vector, and the spin constants as :func:`spin_block`."""
+    if not opts:
+        return ""
+    rows = "\n".join("        " + " ".join(_f(x) for x in s) for s in opts["initial_spins"])
+    consts = {k: np.asarray(v, float) for k, v in opts["spin_constants"].items()
+              if labels is None or k in labels}
+    by_shell = shell_resolved_scc or any(v.size > 1 for v in consts.values())
+    lines = ["  SpinPolarisation = NonColinear {", "    InitialSpins {",
+             "      AllAtomSpins = {", rows, "      }", "    }", "  }", "  SpinConstants {"]
+    if not shell_resolved_scc:
+        lines.append(f"    ShellResolvedSpin = {'Yes' if by_shell else 'No'}")
+    lines += [f"    {k} = {' '.join(_f(x) for x in v.ravel())}" for k, v in consts.items()]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def spinorbit_block(opts, labels) -> str:
+    """HSD ``SpinOrbit`` (M6a): one constant per shell (Hartree) for every type in
+    ``labels`` (DFTB+ needs all of them; types without an entry get zeros), ``Dual``."""
+    if not opts:
+        return ""
+    lines = ["  SpinOrbit {", f"    Dual = {'Yes' if opts.get('dual', True) else 'No'}"]
+    for k, nsh in labels.items():
+        xi = opts["xi"].get(k, [0.0] * nsh)
+        lines.append(f"    {k} [Hartree] = {{ {' '.join(_f(x) for x in xi)} }}")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def parse_angular_momenta(text) -> dict:
+    """detailed.out's ``Electron``/``Orbital angular momentum (mu_B/hbar)`` tables (M6a):
+    {"spin": (n_shell, 3), "orbital": (n_shell, 3)} as printed (8 decimals: -g/4 m and
+    -<L> per shell, in atom and shell order), or {} if absent."""
+    out = {}
+    for key, title in (("spin", "Electron angular momentum"), ("orbital", "Orbital angular momentum")):
+        m = re.search(rf"^{title} \(mu_B/hbar\)\n.*?\n((?:\s+\d+\s+\d+\s+\d+\s+\S+ :.*\n)+)",
+                      text, re.M)
+        if m:
+            rows = [ln.split(":")[1].split() for ln in m.group(1).strip().splitlines()]
+            out[key] = np.array(rows, float)
+    return out
+
+
 def _yes(flag) -> str:
     return "Yes" if flag else "No"
 
@@ -349,14 +394,17 @@ def parse_results_tag(path) -> dict:
 
 def parse_levels(path):
     """``band.out`` or a ``ProjectStates`` region file -> (k weights (n_spin, n_k), values
-    (n_spin, n_k, n_state, 2)): energy (eV) and occupation or region weight, as printed."""
+    (n_spin, n_k, n_state, 2)): energy (eV) and occupation or region weight, as printed.
+    band.out rows are (index, energy, occupation); region rows (energy, weight), or for a
+    two-component run (energy, q, m_x, m_y, m_z), of which the charge weight q is kept."""
     blocks = []
     with open(path) as fh:
         text = fh.read()
     for m in re.finditer(r"KPT\s+(\d+)\s+SPIN\s+(\d+)\s+KWEIGHT\s+(\S+)\s*\n(.*?)(?:\n\s*\n|\Z)",
                          text, re.S):
         rows = np.array([[float(x) for x in ln.split()] for ln in m.group(4).strip().splitlines()])
-        blocks.append((int(m.group(2)), float(m.group(3)), rows[:, -2:]))
+        blocks.append((int(m.group(2)), float(m.group(3)),
+                       rows[:, 1:] if rows.shape[1] == 3 else rows[:, :2]))
     nspin = len({b[0] for b in blocks})
     nk = len(blocks) // nspin
     kw = np.array([b[1] for b in blocks]).reshape(nspin, nk)
@@ -441,7 +489,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         for key, name in [("energy", "Total energy"), ("free_energy", "Total Mermin free energy"),
                           ("e_zero", "Extrapolated to 0"), ("e_rep", "Repulsive energy"),
                           ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
-                          ("e_disp", "Dispersion energy")]:
+                          ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
+                          ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))
@@ -455,6 +504,9 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         if "stress" in tag:
             res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
         res["charges_net"] = tag["gross_atomic_charges"]
+        if "gross_atomic_spins" in tag:
+            res["spins"] = tag["gross_atomic_spins"]       # (n_atom,) or (3, n_atom)
+        res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
         ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)

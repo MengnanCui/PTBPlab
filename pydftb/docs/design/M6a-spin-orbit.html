@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6a 自旋轨道耦合设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6a · 设计文档</p>
+    <h1>自旋轨道耦合与非共线自旋</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6a-spin-orbit.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6 补齐 DFTB+ 的第二批功能，顺序按用户的要求：自旋轨道耦合（SOC）、DFTB+U、外电场等、激发态。M6a 是第一步：让 pydftb 能做“两分量”计算，也就是每个轨道带上自旋向上、向下两个分量，自旋方向不再限定在一个轴上（非共线自旋），并可以加上自旋轨道耦合。只做 NumPy 引擎；torch 后端、自动求导和 SP2 求解器遇到这些选项时明确报错。</p>
+    <ul>
+      <li><strong>做什么</strong>：
+        <ul>
+          <li>非共线自旋：每个原子的磁矩是一个三维向量（DFTB+ <code>SpinPolarisation = NonColinear</code>）。</li>
+          <li>自旋轨道耦合：H<sub>SO</sub> = ξ L·S，ξ 每个壳层一个（DFTB+ <code>SpinOrbit</code>）。两种模型都做：
+            <ul>
+              <li>onsite 模型：只加在同一原子的轨道块上；</li>
+              <li>dual 模型：DFTB+ 的默认，通过重叠矩阵也作用到相邻原子之间，因此有力的贡献。</li>
+            </ul>
+          </li>
+          <li>SOC 可以不加自旋极化，也可以与非共线自旋一起用；可以与 DFTB3、壳层分辨 SCC、色散、k 点、力和应力、能带与 DOS 一起用。这些组合 DFTB+ 25.1 都支持（已试）。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的实测行为</strong>（第二节）：
+        <ul>
+          <li>没有 SOC 时，磁矩方向任意转动，能量和力都不变（O₂、OH、GdO 已试）。</li>
+          <li>SOC 让磁矩倾向某个方向，dual 与 onsite 的 E<sub>LS</sub> 不同（OH：−5.12 与 −5.24 mHa）。</li>
+          <li>SOC 不加自旋时磁矩为零，但 k 点必须是完整网格：用时间反演约化的网格，能量、力、应力碰巧不变，磁矩却算错。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 也有算不了的情况</strong>：周期体系里磁矩不沿坐标轴时（CuO 链，各种温度和混合参数），DFTB+ 的 SCC 发散。原因是磁矩整体转动不改变能量，Broyden 混合在这个方向上不稳定。pydftb 用同样的混合器，预计同样发散。这些组合不做 DFTB+ 对照，改用 pydftb 自身的一致性检查（旋转不变性、力与能量差分一致）。</li>
+      <li><strong>用法</strong>：<code>DFTB(sk, spin="noncolinear", initial_spins=[[0, 0, 1], ...], spin_constants=W, spin_orbit={"Cu": [0, 0, 0.0037]})</code>。ξ 的单位是 Hartree；<code>spin_orbit_dual=False</code> 切换到 onsite 模型。</li>
+      <li><strong>验证</strong>：16 个新的 DFTB+ 参考算例（分子、周期体系、f 轨道、能带），比较能量各项、力、应力、电荷、磁矩向量、轨道角动量和 SCC 轮数。旧算例逐位不变。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2N</span><span class="lbl">旋量哈密顿量的维数（N 为轨道数）</span></li>
+      <li><span class="num">2</span><span class="lbl">SOC 模型：onsite、dual（默认）</span></li>
+      <li><span class="num">16</span><span class="lbl">新的 DFTB+ 参考算例</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <h3>旋量表示</h3>
+      <p>两分量计算中，每个轨道 μ 有自旋向上、向下两个分量。DFTB+ 把所有轨道的“向上”排在前，“向下”排在后，哈密顿量和重叠矩阵都是 2N × 2N 的复矩阵，重叠矩阵为 S ⊗ 1。所有量都用四个“Pauli 分量”存储：电荷 q 和磁化 (m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>)。</p>
+      <ul>
+        <li><strong>哈密顿量</strong>：H = H<sub>q</sub> ⊗ 1 + H<sub>x</sub> σ<sub>x</sub> + H<sub>y</sub> σ<sub>y</sub> + H<sub>z</sub> σ<sub>z</sub> + H<sub>SO</sub>（<code>sparse2dense.F90:unpackHPauli</code>）。
+          <ul>
+            <li>H<sub>q</sub> = H0 + ½ S (V<sub>μ</sub> + V<sub>ν</sub>)，与共线计算相同；</li>
+            <li>H<sub>a</sub> = ½ S (v<sup>a</sup><sub>μ</sub> + v<sup>a</sup><sub>ν</sub>)，v<sup>a</sup> = W m<sup>a</sup>（每个壳层），三个方向用同一个自旋常数矩阵 W。</li>
+          </ul>
+        </li>
+        <li><strong>密度的四个分量</strong>：由旋量密度矩阵 ρ 的四个 N × N 块得到（<code>packHSPauli</code>）：
+          <ul>
+            <li>n = ρ<sub>↑↑</sub> + ρ<sub>↓↓</sub>，m<sub>z</sub> = ρ<sub>↑↑</sub> − ρ<sub>↓↓</sub>；</li>
+            <li>m<sub>x</sub> = ρ<sub>↑↓</sub> + ρ<sub>↓↑</sub>，m<sub>y</sub> = i(ρ<sub>↑↓</sub> − ρ<sub>↓↑</sub>)。</li>
+          </ul>
+          Mulliken 布居对每个分量分别计算。共线计算只是 m<sub>x</sub> = m<sub>y</sub> = 0 的特例。</li>
+        <li><strong>占据</strong>：只有一个费米能级，2N 个能级每个最多 1 个电子（<code>getFillingsAndBandEnergies</code>，nSpin = 4）。</li>
+        <li><strong>能量</strong>：E = E<sub>H0</sub> + E<sub>SCC</sub> + E<sub>3rd</sub> + E<sub>spin</sub> + E<sub>LS</sub> + E<sub>rep</sub> + E<sub>disp</sub>：
+          <ul>
+            <li>E<sub>H0</sub> = Tr(n H0)；E<sub>SCC</sub>、E<sub>3rd</sub> 只看总电荷；</li>
+            <li>E<sub>spin</sub> = ½ Σ<sub>a</sub> m<sup>a</sup> · W · m<sup>a</sup>；</li>
+            <li>E<sub>LS</sub> = Tr(ρ H<sub>SO</sub>)，对密度是线性的。</li>
+          </ul>
+          DFTB+ 的 detailed.out 分别列出 “Energy SPIN” 和 “Energy L.S”。</li>
+      </ul>
+
+      <h3>自旋轨道耦合</h3>
+      <ul>
+        <li>每个壳层 l &gt; 0 有一个常数 ξ；s 壳层的 ξ 必须为零，否则 DFTB+ 报错（<code>initprogram.F90:3866</code>）。DFTB+ 不提供 ξ 的默认值。</li>
+        <li>角动量算符 L<sub>x</sub>、L<sub>y</sub>、L<sub>z</sub> 先在复球谐函数基里写出，再变换到 DFTB+ 的实轨道顺序，例如 p 轨道为 y、z、x（<code>angmomentum.F90:getLOperators</code>）。在实轨道基里 L<sub>a</sub> = i Λ'<sub>a</sub>，Λ'<sub>a</sub> 是实反对称矩阵。下文记 Λ<sup>a</sup> = ½ ξ Λ'<sub>a</sub>，即 ½ ξ L<sub>a</sub> 的虚部，每个原子一个块。</li>
+        <li><strong>onsite 模型</strong>（<code>Dual = No</code>）：H<sub>SO</sub> = i Σ<sub>a</sub> Λ<sup>a</sup> ⊗ σ<sub>a</sub>，只加在同一原子的块上（<code>spinorbit.F90:addOnsiteSpinOrbitHam</code>）。与几何无关，没有力的贡献。</li>
+        <li><strong>dual 模型</strong>（<code>Dual = Yes</code>，默认）：把 Λ<sup>a</sup> 当作“虚部块势”，按 DFTB+U 的规则乘上重叠矩阵，H<sub>SO</sub> = i Σ<sub>a</sub> ½ (S Λ<sup>a</sup> + Λ<sup>a</sup> S) ⊗ σ<sub>a</sub>（<code>getDualSpinOrbitShift</code>、<code>shift.F90:addShift_block</code>）。
+          <ul>
+            <li>S 的对角块是单位阵，所以 onsite 部分与 onsite 模型相同；</li>
+            <li>多出的是相邻原子之间的项，它依赖 S，因此有力和应力的贡献；</li>
+            <li>DFTB+ 的 E<sub>LS</sub> 由块布居 Q = ½(ρS + Sρ) 的虚部（反对称）算出，等于 Tr(ρ H<sub>SO</sub>)。</li>
+          </ul>
+        </li>
+        <li><strong>轨道角动量</strong>：DFTB+ 在 detailed.out 中按壳层列出自旋、轨道和总角动量（以 μ<sub>B</sub>/ħ 计，即磁矩，所以有负号）。onsite 模型用同一原子的密度块，dual 模型用块布居的虚部。</li>
+      </ul>
+
+      <h3>SCC 的规则</h3>
+      <ul>
+        <li><strong>混合向量</strong>：每个壳层的 (q, m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>)，按分量排成 4 段（<code>Spin_getOrbitalEquiv</code> 与 <code>OrbitalEquiv_merge</code>）。原子分辨 SCC 时电荷部分也是按壳层的，这与 pydftb 现有的共线自旋（每个壳层的 ↑、↓）一致。</li>
+        <li><strong>初始值</strong>：电荷为参考布居（按电子数缩放）；每个原子的初始磁矩向量 s 按壳层电荷分配，m<sub>壳层</sub> = q<sub>壳层</sub> · s / q<sub>原子</sub>（<code>initializeCharges</code>）。没有给初始磁矩时为零。</li>
+        <li><strong>第一轮不混合</strong>：第一轮的输出直接作为第二轮的输入，与共线自旋相同（<code>getNextInputCharges</code>）。</li>
+        <li><strong>至少两轮</strong>：两分量计算的 SCC 至少迭代两轮才判断收敛（<code>getMinSccIters</code>）。读入初始电荷时除外。</li>
+        <li>收敛判据：混合向量（四个分量）的最大变化小于 <code>SCCTolerance</code>。</li>
+      </ul>
+
+      <h3>k 点</h3>
+      <ul>
+        <li>有 SOC 时 H(−k) ≠ H(k)*，不能用时间反演把 k 和 −k 合并。DFTB+ 的 <code>SupercellFolding</code> 在 SOC 时自动用完整网格；直接给的 <code>KPointsAndWeights</code> 原样使用。</li>
+        <li>没有 SOC 的非共线自旋，DFTB+ 仍然约化。这只在所有磁矩共面时严格成立；不共面时约化是近似。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>用 pydftb 的参考数据集（PTBP 的 H/C/O/Cu、hotcent 的 Gd/O）、<code>ParserVersion = 14</code>、单线程，试了下面这些组合。ξ 取较大的值（Cu d 0.01 Ha，C p 0.004，O p 0.006–0.01，Gd p/d 0.005、f 0.01），以便各项都明显不为零。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>设置</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>O₂ 三重态</td><td>非共线，初始磁矩沿 z，或沿 (1, 2, 2)/3</td><td>能量与共线计算相同（−6.4203608577 Ha），力相同，2 轮；E<sub>spin</sub> = −0.028</td></tr>
+          <tr><td>O₂</td><td>非共线 + SOC，T = 0</td><td>dual：E<sub>LS</sub> = −0.920 mHa，14 轮；onsite：−1.021 mHa，15 轮；磁矩转向分子轴</td></tr>
+          <tr><td>O₂</td><td>磁矩倾斜 + SOC，T = 0</td><td>不收敛（500 轮，在两个态之间来回）；300 K 时 94 轮收敛</td></tr>
+          <tr><td>OH 自由基，300 K</td><td>非共线，沿 z 或倾斜</td><td>能量相同，11 和 10 轮</td></tr>
+          <tr><td>OH</td><td>非共线 + SOC，沿 z 或倾斜开始</td><td>收敛到同一个态（17 和 20 轮）；dual 与 onsite 的 E<sub>LS</sub> 为 −5.12 与 −5.24 mHa</td></tr>
+          <tr><td>OH，DFTB3</td><td>非共线 + SOC</td><td>20 轮；三阶项照常</td></tr>
+          <tr><td>Cu₄CO，300 K</td><td>只有 SOC（无自旋极化）：dual、onsite；壳层分辨 SCC；壳层分辨 + DFTB3；非 SCC</td><td>都收敛；磁矩 &lt; 2e-13</td></tr>
+          <tr><td>GdO（f 轨道），壳层分辨</td><td>非共线，沿 z 或倾斜</td><td>能量相同，30 轮</td></tr>
+          <tr><td>GdO</td><td>非共线 + f 壳层 SOC</td><td>倾斜开始 166 轮收敛；沿 z 开始发散（费米能级搜索失败）</td></tr>
+          <tr><td>GdO</td><td>只有 SOC</td><td>32 轮</td></tr>
+          <tr><td>CuO 链，k 点 4×2×2</td><td>只有 SOC，完整网格与约化网格</td><td>能量、力、应力完全相同（17、18 轮）；约化网格的磁矩不为零（错误），完整网格为零</td></tr>
+          <tr><td>CuO 链</td><td>非共线沿 z（无 SOC）</td><td>与共线相同，26 轮；完整网格与约化网格相同</td></tr>
+          <tr><td>CuO 链</td><td>非共线，磁矩倾斜或不共面；或非共线 + SOC</td><td>全部发散或停滞（500 K、1000 K、混合参数 0.05 都试过）；2000 K 倾斜 + SOC 83 轮收敛到无磁矩的态</td></tr>
+          <tr><td>Cu fcc，k 点 6³</td><td>只有 SOC，Klines 能带、投影、DOS</td><td>Γ 点 d 带分裂为 4 + 2 重；2 轮；输出 2N = 18 个能级，一个“自旋通道”</td></tr>
+        </tbody>
+      </table></div>
+      <p>CuO 链发散的原因：没有 SOC 时，所有磁矩一起转动不改变能量，SCC 的残差在这个方向上的导数为零。Broyden 混合器在这个方向上的逆雅可比估计趋于无穷，数值噪声就被放大。磁矩恰好沿 z 时，x、y 分量严格为零，这个方向不会被激发，所以能收敛。SOC 带来的各向异性很弱，不足以压住它。</p>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>选项（<code>DFTB</code>）</th><th>含义</th><th>DFTB+</th></tr></thead>
+        <tbody>
+          <tr><td><code>spin="noncolinear"</code></td><td>非共线自旋（需要 <code>spin_constants</code>）。<code>spin=True</code> 和 <code>"colinear"</code> 仍是共线</td><td><code>SpinPolarisation = NonColinear</code></td></tr>
+          <tr><td><code>initial_spins</code></td><td>每个原子的初始磁矩向量，(n_atom, 3)；默认全零</td><td><code>InitialSpins { AllAtomSpins }</code></td></tr>
+          <tr><td><code>spin_orbit</code></td><td>{类型标签: 每个壳层的 ξ}，Hartree。只有 s 壳层的元素可以省略</td><td><code>SpinOrbit { &lt;Sp&gt; = {…} }</code></td></tr>
+          <tr><td><code>spin_orbit_dual</code></td><td>True（默认）：dual 模型；False：onsite 模型</td><td><code>Dual = Yes|No</code></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>与 DFTB+ 相同的限制</strong>：
+          <ul>
+            <li>SOC 配共线自旋报错；</li>
+            <li>s 壳层的 ξ 不为零报错；</li>
+            <li>非共线自旋不能给 <code>unpaired_electrons</code>、<code>relax_total_spin</code>，因为两分量计算只有一个费米能级，总磁矩是自由的。</li>
+          </ul>
+        </li>
+        <li><strong>pydftb 自己的限制</strong>：
+          <ul>
+            <li>有 SOC 时，k 点集合必须对 k → −k 封闭，否则报错，避免算错磁矩。</li>
+            <li><code>api.SCC</code>、<code>PyDFTB</code> 给 Monkhorst-Pack 网格时，两分量计算默认用完整网格（<code>time_reversal=None</code> 表示自动）。非共线无 SOC 时也用完整网格，所以磁矩不共面时同样正确；直接给约化网格也接受（与 DFTB+ 相同）。</li>
+            <li><code>backend="torch"</code>、<code>pydftb.autodiff</code>、<code>solver="sp2"</code> 遇到这些选项报错（只做 NumPy）。</li>
+          </ul>
+        </li>
+        <li><strong>结果</strong>（<code>DFTBResult</code>，新字段都有默认值，追加在末尾）：
+          <ul>
+            <li><code>magmoms</code> 为 (n_atom, 3) 的磁矩向量（共线时仍是 (n_atom,)）；</li>
+            <li><code>q_spin</code> 为 (4, n_shell)：每个壳层的 q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub>，也就是混合向量，可直接用作重启；</li>
+            <li><code>e_ls</code>：自旋轨道能；</li>
+            <li><code>orbital_moments</code>：每个壳层的 ⟨L⟩，(n_shell, 3)，只在有 SOC 时给出；</li>
+            <li>本征值和占据：每个 k 点 2N 个，每个能级最多 1 个电子；<code>fermi_spin</code> 为 None。</li>
+          </ul>
+        </li>
+        <li><strong>ASE</strong>：<code>PyDFTB(spin="noncolinear")</code> 在没有给 <code>initial_spins</code> 时，读取 <code>atoms</code> 的 (N, 3) 初始磁矩；结果的 <code>magmoms</code> 为 (N, 3)，<code>magmom</code> 为总磁矩向量的长度。</li>
+        <li><strong>能带与 DOS</strong>：<code>eigenstates</code>、<code>SCC.states</code> 支持两分量：每个 k 点 2N 个态、一个通道；投影为两个自旋分量之和，与 DFTB+ 的 <code>ProjectStates</code> 相同。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>位置</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/spinorbit.py</code>（新）</td><td>角动量算符（移植 <code>getLOperators</code>、<code>localLOperators</code>，同一变换矩阵 U，X' = U X U<sup>†</sup>）；每个原子的 Λ<sup>a</sup> 块（块对角、实反对称）；旋量矩阵的组装与拆分（Pauli 分量）；块布居 ½Σ<sub>k</sub> w<sub>k</sub>(m<sub>k</sub>S<sub>k</sub> + S<sub>k</sub>m<sub>k</sub>)；轨道角动量；k 点集合的封闭性检查</td></tr>
+            <tr><td><code>calculator.py</code></td><td>选项检查；<code>_Setup.pauli</code>（新字段，旧路径为 None）；初始布居、势、H 的组装、求解、布居、能量、力的两分量分支</td></tr>
+            <tr><td><code>bands.py</code></td><td><code>eigenstates</code> 的两分量分支（与 SCC 共用 H 的组装）</td></tr>
+            <tr><td><code>api.py</code>、<code>ase_calc.py</code></td><td>新选项；k 网格自动用完整网格；ASE 的 (N, 3) 磁矩</td></tr>
+            <tr><td><code>autodiff/api.py</code>、<code>backend</code></td><td>遇到两分量选项报错</td></tr>
+            <tr><td><code>validation/</code></td><td><code>Case</code> 新字段 <code>noncolinear</code>、<code>spin_orbit</code>、<code>time_reversal</code>、<code>torch</code>；DFTB+ 输入块；参考数据增加 E<sub>spin</sub>、E<sub>LS</sub>、磁矩向量、轨道角动量；golden 对新算例只记数、不比较</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>数据结构</h3>
+        <ul>
+          <li><code>_Pauli</code>（setup 中）：W（全部壳层，块对角；无自旋极化时为 None），初始磁矩，Λ<sup>a</sup>（3 × N × N 实数，块对角，无 SOC 时为 None），dual 标志，以及每个 k 点的 H<sub>SO</sub>(k)（2N × 2N 复数，SCC 中不变，只算一次）。</li>
+          <li>旋量矩阵按 DFTB+ 的顺序：[全部轨道 ↑，全部轨道 ↓]；重叠矩阵为 blockdiag(S, S)，交给现有求解器（<code>eigh</code>、<code>batched</code> 及 k 线程）。</li>
+          <li><code>_SCCState</code> 不加字段：两分量时 <code>h</code>、<code>rho</code>、<code>wdm</code> 为 (nk, 2N, 2N)，<code>vs_orb</code> 为 (3, N) 的自旋势，<code>mu</code> 为一个数。</li>
+        </ul>
+
+        <h3>SCC 一轮</h3>
+        <ol>
+          <li>由混合向量得到 dq（总电荷）与壳层磁化 m<sup>a</sup>；电荷势 v（SCC、三阶）同前；自旋势 v<sup>a</sup> = (W m<sup>a</sup>)[轨道的壳层]。</li>
+          <li>H<sub>q</sub> = H0 + ½S(v<sub>μ</sub> + v<sub>ν</sub>)；H<sub>a</sub> = ½S(v<sup>a</sup><sub>μ</sub> + v<sup>a</sup><sub>ν</sub>)；
+            旋量 H = [[H<sub>q</sub> + H<sub>z</sub>, H<sub>x</sub> − iH<sub>y</sub>], [H<sub>x</sub> + iH<sub>y</sub>, H<sub>q</sub> − H<sub>z</sub>]] + H<sub>SO</sub>。</li>
+          <li>H<sub>SO</sub>：令 X<sup>a</sup> = Λ<sup>a</sup>（onsite）或 ½(S<sub>k</sub>Λ<sup>a</sup> + Λ<sup>a</sup>S<sub>k</sub>)（dual），则 ↑↑ 块 iX<sup>z</sup>，↓↓ 块 −iX<sup>z</sup>，↓↑ 块 iX<sup>x</sup> − X<sup>y</sup>，↑↓ 块 iX<sup>x</sup> + X<sup>y</sup>。与 DFTB+ 的 ½ξL<sub>z</sub>、½ξL<sub>+</sub> 写法逐项相同。</li>
+          <li>对角化后用一个费米能级填充（<code>fill</code>，spin_factor = 1）。</li>
+          <li>四个分量 m<sup>s</sup><sub>k</sub> 的 Mulliken 布居 Σ<sub>k</sub> w<sub>k</sub> Re(m<sup>s</sup><sub>k</sub>S<sub>k</sub>)<sub>μμ</sub>，按壳层求和，得到新的混合向量。</li>
+          <li>第一轮不混合；至少两轮（没有给 <code>q_init</code> 时）。</li>
+        </ol>
+
+        <h3>能量</h3>
+        <ul>
+          <li>E<sub>H0</sub> = Σ<sub>k</sub> w<sub>k</sub> Re Tr(n<sub>k</sub> H0<sub>k</sub>)；E<sub>spin</sub> = ½Σ<sub>a</sub> m<sup>a</sup>·W·m<sup>a</sup>；E<sub>LS</sub> = Σ<sub>k</sub> w<sub>k</sub> Re Tr(ρ<sub>k</sub> H<sub>SO,k</sub>)，都用最后一轮的输出量，与 DFTB+ 相同。</li>
+          <li>dual 模型下 E<sub>LS</sub> 也可以写成 −Σ<sub>A</sub>Σ<sub>a</sub>Σ<sub>μν</sub> Qi<sup>a</sup><sub>νμ</sub> Λ<sup>a</sup><sub>μν</sub>（Qi 为块布居的虚部），这是 DFTB+ 的写法，测试中两者互相核对。</li>
+          <li><code>terms</code> 增加 “LS”。</li>
+        </ul>
+
+        <h3>力与应力</h3>
+        <ul>
+          <li>沿用现有的对元素求和（每个 H0、S 元素的导数乘以系数）：
+            <ul>
+              <li>p<sub>e</sub> 来自 n 的实空间元素；</li>
+              <li>w<sub>e</sub> 来自能量加权密度的 ↑↑ + ↓↓；</li>
+              <li>自旋项 Σ<sub>a</sub> p<sup>a</sup> · ½(v<sup>a</sup><sub>μ</sub> + v<sup>a</sup><sub>ν</sub>)，其中 p<sup>a</sup> 是 m<sup>a</sup> 的实空间元素（共线时只有 a = z）。</li>
+            </ul>
+          </li>
+          <li><strong>dual SOC 的新项</strong>：H<sub>SO</sub> 依赖 S。设 I<sup>a</sup>(T) = Im Σ<sub>k</sub> w<sub>k</sub> e<sup>2πik·T</sup> m<sup>a</sup><sub>k</sub>（实空间磁化的虚部，按平移 T 分组，与现有的 <code>_pair_densities</code> 相同）。对元素 (μ 行，ν 列，平移 T)，S 导数的系数加上 −½ Σ<sub>a</sub> (Λ<sup>a</sup> I<sup>a</sup>(T) + I<sup>a</sup>(T) Λ<sup>a</sup>)<sub>νμ</sub>。对应 DFTB+ 的 <code>derivative_iBlock</code>。应力由同样的元素梯度得到。</li>
+          <li>onsite SOC 没有显式的力项：它不依赖几何，SOC 对本征值的影响已经包含在能量加权密度里。</li>
+          <li>用能量对坐标、应变的中心差分检查（每种 SOC 模型、分子和周期体系）。</li>
+        </ul>
+
+        <h3>轨道角动量</h3>
+        <ul>
+          <li>⟨L<sub>a</sub>⟩<sub>壳层</sub> = −Σ<sub>μν∈壳层</sub> Λ'<sub>a,μν</sub> X<sub>νμ</sub>，其中 Λ'<sub>a</sub> = Im L<sub>a</sub>：
+            <ul>
+              <li>onsite 模型的 X 为同一原子 n 块的虚部（<code>getLOnsite</code>）；</li>
+              <li>dual 模型的 X 为电荷分量块布居的虚部 Qi<sup>q</sup>（<code>getLDual</code>）。</li>
+            </ul>
+          </li>
+          <li>DFTB+ 打印的是 −⟨L⟩（磁矩）和 −(g/4) m（g = 2.00231930436），保留 8 位小数，对照时换算。</li>
+        </ul>
+
+        <h3>不改的部分</h3>
+        <p>共线与无自旋的路径一行不改，两分量只走新分支（<code>if st.pauli is not None</code>）。golden 只会多出新字段（<code>pauli</code>、<code>e_ls</code>、<code>orbital_moments</code>），用 <code>--allow-new</code>。</p>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例（冻结在 <code>tests/data/ref</code>）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>设置</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>o2_noncolinear_tilted</code></td><td>O₂ 三重态，磁矩 (1, 2, 2)/3</td><td>x、y 分量与旋量 H；与共线结果相同</td></tr>
+            <tr><td><code>oh_noncolinear_tilted</code></td><td>OH，300 K，W 矩阵，倾斜</td><td>非平凡的 SCC（10 轮）</td></tr>
+            <tr><td><code>oh_noncolinear_soc</code>、<code>oh_noncolinear_soc_onsite</code></td><td>+ O p 的 SOC，dual 与 onsite</td><td>两种 SOC 模型、E<sub>LS</sub>、轨道角动量、磁矩方向</td></tr>
+            <tr><td><code>oh_noncolinear_soc_dftb3</code></td><td>+ DFTB3</td><td>三阶项与两分量</td></tr>
+            <tr><td><code>o2_noncolinear_soc</code>、<code>o2_noncolinear_soc_onsite</code></td><td>O₂，T = 0，沿 z 开始</td><td>T = 0 的填充</td></tr>
+            <tr><td><code>cu4co_soc</code>、<code>cu4co_soc_onsite</code></td><td>只有 SOC，300 K</td><td>d 壳层的 L；无自旋极化的两分量</td></tr>
+            <tr><td><code>cu4co_soc_dftb3_shell</code></td><td>壳层分辨 SCC + DFTB3 + SOC</td><td>壳层电荷势</td></tr>
+            <tr><td><code>cu4co_soc_nonscc</code></td><td>非 SCC + SOC</td><td>一次对角化</td></tr>
+            <tr><td><code>gdo_noncolinear_tilted</code></td><td>GdO，f 轨道，倾斜</td><td>4 × 4 的 W、f 轨道的 x、y 分量</td></tr>
+            <tr><td><code>gdo_noncolinear_soc</code></td><td>+ Gd p/d/f 与 O p 的 SOC</td><td>f 的 L 算符（l = 3）；166 轮的长 SCC</td></tr>
+            <tr><td><code>cuo_chain_soc_k422</code></td><td>完整 k 网格，只有 SOC</td><td>k 点的 H<sub>SO</sub>、dual 的力与应力</td></tr>
+            <tr><td><code>cuo_chain_noncolinear_k422</code></td><td>完整网格，沿 z，无 SOC</td><td>周期体系的两分量路径（力、应力）</td></tr>
+            <tr><td><code>cu_fcc_soc_bands</code></td><td>6³ 网格 + Klines + 投影 + DOS</td><td>两分量的能带、投影、dp_dos</td></tr>
+          </tbody>
+        </table></div>
+        <p>比较：能量（总能、Mermin、外推到 0 K）、E<sub>spin</sub>、E<sub>LS</sub>、力、应力、净电荷、磁矩向量（results.tag 全精度）、轨道角动量（detailed.out，8 位小数）、本征值（能带算例），容差与现有算例相同（1e-6；能带 1e-8）。SCC 轮数列出对照。这些算例在 <code>test_reference.py</code> 和 <code>gpu_check</code> 的 torch 参数化中跳过（<code>Case(torch=False)</code>）。</p>
+
+        <h3>不依赖 DFTB+ 的测试（<code>tests/test_spinorbit.py</code>）</h3>
+        <ul>
+          <li>L 算符：[L<sub>x</sub>, L<sub>y</sub>] = iL<sub>z</sub>，L² = l(l+1)，在实轨道基里为纯虚（l = 1、2、3）。</li>
+          <li>没有 SOC 时整体转动磁矩，能量、力不变（分子；周期体系用完整网格）。</li>
+          <li>非共线沿 z 与共线计算（共用一个费米能级）的能量、力、电荷相同。</li>
+          <li>力、应力与能量的中心差分一致：dual、onsite，分子与 CuO 链（包括 DFTB+ 不收敛的倾斜磁矩，用较宽的展宽）。</li>
+          <li>E<sub>LS</sub> 的两种算法（Tr(ρH<sub>SO</sub>) 与块布居）一致。</li>
+          <li>报错：SOC + 共线自旋、s 壳层 ξ ≠ 0、SOC 下的约化 k 网格、torch、autodiff、SP2、非共线 + <code>unpaired_electrons</code>。</li>
+          <li><code>api.SCC</code>、<code>PyDFTB</code> 的完整网格默认值和 (N, 3) 磁矩；<code>q_spin</code> 作为重启。</li>
+        </ul>
+
+        <h3>门槛</h3>
+        <ul>
+          <li>golden：两个环境（conda、最小环境）对 M6a 之前的提交 <code>d0ca575</code> 逐位相同，<code>--allow-new pauli e_ls orbital_moments</code>；新算例只在工作树中，不参与比较。</li>
+          <li><code>refgen --check</code>（全部，NumPy）、<code>dynamics --check</code>。</li>
+          <li>pydftb 测试三个环境；PTBP 测试；G1 不受影响（PTBP 不用这些选项），跑 <code>engine_parity</code> 确认。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：torch 后端与自动求导的两分量版本；DFTB+U 与 SOC 的组合（M6b，DFTB+ 要求 dual 模型）；Casida 等不支持两分量的功能本来也不支持；混合泛函。</li>
+        <li><strong>风险：长 SCC 的轮数</strong>。GdO + SOC 要 166 轮，微小的舍入差别经过多轮放大后，轮数和收敛点可能与 DFTB+ 略有不同。对策：结果按容差比较，轮数只列出对照。</li>
+        <li><strong>风险：简并能级的相位</strong>。Kramers 简并对的本征向量可以任意混合。只要简并能级的占据相同，密度矩阵不受影响；T = 0 时简并能级正好在费米能级上的情形要避开（参考算例用 300 K，或检查过占据）。</li>
+        <li><strong>风险：周期体系的非共线 SCC 不稳定</strong>（第二节）。这是 DFTB+ 的混合器本身的问题，pydftb 照样复现，不另改混合器；在文档中说明，并给出可收敛的做法（沿坐标轴的初始磁矩、加 SOC 与展宽）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M4e-r0d-confinement.html">← M4e 报告</a><a href="../index.html">文档索引</a><a href="../reports/M6a-spin-orbit.html">M6a 报告 →</a></nav>
+    <span>M6a</span>
+  </footer>
+</div>
+</body>
+</html>

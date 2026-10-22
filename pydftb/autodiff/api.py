@@ -140,6 +140,10 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     gradients.  ``stress`` defaults to ``forces`` for periodic systems."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r} (one of {MODES})")
+    if getattr(calc, "pauli", False):
+        raise NotImplementedError("pydftb.autodiff does not support two-component calculations "
+                                  "(non-collinear spin, spin-orbit coupling): NumPy engine only "
+                                  "(milestone M6a)")
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)

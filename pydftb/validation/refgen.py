@@ -133,7 +133,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
                     dispersion=inp.get("dispersion"), k_threads=k_threads,
                     backend=backend, device=device, dtype=dtype,
-                    **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}))
+                    **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
+                    **pauli_options(case, labels))
         calc = DFTB(sk, **{**opts, **options})
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
@@ -142,6 +143,20 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def pauli_options(case: Case, labels) -> dict:
+    """:class:`pydftb.DFTB` options of a two-component case (M6a), for these type labels."""
+    out = {}
+    if case.noncolinear:
+        nc = case.noncolinear
+        out.update(spin="noncolinear", initial_spins=nc["initial_spins"],
+                   spin_constants={k: v for k, v in nc["spin_constants"].items() if k in labels})
+    if case.spin_orbit:
+        so = case.spin_orbit
+        out.update(spin_orbit={k: v for k, v in so["xi"].items() if k in labels},
+                   spin_orbit_dual=so.get("dual", True))
+    return out
 
 
 def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
@@ -153,6 +168,10 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         extra = (dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(case.spin, set(inp["labels"]), case.shell_resolved)
+                 + dftbplus.noncolinear_block(case.noncolinear, set(inp["labels"]),
+                                              case.shell_resolved)
+                 + dftbplus.spinorbit_block(case.spin_orbit, {lab: inp["max_l"][lab] + 1
+                                                              for lab in inp["max_l"]})
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"]))
         if case.ewald_tolerance is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(case.ewald_tolerance)}\n"
@@ -220,7 +239,7 @@ def _fermi_dev(band, ref_band) -> float:
     with the middle of DFTB+'s gap, because DFTB+'s own value is where its bisection ends
     after middleGap missed the gap (water_box_bands: just below the conduction band)."""
     occ = np.array(ref_band["filling"])
-    full = 2.0 if band.nspin == 1 else 1.0
+    full = 1.0 if band.nspin == 2 or band.two_component else 2.0
     if not np.all((occ < 1e-9) | (occ > full - 1e-9)):
         return float(np.abs(band.fermi - np.array(ref_band["fermi_levels"])).max())
     e = np.array(ref_band["eigenvalues"])
@@ -294,7 +313,9 @@ def regenerate(names=None, threads: int = 1):
             "settings": {"scc": case.scc, "filling": list(case.filling),
                          "shell_resolved": case.shell_resolved, "repulsive": case.repulsive,
                          "typed": case.typed, "dftb3": case.dftb3, "spin": case.spin,
-                         "scc_tol": case.scc_tol, "ewald_tolerance": case.ewald_tolerance},
+                         "scc_tol": case.scc_tol, "ewald_tolerance": case.ewald_tolerance,
+                         **({"noncolinear": case.noncolinear, "spin_orbit": case.spin_orbit,
+                             "time_reversal": case.time_reversal} if case.pauli else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -302,7 +323,9 @@ def regenerate(names=None, threads: int = 1):
             "reference": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in ref.items()
                           if k in ("energy", "free_energy", "e_zero", "e_band", "e_scc", "e_rep",
                                    "ts", "fermi", "forces", "charges_net", "n_scc", "stress",
-                                   "e_disp")},
+                                   "e_disp")
+                          or case.pauli and k in ("e_spin", "e_ls", "e_3rd", "spins",
+                                                  "angular_spin", "angular_orbital")},
             "tolerances": case.tol,
         }
         if case.klines or case.regions or case.dp_dos:
@@ -350,14 +373,40 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     }
     if "eigenvalues" in ref:
         dev.update(_compare_states(case, inp, ref, res, engine))
+    if case.pauli:
+        dev.update(_compare_pauli(ref, res))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
-          and max(dev["free_energy"], dev["e_zero"], dev["e_disp"]) <= tol["energy"]
+          and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
+                  dev.get("e_terms", 0.0)) <= tol["energy"]
           and dev["stress"] <= tol.get("stress", 1e-7)
-          and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev))
+          and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev)
+          and all(dev[k] <= tol[k] for k in ("spins", "moments") if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
+
+
+G_FACTOR = 2.00231930436153  # DFTB+ gfac: detailed.out prints -g/4 m as the spin momentum
+
+
+def _compare_pauli(ref: dict, res) -> dict:
+    """Deviations of a two-component case (M6a): the energy terms E_spin, E_LS (and E_3rd),
+    the magnetisation vectors (results.tag) and the spin and orbital angular momenta per
+    shell (detailed.out: -g/4 m and -<L>, 8 decimals)."""
+    dev = {"e_terms": max([abs(getattr(res, k) - ref[k]) for k in ("e_spin", "e_ls", "e_3rd")
+                           if k in ref] or [0.0])}
+    if "spins" in ref:
+        dev["spins"] = float(np.abs(res.magmoms.T - np.array(ref["spins"])).max())
+    moments = []
+    if "angular_spin" in ref:
+        moments.append(np.abs(-0.25 * G_FACTOR * res.q_spin[1:].T
+                              - np.array(ref["angular_spin"])).max())
+    if "angular_orbital" in ref:
+        moments.append(np.abs(-res.orbital_moments - np.array(ref["angular_orbital"])).max())
+    if moments:
+        dev["moments"] = float(max(moments))
+    return dev
 
 
 def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
@@ -371,7 +420,8 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
 def check(names=None, solver: str = "eigh", **backend) -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
-          f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'|deps| Ha':>9s} {'nSCC py/ref':>11s} {'t_py':>6s}  ok")
+          f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'|deps| Ha':>9s} {'|dm|':>9s} {'nSCC py/ref':>11s} "
+          f"{'t_py':>6s}  ok")
     for case in CASES:
         if names and case.name not in names:
             continue
@@ -385,13 +435,18 @@ def check(names=None, solver: str = "eigh", **backend) -> bool:
         if why:
             print(f"{case.name:26s} skipped: {why}")
             continue
+        if backend.get("backend") == "torch" and not case.torch:
+            print(f"{case.name:26s} skipped: NumPy-only physics (two-component, M6a)")
+            continue
         r = compare(doc, solver, **backend)
         d = r["dev"]
         all_ok &= r["ok"]
         e_disp = f"{d['e_disp']:9.1e}" if "e_disp" in doc["reference"] else f"{'-':>9s}"
         eps = f"{d['eigenvalues']:9.1e}" if "eigenvalues" in d else f"{'-':>9s}"
+        dm = (f"{max(d.get('spins', 0.0), d.get('moments', 0.0)):9.1e}"
+              if "spins" in d or "moments" in d else f"{'-':>9s}")       # M6a: magnetisation
         print(f"{case.name:26s} {r['natoms']:4d} {d['energy']:9.1e} {d['forces']:12.1e} "
-              f"{d['charges']:9.1e} {d['stress']:9.1e} {e_disp} {eps} "
+              f"{d['charges']:9.1e} {d['stress']:9.1e} {e_disp} {eps} {dm} "
               f"{r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
     return all_ok
 

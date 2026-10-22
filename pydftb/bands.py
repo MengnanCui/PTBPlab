@@ -23,6 +23,7 @@ from .constants import HARTREE
 from .hamiltonian import Basis, fold, fold_all
 from .occupations import fill
 from .solvers import SOLVERS, BatchedSolver
+from . import spinorbit as so
 
 # dp_dos defaults: broadening width (eV), cut-off in widths, energy grid (eV)
 DOS_WIDTH = {"gauss": 0.1, "fermi": 0.1, "mp": 0.1}
@@ -62,19 +63,27 @@ def klines(lines):
 @dataclass
 class States:
     """Eigenstates at frozen charges.  Energies in Hartree; ``dos``, ``pdos`` and
-    ``band_structure`` return eV.  Spin channels are the first axis (up, down)."""
+    ``band_structure`` return eV.  Spin channels are the first axis (up, down); a
+    two-component calculation (M6a) has one channel of 2N spinor states."""
     kpts: np.ndarray                    # (n_k, 3) fractional
     kweights: np.ndarray                # (n_k,), sum 1
     eigenvalues: np.ndarray             # (n_spin, n_k, n_state)
     occupations: np.ndarray             # (n_spin, n_k, n_state); without spin incl. factor 2
+                                        # (two-component: at most 1)
     fermi: np.ndarray                   # (n_spin,) Fermi level(s) of the filling at these k-points
     scc_fermi: np.ndarray | None        # (n_spin,) Fermi level(s) of the SCC run (band plot zero)
     basis: Basis
     projections: np.ndarray | None = None   # (n_spin, n_k, n_orb, n_state) Re[c* (S c)]
+                                            # (two-component: summed over both spins)
 
     @property
     def nspin(self) -> int:
         return self.eigenvalues.shape[0]
+
+    @property
+    def two_component(self) -> bool:
+        """Spinor states (non-collinear spin or spin-orbit coupling)."""
+        return self.eigenvalues.shape[2] == 2 * self.basis.norb
 
     def orbitals(self, atoms=None, shell=None, m=None) -> np.ndarray:
         """Orbital indices of a region, as DFTB+ ``ProjectStates`` regions.
@@ -144,7 +153,8 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
 
     ``engine`` is a :class:`pydftb.DFTB`; positions and cell in Bohr.  ``populations`` is the
     vector the SCC loop mixes, normally ``DFTBResult.q_in`` (DFTB+'s ``charges.bin``): site
-    populations, or with spin [up, down] per shell; None = the reference populations.
+    populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
+    shell); None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
     band-structure run; ``scc_fermi`` (Hartree, one value or one per spin) is kept as the
@@ -159,22 +169,25 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
         k, kw = _kpoint_set(kpts)
     q = (engine._initial_populations(st) if populations is None
          else np.asarray(populations, float))
-    n_expected = len(st.q0) if st.spin is None else 2 * len(st.basis.shell_l)
+    pauli = st.pauli is not None
+    nsh = len(st.basis.shell_l)
+    n_expected = 4 * nsh if pauli else len(st.q0) if st.spin is None else 2 * nsh
     if q.shape != (n_expected,):
         raise ValueError(f"populations need {n_expected} entries (the SCC's mixed vector, "
                          f"DFTBResult.q_in), got shape {q.shape}")
     v_orb, vs_orb = engine._potentials(st, q)
-    nspin = 1 if vs_orb is None else 2
+    nspin = 1 if vs_orb is None or pauli else 2
     norb = st.basis.norb
+    nstate = 2 * norb if pauli else norb
     pb = st.pairs
     ones = np.ones(norb)
     gamma = len(k) == 1 and not np.any(k[0])
     solver = engine.solver if not isinstance(engine.solver, str) else SOLVERS[engine.solver]()
     if not hasattr(solver, "eig"):
         solver = BatchedSolver()                      # SP2 has no eigenvectors
-    chunk = chunk or max(1, MATRIX_BUDGET // (norb * norb))
-    evals = np.empty((nspin, len(k), norb))
-    proj = np.empty((nspin, len(k), norb, norb)) if projections else None
+    chunk = chunk or max(1, MATRIX_BUDGET // (nstate * nstate))
+    evals = np.empty((nspin, len(k), nstate))
+    proj = np.empty((nspin, len(k), norb, nstate)) if projections else None
     for c0 in range(0, len(k), chunk):
         kc = k[c0:c0 + chunk]
         if gamma:
@@ -183,6 +196,19 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
         else:
             h0 = fold_all(pb, pb.h, norb, kc, st.eps0)
             s = fold_all(pb, pb.s, norb, kc, ones)
+        if pauli:                                                # two-component (M6a)
+            p = st.pauli
+            hso = None if p.lam is None else so.soc_hamiltonian(p.lam, s if p.dual else None)
+            h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
+            s2 = so.overlap2(s)
+            solver.prepare(s2)
+            e, c = solver.eig(h)
+            n = len(kc)
+            evals[0, c0:c0 + n] = e
+            if projections:
+                share = (np.conj(c) * (s2 @ c)).real
+                proj[0, c0:c0 + n] = share[:, :norb] + share[:, norb:]
+            continue
         h = h0 + 0.5 * s * (v_orb[:, None] + v_orb[None, :])     # as in the SCC loop
         if vs_orb is not None:
             hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
@@ -216,6 +242,9 @@ def _kpoint_set(kpts):
 def _fill(engine, st, evals, kw):
     """Occupations and Fermi level(s) at these k-points, as the SCC loop fills (``_solve``)."""
     sm = engine.smearing
+    if st.pauli is not None:
+        occ, mu, _ = fill(evals[0], kw, st.nelec, sm, spin_factor=1.0)
+        return np.array(occ)[None], np.array([mu])
     if st.spin is None:
         occ, mu, _ = fill(evals[0], kw, st.nelec, sm)
         return np.array(occ)[None], np.array([mu])
