@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6d 激发态设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6d · 设计文档</p>
+    <h1>激发态：Casida 线性响应（TD-DFTB）</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6d-casida.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6 的第四步：激发态。DFTB 的线性响应（TD-DFTB，Casida 方程）在基态 SCC 收敛之后进行：用基态的轨道、轨道能和原子间的 γ 矩阵，求分子的垂直激发能、振子强度和跃迁偶极，也就是吸收光谱。只做 NumPy 引擎；torch 后端和自动求导遇到时明确报错。</p>
+    <ul>
+      <li><strong>拆分</strong>：原计划的 M6d 还包括激发态的力和 XL-BOMD。读完 DFTB+ 的源码后，按原计划“量大时单列”的约定拆开：
+        <ul>
+          <li><strong>M6d（本阶段）</strong>：激发态本身，即能量、振子强度、跃迁偶极及相关输出。</li>
+          <li><strong>M6e（下一阶段）</strong>：激发态的力（Z 向量方法）、激发态的电荷与偶极、激发态的结构优化与分子动力学，以及 XL-BOMD。</li>
+        </ul>
+        理由：Z 向量的力占 DFTB+ 线性响应代码的一半以上（<code>linrespgrad.F90</code> 5800 行中的大部分）；XL-BOMD 是一套独立的机制（影子能量、动力学型的力），与激发态无关。</li>
+      <li><strong>做什么</strong>（全部对照 DFTB+ 25.1 的 <code>ExcitedState { Casida }</code>）：
+        <ul>
+          <li>单重态、三重态、两者（<code>Symmetry</code>）；共线自旋极化体系的激发（带自旋污染 Δ⟨S²⟩）；</li>
+          <li>分数占据（有电子温度时，部分占据能级之间的跃迁）；onsite 修正；Γ 点周期体系；</li>
+          <li>能量窗口和振子窗口（缩小参与耦合的单粒子跃迁）；“最亮态”（<code>StateOfInterest</code> &lt; 0）；</li>
+          <li>与 DFTB+ 输出文件对应的内容：<code>EXC.DAT</code>（激发能、振子强度、主要跃迁、权重、对应的单粒子能量、对称性或 Δ⟨S²⟩）、<code>SPX.DAT</code>（单粒子跃迁）、<code>TRA.DAT</code>、<code>TDP.DAT</code>（跃迁偶极），以及 X+Y 向量。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的实测</strong>（第二节）：
+        <ul>
+          <li>DFTB+ 的两种迭代求解器（ARPACK、Stratmann）在小分子上给出相同的 ω²（差 ≤ 1e-15）。pydftb 在跃迁不多时对整个 Casida 矩阵做精确的稠密对角化，另备迭代解法给大体系（实现时定为分块 Davidson，见完成报告）。</li>
+          <li>DFTB+ 不允许：非 SCC、DFTB3、k 点（只能 Γ 点）、壳层分辨 SCC、非共线自旋、SOC、DFTB+U、隐式溶剂；onsite 修正只能配 ARPACK。外电场、点电荷、色散可以同用（只影响基态）。pydftb 照此限制。</li>
+          <li>在 <code>StateOfInterest</code> 非零时，DFTB+ 写在 results.tag 和 detailed.out 里的 “Total energy”、“Mermin free energy” 仍是基态能量，激发能另行打印为 “Excitation Energy”（与手册的说法不同）。</li>
+          <li>为 M6e 先做的检查：DFTB+ 的激发态力（单重态、三重态、自旋极化）与 E<sub>0</sub> + ω 的有限差分一致到 3e-7 Ha/Bohr。</li>
+          <li>含部分占据 d 能级的金属团簇（Cu<sub>4</sub>CO，300 K）上，DFTB+ 的两个求解器都失败（ARPACK 迭代次数用尽、Stratmann 子空间对角化失败）。pydftb 的精确对角化不受影响。</li>
+        </ul>
+      </li>
+      <li><strong>用法</strong>：<code>DFTB(sk, casida=Casida(n_excitations=6, symmetry="singlet"))</code>，结果在 <code>result.excitations</code>（能量用 Ha，偶极用 e·Bohr）；ASE 中 <code>PyDFTB(…, casida=…)</code>。</li>
+      <li><strong>验证</strong>：约 15 个 DFTB+ 参考算例。从 <code>autotest.tag</code> 取全精度的 ω²、振子强度和跃迁偶极大小，从 EXC.DAT、SPX.DAT 取主要跃迁、权重和 Δ⟨S²⟩。旧算例逐位不变。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">1e-15</span><span class="lbl">DFTB+ 的 ARPACK 与 Stratmann 求解器之间的差（ω²，Ha²）</span></li>
+      <li><span class="num">3</span><span class="lbl">自旋情形：单重态、三重态、自旋极化</span></li>
+      <li><span class="num">≈ 15</span><span class="lbl">计划的 DFTB+ 参考算例</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>下文 i、j 是占据轨道，a、b 是空轨道，ω<sub>ia</sub> = ε<sub>a</sub> − ε<sub>i</sub> 是单粒子跃迁能，c 是基态轨道系数，S 是交叠矩阵，A、B 是原子。实现在 DFTB+ 的 <code>timedep/linresp.F90</code>、<code>linrespgrad.F90</code>、<code>linrespcommon.F90</code>、<code>transcharges.F90</code>，方法来自 Niehaus 等（Phys. Rev. B 63, 085108 (2001)）。</p>
+
+      <h3>单粒子跃迁</h3>
+      <ul>
+        <li>所有 f<sub>i</sub> &gt; f<sub>a</sub> 的能级对都算一个跃迁（按自旋通道分开）。有电子温度时，部分占据的能级既是“占据”也是“空”，它们之间的跃迁也计入。按 ω<sub>ia</sub> 从小到大排序。</li>
+        <li>占据数因子 n<sub>ia</sub> = f<sub>i</sub> − f<sub>a</sub>，闭壳层再除以 2（占据数 0…2），程序中用的是 √n<sub>ia</sub>。</li>
+        <li><strong>跃迁电荷</strong>（Mulliken 近似）：q<sup>ia</sup><sub>A</sub> = ½ Σ<sub>μ∈A</sub> [c<sub>μi</sub>(Sc<sub>a</sub>)<sub>μ</sub> + c<sub>μa</sub>(Sc<sub>i</sub>)<sub>μ</sub>]。同一原子上 s、p 轨道之间的跃迁电荷为零，所以这类跃迁（例如水分子 HOMO 的 p 孤对到 LUMO）不与其他跃迁耦合，激发能就等于单粒子能量差，振子强度为零。</li>
+        <li><strong>单粒子跃迁偶极</strong> d<sub>ia</sub> = Σ<sub>A</sub> R<sub>A</sub> q<sup>ia</sup><sub>A</sub>，单粒子振子强度 (2/3) ω<sub>ia</sub> |d<sub>ia</sub>|²（SPX.DAT）。</li>
+      </ul>
+
+      <h3>Casida 矩阵</h3>
+      <ul>
+        <li>厄米形式：Ω F = Ω<sub>I</sub>² F，Ω<sub>ia,jb</sub> = δ<sub>ia,jb</sub> ω<sub>ia</sub>² + 4 √(n<sub>ia</sub>ω<sub>ia</sub>) K<sub>ia,jb</sub> √(n<sub>jb</sub>ω<sub>jb</sub>)。Ω<sub>I</sub> 是第 I 个激发能。</li>
+        <li><strong>单重态</strong>：K = Σ<sub>AB</sub> q<sup>ia</sup><sub>A</sub> γ<sub>AB</sub> q<sup>jb</sup><sub>B</sub>。<strong>三重态</strong>：K = Σ<sub>A</sub> q<sup>ia</sup><sub>A</sub> W<sub>A</sub> q<sup>jb</sup><sub>A</sub>（W 是原子的自旋常数，所以三重态需要 <code>SpinConstants</code>）。</li>
+        <li><strong>自旋极化</strong>（共线）：两个自旋通道的跃迁放在一起，前因子从 4 变为 2，K = Σ<sub>AB</sub> q γ q + σ<sub>s</sub>σ<sub>t</sub> Σ<sub>A</sub> q W<sub>A</sub> q（σ = ±1 表示自旋向上、向下）。</li>
+        <li><strong>γ</strong>：原子分辨的 γ 矩阵（库仑 1/r 部分加短程部分；周期体系为 Ewald 和），即基态 SCC 用的 γ。DFTB+ 要求原子分辨 SCC，这时所有壳层用 s 壳层的 U。</li>
+        <li><strong>W</strong>：每种元素取“最高占据原子轨道”所在壳层的对角元 W(l<sub>HOAO</sub>, l<sub>HOAO</sub>)（<code>initprogram.F90</code>：参考占据数不为零的壳层中，原子本征值最高的那个）。</li>
+        <li><strong>onsite 修正</strong>（<code>onsiteEner</code>）：把跃迁密度在每个原子上的轨道块 ½[c<sub>μi</sub>(Sc<sub>a</sub>)<sub>ν</sub> + …] 与 onsite 常数矩阵收缩，再对每个壳层的对角元减去平均值（转动不变性修正）。闭壳层单重态用 f<sub>↑↑</sub> + f<sub>↑↓</sub>，三重态用 f<sub>↑↑</sub> − f<sub>↑↓</sub>；自旋极化时同自旋用 f<sub>↑↑</sub>、异自旋用 f<sub>↑↓</sub>。</li>
+      </ul>
+
+      <h3>求解与输出</h3>
+      <ul>
+        <li><strong>求解器</strong>：ARPACK（对 Ω 求最小的几个本征值，相对容差为单精度的 ε ≈ 1.2e-7）和 Stratmann（在 A+B、A−B 的子空间中迭代，残差阈值 1.2e-8）。两者都只求 <code>NrOfExcitations</code> 个最低的态。</li>
+        <li><strong>X+Y</strong> = F √(ω<sub>ia</sub>/Ω<sub>I</sub>)，F 是归一化的本征向量；X−Y = (X+Y) Ω<sub>I</sub>/ω<sub>ia</sub>。</li>
+        <li><strong>跃迁偶极</strong> μ<sub>I</sub> = Σ<sub>ia</sub> d<sub>ia</sub> √n<sub>ia</sub> (X+Y)<sub>ia,I</sub>，闭壳层乘 √2；<strong>振子强度</strong> f<sub>I</sub> = (2/3) Ω<sub>I</sub> |Σ d √n (X+Y)|²，闭壳层乘 2。闭壳层的三重态振子强度为零。</li>
+        <li><strong>主要跃迁与权重</strong>：w<sub>ia</sub> = (X+Y)<sub>ia</sub>² / ‖(X+Y)²‖<sub>2</sub>，取最大的一个（EXC.DAT 的 Transition、Weight、KS [eV] 三列）；TRA.DAT 列出全部跃迁的权重。</li>
+        <li><strong>自旋污染</strong>（自旋极化时 EXC.DAT 的最后一列 Δ⟨S²⟩）：由归一化的 X+Y 和不同自旋轨道之间的交叠 ⟨φ<sub>p↑</sub>|φ<sub>q↓</sub>⟩ 组成三项之和（García 的博士论文），DFTB+ 认为绝对值小于 0.5 的态可信。</li>
+        <li><strong>窗口</strong>：<code>EnergyWindow</code> 只保留 ω<sub>ia</sub> ≤ ω<sub>N</sub> + 窗口的跃迁（N = <code>NrOfExcitations</code>）；<code>OscillatorWindow</code> 再把更高的、按能级简并分组后振子强度之和超过阈值的跃迁加进来。窗口会改变激发能（参与耦合的跃迁变少）。</li>
+        <li><strong>最亮态</strong>：<code>StateOfInterest</code> &lt; 0 时取振子强度最大的单重态。</li>
+        <li><strong>简并</strong>：简并能级中各个态的振子强度取决于本征向量的任意组合，只有和有意义。<code>autotest.tag</code> 中简并的态合并为一个（能量取一个，振子强度相加）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>参数为测试用的 <code>ptbp_hcocu</code>（H、C、O、Cu），探针脚本在会话的临时目录（<code>m6d/probe*.py</code>）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>试验</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>H<sub>2</sub>O、H<sub>2</sub>CO、C<sub>2</sub>H<sub>4</sub>、CH<sub>3</sub>OH，单重态与三重态，两种求解器</td><td>ω² 相差 ≤ 1e-15，振子强度 ≤ 7e-9（CH<sub>3</sub>OH，ARPACK 的容差）。对称禁戒的态振子强度为 1e-30 量级的数值噪声。H<sub>2</sub>CO 最低的 n→π* 态（2.708 eV）单重态与三重态相同，等于单粒子能量差（跃迁电荷为零）。</td></tr>
+          <tr><td><code>autotest.tag</code></td><td>需要 <code>Options { WriteAutotestTag = Yes }</code>。内容：<code>exc_energies_sqr</code>（Ω²）、<code>exc_oscillator</code>，以及（开启 <code>WriteTransitionDipole</code> 时）<code>exc_transdip</code>（|μ|）。简并的态合并（苯：8 个态只剩 4 个值）。<code>Symmetry = both</code> 时只保留后算的单重态，三重态只在 EXC.DAT 中。</td></tr>
+          <tr><td>自旋极化（H<sub>2</sub>CO<sup>+</sup> 二重态、O<sub>2</sub> 三重态）</td><td>可以计算；EXC.DAT 最后一列为 Δ⟨S²⟩，不再标 S/T。</td></tr>
+          <tr><td>电子温度 3000 K（H<sub>2</sub>CO）</td><td>出现部分占据能级之间的低能跃迁（0.57 eV 等），振子强度大多为零。</td></tr>
+          <tr><td>onsite 修正</td><td>ARPACK 可用；Stratmann 报错 “Onsite corrections not implemented for Stratmann diagonaliser”。</td></tr>
+          <tr><td>Γ 点周期（H<sub>2</sub>CO 在 8 Å 的立方盒子中）</td><td>可以计算激发能（与孤立分子差 0.01 eV 左右）；打开力时报错 “Excited state stresses not implemented”。</td></tr>
+          <tr><td>能量窗口 2 eV、振子窗口 0.01</td><td>参与耦合的跃迁变少，高处的激发能改变（H<sub>2</sub>CO 第 4 个态 6.570 → 7.908 eV）。</td></tr>
+          <tr><td>外电场、点电荷、Lennard-Jones 色散</td><td>都可以与 Casida 同用，激发能随基态改变；激发态的力也能运行（正确性在 M6e 中检查）。</td></tr>
+          <tr><td>Cu<sub>2</sub>、CuH、CuCO<sup>+</sup>（T = 0）</td><td>正常，覆盖 d 轨道之间的跃迁；CuH 的简并态合并后只剩 3 个值。</td></tr>
+          <tr><td>Cu<sub>4</sub>CO（300 K，部分占据的 d 能级）</td><td>ARPACK：“Maximum number of iterations reached”；Stratmann：“TDDFT diagonalisation failure. Increase SubSpaceFactor”（加大到 60 仍失败）；T = 0 时基态 SCC 不收敛。</td></tr>
+          <tr><td><code>StateOfInterest</code> = 4（H<sub>2</sub>CO，单重态）</td><td>detailed.out 的 “Total energy” 与 results.tag 的 <code>mermin_energy</code> 都是基态能量（E<sub>elec</sub> + E<sub>rep</sub>），激发能单独打印为 “Excitation Energy: 0.2365 H”。DFTB+ 的激发态力与 E<sub>0</sub> + ω 的中心差分一致到 1.3e-7 – 3.2e-7；三重态（第 2 个态）3.7e-7，Stratmann 1.4e-7，自旋极化的 H<sub>2</sub>CO<sup>+</sup> 3.0e-7。</td></tr>
+          <tr><td>不计算力时写 <code>ExcitedStateForces</code></td><td>输入错误（该节点不被读取）；计算力而 <code>StateOfInterest</code> = 0 时，必须写 <code>ExcitedStateForces = No</code>，否则报错 “Excited forces only available for StateOfInterest non zero”。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>from pydftb.casida import Casida
+
+calc = DFTB(sk, temperature=0.0,
+            spin_constants={"H": -0.072, "C": -0.023, "O": -0.028},   # 三重态或自旋极化时需要
+            casida=Casida(n_excitations=6, symmetry="singlet"))        # "triplet"、"both"
+r = calc.calculate(labels, positions)
+x = r.excitations
+x.energies                  # (n,) Ha
+x.oscillator_strengths      # (n,)
+x.transition_dipoles        # (n, 3) e·Bohr
+x.symmetries                # "S" / "T"；自旋极化时为 None
+x.transitions, x.weights    # 主要的单粒子跃迁 (i, a, 自旋)，从 0 起；权重
+x.spin_contamination        # 自旋极化时的 Δ⟨S²⟩
+x.single_particle           # SPX：单粒子跃迁能、振子强度、(i, a, 自旋)
+x.xpy                       # (跃迁数, n) X+Y
+print(x.table())            # EXC.DAT 格式的文本
+
+Casida(n_excitations=10, energy_window=0.05, oscillator_window=0.01,   # Ha；无量纲
+       state_of_interest=-1,                                           # 最亮的单重态
+       solver="auto")                                                  # "exact"、"davidson"、"arpack"</code></pre>
+      <ul>
+        <li><strong>单位</strong>：能量 Ha，偶极 e·Bohr；<code>table()</code> 与 DFTB+ 一样用 eV。</li>
+        <li><strong>求解器</strong>：<code>"exact"</code> 对整个 Ω 做稠密对角化，只取最低的 n 个本征对；<code>"davidson"</code>（分块 Davidson）与 <code>"arpack"</code>（SciPy 的 ARPACK）用不存储 Ω 的矩阵—向量乘积，供跃迁数很多的体系使用；<code>"auto"</code>（默认）按跃迁数选择，500 个以内用稠密对角化。（设计时只有 <code>"exact"</code> 与基于 ARPACK 的 <code>"iterative"</code>，实现时按实测改为现在的样子，见完成报告第八节。）</li>
+        <li><strong><code>state_of_interest</code></strong>：大于 0 时，<code>r.excitation_energy</code> 给出该态的激发能（DFTB+ 的 “Excitation Energy”）；能量的其他字段仍是基态，与 DFTB+ 相同。M6d 中这时要求力就报错，提示 M6e；<code>Casida(excited_forces=False)</code> 返回基态的力（DFTB+ 的 <code>ExcitedStateForces = No</code>）。</li>
+        <li><strong>限制</strong>（与 DFTB+ 相同）：需要 SCC；不能与 DFTB3、壳层分辨 SCC、非共线自旋、SOC、DFTB+U、隐式溶剂同用；周期体系只能用 Γ 点。onsite 修正可以用（DFTB+ 只在 ARPACK 中支持）。外电场、点电荷、色散可以用。</li>
+        <li><strong>其他入口</strong>：<code>api.SCC(…, casida=…)</code>；ASE 的 <code>PyDFTB(…, casida=…)</code>，结果在 <code>calc.excitations</code>。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>新模块 <code>pydftb/casida.py</code></h3>
+        <ul>
+          <li><code>Casida</code>：选项与检查。<code>Excitations</code>：结果（上表的字段，加 EXC.DAT 格式的 <code>table()</code>；SPX.DAT 格式由 <code>single_particle.table()</code> 给出）。</li>
+          <li><code>single_particle_transitions(eps, f, spin)</code>：按 DFTB+ 的规则列出跃迁（f<sub>i</sub> &gt; f<sub>a</sub> + 容差），排序（有振子窗口时用稳定排序，同 DFTB+ 的 <code>merge_sort</code>）。</li>
+          <li><code>transition_charges(c, sc, orb_atom, pairs)</code>：按原子分段求和，向量化，得到 (跃迁数, 原子数) 的矩阵。onsite 修正另需每个原子的跃迁密度块。</li>
+          <li><code>omega_matrix(...)</code>：组装 Ω（单重态、三重态、自旋极化、onsite）；<code>omega_product(v)</code>：不组装矩阵的乘积，复杂度为（跃迁数 × 原子数）。</li>
+          <li>求解：<code>scipy.linalg.eigh(Ω, subset_by_index=[0, n−1])</code>；迭代时用分块 Davidson（以 ω<sub>ia</sub>² 为预条件）或 <code>scipy.sparse.linalg.eigsh</code>（<code>LinearOperator</code>，<code>which="SA"</code>），Ω 是对称正定的。</li>
+          <li>性质：X+Y、振子强度、跃迁偶极、权重与主要跃迁、单粒子振子强度、Δ⟨S²⟩、窗口、最亮态，公式与第一节相同。</li>
+        </ul>
+        <h3>引擎（<code>calculator.py</code>）</h3>
+        <ul>
+          <li><code>DFTB(…, casida=None)</code>：检查限制；新字段 <code>DFTBResult.excitations</code>、<code>excitation_energy</code>，默认 None，旧算例没有新属性。</li>
+          <li><code>_run</code> 在能量之后调用 Casida：用最后一轮 SCC 的哈密顿量 <code>sc.h</code>（DFTB+ 也用最后一轮对角化的本征向量）和交叠矩阵重新求本征向量（广义本征问题），占据数取自 <code>sc.occ</code>，γ 取自 <code>st.coul.gamma</code>（原子分辨时站点就是原子），W 由自旋常数和 HOAO 规则得到，onsite 常数取自块势的设置。</li>
+          <li>Γ 点周期体系：用 Γ 点的 H、S（实数）；有 k 点时报错。</li>
+          <li>torch 后端、自动求导：报错（“NumPy backend only (milestone M6d)”）。</li>
+        </ul>
+        <h3>数值上的注意</h3>
+        <ul>
+          <li>简并轨道的本征向量与 DFTB+ 不同（任意组合），激发能不受影响；单个态的振子强度、跃迁偶极的分量可能不同，只比较简并组的和与 |μ| 的和。</li>
+          <li>X+Y 的整体符号任意：比较 |μ| 和振子强度，跃迁偶极的分量比较绝对值。</li>
+          <li>负的 Ω²（基态不稳定）：DFTB+ 在 EXC.DAT 中写 “&lt; 0”；pydftb 保留负值并给出警告。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例（计划）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th><th>DFTB+ 求解器</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2o_casida</code></td><td>单重态，含不耦合的跃迁</td><td>Stratmann</td></tr>
+            <tr><td><code>h2co_casida</code></td><td>单重态，主要对照</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_casida_triplet</code></td><td>三重态（W）</td><td>Stratmann</td></tr>
+            <tr><td><code>c2h4_casida_both</code></td><td>单重态与三重态</td><td>Stratmann</td></tr>
+            <tr><td><code>ch3oh_casida</code></td><td>较多的态（12 个），低对称性</td><td>ARPACK</td></tr>
+            <tr><td><code>c6h6_casida</code></td><td>简并的态</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_cation_casida</code></td><td>自旋极化（二重态），Δ⟨S²⟩</td><td>Stratmann</td></tr>
+            <tr><td><code>o2_triplet_casida</code></td><td>自旋极化（三重态基态）</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_casida_3000K</code></td><td>分数占据</td><td>Stratmann</td></tr>
+            <tr><td><code>h2co_casida_onsite</code></td><td>onsite 修正</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_casida_ewindow</code>、<code>_owindow</code></td><td>能量窗口、振子窗口</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_box_casida</code></td><td>Γ 点周期（Ewald 的 γ）</td><td>Stratmann</td></tr>
+            <tr><td><code>cuco_cation_casida</code></td><td>Cu 的 d 轨道</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_casida_field_pc</code></td><td>外电场 + 点电荷下的激发</td><td>ARPACK</td></tr>
+            <tr><td><code>h2co_casida_bright</code></td><td>最亮态（<code>StateOfInterest</code> = −1），激发能</td><td>Stratmann</td></tr>
+          </tbody>
+        </table></div>
+        <h3>比较的量与容差</h3>
+        <ul>
+          <li>基态部分照旧（能量、电荷、SCC 轮数）。</li>
+          <li>autotest.tag：Ω²（按简并组）、振子强度（组内求和）、|μ|：1e-8（量纲为 Ha²、无量纲、e·Bohr）。基态本征值与 DFTB+ 差 1e-11 左右，传到激发能也在这个量级。</li>
+          <li>EXC.DAT：每个态的激发能（3 位小数，eV）、主要跃迁、权重（3 位小数）、单粒子能量、对称性或 Δ⟨S²⟩（3 位小数）；SPX.DAT：单粒子跃迁能、振子强度。<code>Symmetry = both</code> 的三重态只能这样比较。</li>
+          <li>“最亮态”：选中的态号与 detailed.out 的 “Excitation Energy”。</li>
+        </ul>
+        <h3>自洽测试（不需要 DFTB+）</h3>
+        <ul>
+          <li>精确解与迭代解一致；Ω 对称；(X+Y)<sup>T</sup>(X−Y) = 1。</li>
+          <li>极限：γ 和 W 都为零时激发能等于单粒子能量差；闭壳层的三重态在 W = 0 时等于单粒子能量差。</li>
+          <li>分子整体平移、转动：激发能、振子强度不变，跃迁偶极随之转动。</li>
+          <li>自旋极化路径用于闭壳层分子（未成对电子为 0）时，激发能是单重态与三重态的并集，Δ⟨S²⟩ 区分两者。</li>
+          <li>torch 后端、自动求导报错；不允许的组合报错。</li>
+        </ul>
+        <h3>门槛</h3>
+        <p>golden（两个环境逐位相同，新属性 <code>excitations</code>、<code>excitation_energy</code> 用 <code>--allow-new</code>）；<code>refgen --check</code>（NumPy；新算例跳过 torch）；三个环境的 pydftb 测试；PTBP 测试；<code>engine_parity</code>。</p>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>放到 M6e</strong>：激发态的力（Z 向量）、激发态的 Mulliken 电荷与偶极（XCH.DAT、XREST.DAT，也来自 Z 向量）、激发态的结构优化与 MD、非绝热耦合向量（<code>StateCouplings</code>）、XL-BOMD。</li>
+        <li><strong>不做</strong>：长程校正（LC-DFTB）的激发态（需要专门的 SKF）；pp-RPA（<code>ExcitedState { PP-RPA }</code>）；锥形交叉优化；激发态的自然轨道与系数文件（COEF.DAT、excitedOrbs）——按需再做。</li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>简并与相位：只比较简并组的和与大小，单个态的分量不比较。</li>
+            <li>窗口与排序：振子窗口时 DFTB+ 用稳定排序，简并的单粒子跃迁的顺序会影响选中的跃迁；pydftb 照搬排序规则，按简并组选取。</li>
+            <li>大体系：Ω 的大小是跃迁数的平方（1 万个跃迁约 0.8 GB），需要用迭代解法；默认的 <code>"auto"</code> 在超过阈值（500 个跃迁）时切换到 Davidson。</li>
+            <li>DFTB+ 在 Cu<sub>4</sub>CO 一类体系上失败，这类体系不放进参考算例，只做 pydftb 的自洽测试。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6c-fields-solvation.html">← M6c 完成报告</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

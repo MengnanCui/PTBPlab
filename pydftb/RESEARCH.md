@@ -248,7 +248,7 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | 外加电场、外部点电荷（QM/MM） | ✅ M6c 完成（周期体系为 DFTB+ 的锯齿势；点电荷可加高斯展宽，周期体系用 Ewald，给出点电荷受的力，可接 ASE 的 EIQMMM；原子格点势；只有 NumPy 引擎；12 个 DFTB+ 参考算例全部通过，SCC 轮数相同） | 中–高 |
 | 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照） | 低–中（前期可直接用 ASE 驱动，接口已有） |
 | 声子、极化率 | ⬜ | 中（有自动求导后更容易） |
-| 激发态（TD-DFTB） | ⬜ M6d（Casida） | 中–高 |
+| 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力与 XL-BOMD 在 M6e [文献 S8–S10] | 中–高 |
 | 输运（NEGF，算电流） | ⬜ | **很高**（建议直接调用 libNEGF） |
 | xTB 方法 | ⬜ | 直接调用 `tblite` 或 `dxtb` |
 | GPU 版、多机稀疏版 | 原型 | 高 |
@@ -363,5 +363,8 @@ print(atoms.get_potential_energy(), atoms.get_forces())       # 单位：eV、eV
 - **S5** Sigalov, Fenley, Onufriev, *J. Chem. Phys.* 124, 124902 (2006)：ALPB；Ehlert et al., *J. Chem. Theory Comput.* 17, 4250 (2021)：xtb 的 GBSA/ALPB 参数化（DFTB+ 的溶剂参数文件采用这个格式）。
 - **S6** Marenich et al., *J. Chem. Theory Comput.* 8, 527 (2012)：CM5 电荷（M6c 默认按原文，DFTB+ 25.1 的 GB 中算了两次，见 M6c 报告）。
 - **S7** Lebedev, Laikov, *Dokl. Math.* 59, 477 (1999)：球面积分网格（SASA 用）。
+- **S8** Niehaus et al., *Phys. Rev. B* 63, 085108 (2001)：DFTB 的线性响应（TD-DFTB），跃迁电荷与 γ、W 构成的 Casida 矩阵（M6d 照此实现，与 DFTB+ 的 `timedep/` 对照）；Casida, in *Recent Advances in Density Functional Methods, Part I*, ed. D. P. Chong (World Scientific, 1995), p. 155：Casida 方程。
+- **S9** Stratmann, Scuseria, Frisch, *J. Chem. Phys.* 109, 8218 (1998)：DFTB+ 的 Stratmann 求解器（在 A+B、A−B 的子空间中迭代）。
+- **S10** Davidson, *J. Comput. Phys.* 17, 87 (1975)：Davidson 方法（M6d 用分块形式、以对角元为预条件，解大体系的 Casida 方程）。
 - **P1** TBMaLT, *J. Chem. Phys.* 158, 034801 (2023)；**P2** dxtb, *J. Chem. Phys.* 161, 062501 (2024)：可自动求导的紧束缚程序。
 - 其他同类项目：LATTE/PROGRESS（LANL，SP2 + GPU）、CP2K（线性标度 DFTB）、hotbit（Python DFTB）、PYSEQM（GPU 半经验方法）。

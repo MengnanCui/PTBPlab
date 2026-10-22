@@ -129,6 +129,17 @@ def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     return "\n".join(lines) + "\n"
 
 
+def spin_constants_block(consts, labels=None) -> str:
+    """HSD ``SpinConstants`` alone (one W per type, ``ShellResolvedSpin = No``): triplet
+    excitations of a spin-restricted ground state (M6d)."""
+    if not consts:
+        return ""
+    lines = ["  SpinConstants {", "    ShellResolvedSpin = No"]
+    lines += [f"    {k} = {_f(float(np.ravel(v)[0]))}" for k, v in consts.items()
+              if labels is None or k in labels]
+    return "\n".join(lines + ["  }"]) + "\n"
+
+
 def noncolinear_block(opts, labels=None, shell_resolved_scc=False) -> str:
     """HSD for non-collinear spin (M6a): ``SpinPolarisation = NonColinear`` with every atom's
     initial magnetisation vector, and the spin constants as :func:`spin_block`."""
@@ -450,7 +461,10 @@ def opt_driver(optimiser="LBFGS {}", lattice=False, grad_elem=1e-7, max_steps=30
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
-             read_charges=False, convergent_only=True, extra_analysis="", driver="") -> str:
+             read_charges=False, convergent_only=True, extra_analysis="", driver="",
+             extra_top="", forces=True, autotest=False) -> str:
+    """The HSD input.  ``extra_top``: further top-level blocks (e.g. ``ExcitedState``);
+    ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d)."""
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
     kblock = ""
     if periodic and klines is not None:
@@ -489,13 +503,13 @@ Hamiltonian = DFTB {{
 {kblock}{poly}{diff}{extra_ham}
 }}
 Analysis {{
-{extra_analysis}  PrintForces = Yes
+{extra_analysis}  PrintForces = {"Yes" if forces else "No"}
   MullikenAnalysis = Yes
 }}
 Options {{
   WriteDetailedOut = Yes
   WriteResultsTag = Yes
-  TimingVerbosity = {2 if timing else 0}
+{"  WriteAutotestTag = Yes" + chr(10) if autotest else ""}  TimingVerbosity = {2 if timing else 0}
 }}
 ParserOptions {{
   ParserVersion = {PARSER_VERSION}
@@ -503,7 +517,74 @@ ParserOptions {{
 Parallel {{
   UseOmpThreads = Yes
 }}
-"""
+{extra_top}"""
+
+
+HARTREE_EV = 27.2113845        # DFTB+ Hartree__eV (TRA.DAT, EXC.DAT)
+
+
+def casida_block(spec, forces: bool = True) -> str:
+    """Top-level HSD ``ExcitedState { Casida }`` (M6d) for a spec {"n": NrOfExcitations,
+    "symmetry": "singlet" | "triplet" | "both" | None (spin polarised), "solver": "Arpack" |
+    "Stratmann", "state": StateOfInterest, "energy_window" (Hartree), "oscillator_window"}.
+    With forces and no state of interest DFTB+ needs ``ExcitedStateForces = No``."""
+    if not spec:
+        return ""
+    lines = ["ExcitedState {", "  Casida {", f"    NrOfExcitations = {int(spec['n'])}"]
+    if spec.get("symmetry"):
+        lines.append(f"    Symmetry = {spec['symmetry']}")
+    lines += [f"    StateOfInterest = {int(spec.get('state', 0))}",
+              f"    Diagonaliser = {spec.get('solver', 'Stratmann')} {{}}"]
+    if spec.get("energy_window") is not None:
+        lines.append(f"    EnergyWindow = {_f(spec['energy_window'])}")
+    if spec.get("oscillator_window") is not None:
+        lines.append(f"    OscillatorWindow = {_f(spec['oscillator_window'])}")
+    lines += ["    WriteTransitions = Yes", "    WriteSPTransitions = Yes",
+              "    WriteTransitionDipole = Yes"]
+    if forces:          # M6d: ground-state forces (excited-state forces are M6e)
+        lines.append(f"    ExcitedStateForces = {'Yes' if spec.get('excited_forces') else 'No'}")
+    lines += ["  }", "}"]
+    return "\n".join(lines) + "\n"
+
+
+def parse_casida(workdir, detailed: str) -> dict:
+    """Excitation outputs of a Casida run (M6d): ``exc_tags`` (autotest.tag: Omega^2,
+    oscillator strengths, |transition dipole| per degenerate group), ``exc_energies`` (every
+    state from TRA.DAT, Hartree), ``exc_rows`` (EXC.DAT: w eV, oscillator strength, i, a,
+    weight, KS eV, symmetry or D<S^2>), ``spx_rows`` (SPX.DAT: w eV, oscillator strength,
+    i, a, spin) and ``excitation_energy`` (detailed.out, the state of interest)."""
+    out = {}
+    path = os.path.join(workdir, "autotest.tag")
+    if os.path.exists(path):
+        t = parse_results_tag(path)
+        out["exc_tags"] = {k: np.atleast_1d(t[n]).astype(float)
+                           for k, n in (("omega2", "exc_energies_sqr"),
+                                        ("oscillator", "exc_oscillator"),
+                                        ("transdip", "exc_transdip")) if n in t}
+    path = os.path.join(workdir, "TRA.DAT")
+    if os.path.exists(path):
+        found = re.findall(r"^\s+Energy\s+\d+\s+(\S+)\s+eV\s*(\S?)", open(path).read(), re.M)
+        out["exc_energies"] = np.array([float(e) / HARTREE_EV for e, _ in found])
+        out["exc_symmetries"] = [sym for _, sym in found]
+    path = os.path.join(workdir, "EXC.DAT")
+    if os.path.exists(path):
+        rows = []
+        for ln in open(path).read().splitlines():
+            m = re.match(r"^\s*(\S+)\s+(\S+)\s+(\d+)\s+->\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$", ln)
+            if m and m.group(1) != "w":
+                w = float("nan") if m.group(1) == "<" else float(m.group(1))
+                rows.append([w, float(m.group(2)), int(m.group(3)), int(m.group(4)),
+                             float(m.group(5)), float(m.group(6)), m.group(7)])
+        out["exc_rows"] = rows
+    path = os.path.join(workdir, "SPX.DAT")
+    if os.path.exists(path):
+        rows = re.findall(r"^\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+->\s+(\d+)\s*([UD]?)\s*$",
+                          open(path).read(), re.M)
+        out["spx_rows"] = [[float(w), float(f), int(i), int(a), s] for w, f, i, a, s in rows]
+    m = re.search(r"^Excitation Energy:\s+(\S+)\s+H", detailed, re.M)
+    if m:
+        out["excitation_energy"] = float(m.group(1))
+    return out
 
 
 def parse_results_tag(path) -> dict:
@@ -595,7 +676,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         filling=("fermi", 0.0), shell_resolved=False, scc_tol=1e-10, max_scc=500,
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
-        convergent_only=True, extra_analysis="", driver="") -> dict:
+        convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
+        autotest=False) -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata."""
     if not available():
@@ -607,7 +689,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                   None if cell_ang is None else np.asarray(cell_ang))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
-                       klines, read_charges, convergent_only, extra_analysis, driver)
+                       klines, read_charges, convergent_only, extra_analysis, driver,
+                       extra_top, forces, autotest)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
@@ -635,7 +718,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         res["fermi_levels"] = np.atleast_1d(tag["fermi_level"]).astype(float)
         res["eigenvalues"] = tag.get("eigenvalues")
         res["filling"] = tag.get("filling")
-        res["forces"] = tag["forces"]
+        res["forces"] = tag.get("forces")
         if "stress" in tag:
             res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
         res["charges_net"] = tag["gross_atomic_charges"]
@@ -649,11 +732,15 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         if m:
             res["dipole"] = np.array([float(x) for x in m.groups()])
         res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
+        if autotest or extra_top:
+            res.update(parse_casida(workdir, det))
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
         ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)
         res["version"] = ver.group(1) if ver else "unknown"
-        iters = re.findall(r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*$", p.stdout, re.M)
+        # one line each (\s would also match the newlines of Casida's Stratmann progress table)
+        iters = re.findall(r"^[ \t]+(\d+)[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]*$",
+                           p.stdout, re.M)
         res["n_scc"] = int(iters[-1]) if iters else (1 if not scc else None)
         if driver:
             res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", p.stdout))

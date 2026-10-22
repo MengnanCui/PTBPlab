@@ -15,7 +15,7 @@ from ase import Atoms
 from ase.build import bulk, molecule
 
 from ..blockpot import ONSITE_PBE
-from ..constants import BOHR, KCAL_MOL
+from ..constants import BOHR, HARTREE, KCAL_MOL
 from ..external import fold_into_cell
 from ..kpoints import monkhorst_pack, reduce_time_reversal
 
@@ -126,6 +126,9 @@ class Case:
     solvation: dict | None = None         # solvation spec (atomic units), see solvation_model
     rescale_fields: bool = True           # DFTB+ RescaleSolvatedFields
     charge: float = 0.0                   # net charge (e)
+    casida: dict | None = None            # Casida excitations (M6d): {"n", "symmetry" (None with
+                                          # spin), "solver" (DFTB+), "state", "energy_window" (Ha),
+                                          # "oscillator_window", "spin_constants" (no spin)}
     torch: bool = True                    # also checked on the torch backend (test_reference)
     klines: list | None = None            # band run on DFTB+ Klines [(n, (k1, k2, k3)), ...]
     regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
@@ -335,6 +338,39 @@ GBSA_WATER = {
     "hbond": {"H": -7.172800544988973e-02, "C": -2.548469535762511e-03,
               "N": -1.976849501504001e-02, "O": -8.462476828587280e-03}}
 TOL_ENV = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "pc_forces": 1e-6, "dipole": 1e-6}
+
+
+def _h2co():
+    a = molecule("H2CO")
+    a.rattle(0.02, seed=3)
+    return a
+
+
+def _c2h4():
+    a = molecule("C2H4")
+    a.rattle(0.02, seed=12)        # every distance >= 3e-3 Bohr from an SK grid node
+    return a
+
+
+def _c6h6():
+    return molecule("C6H6")                  # D6h: degenerate excitations
+
+
+def _cuco_linear():
+    return Atoms("CuCO", positions=[[0, 0, 0], [0, 0, 1.85], [0, 0, 3.0]])
+
+
+def _h2co_box():
+    a = _h2co()
+    a.positions += 4.0
+    a.cell = np.eye(3) * 8.0
+    a.pbc = True
+    return a
+
+
+W_HCO = {"H": -0.072, "C": -0.023, "O": -0.028}       # spin constants of the Casida cases
+TOL_CASIDA = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "exc": 1e-8, "exc_osc": 1e-7,
+              "exc_tdip": 1e-7, "exc_table": 0, "spx": 0, "exc_state": 1e-9}
 
 
 def solvation_model(spec):
@@ -703,5 +739,62 @@ CASES = [
     Case("oh_noncolinear_soc_gb", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
          spin_orbit={"xi": {"O": [0.0, 0.01]}}, solvation=GB_WATER, torch=False,
          tol={**TOL_PAULI, **TOL_ENV}),
+    # ---- M6d: Casida excitations (DFTB+ ExcitedState { Casida }) ----------------------------
+    Case("h2o_casida", _water, casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann"},
+         torch=False, tol={**TOL_CASIDA, **TOL_DFTBP_FD},
+         note="singlets; the HOMO -> LUMO transitions do not couple (zero transition charges)"),
+    Case("h2co_casida", _h2co, casida={"n": 8, "symmetry": "singlet", "solver": "Arpack"},
+         torch=False, tol=TOL_CASIDA),
+    Case("h2co_casida_triplet", _h2co,
+         casida={"n": 6, "symmetry": "triplet", "solver": "Stratmann", "spin_constants": W_HCO},
+         torch=False, tol=TOL_CASIDA),
+    Case("c2h4_casida_both", _c2h4,
+         casida={"n": 4, "symmetry": "both", "solver": "Stratmann", "spin_constants": W_HCO},
+         torch=False, tol=TOL_CASIDA, note="triplets then singlets, as DFTB+ lists them"),
+    Case("ch3oh_casida", _meoh, casida={"n": 12, "symmetry": "singlet", "solver": "Arpack"},
+         torch=False, tol=TOL_CASIDA),
+    Case("c6h6_casida", _c6h6, casida={"n": 8, "symmetry": "singlet", "solver": "Arpack"},
+         torch=False, tol=TOL_CASIDA, note="degenerate excited states (ARPACK: DFTB+'s Stratmann "
+                                           "gets their oscillator-strength sums to ~5e-7 only)"),
+    Case("h2co_cation_casida", _h2co, charge=1.0,
+         spin={"unpaired_electrons": 1, "spin_constants": W_HCO},
+         casida={"n": 6, "symmetry": None, "solver": "Stratmann"}, torch=False, tol=TOL_CASIDA,
+         note="spin polarised (doublet): both spin channels, D<S^2>"),
+    Case("o2_triplet_casida", _o2, spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}},
+         casida={"n": 6, "symmetry": None, "solver": "Stratmann"}, torch=False, tol=TOL_CASIDA,
+         note="spin polarised triplet ground state, degenerate excitations"),
+    Case("h2co_casida_3000K", _h2co, filling=("fermi", 3000.0),
+         casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann"}, torch=False,
+         tol=TOL_CASIDA, note="fractional occupations: transitions between partly filled levels"),
+    Case("h2co_casida_onsite", _h2co, onsite=ONS,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Arpack"}, torch=False,
+         tol={**TOL_BLOCK, **TOL_CASIDA},
+         note="onsite corrections in the response (DFTB+: ARPACK only)"),
+    Case("h2co_cation_casida_onsite", _h2co, charge=1.0, onsite=ONS,
+         spin={"unpaired_electrons": 1, "spin_constants": W_HCO},
+         casida={"n": 6, "symmetry": None, "solver": "Arpack"}, torch=False,
+         tol={**TOL_BLOCK, **TOL_CASIDA},
+         note="spin polarised with onsite corrections (f_uu for equal, f_ud for opposite spins)"),
+    Case("h2co_casida_ewindow", _h2co,
+         casida={"n": 4, "symmetry": "singlet", "solver": "Arpack", "energy_window": 2.0 / HARTREE},
+         torch=False, tol=TOL_CASIDA, note="EnergyWindow 2 eV"),
+    Case("h2co_casida_owindow", _h2co,
+         casida={"n": 4, "symmetry": "singlet", "solver": "Arpack", "oscillator_window": 0.01},
+         torch=False, tol=TOL_CASIDA, note="OscillatorWindow 0.01: only bright transitions"),
+    Case("h2co_box_casida", _h2co_box, ewald_tolerance=1e-12,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann"}, torch=False,
+         tol=TOL_CASIDA, note="Gamma point of an 8 A cell (Ewald gamma); DFTB+ gives no forces"),
+    Case("cuco_cation_casida", _cuco_linear, charge=1.0,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann"}, torch=False,
+         tol=TOL_CASIDA, note="Cu d levels; a linear molecule with degenerate states"),
+    Case("h2co_casida_field_pc", _h2co, efield=FIELD, point_charges=PC3,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Arpack"}, torch=False,
+         tol={**TOL_CASIDA, **TOL_ENV}),
+    Case("h2co_casida_bright", _h2co,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann", "state": -1},
+         torch=False, tol=TOL_CASIDA, note="StateOfInterest = -1: the brightest singlet"),
+    Case("h2co_casida_state", _h2co,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Arpack", "state": 4}, torch=False,
+         tol=TOL_CASIDA, note="StateOfInterest = 4 (ground-state forces, ExcitedStateForces = No)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

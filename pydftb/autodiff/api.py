@@ -151,6 +151,9 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
         raise NotImplementedError("pydftb.autodiff does not support external fields, point "
                                   "charges, site potentials or implicit solvation: NumPy "
                                   "engine only (milestone M6c)")
+    if getattr(calc, "casida", None) is not None:
+        raise NotImplementedError("pydftb.autodiff does not support Casida excitations: NumPy "
+                                  "engine only (milestone M6d)")
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)

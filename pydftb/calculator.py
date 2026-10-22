@@ -41,6 +41,7 @@ import numpy as np
 from ase.data import atomic_numbers as _NUMBERS
 
 from . import blockpot, external
+from . import casida as _casida
 from . import solvation as _solvation
 from .backend import ops
 from .backend.spec import make_backend
@@ -108,6 +109,10 @@ class DFTBResult:
     e_solv: float = 0.0                  # implicit solvation (DFTB+ "Solvation energy")
     point_charge_forces: np.ndarray | None = None   # (M, 3) forces on external point charges
     dipole: np.ndarray | None = None     # sum_A (q0_A - q_A) r_A (e Bohr), molecules only
+    excitations: object | None = None    # Casida excitations (M6d): casida.Excitations, or
+                                         # [triplets, singlets] for symmetry "both"
+    excitation_energy: float | None = None   # the state of interest's (DFTB+ "Excitation
+                                         # Energy"); energy and free_energy stay the ground state's
 
     @property
     def e_total(self) -> float:
@@ -292,6 +297,12 @@ class DFTB:
     onsite_corrections : dict  onsite corrections (DFTB+ ``OnSiteCorrection``): type label ->
                           {"uu": f_uu, "ud": f_ud}, n_shell x n_shell (Hartree), for every type;
                           :data:`pydftb.blockpot.ONSITE_PBE` has DFTB+'s PBE values.
+    casida : Casida | dict  linear-response (TD-DFTB) excitations after the SCC (DFTB+
+                          ``ExcitedState { Casida }``, milestone M6d): see
+                          :class:`pydftb.casida.Casida`; results in ``DFTBResult.excitations``.
+                          Molecules or the Gamma point, atom-resolved SCC, not with DFTB3,
+                          two-component spin, DFTB+U or implicit solvation (as in DFTB+);
+                          triplets and spin polarisation need ``spin_constants``.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -312,7 +323,7 @@ class DFTB:
                  spin_orbit_dual: bool = True, plus_u: dict | None = None,
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
-                 solvation=None, rescale_solvated_fields: bool = True):
+                 solvation=None, rescale_solvated_fields: bool = True, casida=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -407,6 +418,9 @@ class DFTB:
         if solvation is not None and not scc:
             raise ValueError("implicit solvation needs SCC (DFTB+ runs without it, but its "
                              "Born term then stays zero)")
+        self.casida = _casida.Casida.make(casida)
+        if self.casida is not None:
+            self._check_casida(sk, solver)
         self.backend = make_backend(backend, device, dtype)
         if self.backend.is_torch and self.pauli:
             raise ValueError("non-collinear spin and spin-orbit coupling are implemented for "
@@ -418,6 +432,9 @@ class DFTB:
             raise ValueError("external fields, point charges, site potentials and implicit "
                              "solvation are implemented for the NumPy backend only "
                              "(milestone M6c)")
+        if self.backend.is_torch and self.casida is not None:
+            raise ValueError("Casida excitations are implemented for the NumPy backend only "
+                             "(milestone M6d)")
         if self.backend.is_torch:
             if solver not in ("eigh", "batched"):
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
@@ -443,6 +460,29 @@ class DFTB:
             raise ValueError("unpaired_electrons and relax_total_spin are for collinear spin: "
                              "a non-collinear calculation has one Fermi level and a free "
                              "total magnetisation (set initial_spins instead)")
+
+    def _check_casida(self, sk, solver):
+        """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
+        why = None
+        if not self.scc:
+            why = "needs SCC"
+        elif self.third_order:
+            why = "does not work with third order (DFTB3)"
+        elif sk.shell_resolved:
+            why = "does not support shell-resolved SCC"
+        elif self.pauli:
+            why = "does not work with non-collinear spin or spin-orbit coupling"
+        elif self.plus_u is not None:
+            why = "does not support DFTB+U"
+        elif self.solvation is not None:
+            why = "does not work with implicit solvation"
+        elif solver == "sp2":
+            why = "needs eigenvectors (not the SP2 solver)"
+        if why:
+            raise ValueError(f"Casida linear response {why} (as in DFTB+)")
+        if (self.casida.symmetry != "singlet" or self.spin) and self.spin_constants is None:
+            raise ValueError("triplet and spin-polarised excitations need spin_constants "
+                             "(DFTB+ SpinConstants)")
 
     @property
     def pauli(self) -> bool:
@@ -499,9 +539,17 @@ class DFTB:
             raise ValueError("no stress with external point charges (DFTB+ does not compute "
                              "it either)")
         need_derivs = forces or stress
+        if (forces and self.casida is not None and self.casida.state_of_interest != 0
+                and self.casida.excited_forces):
+            raise NotImplementedError("excited-state forces are milestone M6e; use "
+                                      "Casida(excited_forces=False) for the ground-state forces")
         setup = self._setup(species, positions, cell, pbc, need_derivs, timings)
         state = self._scc(setup, q_init, need_derivs, timings)
         res = self._energies(setup, state)
+        if self.casida is not None:
+            t1 = time.perf_counter()
+            self._excitations(setup, state, res)
+            timings["casida"] = time.perf_counter() - t1
         if need_derivs:
             t1 = time.perf_counter()
             grad, virial = self._gradient(setup, state, virial=stress)
@@ -517,6 +565,50 @@ class DFTB:
         timings["total"] = time.perf_counter() - t0
         res.timings = timings
         return res, setup, state
+
+    # ---- linear response (M6d) ----------------------------------------------------------
+    def _excitations(self, st: _Setup, sc: _SCCState, res: DFTBResult):
+        """Casida excitations of the converged ground state (DFTB+ runs them after the SCC,
+        with the eigenvectors of the last iteration)."""
+        if not st.gamma_only:
+            raise ValueError("Casida excitations need a molecule or the Gamma point only "
+                             "(as in DFTB+)")
+        x = _casida.excitations(self.casida, self._casida_ground_state(st, sc))
+        res.excitations = x
+        if self.casida.state_of_interest != 0:
+            res.excitation_energy = float(x.energies[x.state - 1])
+
+    def _casida_ground_state(self, st: _Setup, sc: _SCCState) -> "_casida.GroundState":
+        b, sk = st.basis, self.sk
+        s = np.asarray(st.smat[0]).real
+        h = np.asarray(sc.h).real
+        eps, coeffs = [], []
+        for hc in h:                      # spin channels (one k-point)
+            e, c = ops.eigh(hc, s)
+            eps.append(np.asarray(e))
+            coeffs.append(np.asarray(c))
+        occ = [np.asarray(o, float).ravel() for o in sc.occ]
+        natom = len(b.species)
+        spin_w = None
+        if self.spin_constants is not None:
+            w = self._spin_matrix(b)
+            first = np.searchsorted(b.shell_atom, np.arange(natom))
+            spin_w = np.empty(natom)
+            for a, lab in enumerate(b.species):
+                k = _casida.hoao_shell([sk.onsite[lab][l] for l in b.shells[a]],
+                                       [sk.occupation[lab][l] for l in b.shells[a]])
+                spin_w[a] = w[first[a] + k, first[a] + k]
+        onsite = ranges = None
+        if self.onsite_corrections is not None:
+            parsed = blockpot.parse_onsite(self.onsite_corrections, sk, b.species)
+            onsite, ranges = [], []
+            for a, lab in enumerate(b.species):
+                onsite.append(tuple(blockpot.onsite_orbital_matrix(b.shells[a], m)
+                                    for m in parsed[lab]))
+                edges = np.concatenate([[0], np.cumsum([2 * l + 1 for l in b.shells[a]])])
+                ranges.append(list(zip(edges[:-1].tolist(), edges[1:].tolist())))
+        return _casida.GroundState(eps, coeffs, occ, s, np.asarray(b.orb_atom), st.pos,
+                                   np.asarray(st.coulomb.gamma), spin_w, onsite, ranges)
 
     # ------------------------------------------------------------------
     def _sites(self, basis: Basis):

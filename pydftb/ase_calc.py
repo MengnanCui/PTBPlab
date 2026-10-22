@@ -74,7 +74,9 @@ class PyDFTB(Calculator):
     calculations ``spin="noncolinear"``, ``initial_spins``, ``spin_orbit``,
     ``spin_orbit_dual``, for DFTB+U and onsite corrections ``plus_u``,
     ``plus_u_functional``, ``onsite_corrections``, implicit solvation ``solvation``,
-    ``rescale_solvated_fields``, and ``dispersion``) are passed to :class:`pydftb.DFTB`.
+    ``rescale_solvated_fields``, Casida excitations ``casida``, and ``dispersion``) are passed
+    to :class:`pydftb.DFTB`.  The excitations of the last calculation are in
+    :attr:`excitations` (atomic units); ASE's energy and forces stay the ground state's.
     The environment of milestone M6c in ASE units: ``electric_field`` (E_x, E_y, E_z) in
     V/Angstrom, ``point_charges`` (positions in Angstrom, charges in e[, Gaussian blur width
     in Angstrom]), ``site_potentials`` {"gross"/"net": {atom: V}} in eV; the solvation
@@ -104,7 +106,8 @@ class PyDFTB(Calculator):
                  spin_orbit_dual: bool = True, plus_u: dict | None = None,
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
-                 solvation=None, rescale_solvated_fields: bool = True, **kwargs):
+                 solvation=None, rescale_solvated_fields: bool = True, casida=None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -122,7 +125,8 @@ class PyDFTB(Calculator):
                                 spin_orbit_dual=spin_orbit_dual, plus_u=plus_u,
                                 plus_u_functional=plus_u_functional,
                                 onsite_corrections=onsite_corrections, solvation=solvation,
-                                rescale_solvated_fields=rescale_solvated_fields)
+                                rescale_solvated_fields=rescale_solvated_fields,
+                                casida=casida)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
         self.site_potentials = site_potentials        # eV
@@ -136,6 +140,12 @@ class PyDFTB(Calculator):
         self._raw_labels = None  # type labels of that result
 
     # ------------------------------------------------------------------
+    @property
+    def excitations(self):
+        """Casida excitations of the last calculation (:class:`pydftb.casida.Excitations`,
+        atomic units; [triplets, singlets] for symmetry "both"), None without ``casida``."""
+        return None if self.raw is None else self.raw.excitations
+
     @property
     def two_component(self) -> bool:
         """Non-collinear spin or spin-orbit coupling (M6a)."""

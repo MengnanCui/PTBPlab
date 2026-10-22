@@ -140,6 +140,39 @@ paper; DFTB+ 25.1 adds the CM5 correction twice in its GB model, which
 `CM5(double_count=True)` reproduces.  Details:
 [`docs/reports/M6c-fields-solvation.html`](docs/reports/M6c-fields-solvation.html).
 
+### Excited states (Casida linear response)
+
+DFTB+'s `ExcitedState { Casida }` (NumPy engine only): vertical excitation energies,
+oscillator strengths, transition dipoles and the dominant single-particle transitions of
+molecules (or the Gamma point of a cell), after the SCC:
+
+```python
+from pydftb.casida import Casida
+
+mf = pydftb.SCC(system, params,
+                spin_constants={"H": -0.072, "C": -0.023, "O": -0.028},   # triplets, spin polarisation
+                casida=Casida(n_excitations=8, symmetry="singlet"))        # "triplet", "both"
+mf.kernel()
+x = mf.result.excitations
+x.energies, x.oscillator_strengths, x.transition_dipoles     # Hartree, -, e Bohr
+x.transitions, x.weights, x.spin_contamination               # dominant (i, a, spin), 0-based; D<S^2>
+print(x.table())                                             # EXC.DAT; x.single_particle.table(): SPX.DAT
+```
+
+Singlets, triplets (`symmetry="both"` gives `[triplets, singlets]`) and collinear spin
+polarisation (both channels coupled, with DFTB+'s D<S^2>); fractional occupations, onsite
+corrections, energy and oscillator windows, a state of interest (`state_of_interest=k`,
+or `-1` for the brightest singlet: `result.excitation_energy`, while `energy` stays the
+ground state's, as in DFTB+'s output).  The restrictions are DFTB+'s: SCC, atom-resolved,
+no DFTB3, two-component spin, DFTB+U or solvent, Gamma point only; fields, point charges
+and dispersion are fine.  `solver="auto"` diagonalises Omega densely up to 500
+transitions and uses a block Davidson solver beyond (C60's 14,400 transitions in 0.46 s,
+DFTB+'s fastest solver 1.46 s); `"arpack"` is an independent check.  In degenerate
+manifolds only group sums are defined (`x.degenerate_groups()`).  Excited-state forces are
+milestone M6e (`excited_forces=False` returns the ground-state forces).  `PyDFTB(...,
+casida=...)` gives `calc.excitations`.  Details:
+[`docs/reports/M6d-casida.html`](docs/reports/M6d-casida.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6d 激发态报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6d · 完成报告</p>
+    <h1>激发态：Casida 线性响应（TD-DFTB）</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6d-casida.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在能算分子的激发态：在基态 SCC 收敛后解 Casida 方程，给出垂直激发能、振子强度、跃迁偶极、主要的单粒子跃迁及其权重，也就是吸收光谱。支持单重态、三重态、两者，共线自旋极化（带自旋污染 Δ⟨S²⟩），分数占据，onsite 修正，Γ 点周期体系，能量窗口与振子窗口，指定的态与“最亮态”，并可与外电场、点电荷、色散同用。18 个新的 DFTB+ 参考算例全部通过。新功能只在 NumPy 引擎中；旧的计算路径逐位不变。激发态的力按设计放到 M6e。</p>
+    <ul>
+      <li><strong>与 DFTB+ 一致</strong>（18 个算例）：
+        <ul>
+          <li>激发能差 ≤ 1.8e-11 Ha，振子强度差 ≤ 6.1e-10，跃迁偶极大小差 ≤ 9.2e-9 e·Bohr；这几个上限来自 DFTB+ 的 ARPACK 只收敛到单精度容差，大多数算例的振子强度差在 1e-14 量级；</li>
+          <li>EXC.DAT 和 SPX.DAT 中打印的每个值（激发能、振子强度、主要跃迁、权重、单粒子能量、对称性或 Δ⟨S²⟩）都一致；没有简并能级的分子，pydftb 写出的两个文件与 DFTB+ 的逐字节相同；</li>
+          <li>基态部分：能量差 ≤ 4.6e-11 Ha，力差 ≤ 1.4e-8 Ha/Bohr（水 1.2e-6，是 DFTB+ 数值 SK 导数的已知误差），SCC 轮数全部相同；指定态的激发能（DFTB+ 的 “Excitation Energy”）差 ≤ 4.6e-11 Ha。</li>
+        </ul>
+      </li>
+      <li><strong>三种求解器</strong>：稠密对角化（<code>"exact"</code>）、分块 Davidson（<code>"davidson"</code>）、SciPy 的 ARPACK（<code>"arpack"</code>）。默认 <code>"auto"</code>：跃迁数不超过 500 时用稠密对角化，更多时用 Davidson。18 个算例用三种求解器分别对照，都通过。</li>
+      <li><strong>速度</strong>（第六节）：C<sub>60</sub>（14,400 个跃迁，10 个单重态）的激发部分 pydftb 用 0.46 s，DFTB+ 的 Stratmann 求解器 1.46 s、ARPACK 9.1 s；两者的结果与 pydftb 分别一致到 3.6e-9 Ha（Stratmann 的收敛阈值）和 1.5e-15 Ha。</li>
+      <li><strong>DFTB+ 25.1 的行为</strong>（第五节）：设置 <code>StateOfInterest</code> 后，“Total energy” 与 <code>mermin_energy</code> 仍是基态能量，激发能另行打印（与手册的说法不同）；含部分占据 d 能级的 Cu<sub>4</sub>CO（300 K）上两个求解器都失败，pydftb 三种求解器都正常；Stratmann 求解器使简并态的振子强度之和只准到约 5e-7；简并能级中单个态的输出取决于求解器给出的本征向量组合。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">18</span><span class="lbl">新的 DFTB+ 参考算例，三种求解器都通过</span></li>
+      <li><span class="num">≤ 1.8e-11</span><span class="lbl">与 DFTB+ 的激发能差（Ha）</span></li>
+      <li><span class="num">3.2×</span><span class="lbl">C<sub>60</sub> 上比 DFTB+ 最快的求解器快</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#cost">六、速度</a></li>
+      <li><a href="#tests">七、测试与门槛</a></li>
+      <li><a href="#deviations">八、与设计的偏差</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/casida.py</code>（新）</td><td>
+              <ul>
+                <li><code>Casida</code>：选项与检查（态数、对称性、指定态、两个窗口、求解器、<code>excited_forces</code>）；</li>
+                <li><code>GroundState</code>：响应需要的基态数据（各自旋通道的轨道能、S 正交的本征向量、占据数，交叠矩阵，原子分辨的 γ，每个原子 HOAO 壳层的自旋常数 W，onsite 常数矩阵）；</li>
+                <li>单粒子跃迁（DFTB+ 的规则与稳定排序）、Mulliken 跃迁电荷（分块向量化）、onsite 修正需要的每个原子的跃迁密度块与壳层平均修正；</li>
+                <li><code>Response</code>：单重态、三重态、自旋极化与 onsite 项的 Ω 矩阵，以及不组装矩阵的乘积（每次的代价为跃迁数 × 原子数，onsite 修正再加跃迁数 × 每个原子轨道数的平方）；求解器 <code>exact</code>（<code>scipy.linalg.eigh</code> 只取最低的 n 个）、<code>davidson</code>（分块 Davidson，以 ω<sub>ia</sub>² 为预条件）、<code>arpack</code>（<code>eigsh</code>）；</li>
+                <li>窗口（能量窗口、按简并组选取的振子窗口，ARPACK 规则下至少保留 n + 1 个跃迁）、X+Y、振子强度、跃迁偶极、权重与主要跃迁、Δ⟨S²⟩（向量化的 <code>getExcSpin</code>）、最亮态；</li>
+                <li><code>Excitations</code>（结果，<code>degenerate_groups()</code> 按 DFTB+ 的方式合并简并态，<code>table()</code> 写 EXC.DAT）与 <code>SingleParticle</code>（<code>table()</code> 写 SPX.DAT），两种表的列宽照 DFTB+ 的 Fortran 格式。</li>
+              </ul>
+            </td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li>新选项 <code>casida</code> 及 DFTB+ 的限制检查（需要 SCC，不能与 DFTB3、壳层分辨 SCC、两分量、DFTB+U、隐式溶剂、SP2 同用；三重态与自旋极化需要自旋常数）；</li>
+                <li><code>_run</code> 在能量之后调用：用最后一轮 SCC 的哈密顿量重新求本征向量，占据数、γ、HOAO 的 W、onsite 常数取自引擎已有的数据；只允许分子或 Γ 点；</li>
+                <li><code>DFTBResult.excitations</code>、<code>excitation_energy</code>（新字段，默认 None）；指定态且要求激发态的力时报 <code>NotImplementedError</code>（M6e）；耗时记在 <code>timings["casida"]</code>。</li>
+              </ul>
+              旧路径的表达式一个未改，新代码只在 <code>casida</code> 不为空时执行。</td></tr>
+            <tr><td><code>ase_calc.py</code>、<code>api.py</code></td><td><code>PyDFTB(…, casida=…)</code> 与 <code>calc.excitations</code>；<code>api.SCC</code> 把选项传给引擎</td></tr>
+            <tr><td><code>autodiff/api.py</code></td><td>遇到 <code>casida</code> 报 <code>NotImplementedError</code>；torch 后端在构造时报错</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>Case.casida</code>；DFTB+ 输入块 <code>casida_block</code>（<code>ExcitedState { Casida }</code>，写出 EXC.DAT、SPX.DAT、TRA.DAT 与跃迁偶极）与 <code>spin_constants_block</code>；<code>make_hsd</code>、<code>run</code> 新增 <code>extra_top</code>、<code>forces</code>、<code>autotest</code>（默认值下写出的输入与以前相同）；</li>
+                <li><code>parse_casida</code> 读 autotest.tag、TRA.DAT、EXC.DAT、SPX.DAT 和 “Excitation Energy”；</li>
+                <li><code>refgen</code>：比较激发能（全精度）、振子强度、|μ|、两张表与指定态；表的比较不受简并能级任意组合的影响（第三节）；<code>--casida-solver</code> 选择 pydftb 的求解器；检查输出多一行激发态的偏差。</li>
+              </ul>
+            </td></tr>
+            <tr><td>测试</td><td>18 个参考 JSON；<code>tests/test_casida.py</code>（21 个）</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>import pydftb
+from pydftb.casida import Casida
+
+mf = pydftb.SCC(system, params,
+                spin_constants={"H": -0.072, "C": -0.023, "O": -0.028},   # 三重态或自旋极化时需要
+                casida=Casida(n_excitations=8, symmetry="singlet"))        # "triplet"、"both"
+mf.kernel()
+x = mf.result.excitations
+x.energies, x.oscillator_strengths, x.transition_dipoles     # Ha；无量纲；e·Bohr
+x.transitions, x.weights, x.ks_energies                      # 主要的单粒子跃迁 (i, a, 自旋)，从 0 起
+x.spin_contamination                                         # 自旋极化时的 Δ⟨S²⟩
+x.degenerate_groups()                                        # 简并态合并后的能量、振子强度、|μ|
+print(x.table())                                             # EXC.DAT
+print(x.single_particle.table())                             # SPX.DAT
+
+Casida(10, energy_window=0.05, oscillator_window=0.01,   # Ha；无量纲
+       state_of_interest=-1, excited_forces=False,       # 最亮的单重态；基态的力
+       solver="auto")                                    # "exact"、"davidson"、"arpack"
+
+# ASE
+calc = PyDFTB(skdir, casida={"n_excitations": 8})
+atoms.calc = calc; atoms.get_potential_energy(); calc.excitations</code></pre>
+      <ul>
+        <li><strong>单位</strong>：能量 Ha，偶极 e·Bohr；两个 <code>table()</code> 与 DFTB+ 一样用 eV。</li>
+        <li><strong><code>symmetry="both"</code></strong>：结果是列表 [三重态, 单重态]（DFTB+ 的顺序）；EXC.DAT 写成 <code>xs[0].table() + xs[1].table(header=False)</code>。自旋极化时忽略 <code>symmetry</code>，两个自旋通道的跃迁一起耦合。</li>
+        <li><strong>指定态</strong>：<code>state_of_interest</code> &gt; 0 时 <code>excitation_energy</code> 给出该态的激发能，&lt; 0 时给出最亮的单重态；<code>energy</code>、<code>free_energy</code> 仍是基态的（与 DFTB+ 的输出相同，见第五节）。这时要求力会报错，提示 M6e；<code>excited_forces=False</code> 给出基态的力（DFTB+ 的 <code>ExcitedStateForces = No</code>）。</li>
+        <li><strong>求解器</strong>：<code>"auto"</code> 一般就够用。<code>"arpack"</code> 慢，只用来独立核对。</li>
+        <li><strong>限制</strong>（与 DFTB+ 相同）：需要 SCC；不能与 DFTB3、壳层分辨 SCC、非共线自旋、SOC、DFTB+U、隐式溶剂同用；周期体系只能用 Γ 点。onsite 修正可以用（DFTB+ 只在 ARPACK 求解器中支持）；外电场、点电荷、色散可以用。torch 后端和自动求导报错。</li>
+        <li><strong>简并</strong>：简并的态之间可以任意组合，单个态的振子强度、跃迁偶极、主要跃迁和权重因此不唯一；有意义的是简并组的和，<code>degenerate_groups()</code> 给出。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>18 个算例（DFTB+ 25.1，SCC 容差 1e-10，参数为测试用的 <code>ptbp_hcocu</code>）。每个算例比较基态的能量、力、电荷和 SCC 轮数；激发态比较 autotest.tag 中全精度的 Ω²、振子强度、|μ|（按简并组），TRA.DAT 中每个态的激发能，EXC.DAT 与 SPX.DAT 中打印的每个值，以及指定态的激发能。表中的数是 pydftb 默认求解器的结果；用 Davidson 或 ARPACK 时各列的最大值相同。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>DFTB+ 求解器</th><th>激发能差</th><th>振子强度差</th><th>|μ| 差</th><th>两张表</th><th>SCC</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_casida</code></td><td>单重态，含不耦合的跃迁</td><td>Stratmann</td><td>1.1e-11</td><td>9.5e-15</td><td>6.4e-15</td><td>一致</td><td>8/8</td></tr>
+          <tr><td><code>h2co_casida</code></td><td>单重态（8 个），主要对照</td><td>ARPACK</td><td>1.8e-11</td><td>2.7e-15</td><td>3.5e-14</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_casida_triplet</code></td><td>三重态（自旋常数 W）</td><td>Stratmann</td><td>8.8e-12</td><td>0</td><td>0</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>c2h4_casida_both</code></td><td>三重态与单重态</td><td>Stratmann</td><td>1.8e-12</td><td>2.3e-15</td><td>3.7e-14</td><td>一致</td><td>10/10</td></tr>
+          <tr><td><code>ch3oh_casida</code></td><td>12 个态，低对称性</td><td>ARPACK</td><td>1.6e-11</td><td>2.2e-14</td><td>8.7e-14</td><td>一致</td><td>12/12</td></tr>
+          <tr><td><code>c6h6_casida</code></td><td>简并的态（D<sub>6h</sub>）</td><td>ARPACK</td><td>1.8e-12</td><td>1.1e-14</td><td>1.4e-9</td><td>一致*</td><td>7/7</td></tr>
+          <tr><td><code>h2co_cation_casida</code></td><td>自旋极化（二重态），Δ⟨S²⟩</td><td>Stratmann</td><td>1.2e-12</td><td>7.1e-15</td><td>4.0e-13</td><td>一致</td><td>21/21</td></tr>
+          <tr><td><code>o2_triplet_casida</code></td><td>自旋极化（三重态基态），简并</td><td>Stratmann</td><td>1.6e-12</td><td>1.6e-15</td><td>6.4e-15</td><td>一致*</td><td>2/2</td></tr>
+          <tr><td><code>h2co_casida_3000K</code></td><td>分数占据</td><td>Stratmann</td><td>1.2e-12</td><td>8.3e-18</td><td>3.3e-15</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_casida_onsite</code></td><td>onsite 修正</td><td>ARPACK</td><td>1.8e-11</td><td>1.1e-10</td><td>9.2e-9</td><td>一致</td><td>19/19</td></tr>
+          <tr><td><code>h2co_cation_casida_onsite</code></td><td>自旋极化 + onsite 修正（同自旋 f<sub>↑↑</sub>、异自旋 f<sub>↑↓</sub>）</td><td>ARPACK</td><td>1.4e-12</td><td>4.7e-12</td><td>2.6e-9</td><td>一致</td><td>26/26</td></tr>
+          <tr><td><code>h2co_casida_ewindow</code></td><td>能量窗口 2 eV</td><td>ARPACK</td><td>1.7e-12</td><td>2.1e-15</td><td>1.4e-15</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_casida_owindow</code></td><td>振子窗口 0.01</td><td>ARPACK</td><td>6.8e-12</td><td>6.1e-10</td><td>1.1e-9</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_box_casida</code></td><td>8 Å 盒子的 Γ 点（Ewald 的 γ）</td><td>Stratmann</td><td>3.3e-12</td><td>3.0e-12</td><td>1.1e-11</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>cuco_cation_casida</code></td><td>Cu 的 d 轨道，线形分子的简并态</td><td>Stratmann</td><td>1.7e-12</td><td>2.4e-17</td><td>1.2e-14</td><td>一致*</td><td>14/14</td></tr>
+          <tr><td><code>h2co_casida_field_pc</code></td><td>外电场 + 3 个点电荷</td><td>ARPACK</td><td>5.0e-12</td><td>6.5e-13</td><td>2.1e-10</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_casida_bright</code></td><td>最亮态（<code>StateOfInterest</code> = −1）</td><td>Stratmann</td><td>5.0e-12</td><td>2.7e-15</td><td>3.7e-14</td><td>一致</td><td>11/11</td></tr>
+          <tr><td><code>h2co_casida_state</code></td><td>第 4 个态（基态的力）</td><td>ARPACK</td><td>5.0e-12</td><td>8.0e-12</td><td>1.6e-9</td><td>一致</td><td>11/11</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>单位：激发能 Ha，|μ| e·Bohr。激发能差是 autotest.tag（全精度）与 TRA.DAT 两者中较大的一个；它主要来自基态（SCC 容差 1e-10），不来自响应。两个指定态的算例中 “Excitation Energy” 的差为 3.3e-11、4.6e-11 Ha。</li>
+        <li>振子强度差、|μ| 差较大的几个算例（onsite、两个窗口、外场 + 点电荷、第 4 个态）都用 DFTB+ 的 ARPACK：它的收敛容差是单精度的 ε ≈ 1.2e-7（相对），pydftb 的三种求解器之间的差小得多（第四节）。</li>
+        <li>基态：能量差 ≤ 4.6e-11 Ha，力差 ≤ 1.4e-8 Ha/Bohr（水 1.2e-6，见 <code>TOL_DFTBP_FD</code>；Γ 点盒子 DFTB+ 不给力），Mulliken 电荷差 ≤ 1.3e-11。</li>
+        <li><strong>两张表</strong>：EXC.DAT 中激发能、振子强度、权重、单粒子能量、Δ⟨S²⟩ 打印到 3 或 8 位小数，SPX.DAT 同样；“一致”指每个值都相差不到末位的一个单位，主要跃迁的轨道编号、对称性标记完全相同。* 有简并能级的三个算例（苯、O<sub>2</sub>、CuCO<sup>+</sup>）：简并的轨道和态可以任意组合，DFTB+ 与 pydftb 选的组合不同，单个态的权重和单个跃迁的振子强度因此不同（例如 O<sub>2</sub> 的一个跃迁 DFTB+ 是 0.1174356，pydftb 是 0.1210576，简并组之和相同）。这些地方比较与组合无关的量：简并态组的振子强度之和、Δ⟨S²⟩ 之和、排序后的单粒子能量，简并跃迁组的振子强度之和；主要跃迁与权重只在态不简并、且 X+Y 几乎不落在简并跃迁上时比较。没有简并能级的算例中，pydftb 写出的 EXC.DAT 与 SPX.DAT 与 DFTB+ 的逐字节相同（另做了文件比对）。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <ul>
+        <li><strong>三种求解器</strong>：CH<sub>3</sub>OH（12 个态）、苯（8 个态，含简并）、自旋极化的 H<sub>2</sub>CO<sup>+</sup> 上，Davidson、ARPACK 与稠密对角化的 Ω² 差 ≤ 1e-12，按简并组的振子强度差 ≤ 1e-9；苯最低的 20 个本征对中，Davidson 与稠密解的本征值差 ≤ 1e-13，每个简并组张成同一子空间（主角余弦与 1 差 ≤ 1e-8）。</li>
+        <li><strong>Casida 矩阵</strong>：单重态、三重态、自旋极化、onsite、自旋极化 + onsite 五种情形下 Ω 严格对称，不组装矩阵的乘积与矩阵相同到 1e-12（相对）；本征向量满足 Σ (X+Y)² Ω/ω = 1 到 1e-12。</li>
+        <li><strong>不耦合的极限</strong>：γ 取零时激发能等于单粒子跃迁能（1e-14），闭壳层的振子强度是单粒子值的两倍，主要跃迁就是该跃迁、权重为 1。</li>
+        <li><strong>自旋极化路径用于闭壳层</strong>：H<sub>2</sub>CO 按自旋极化算（未成对电子为 0），12 个激发能就是同一分子单重态与三重态合在一起最低的 12 个（差 8e-16），Δ⟨S²⟩ 对三重态为 2、单重态为 0（1e-8）。</li>
+        <li><strong>转动与平移</strong>：分子整体转动并平移后，激发能、振子强度不变（1e-10），跃迁偶极随分子转动。</li>
+        <li><strong>表格</strong>：EXC.DAT、SPX.DAT 由参考数据的解析器读回后，与冻结的 DFTB+ 值完全相同（闭壳层、自旋极化、单重态 + 三重态、振子窗口四种）。</li>
+        <li><strong>大体系</strong>：C<sub>60</sub>（14,400 个跃迁）的 10 个单重态与 DFTB+ 的 ARPACK 一致到 1.5e-15 Ha（激发能）和 1.5e-15（振子强度），简并组的数目相同。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <h3>1. 指定态时的“总能量”</h3>
+      <p>手册说设置 <code>StateOfInterest</code> 后总能量包含激发能。实测 DFTB+ 25.1 中 detailed.out 的 “Total energy” 与 results.tag 的 <code>mermin_energy</code> 都还是基态能量：<code>main.F90</code> 先写出能量，之后才把激发能加到 E<sub>total</sub> 和 E<sub>Mermin</sub> 上。激发能另行打印为 “Excitation Energy”，结构优化与 MD 用的是 E<sub>force related</sub> + 激发能。pydftb 的 <code>energy</code> 与 DFTB+ 的输出一致（基态），激发能在 <code>excitation_energy</code> 中。</p>
+      <h3>2. Cu<sub>4</sub>CO（300 K）上两个求解器都失败</h3>
+      <p>部分占据的 Cu d 能级之间有很多接近零的跃迁。ARPACK 报 “Maximum number of iterations reached”，Stratmann 报 “TDDFT diagonalisation failure. Increase SubSpaceFactor”（加大到 60 仍失败）。pydftb 的三种求解器都给出相同的 6 个态（最低的一个 0.0051 eV，在两个几乎简并的部分占据能级之间），稠密解 0.17 s、Davidson 0.03 s。</p>
+      <h3>3. Stratmann 求解器与简并</h3>
+      <ul>
+        <li>Stratmann 的收敛阈值是残差 1.2e-8（0.1 × 单精度 ε）。苯的简并态上，它的振子强度之和与精确值差约 5e-7，ARPACK 则差 1e-14，所以苯的参考算例用 ARPACK。C<sub>60</sub> 上 Stratmann 的激发能与精确值差 3.6e-9 Ha，ARPACK 差 1.5e-15。</li>
+        <li>简并能级中，单个态的振子强度、权重、主要跃迁，以及 SPX.DAT 中单个简并跃迁的振子强度，都取决于对角化程序给出的组合，DFTB+ 与 pydftb 的不同。只有简并组的和是确定的（手册附录也这样说明）。autotest.tag 已经把简并态合并，比较时用它。</li>
+      </ul>
+      <h3>4. 输入与输出的细节</h3>
+      <ul>
+        <li>onsite 修正只能配 ARPACK（Stratmann 报 “Onsite corrections not implemented for Stratmann diagonaliser”）。</li>
+        <li>Γ 点周期体系可以算激发能，但打开力就报 “Excited state stresses not implemented”。</li>
+        <li>不计算力时写 <code>ExcitedStateForces</code> 是输入错误（节点不被读取）；计算力而 <code>StateOfInterest</code> = 0 时必须写 <code>ExcitedStateForces = No</code>。</li>
+        <li><code>Symmetry = both</code> 时 autotest.tag 只保留后算的单重态，三重态只在 EXC.DAT 中；EXC.DAT 只有一个表头，先列三重态。</li>
+        <li>EXC.DAT 中自旋极化与闭壳层的列宽不同，Ω² &lt; 0 的行又不同（闭壳层时振子强度后的空格从 5 个变为 2 个）；pydftb 的 <code>table()</code> 照搬这些格式。</li>
+        <li>为 M6e 先做的检查：DFTB+ 的激发态力（单重态、三重态、自旋极化）与 E<sub>0</sub> + ω 的有限差分一致到 3e-7 Ha/Bohr。</li>
+      </ul>
+    </section>
+
+    <section id="cost">
+      <h2>六、速度</h2>
+      <p>两个程序都用单线程，不算力，SCC 容差 1e-10。DFTB+ 一栏是加不加 <code>ExcitedState</code> 两次运行的时间差（激发部分），总时间包含进程启动和读写文件。pydftb 在 conda 环境（MKL）中运行，“激发部分”是 <code>timings["casida"]</code>。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>跃迁数</th><th>pydftb 激发部分</th><th>DFTB+ 激发部分</th><th>pydftb 总时间</th><th>DFTB+ 总时间</th></tr></thead>
+        <tbody>
+          <tr><td>苯，8 个单重态</td><td>225</td><td>0.003 s（稠密）<br>0.003 s（Davidson）<br>0.010 s（ARPACK）</td><td>0.025 s（ARPACK）<br>0.055 s（Stratmann）</td><td>0.014 s</td><td>0.09 s</td></tr>
+          <tr><td>C<sub>60</sub>，10 个单重态</td><td>14,400</td><td>0.46 s（Davidson）<br>4.1 s（ARPACK）</td><td>9.1 s（ARPACK）<br>1.46 s（Stratmann）</td><td>0.60 s</td><td>1.73 s（Stratmann）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>为什么 Davidson 快</strong>：Ω 是对角阵 ω<sub>ia</sub>² 加一个秩不超过原子数的耦合，以对角元为预条件的 Davidson 在 C<sub>60</sub> 上 10 次迭代（约 110 次矩阵—向量乘积）就收敛到残差 1e-12；ARPACK 的 Lanczos 在 C<sub>60</sub> 这种近简并的谱上要几千次乘积。每次乘积的代价是跃迁数 × 原子数。</li>
+        <li><strong>稠密对角化与 Davidson 的分界</strong>：用 C<sub>60</sub> 前若干个跃迁组成的矩阵测得，100 个跃迁时稠密解 0.001 s、Davidson 0.004 s；500 个时两者相当（0.014 s 对 0.011 s）；1000、2000、4000 个时稠密解 0.11、0.85、6.1 s，Davidson 0.02、0.04、0.10 s，两者的本征值差 ≤ 5e-17。<code>"auto"</code> 因此在 500 个跃迁处切换。</li>
+        <li>内存：稠密 Ω 是跃迁数的平方（14,400 个跃迁约 1.7 GB），Davidson 与 ARPACK 只存跃迁电荷（跃迁数 × 原子数）和子空间向量。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>七、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6d 之前的提交 <code>fb9d638</code> 逐字节比较（<code>--allow-new excitations excitation_energy</code>）</td><td>conda 环境 407 次计算、81,949 个量，最小环境 368 次、75,547 个量，逐位相同；新算例的 54 次计算（18 个算例 × 3 种求解设置）只在工作树中，不比较</td></tr>
+          <tr><td>参考</td><td><code>refgen --check</code>（NumPy、torch；激发态算例另用 <code>--casida-solver davidson</code>、<code>arpack</code>），<code>dynamics --check</code></td><td>NumPy：148 个单点全部通过（其中新增 18 个）；18 个激发态算例另用稠密、Davidson、ARPACK 三种求解器各检查一遍，全部通过；torch：74 个通过，两分量的 16 个、块势的 18 个、外加条件的 22 个和激发态的 18 个按设计跳过；13 个优化/MD 全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 644 个通过、74 个跳过（四类 NumPy 专有参考算例的 torch 参数化）；最小环境 423 个通过、174 个跳过；最小环境 + torch 610 个通过、108 个跳过；比 M6c 多出的数目与新测试（18 个参考、<code>test_casida.py</code> 21 个）一致</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>224 个通过，7 个已知的界面冒烟测试失败（与之前相同），1 个跳过</td></tr>
+          <tr><td>PTBP 结果</td><td><code>tools/engine_parity.py --compare-serial</code>，发表点</td><td>energygeometry 损失 0.9198547924（与 M6c 相同），1 核与自动核数逐位相同（PTBP 不用激发态）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与设计的偏差</h2>
+      <ul>
+        <li><strong>求解器</strong>：设计是默认稠密对角化，另备 SciPy 的迭代求解器（ARPACK）。实测 SciPy 的 ARPACK 在 C<sub>60</sub> 上要 10 s（加大 Krylov 子空间后 4.1 s），比 DFTB+ 的 Stratmann（1.46 s）慢，于是加了分块 Davidson 作为大体系的默认（0.46 s），ARPACK 保留作独立核对；<code>"auto"</code> 的分界从计划的 4000 个跃迁改为实测的 500 个。<code>solver</code> 的取值因此是 <code>"auto"</code>、<code>"exact"</code>、<code>"davidson"</code>、<code>"arpack"</code>。</li>
+        <li><strong>文本输出</strong>：做了 EXC.DAT 与 SPX.DAT 两张表（格式与 DFTB+ 相同）；TRA.DAT、TDP.DAT 没有写成文本，其中的数据都在结果里（<code>xpy</code> 与 <code>pairs</code>、<code>transition_dipoles</code>）。</li>
+        <li><strong>算例</strong>：18 个（计划约 15 个），多了 <code>h2co_casida_state</code>（指定第 4 个态，基态的力）和 <code>h2co_cation_casida_onsite</code>（自旋极化 + onsite 修正，设计时没有列出，DFTB+ 支持这种组合）。苯改用 DFTB+ 的 ARPACK（Stratmann 的简并组精度不够，第五节第 3 条），O<sub>2</sub> 与 CuCO<sup>+</sup> 用 Stratmann。乙烯的结构换了随机扰动的种子（4 → 12）：原来的一个 C–H 距离离 SK 网格点只有 7e-5 Bohr，落在 DFTB+ 数值求导的步长内，基态的力差 7.4e-6（与 <code>TOL_DFTBP_FD</code> 记录的水分子问题相同，与激发态无关）。</li>
+        <li><strong>表格的比较</strong>：设计只说简并时比较和；实际把规则写细（第三节）：简并态组比较振子强度和 Δ⟨S²⟩ 之和与排序后的单粒子能量，主要跃迁与权重只在态不简并、且 X+Y 落在简并跃迁上的部分可以忽略时比较。</li>
+        <li><strong>ASE</strong>：结果用 <code>calc.excitations</code>（设计写的是 <code>calc.raw.excitations</code>，两者都可用）。</li>
+        <li><strong>新增</strong>：<code>Excitations.degenerate_groups()</code>（DFTB+ autotest.tag 的合并规则）；<code>refgen --casida-solver</code>；检查输出中每个激发态算例多一行偏差。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li>M6e：激发态的力（Z 向量方法，对照 DFTB+ 的 <code>linrespgrad</code>，并与 E<sub>0</sub> + ω 的差分核对）、激发态的 Mulliken 电荷与偶极、激发态的结构优化与 MD，以及 XL-BOMD（自写 Verlet 驱动，对照 DFTB+ 的 <code>Xlbomd</code>、<code>XlbomdFast</code> 的轨迹和能量）。</li>
+        <li>之后按路线图做 M5、M7、M8。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6d-casida.html">← M6d 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M6d</span>
+  </footer>
+</div>
+</body>
+</html>

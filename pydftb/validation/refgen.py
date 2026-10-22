@@ -24,6 +24,7 @@ import numpy as np
 
 from ..bands import broaden, eigenstates, klines
 from ..calculator import DFTB
+from ..casida import Casida
 from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
 from ..external import PointCharges
@@ -111,10 +112,11 @@ def missing_requirement(doc: dict) -> str | None:
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
                fd_delta: float | None = None, engine: bool = False, k_threads=1,
-               backend=None, device=None, dtype=None, **options):
+               backend=None, device=None, dtype=None, casida_solver: str = "auto", **options):
     """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set.
     ``engine``: also return the pydftb.DFTB object (for band structures).
     ``backend``/``device``/``dtype``: the array backend (milestone M4, default NumPy);
+    ``casida_solver``: the eigensolver of a Casida case (M6d);
     ``options``: other DFTB settings that replace the case's (e.g. ``scc_tol``)."""
     tmp = None
     if skdir is None and case.typed:
@@ -136,7 +138,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     backend=backend, device=device, dtype=dtype,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
                     **pauli_options(case, labels), **block_options(case, labels),
-                    **environment_options(case))
+                    **environment_options(case), **casida_options(case, casida_solver))
         calc = DFTB(sk, **{**opts, **options})
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
@@ -219,6 +221,23 @@ def environment_ase_options(case: Case) -> dict:
     return out
 
 
+def casida_options(case: Case, solver: str = "auto") -> dict:
+    """:class:`pydftb.DFTB` options of a Casida case (M6d): ground-state forces, and the spin
+    constants of spin-restricted triplets; ``solver`` is pydftb's (the case's "solver" is
+    DFTB+'s)."""
+    spec = case.casida
+    if not spec:
+        return {}
+    out = {"casida": Casida(n_excitations=spec["n"], symmetry=spec.get("symmetry") or "singlet",
+                            state_of_interest=spec.get("state", 0),
+                            energy_window=spec.get("energy_window"),
+                            oscillator_window=spec.get("oscillator_window"),
+                            solver=solver, excited_forces=False)}
+    if spec.get("spin_constants") and not case.spin:
+        out["spin_constants"] = spec["spin_constants"]
+    return out
+
+
 def environment_hsd(case: Case) -> str:
     """DFTB+ ``ElectricField``, ``AtomSitePotential`` and ``Solvation`` blocks (M6c)."""
     return (dftbplus.electric_field_block(case.efield, case.point_charges)
@@ -241,13 +260,20 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                                                               for lab in inp["max_l"]})
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
                  + block_hsd(case, inp) + environment_hsd(case))
+        if case.casida and case.casida.get("spin_constants") and not case.spin:
+            extra += dftbplus.spin_constants_block(case.casida["spin_constants"],
+                                                   set(inp["labels"]))
         if case.ewald_tolerance is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(case.ewald_tolerance)}\n"
         args = (inp["labels"], np.array(inp["positions_angstrom"]),
                 np.array(inp["cell_angstrom"]) if periodic else None)
+        # DFTB+ has no excited-state stress: no forces for a periodic Casida case
+        forces = not (case.casida and periodic)
         kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
-                  scc_tol=case.scc_tol, threads=threads, charge=case.charge)
+                  scc_tol=case.scc_tol, threads=threads, charge=case.charge,
+                  **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
+                      "autotest": True} if case.casida else {}))
         if not (case.klines or case.regions or case.dp_dos):
             return dftbplus.run(*args, **kw)
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
@@ -388,7 +414,9 @@ def regenerate(names=None, threads: int = 1):
                          **({"efield": case.efield, "point_charges": case.point_charges,
                              "site_potentials": case.site_potentials,
                              "solvation": case.solvation, "rescale_fields": case.rescale_fields,
-                             "charge": case.charge} if case.environment else {})},
+                             "charge": case.charge} if case.environment else {}),
+                         **({"casida": case.casida, "charge": case.charge}
+                            if case.casida else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -404,11 +432,17 @@ def regenerate(names=None, threads: int = 1):
                                                   "angular_orbital", "orbital_charges")
                           or case.environment and k in ("e_ext", "e_solv", "dipole",
                                                         "point_charge_forces", "e_spin",
-                                                        "e_ls", "e_3rd", "spins")},
+                                                        "e_ls", "e_3rd", "spins")
+                          or case.casida and k in ("exc_energies", "exc_symmetries",
+                                                   "exc_rows", "spx_rows", "excitation_energy",
+                                                   "e_spin", "spins")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
             doc["reference"]["scc_eigenvalues"] = np.asarray(ref["eigenvalues"]).tolist()
+        if case.casida:
+            doc["reference"]["exc_tags"] = {k: np.asarray(v).tolist()
+                                            for k, v in ref["exc_tags"].items()}
         if case.klines or case.regions or case.dp_dos:
             doc["reference"].update(_band_reference(case, ref))
             doc["band_hsd"] = ref.get("band", {}).get("hsd")
@@ -427,18 +461,19 @@ def load(name: str) -> dict:
 
 
 def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
-            **backend) -> dict:
+            casida_solver: str = "auto", **backend) -> dict:
     """Run pydftb on a frozen case; return the deviations and pass/fail.
 
     ``fd_delta`` = DFTB+'s finite-difference step (1.22e-4 by default in the
     reference runs) makes pydftb reproduce DFTB+'s approximate forces.
+    ``casida_solver``: pydftb's Casida eigensolver (M6d).
     ``backend``: ``backend``/``device``/``dtype`` of :class:`pydftb.DFTB`.
     """
     case = CASES_BY_NAME[doc["case"]]
     inp = doc["input"]
     t0 = time.perf_counter()
     res, engine = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, engine=True,
-                             **backend)
+                             casida_solver=casida_solver, **backend)
     wall = time.perf_counter() - t0
     ref = doc["reference"]
     sk_q0 = _neutral_populations(case, inp)
@@ -451,7 +486,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         "e_zero": abs(res.e_zero - ref["e_zero"]) if "e_zero" in ref else 0.0,
         "stress": (float(np.abs(res.stress - ref_stress).max())
                    if ref_stress is not None else 0.0),
-        "forces": float(np.abs(res.forces - np.array(ref["forces"])).max()),
+        "forces": (float(np.abs(res.forces - np.array(ref["forces"])).max())
+                   if ref.get("forces") is not None else 0.0),
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
         "e_disp": abs(res.e_disp - ref["e_disp"]) if "e_disp" in ref else 0.0,
     }
@@ -467,6 +503,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         env = _compare_environment(case, ref, res)
         env["e_terms"] = max(env["e_terms"], dev.get("e_terms", 0.0))
         dev.update(env)
+    if case.casida:
+        dev.update(_compare_casida(ref, res))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -474,7 +512,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
           and dev["stress"] <= tol.get("stress", 1e-7)
           and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev)
           and all(dev[k] <= tol[k] for k in ("spins", "moments", "orbital", "pc_forces",
-                                              "dipole") if k in dev))
+                                              "dipole", "exc", "exc_osc", "exc_tdip",
+                                              "exc_table", "spx", "exc_state") if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -542,6 +581,97 @@ def _compare_environment(case: Case, ref: dict, res) -> dict:
     return dev
 
 
+def _runs(values, tol: float) -> list:
+    """[start, stop) of the runs of consecutive values that differ by at most ``tol``."""
+    runs, start = [], 0
+    for k in range(1, len(values) + 1):
+        if k == len(values) or abs(values[k] - values[k - 1]) > tol:
+            runs.append((start, k))
+            start = k
+    return runs
+
+
+def _rotation_free(x, tol: float = 1e-8, share: float = 1e-4) -> np.ndarray:
+    """Per state: True if its X + Y has (practically) nothing on degenerate transitions (an
+    energy that another transition of the same spin shares).  Degenerate orbitals are fixed
+    only up to a rotation, which DFTB+ and pydftb choose differently; it changes the weights
+    (X+Y)^2 / ||(X+Y)^2||_2 unless (sum of (X+Y)^2 over them)^2 is small against ||(X+Y)^2||^2."""
+    w, spin = x.single_particle.energies, x.pairs[:, 2]
+    deg = np.zeros(len(w), bool)
+    for s in np.unique(spin):
+        idx = np.flatnonzero(spin == s)
+        idx = idx[np.argsort(w[idx], kind="stable")]
+        close = np.abs(np.diff(w[idx])) <= tol
+        deg[idx[1:][close]] = deg[idx[:-1][close]] = True
+    sq = x.xpy ** 2
+    return sq[deg].sum(axis=0) ** 2 <= share * (sq ** 2).sum(axis=0)
+
+
+def _compare_casida(ref: dict, res) -> dict:
+    """Casida excitations against DFTB+ (M6d): the degenerate groups of autotest.tag (Omega,
+    oscillator strengths, |mu|; full precision), every state's energy from TRA.DAT, the rows
+    of EXC.DAT (oscillator strength, transition, weight, KS energy, symmetry or D<S^2>;
+    printed with 8 and 3 decimals) and of SPX.DAT, and the state of interest's energy.
+    ``exc_table`` and ``spx`` count the printed values that differ by more than their last
+    digit.  Degenerate states and orbitals are fixed only up to a rotation that the two codes
+    choose differently, so the tables are compared through what does not depend on it: per
+    group of degenerate states the summed oscillator strength and D<S^2> and the sorted KS
+    energies, the transition and weight only of a non-degenerate state that is free of
+    degenerate transitions (:func:`_rotation_free`), and in SPX.DAT the summed oscillator
+    strength of every group of degenerate transitions."""
+    xs = res.excitations if isinstance(res.excitations, list) else [res.excitations]
+    tags = ref["exc_tags"]
+    g = xs[-1].degenerate_groups()             # the tags hold the last symmetry (DFTB+)
+    dev = {"exc_groups": float(len(g["omega2"]) != len(tags["omega2"]))}
+    n = min(len(g["omega2"]), len(tags["omega2"]))
+    dev["exc"] = float(np.abs(np.sqrt(np.abs(g["omega2"][:n]))
+                              - np.sqrt(np.abs(np.array(tags["omega2"][:n])))).max())
+    dev["exc_osc"] = float(np.abs(g["oscillator"][:n] - np.array(tags["oscillator"][:n])).max())
+    dev["exc_tdip"] = float(np.abs(g["transdip"][:n] - np.array(tags["transdip"][:n])).max())
+    energies = np.concatenate([x.energies for x in xs])
+    if "exc_energies" in ref:
+        e_ref = np.array(ref["exc_energies"])
+        dev["exc"] = max(dev["exc"], float(np.abs(energies[:len(e_ref)] - e_ref).max())
+                         if len(e_ref) == len(energies) else np.inf)
+    ref_rows = ref.get("exc_rows", [])
+    bad = int(len(ref_rows) != sum(len(x.omega2) for x in xs))
+    offset = 0
+    for x in xs if not bad else []:
+        rows = ref_rows[offset:offset + len(x.omega2)]
+        offset += len(x.omega2)
+        free = _rotation_free(x)
+        for a, b in x.degenerate_groups()["groups"]:
+            grp = rows[a:b]
+            bad += abs(x.oscillator_strengths[a:b].sum() - sum(r[1] for r in grp)) > 6e-9 * (b - a)
+            bad += np.abs(np.sort(x.ks_energies[a:b]) * HARTREE
+                          - np.sort([r[5] for r in grp])).max() > 6e-4
+            if x.symmetries is None:
+                bad += abs(x.spin_contamination[a:b].sum()
+                           - sum(float(r[6]) for r in grp)) > 6e-4 * (b - a)
+            else:
+                bad += sum(s != r[6] for s, r in zip(x.symmetries[a:b], grp))
+            if b - a == 1 and free[a]:
+                i, v, _ = x.transitions[a]
+                bad += (i + 1, v + 1) != (grp[0][2], grp[0][3])
+                bad += abs(x.weights[a] - grp[0][4]) > 6e-4
+    dev["exc_table"] = float(bad)
+    spx_ref = ref.get("spx_rows", [])
+    sp = xs[-1].single_particle
+    bad = int(len(spx_ref) != len(sp.energies))
+    channel = {"": 0, "U": 0, "D": 1}
+    for a, b in _runs(sp.energies, 1e-8) if not bad else []:
+        grp = spx_ref[a:b]
+        bad += np.abs(sp.energies[a:b] * HARTREE - np.array([r[0] for r in grp])).max() > 6e-4
+        bad += abs(sp.oscillator_strengths[a:b].sum() - sum(r[1] for r in grp)) > 6e-8 * (b - a)
+        bad += (sorted((int(i) + 1, int(v) + 1, int(s)) for i, v, s in sp.pairs[a:b])
+                != sorted((r[2], r[3], channel[r[4]]) for r in grp))
+    dev["spx"] = float(bad)
+    if ref.get("excitation_energy") is not None:
+        dev["exc_state"] = abs(res.excitation_energy - ref["excitation_energy"])
+    dev["exc_table"] += dev.pop("exc_groups")
+    return dev
+
+
 def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
     params_dir = SKF_SETS[case.skf_set]
     base = case.typed or {}
@@ -550,7 +680,7 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
     return np.array([sk.occupation[base.get(lab, lab)].sum() for lab in inp["labels"]])
 
 
-def check(names=None, solver: str = "eigh", **backend) -> bool:
+def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backend) -> bool:
     all_ok = True
     print(f"{'case':26s} {'N':>4s} {'|dE| Ha':>9s} {'|dF| Ha/Bohr':>12s} {'|dq| e':>9s} "
           f"{'|dsigma|':>9s} {'|dE_disp|':>9s} {'|deps| Ha':>9s} {'|dm|':>9s} {'nSCC py/ref':>11s} "
@@ -570,9 +700,9 @@ def check(names=None, solver: str = "eigh", **backend) -> bool:
             continue
         if backend.get("backend") == "torch" and not case.torch:
             print(f"{case.name:26s} skipped: NumPy-only physics (M6a two-component, M6b blocks, "
-                  "M6c environment)")
+                  "M6c environment, M6d excitations)")
             continue
-        r = compare(doc, solver, **backend)
+        r = compare(doc, solver, casida_solver=casida_solver, **backend)
         d = r["dev"]
         all_ok &= r["ok"]
         e_disp = f"{d['e_disp']:9.1e}" if "e_disp" in doc["reference"] else f"{'-':>9s}"
@@ -583,6 +713,11 @@ def check(names=None, solver: str = "eigh", **backend) -> bool:
         print(f"{case.name:26s} {r['natoms']:4d} {d['energy']:9.1e} {d['forces']:12.1e} "
               f"{dq:9.1e} {d['stress']:9.1e} {e_disp} {eps} {dm} "
               f"{r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
+        if "exc" in d:                                    # M6d: the excitations
+            state = f", |dE_exc| {d['exc_state']:.1e} Ha" if "exc_state" in d else ""
+            print(f"{'':26s}   Casida: |dw| {d['exc']:.1e} Ha, |df| {d['exc_osc']:.1e}, "
+                  f"|dmu| {d['exc_tdip']:.1e} e Bohr, table/SPX differences "
+                  f"{int(d['exc_table'])}/{int(d['spx'])}{state}")
     return all_ok
 
 
@@ -608,6 +743,8 @@ def main(argv=None):
     g.add_argument("--live", action="store_true", help="compare pydftb with a fresh dftb+ run")
     ap.add_argument("cases", nargs="*", help="case names (default: all)")
     ap.add_argument("--solver", default="eigh")
+    ap.add_argument("--casida-solver", default="auto",
+                    help="pydftb's Casida eigensolver: auto, exact, davidson or arpack (M6d)")
     ap.add_argument("--backend", default=None, help="numpy (default) or torch")
     ap.add_argument("--device", default=None, help="torch device, e.g. cpu or cuda")
     ap.add_argument("--dtype", default=None, help="float64 (default) or float32")
@@ -615,8 +752,8 @@ def main(argv=None):
     if a.regenerate:
         regenerate(a.cases)
     elif a.check:
-        sys.exit(0 if check(a.cases, a.solver, backend=a.backend, device=a.device,
-                            dtype=a.dtype) else 1)
+        sys.exit(0 if check(a.cases, a.solver, casida_solver=a.casida_solver,
+                            backend=a.backend, device=a.device, dtype=a.dtype) else 1)
     else:
         live(a.cases)
 
