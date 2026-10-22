@@ -28,7 +28,8 @@ Periodic systems take a Monkhorst-Pack grid, e.g. `pydftb.SCC(system, params, kp
 
 ASE users can call `pydftb.ase_calc.PyDFTB` instead; it works in eV and Angstrom.  When the
 engine fails where DFTB+ would stop (a non-positive-definite overlap, e.g. very diffuse
-basis functions), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
+basis functions, or two atoms closer than 0.01 Bohr, an atom and its own periodic image
+included), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
 
 ### Several parameter sets for one element
 

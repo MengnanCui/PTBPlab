@@ -152,7 +152,7 @@ python -m pydftb.validation.gpu_check --device cpu --quick # GPU 自检脚本，
         <li>PTBP 损失的梯度（M4c）：M4c 时 r0_d 不改变 SKF（hotcent 2 的微扰约束默认值，M4e 已改回自洽约束，r0_d 重新起作用）。energygeometry 损失在发表的 Cu 参数附近不连续：组 4 的 Birch–Murnaghan 拟合有两个最小二乘解（r0_w 改变 0.005 Bohr 体积比就在 +0.12 和 −0.14 之间跳），组 3 的拟合 B &lt; 0，r0_w = 2.751 时拟合失败、2.789 时体积比 −1.06；梯度只描述当前拟合分支，<code>grad.out</code> 对这样的拟合给出提示。hotcent 的数值噪声使梯度有 1–3% 的不确定度（M4c 报告第七节）。</li>
         <li>PTBP 默认的 BO（<code>--n_calls 11</code>）实际是种子点加 10 个随机点：skopt 的 <code>gp_minimize</code> 默认先取 10 个随机点，高斯过程不参与选点。要让 BO 起作用，调用次数要明显多于 11（M4c 报告第七节）。</li>
         <li>GPU（M4d）：本机没有 GPU，GPU 上的正确性和速度都没有实测；MPS、XPU 只保证能运行（自检脚本是唯一的检验）。PTBP 用 GPU 时 DFTB 阶段在主进程里逐个结构计算，只有 GPU 比 CPU 上的多个进程更快才划算；梯度优化器只用 NumPy 后端（M4d 报告）。</li>
-        <li>两个原子相距不到 0.01 Bohr 时 DFTB+ 报错退出（proximity），pydftb 不报错：完全重合的原子被当作互不作用。已列为待办（<code>dftbplus_map.md</code> 第 36 条）。</li>
+        <li><strong>已修正：</strong>两个原子相距不到 0.01 Bohr 时 DFTB+ 报错退出（“Atoms 2 and 1 too close together”），pydftb 过去不报错，完全重合的原子被当作互不作用（Cu 二聚体的两个原子放在同一位置时得到两个孤立原子的能量）。现在 pydftb 按同一规则抛出 <code>AtomsTooClose</code>（原子与自己的周期镜像也算），ASE 计算器报 <code>CalculationFailed</code>，PTBP 把这一步记为失败，与 DFTB+ 相同；其他几何的结果逐位不变（<code>dftbplus_map.md</code> 第 36 条）。</li>
         <li>dataset、reaction 模式下，失败的步（PTBP 记为 97–99）比真实损失还低（Cu 约 210–7000），BO 会把失败点当成最优：M4c 基准中 3 次 BO 有 2 次如此。要不要改由用户决定（M4c 报告第七节）。</li>
         <li>用 PTBP 参数表中 Ga 的 r0、p，hotcent 2.1 算不出受限原子（“Eigensolver out of iterations”，4d 壳层几乎不束缚）。</li>
         <li><code>physrep.evaluate_pbc</code> 的超胞层数由最短的晶格矢量长度决定，晶胞很斜时会漏掉近邻（γ = 13° 的测试晶胞：22 对中只算 20 对）；Cu 数据集没有遗漏。为了结果不变，没有修。</li>

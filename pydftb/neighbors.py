@@ -4,6 +4,14 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial import cKDTree
 
+from .constants import MIN_NEIGH_DIST
+
+
+class AtomsTooClose(ValueError):
+    """Two atoms closer than ``MIN_NEIGH_DIST`` (0.01 Bohr), an atom and its own periodic
+    image included: DFTB+ stops there (``periodic.F90:updateNeighbourList``, minNeighDist).
+    :class:`pydftb.ase_calc.PyDFTB` reports it as ASE's ``CalculationFailed``."""
+
 
 def image_range(cell: np.ndarray, pbc: np.ndarray, cutoff: float) -> np.ndarray:
     """Number of periodic images needed along each lattice vector."""
@@ -35,7 +43,9 @@ def pair_vectors(pos: np.ndarray, cell: np.ndarray | None, i: np.ndarray, j: np.
 def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     """All ordered pairs (i, j, shift) with |r_j + shift.cell - r_i| < cutoff.
 
-    Self-pairs (i == j, shift == 0) are excluded.  Returns
+    Self-pairs (i == j, shift == 0) are excluded.  Any other pair closer than
+    ``MIN_NEIGH_DIST`` raises :class:`AtomsTooClose`, as DFTB+ stops there; this includes
+    an atom and its own periodic image.  Returns
     ``i, j, shifts (int, (n,3)), vec (n,3), dist (n,)``.
     """
     natom = len(pos)
@@ -66,7 +76,19 @@ def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     sh = shifts[s]
     vec = pair_vectors(pos, cell, i, j, sh)
     dist = np.sqrt((vec * vec).sum(1))
-    keep = dist > 1e-8
+    keep = (i != j) | sh.any(1)           # all but each atom with itself, as in DFTB+
     order = np.lexsort((s[keep], j[keep], i[keep]))
-    return (i[keep][order], j[keep][order], sh[keep][order],
-            vec[keep][order], dist[keep][order])
+    i, j, sh, vec, dist = (x[keep][order] for x in (i, j, sh, vec, dist))
+    close = np.flatnonzero(dist < MIN_NEIGH_DIST)
+    if len(close):
+        k = close[0]
+        t = sh[k].tolist()
+        if not any(t):
+            who = f"atoms {i[k]} and {j[k]}"
+        elif i[k] == j[k]:
+            who = f"atom {i[k]} and its own periodic image at lattice shift {t}"
+        else:
+            who = f"atom {i[k]} and the periodic image of atom {j[k]} at lattice shift {t}"
+        raise AtomsTooClose(f"{who} are {dist[k]:.3g} Bohr apart, closer than "
+                            f"{MIN_NEIGH_DIST:g} Bohr (DFTB+ minNeighDist)")
+    return i, j, sh, vec, dist

@@ -16,6 +16,7 @@ MIN_TEMP = 1.0e-8            # Ha; T = 0 is treated as Fermi filling at this kT
 MIN_HUB_DIFF = 0.3125e-5     # Ha; Hubbard U values closer than this count as equal
 MIN_HUB_TOL = 1.0e-6         # Ha; smallest admissible Hubbard U
 TOL_SAME_DIST = 1.0e-5       # Bohr; distances below this are "on site"
+MIN_NEIGH_DIST = 1.0e-2      # Bohr; two atoms closer than this stop the calculation
 MIN_SHORT_GAMMA = 1.0e-10    # short-range gamma S is dropped beyond where it falls below this
 TOL_SHORT_GAMMA = 1.0e-10    # ... and that distance is bisected to this tolerance in S
 ELEC_TOL_MAX = 1.0e-7        # max. electron-count error after the Fermi search

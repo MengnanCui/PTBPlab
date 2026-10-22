@@ -13,8 +13,13 @@ from pydftb.kpoints import monkhorst_pack, reduce_time_reversal
 from pydftb.skf import SIMPLE_COLUMNS, SKFile, SKSet
 from pydftb.slako import bond_frames, rotation_blocks, sk_block
 
+from .conftest import SKF_HCOCU
+
 SKDIR = os.path.join(os.path.dirname(__file__), "data", "skf", "orbit")
 WATER = np.array([[0.0, 0.0, 0.2], [1.44, 0.0, -0.85], [-1.32, 0.19, -0.94]])  # Bohr
+# the Cu dimer box of PTBP's dataset (dft/dft.xyz, image 4), Angstrom
+CU_BOX = np.diag([9.7662, 7.8130, 7.8130])
+CU_SITE = np.array([-0.1174, 0.0, 0.0])
 
 
 @pytest.fixture(scope="module")
@@ -122,6 +127,56 @@ def test_a_failed_factorisation_is_an_ase_calculation_failure(monkeypatch):
     with pytest.raises(CalculationFailed, match="not positive definite") as info:
         atoms.get_forces()
     assert isinstance(info.value.__cause__, np.linalg.LinAlgError)
+
+
+def _too_close(case):
+    """A geometry DFTB+ rejects (a pair closer than minNeighDist = 0.01 Bohr) and what
+    pydftb's message says about it."""
+    import ase
+    if case == "molecule":              # 0.004 A = 0.0076 Bohr: a pair the search used to keep
+        return (ase.Atoms("Cu2", positions=[CU_SITE, CU_SITE + [0.004, 0.0, 0.0]]),
+                "atoms 0 and 1 are 0.00756 Bohr apart")
+    if case == "periodic":              # both atoms on one site
+        return (ase.Atoms("Cu2", positions=[CU_SITE, CU_SITE], cell=CU_BOX, pbc=True),
+                "atoms 0 and 1 are 0 Bohr apart")
+    if case == "periodic_image":        # on one site only through a lattice translation
+        return (ase.Atoms("Cu2", positions=[CU_SITE, CU_SITE + CU_BOX[0]], cell=CU_BOX, pbc=True),
+                "atom 0 and the periodic image of atom 1")
+    # "self_image": an atom and its own image, 0.004 A along the first lattice vector
+    return (ase.Atoms("Cu", cell=np.diag([0.004, 7.8130, 7.8130]), pbc=True),
+            "atom 0 and its own periodic image")
+
+
+@pytest.mark.parametrize("case", ["molecule", "periodic", "periodic_image", "self_image"])
+def test_atoms_closer_than_0_01_bohr_are_an_ase_calculation_failure(case):
+    """DFTB+ stops when two atoms are closer than minNeighDist = 0.01 Bohr
+    (periodic.F90:updateNeighbourList), an atom and its own periodic image included, which
+    ASE reports as CalculationFailed; PyDFTB raises the same.  pydftb used to drop such
+    pairs: two Cu atoms on one site gave the energy of two isolated atoms."""
+    from ase.calculators.calculator import CalculationFailed
+
+    from pydftb.ase_calc import PyDFTB
+    from pydftb.neighbors import AtomsTooClose
+
+    atoms, message = _too_close(case)
+    atoms.calc = PyDFTB(SKF_HCOCU)
+    with pytest.raises(CalculationFailed, match="closer than 0.01 Bohr") as info:
+        atoms.get_potential_energy()
+    assert message in str(info.value)
+    assert isinstance(info.value.__cause__, AtomsTooClose)
+
+
+def test_neighbour_list_minimum_distance():
+    """The limit is DFTB+'s minNeighDist, 0.01 Bohr (0.0053 Angstrom)."""
+    from pydftb.neighbors import AtomsTooClose, neighbor_list
+
+    pos = np.array([[0.0, 0.0, 0.0], [0.0099, 0.0, 0.0]])
+    with pytest.raises(AtomsTooClose, match="atoms 0 and 1 are 0.0099 Bohr apart"):
+        neighbor_list(pos, None, None, 5.0)
+    pos[1, 0] = 0.0101
+    i, j, shift, _, dist = neighbor_list(pos, None, None, 5.0)
+    assert i.tolist() == [0, 1] and j.tolist() == [1, 0] and not shift.any()
+    assert np.allclose(dist, 0.0101, rtol=0.0, atol=1e-15)
 
 
 def test_sp2_matches_diagonalisation(sk):
