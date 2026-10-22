@@ -154,7 +154,8 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     ``engine`` is a :class:`pydftb.DFTB`; positions and cell in Bohr.  ``populations`` is the
     vector the SCC loop mixes, normally ``DFTBResult.q_in`` (DFTB+'s ``charges.bin``): site
     populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
-    shell); None = the reference populations.
+    shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`);
+    None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
     band-structure run; ``scc_fermi`` (Hartree, one value or one per spin) is kept as the
@@ -172,10 +173,14 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     pauli = st.pauli is not None
     nsh = len(st.basis.shell_l)
     n_expected = 4 * nsh if pauli else len(st.q0) if st.spin is None else 2 * nsh
+    if st.block is not None:
+        n_expected = st.block.size
     if q.shape != (n_expected,):
         raise ValueError(f"populations need {n_expected} entries (the SCC's mixed vector, "
                          f"DFTBResult.q_in), got shape {q.shape}")
     v_orb, vs_orb = engine._potentials(st, q)
+    # block potentials (M6b), with the onsite corrections: DFTB+'s band run reads its charges
+    pots = None if st.block is None else engine._block_potentials(st, q)
     nspin = 1 if vs_orb is None or pauli else 2
     norb = st.basis.norb
     nstate = 2 * norb if pauli else norb
@@ -199,7 +204,10 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
         if pauli:                                                # two-component (M6a)
             p = st.pauli
             hso = None if p.lam is None else so.soc_hamiltonian(p.lam, s if p.dual else None)
-            h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
+            if pots is not None:
+                h = engine._block_hamiltonian(st, h0, s, v_orb, vs_orb, pots, hso)
+            else:
+                h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
             s2 = so.overlap2(s)
             solver.prepare(s2)
             e, c = solver.eig(h)
@@ -209,11 +217,16 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 share = (np.conj(c) * (s2 @ c)).real
                 proj[0, c0:c0 + n] = share[:, :norb] + share[:, norb:]
             continue
-        h = h0 + 0.5 * s * (v_orb[:, None] + v_orb[None, :])     # as in the SCC loop
-        if vs_orb is not None:
-            hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
-            h = np.concatenate([h + hs, h - hs])                 # up, down
-            s = np.concatenate([s, s])
+        if pots is not None:
+            h = engine._block_hamiltonian(st, h0, s, v_orb, vs_orb, pots, None)
+            if vs_orb is not None:
+                s = np.concatenate([s, s])
+        else:
+            h = h0 + 0.5 * s * (v_orb[:, None] + v_orb[None, :])     # as in the SCC loop
+            if vs_orb is not None:
+                hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
+                h = np.concatenate([h + hs, h - hs])                 # up, down
+                s = np.concatenate([s, s])
         solver.prepare(s)
         e, c = solver.eig(h)
         n = len(kc)

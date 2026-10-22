@@ -78,6 +78,31 @@ mixer, or for periodic cells whose moments are not along a coordinate axis; the 
 (`mixer="pulay"`) converged in these cases.  Details:
 [`docs/reports/M6a-spin-orbit.html`](docs/reports/M6a-spin-orbit.html).
 
+### DFTB+U and onsite corrections
+
+Block potentials, DFTB+'s `OrbitalPotential` and `OnSiteCorrection` (NumPy engine only):
+
+```python
+from pydftb.blockpot import ONSITE_PBE
+mf = pydftb.SCC(system, params, temperature=300,
+                plus_u={"Cu": [("d", 0.15)]},       # groups of shells with U - J (Hartree)
+                plus_u_functional="fll",            # or "psic"
+                onsite_corrections=ONSITE_PBE)      # f_uu, f_ud per type (DFTB+ manual, PBE)
+mf.kernel()
+mf.result.e_plus_u, mf.result.e_onsite             # "Energy DFTB+U", "Energy onsite"
+```
+
+Shells are angular momentum letters (`"pd"` couples the p and d shells in one group) or
+0-based shell indices (DFTB+'s `Shells` count from 1).  Onsite corrections need an entry for
+every type, zeros for H; `ONSITE_PBE` has H, C, N, O, S, Ti and Au for s / sp / spd bases.
+Both work with collinear and non-collinear spin, spin-orbit coupling (+U only with the dual
+model, as in DFTB+), DFTB3, k-points, forces, stress and band structures.  The SCC mixes
+what DFTB+ mixes then (the corrected orbitals one by one, the blocks' off-diagonal elements),
+so it takes the same iterations; given charges (`q_init`, `reuse_charges`) count as read in,
+so the onsite potential is in the first iteration, while DFTB+'s own drivers leave it out of
+the first iteration of every geometry step.  Details:
+[`docs/reports/M6b-dftbu-onsite.html`](docs/reports/M6b-dftbu-onsite.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

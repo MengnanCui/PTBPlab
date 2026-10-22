@@ -14,6 +14,7 @@ import numpy as np
 from ase import Atoms
 from ase.build import bulk, molecule
 
+from ..blockpot import ONSITE_PBE
 from ..constants import BOHR
 from ..kpoints import monkhorst_pack, reduce_time_reversal
 
@@ -115,6 +116,9 @@ class Case:
     noncolinear: dict | None = None       # initial_spins (per atom) / spin_constants (M6a)
     spin_orbit: dict | None = None        # xi {label: per shell, Hartree} / dual (M6a)
     time_reversal: bool = True            # reduce the Monkhorst-Pack grid by k -> -k
+    plus_u: dict | None = None            # DFTB+U {"groups": {label: [(shells, U-J)]},
+                                          # "functional": "fll" | "psic"} (M6b)
+    onsite: dict | None = None            # onsite corrections {label: {"uu", "ud"}} (M6b)
     torch: bool = True                    # also checked on the torch backend (test_reference)
     klines: list | None = None            # band run on DFTB+ Klines [(n, (k1, k2, k3)), ...]
     regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
@@ -128,6 +132,11 @@ class Case:
     def pauli(self) -> bool:
         """Two-component (non-collinear spin or spin-orbit coupling)."""
         return self.noncolinear is not None or self.spin_orbit is not None
+
+    @property
+    def block(self) -> bool:
+        """Block potentials: DFTB+U or onsite corrections (M6b)."""
+        return self.plus_u is not None or self.onsite is not None
 
     def kpoints(self):
         if self.kgrid is None:
@@ -262,6 +271,15 @@ NC_OH = {"initial_spins": [TILT, [0.0, 0.0, 0.0]], "spin_constants": W_SPIN}
 NC_GDO = {"initial_spins": [[7 * x for x in TILT], TILT], "spin_constants": W_SPIN}
 # magnetisation vectors to 1e-6 (results.tag), angular momenta to 1e-8 (detailed.out, 8 decimals)
 TOL_PAULI = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "moments": 1e-8}
+
+# DFTB+U and onsite corrections (milestone M6b): U - J of the Cu d shell 0.15 Ha (4.1 eV, a
+# typical literature value), O p 0.1 Ha; onsite constants from the DFTB+ manual (PBE), Cu with
+# Au's s/p/d values only to test the code.  Orbital populations (results.tag) are compared too
+U_CU = {"groups": {"Cu": [("d", 0.15)]}}
+U_O = {"groups": {"O": [("p", 0.1)]}}
+ONS = {lab: ONSITE_PBE[lab] for lab in ("H", "C", "O")} | {"Cu": {**ONSITE_PBE["Au"]}}
+TOL_BLOCK = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "orbital": 1e-6,
+             "eigenvalues": 1e-7, "spins": 1e-6, "moments": 1e-8}
 
 CASES = [
     Case("h2o", _water, tol=TOL_DFTBP_FD, note="force tolerance 2e-6, see TOL_DFTBP_FD"),
@@ -494,5 +512,57 @@ CASES = [
          dp_dos=[("band.out", ["-g", "0.05"])], ewald_tolerance=1e-12, torch=False,
          tol={**TOL_BANDS, "spins": 1e-6, "moments": 1e-8},
          note="spinor bands (d bands split at Gamma), projections and DOS"),
+    # --- DFTB+U and onsite corrections (milestone M6b), NumPy only ---
+    Case("cu4co_plusu", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, torch=False,
+         tol=TOL_BLOCK, note="FLL on the Cu d shells"),
+    Case("cu4co_plusu_psic", _cu4co, filling=("fermi", 300.0),
+         plus_u={**U_CU, "functional": "psic"}, torch=False, tol=TOL_BLOCK),
+    Case("cu4co_plusu_groups_shell", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         plus_u={"groups": {"Cu": [("pd", 0.15)], "O": [("p", 0.1)]}}, torch=False,
+         tol=TOL_BLOCK, note="a p-d group (cross-shell blocks), two types, shell charges"),
+    Case("cuo_chain_spin_plusu_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, plus_u=U_CU,
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_BLOCK, "stress": 1e-9},
+         note="collinear spin (q, m blocks, up/down mixing), k-points, forces and stress"),
+    Case("gdo_spin_plusu", _gdo, shell_resolved=True, **GDO,
+         spin={"unpaired_electrons": 8, "spin_constants": W_SPIN},
+         plus_u={"groups": {"Gd": [("f", 0.2)]}}, torch=False, tol=TOL_BLOCK,
+         note="f shell (7 x 7 blocks)"),
+    Case("oh_noncolinear_plusu", _oh, filling=("fermi", 300.0), noncolinear=NC_OH, plus_u=U_O,
+         torch=False, tol=TOL_BLOCK, note="the four Pauli components"),
+    Case("oh_noncolinear_soc_plusu", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, plus_u=U_O, torch=False, tol=TOL_BLOCK,
+         note="dual spin-orbit coupling: imaginary +U potentials and skew blocks"),
+    Case("cu4co_soc_plusu", _cu4co, filling=("fermi", 300.0), spin_orbit={"xi": XI_CU4CO},
+         plus_u=U_CU, torch=False, tol=TOL_BLOCK, note="two-component without spin"),
+    Case("cuo_chain_soc_plusu_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 1000.0), spin_orbit={"xi": XI_CUO}, plus_u=U_CU,
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_BLOCK, "stress": 1e-9},
+         note="forces and stress of imaginary block potentials at k-points; 1000 K (at 500 K "
+              "both codes need ~140 SCC iterations, with U - J = 0.1 DFTB+ diverges)"),
+    Case("h2o_ons", _water, onsite=ONS, torch=False, tol={**TOL_BLOCK, **TOL_DFTBP_FD},
+         note="onsite corrections; force tolerance see TOL_DFTBP_FD"),
+    Case("ch3oh_ons", _meoh, onsite=ONS, torch=False, tol=TOL_BLOCK),
+    Case("ch3oh_ons_dftb3", _meoh, dftb3=DFTB3_3OB, onsite=ONS, torch=False, tol=TOL_BLOCK),
+    Case("oh_radical_ons", _oh, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}, onsite=ONS, torch=False,
+         tol=TOL_BLOCK, note="the magnetisation uses f_uu - f_ud"),
+    Case("water_box_ons", _water_box, onsite=ONS, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_BLOCK, "stress": 1e-9}, note="periodic images in the block populations"),
+    Case("cuo_chain_spin_ons_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, onsite=ONS,
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_BLOCK, "stress": 1e-9},
+         note="s/p/d onsite blocks at k-points (Cu with Au's constants)"),
+    Case("oh_noncolinear_soc_ons", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, onsite=ONS, torch=False, tol=TOL_BLOCK,
+         note="imaginary onsite potentials (dual spin-orbit coupling)"),
+    Case("cu4co_plusu_ons", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, onsite=ONS,
+         torch=False, tol=TOL_BLOCK, note="both block potentials"),
+    Case("cuo_chain_spin_plusu_bands", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, plus_u=U_CU,
+         klines=path(ORC, "GXSGZU", [10, 5, 10, 0, 6]),
+         regions=[{"label": "cu", "atoms": [0, 2], "shell_resolved": True}],
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_BANDS, "orbital": 1e-6, "spins": 1e-6},
+         note="band run with +U (the block vector read back), d projections"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

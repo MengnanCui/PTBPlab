@@ -144,6 +144,9 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
         raise NotImplementedError("pydftb.autodiff does not support two-component calculations "
                                   "(non-collinear spin, spin-orbit coupling): NumPy engine only "
                                   "(milestone M6a)")
+    if getattr(calc, "block_terms", False):
+        raise NotImplementedError("pydftb.autodiff does not support DFTB+U or onsite "
+                                  "corrections: NumPy engine only (milestone M6b)")
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)

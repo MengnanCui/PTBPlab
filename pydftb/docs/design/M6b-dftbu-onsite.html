@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6b DFTB+U 设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6b · 设计文档</p>
+    <h1>DFTB+U 与 onsite 修正</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6b-dftbu-onsite.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6 的第二步。DFTB+U 和 onsite 修正都是“块势”：它们不是每个轨道一个数，而是作用在同一原子的整个轨道块上（包括 p、d 轨道之间的非对角元），依赖的是“块布居”，也就是同一原子上两个轨道之间的电子数。两者共用一套机制：块布居、块势进入哈密顿量、混合向量里的块元素、力和应力中的块项。只做 NumPy 引擎；torch 后端和自动求导遇到这些选项时明确报错。</p>
+    <ul>
+      <li><strong>做什么</strong>：
+        <ul>
+          <li><strong>DFTB+U</strong>（DFTB+ <code>OrbitalPotential</code>）：对指定原子的指定壳层（例如 Cu 的 d、Gd 的 f）加 U−J 修正，常用于局域的 d、f 电子。两种泛函：FLL（完全局域极限，DFTB+ 默认）和 pSIC（赝自相互作用修正）。</li>
+          <li><strong>onsite 修正</strong>（DFTB+ <code>OnSiteCorrection</code>）：补上同一原子不同轨道之间的交换类积分，改善氢键等。每个元素两个 n<sub>壳层</sub> × n<sub>壳层</sub> 的常数矩阵（同自旋、异自旋）。DFTB+ 手册给出 H、C、N、O、S、Ti、Au 的 PBE 值，pydftb 一并收录。</li>
+          <li>两者可以单独用，也可以一起用；可以配无自旋、共线自旋、非共线自旋、SOC（DFTB+U 配 SOC 时只能用 dual 模型，与 DFTB+ 相同）、DFTB3、色散、k 点、力和应力、能带与 DOS。</li>
+        </ul>
+      </li>
+      <li><strong>和 DFTB+ 逐轮一致的关键</strong>：混合向量要与 DFTB+ 相同。有块势时，DFTB+ 把被修正的轨道各自单独混合，并把块的非对角元也放进混合向量。第一轮的输出不混合，直接作为第二轮的输入；有 +U 时至少迭代两轮。onsite 修正在每个几何步的第一轮不加进哈密顿量。这些规则都照搬（第一节）。</li>
+      <li><strong>DFTB+ 的实测</strong>（第二节）：所有组合都能跑，包括 SOC dual + U、SOC + onsite、两者同时用。只有 s 壳层的 +U 组会让 DFTB+ 25.1 崩溃（段错误），pydftb 支持这种情况，用自身的一致性检查验证。</li>
+      <li><strong>用法</strong>：<code>DFTB(sk, plus_u={"Cu": [("d", 0.15)]})</code>（U−J 以 Hartree 计，<code>plus_u_functional="psic"</code> 切换泛函）；<code>DFTB(sk, onsite_corrections=ONSITE_PBE)</code>。</li>
+      <li><strong>验证</strong>：16 个新的 DFTB+ 参考算例，比较能量各项（含 E<sub>U</sub>、E<sub>ons</sub>）、力、应力、逐轨道布居、本征值、磁矩和 SCC 轮数；另有一个分子动力学对照。旧算例逐位不变。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2</span><span class="lbl">块势：DFTB+U（FLL、pSIC）、onsite 修正</span></li>
+      <li><span class="num">½(SV + VS)</span><span class="lbl">块势进入哈密顿量的方式</span></li>
+      <li><span class="num">16</span><span class="lbl">新的 DFTB+ 参考算例</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <h3>块布居与块势</h3>
+      <ul>
+        <li><strong>块布居</strong>（dual Mulliken，<code>populations.F90:mulliken</code> 的块版本）：Q<sup>A</sup><sub>μν</sub> = ½ Σ<sub>κ</sub> (ρ<sub>μκ</sub>S<sub>κν</sub> + S<sub>μκ</sub>ρ<sub>κν</sub>)，μ、ν 都在原子 A 上，κ 遍历所有轨道（含周期像）。对角元就是普通的逐轨道 Mulliken 布居。每个自旋分量各算一份：无自旋时只有电荷 q；共线自旋为 (q, m)；两分量为 (q, m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>)。有 dual SOC 时还有虚部（反对称）Qi，M6a 已经实现了它的计算。</li>
+        <li><strong>块势进入 H</strong>（<code>shift.F90:addShift</code>）：每个原子一个块势 V<sup>A</sup>，H<sub>νμ</sub> += ½[Σ<sub>κ∈A</sub> S<sub>νκ</sub>V<sup>A</sup><sub>κμ</sub> + Σ<sub>κ∈B</sub> V<sup>B</sup><sub>νκ</sub>S<sub>κμ</sub>]，即 H += ½(S V + V S)，V 为各原子块组成的块对角矩阵。普通的电荷势、自旋势只是 V 为对角阵的特例，这时公式退化为现有的 ½S<sub>μν</sub>(v<sub>μ</sub> + v<sub>ν</sub>)。k 点下 S 换成 S(k)，V 不变（它只在原子上）。</li>
+        <li>各自旋分量的 H 按现有规则组装：共线时 H<sub>↑/↓</sub> = H<sub>q</sub> ± H<sub>m</sub>；两分量时 H = H<sub>q</sub> ⊗ 1 + Σ<sub>a</sub> H<sub>a</sub> σ<sub>a</sub>。虚部块势 Vi 以 i·½(S Vi + Vi S) 加到对应分量上，与 M6a 的 dual SOC 完全相同。</li>
+        <li>势的计算顺序（<code>main.F90:processPotentials</code>）：电荷、自旋、三阶项 → DFTB+U → onsite 修正。</li>
+      </ul>
+
+      <h3>DFTB+U（<code>dftbplusu.F90</code>）</h3>
+      <ul>
+        <li><strong>输入</strong>：每个元素若干个“组”，每组是一个或几个壳层加一个 U−J 值（Hartree，可带单位）。同一组的几个壳层之间的块（例如 p–d）也受修正。U−J ≤ 1e-10 报错，同一壳层出现在两组里报错。</li>
+        <li><strong>势</strong>（对每个自旋分量 s，组内所有轨道对 μ、ν）：V<sup>s</sup><sub>μν</sub> = −(U−J)/2 · Q<sup>s</sup><sub>μν</sub>。FLL 另在电荷分量的对角元加 +(U−J)/2。有 dual SOC 时，虚部 Vi<sup>s</sup> = −(U−J)/2 · Qi<sup>s</sup>。</li>
+        <li><strong>能量</strong>：E<sub>U</sub> = Σ<sub>原子</sub> Σ<sub>组</sub> [ −(U−J)/4 Σ<sub>s</sub> Σ<sub>μν</sub> ((Q<sup>s</sup><sub>μν</sub>)² + (Qi<sup>s</sup><sub>μν</sub>)²) + FLL 时 (U−J)/2 Σ<sub>μ</sub> Q<sup>q</sup><sub>μμ</sub> ]。换成每个自旋的占据矩阵 n<sup>σ</sup> 就是熟悉的形式：E<sub>FLL</sub> = (U−J)/2 Σ<sub>σ</sub> Tr(n<sup>σ</sup> − n<sup>σ</sup>n<sup>σ</sup>)，E<sub>pSIC</sub> = −(U−J)/2 Σ<sub>σ</sub> Tr(n<sup>σ</sup>n<sup>σ</sup>)。上面的势正是能量对 Q 的导数。</li>
+        <li>FLL 把被修正壳层中的已占态压低、空态抬高；pSIC 只压低已占态，所以 E<sub>pSIC</sub> 是一个大的负数（Cu₄CO：−2.96 Ha），总能量不能直接与 FLL 比较。</li>
+      </ul>
+
+      <h3>onsite 修正（<code>onscorrection.F90</code>）</h3>
+      <ul>
+        <li><strong>输入</strong>：每个元素两个矩阵 f<sub>uu</sub>、f<sub>ud</sub>（同自旋、异自旋），维数为该元素的壳层数，单位 Hartree。DFTB+ 要求结构中每个元素都给出（全零也要写）。矩阵先对称化；同一个 s 壳层自身的元素（ss′）不用。</li>
+        <li><strong>系数</strong>：f<sup>±</sup> = f<sub>uu</sub> ± f<sub>ud</sub>，按 (壳层(μ), 壳层(ν)) 铺到轨道对上；同一 l &gt; 0 壳层内部（含对角元）都用该壳层的对角值。电荷分量用 f<sup>+</sup>，各磁化分量用 f<sup>−</sup>。</li>
+        <li><strong>势</strong>：W<sup>s</sup><sub>μν</sub> = f<sup>(s)</sup><sub>μν</sub> (Q<sup>s</sup><sub>μν</sub> − δ<sub>s,q</sub>δ<sub>μν</sub> q0<sub>μ</sub>)，再对每个壳层的对角元减去该壳层对角元的平均值（转动不变性修正），这样只有壳层内各轨道布居的差别起作用。V<sup>s</sup> = W<sup>s</sup>。虚部 Wi<sup>s</sup> = f<sup>(s)</sup> ∘ Qi<sup>s</sup>，对角元置零，没有平均修正。</li>
+        <li><strong>能量</strong>：E<sub>ons</sub> = ½ Σ<sub>A</sub> Σ<sub>s</sub> Σ<sub>μν</sub> (W<sup>s</sup><sub>μν</sub> Q<sup>s</sup><sub>μν</sub> + Wi<sup>s</sup><sub>μν</sub> Qi<sup>s</sup><sub>μν</sub>)。它是 Q 的二次型，势就是它的导数。</li>
+        <li>参考：Domínguez, Niehaus, Frauenheim, J. Phys. Chem. A 119, 3535 (2015)；常数取自 García 的学位论文（DFTB+ 手册附录）。</li>
+      </ul>
+
+      <h3>SCC 的规则</h3>
+      <ul>
+        <li><strong>混合向量</strong>（<code>reduceCharges</code>、<code>setEquivalencyRelations</code>）：
+          <ol>
+            <li>轨道布居按“等价类”求和。没有块势时，等价类就是 pydftb 现在混合的位点（原子，或壳层，有自旋时每个壳层每个自旋）。加 +U 后，被修正壳层的每个轨道单独成一类；加 onsite 后，所有轨道都单独成类。</li>
+            <li>接着是块的非对角元：+U 时为各组内的轨道对，onsite 时为每个原子的全部轨道对，每对 (i &gt; j) 一个数 ½(Q<sub>ij</sub> + Q<sub>ji</sub>)。</li>
+            <li>有 dual SOC 时再接虚部块 ½(Qi<sub>ij</sub> − Qi<sub>ji</sub>)，轨道对与上一条相同。</li>
+          </ol>
+          共线自旋时布居和块都按 ↑、↓ 存放（与现有的共线路径相同）；两分量时按 (q, m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>)。</li>
+        <li><strong>收敛判据</strong>：整个混合向量（包括块元素）的最大变化小于 <code>SCCTolerance</code>。</li>
+        <li><strong>第一轮不混合</strong>：有块势时，第一轮的输出直接作为第二轮的输入（与自旋计算相同，<code>getNextInputCharges</code>）。</li>
+        <li><strong>至少两轮</strong>：有 +U（或自旋）时至少两轮（<code>getMinSccIters</code>）；只有 onsite 且无自旋时为一轮。给了初始电荷时为一轮。</li>
+        <li><strong>初始块</strong>：对角块，每个轨道取所在壳层的平均布居，非对角元为零（<code>initializeCharges</code>）。所以第一轮的 +U 势只有对角元。</li>
+        <li><strong>onsite 在第一轮缺席</strong>：每个几何步的第一轮 SCC，onsite 势不加进 H（<code>processPotentials</code> 的条件 <code>iSCCIter &gt; 1 .or. tReadChrg</code>）。能量和力用的输出势里总是有它。这只改变 SCC 的路径，不改变收敛结果。DFTB+ 读入电荷文件时（<code>ReadInitialCharges</code>）第一轮就有它，DFTB+ 的能带计算就属于这种情况。pydftb 不给初始电荷时与 DFTB+ 相同；给了 <code>q_init</code>（重启、ASE 的 <code>reuse_charges</code>）时当作读入的电荷，第一轮就加。所以分子动力学里每步的 SCC 轮数比 DFTB+ 的少，轨迹不变。</li>
+        <li><strong>能量用输出量</strong>：对角化之后，DFTB+ 用这一轮的输出布居和输出块重建所有势，E<sub>U</sub>、E<sub>ons</sub> 都由输出块算出，与 E<sub>SCC</sub> 等相同（<code>calcEnergies</code>）。detailed.out 中为 “Energy DFTB+U” 和 “Energy onsite”。</li>
+      </ul>
+
+      <h3>力与应力</h3>
+      <ul>
+        <li>块势只通过 S 依赖几何（V 本身是密度的函数，这部分在自洽解中抵消）。对每个 S 元素 (ν, μ)，导数的系数为 Σ<sub>s</sub> ½(V<sup>s</sup>ρ<sup>s</sup> + ρ<sup>s</sup>V<sup>s</sup>)<sub>μν</sub>（<code>forces.F90:derivative_blockEuclidean</code>），ρ<sup>s</sup> 为各自旋分量的实空间密度。V 为对角阵时，就是现有的 ρ<sub>μν</sub> · ½(v<sub>μ</sub> + v<sub>ν</sub>)。</li>
+        <li>虚部块势的系数为 −½ Σ<sub>s</sub> (Vi<sup>s</sup> I<sup>s</sup> + I<sup>s</sup> Vi<sup>s</sup>)<sub>μν</sub>，I<sup>s</sup> 为实空间密度的虚部（<code>derivative_iBlock</code>），与 M6a 的 dual SOC 项同形。</li>
+        <li>应力由同样的元素梯度得到（<code>getBlockStress</code>）。所以力和应力对分子、Γ 点、k 点都自动成立。</li>
+      </ul>
+
+      <h3>限制</h3>
+      <ul>
+        <li>两者都只在 SCC 计算中可用。</li>
+        <li>DFTB+U 配 SOC 只能用 dual 模型（<code>initprogram.F90:4171</code>）。onsite 修正配两种 SOC 模型都可以；只有 dual 模型下才有虚部块。</li>
+        <li>不支持：XL-BOMD、Casida 激发态（DFTB+U 不支持；onsite 只支持激发能，不支持力），M6d 时照此限制。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>用 pydftb 的参考数据集（PTBP 的 H/C/O/Cu）、<code>ParserVersion = 14</code>、单线程、SCC 容差 1e-10。onsite 常数取手册中的 PBE 值，Cu 没有给出，测试时借用 Au 的值（只为检验代码）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>设置</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>Cu₄CO，300 K</td><td>无修正</td><td>E = −13.0021452587 Ha，11 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>Cu d，U−J = 0.15 Ha，FLL</td><td>E<sub>U</sub> = 0.0406 Ha，18 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>同上，pSIC</td><td>E<sub>U</sub> = −2.957 Ha，17 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>Cu {p, d} 一组 + O p，FLL</td><td>E<sub>U</sub> = 0.118 Ha，26 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>壳层分辨 SCC + Cu d</td><td>20 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>只有 Cu s 一组</td><td><strong>DFTB+ 崩溃</strong>（初始化后段错误，返回码 −11）</td></tr>
+          <tr><td>Cu₄CO</td><td>U−J = 0；同一壳层写两次</td><td>报错（“too small”；“Multiple copies of shells”）</td></tr>
+          <tr><td>Cu₄CO</td><td>+U 配 SOC onsite 模型</td><td>报错 “Only dual spin orbit currently supported for orbital potentials”</td></tr>
+          <tr><td>Cu₄CO</td><td>SOC（dual，无自旋）+ Cu d</td><td>19 轮</td></tr>
+          <tr><td>Cu₄CO</td><td>Cu d + onsite（Cu、C、O）</td><td>E<sub>U</sub> = 0.0399，E<sub>ons</sub> = 0.0543 Ha，27 轮</td></tr>
+          <tr><td>CuO 链，k 点 4×2×2</td><td>共线自旋 + Cu d</td><td>73 轮（无 +U 时约 26 轮）</td></tr>
+          <tr><td>CuO 链，k 点</td><td>共线自旋 + onsite</td><td>28 轮</td></tr>
+          <tr><td>OH，300 K</td><td>非共线 + O p</td><td>11 轮</td></tr>
+          <tr><td>OH</td><td>非共线 + SOC（dual）+ O p</td><td>33 轮（虚部 +U 势）</td></tr>
+          <tr><td>OH</td><td>非共线 + SOC（dual / onsite 模型）+ onsite 修正</td><td>43 / 39 轮</td></tr>
+          <tr><td>OH 自由基</td><td>共线自旋 + onsite</td><td>12 轮</td></tr>
+          <tr><td>水</td><td>onsite（O、H）</td><td>E<sub>ons</sub> = 0.0201 Ha，13 轮；第 2 轮的总能几乎不变，第 3 轮才明显下降：第 1 轮的 H 里没有 onsite 势</td></tr>
+          <tr><td>甲醇</td><td>onsite；onsite + DFTB3</td><td>18 / 17 轮</td></tr>
+          <tr><td>水盒子，Γ 点</td><td>onsite</td><td>21 轮</td></tr>
+          <tr><td>水，非 SCC</td><td>onsite</td><td>输入错误（只在 SCC 时读这一块）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>detailed.out 列出 “Block populations” 及其本征分解，但只有 4 位小数；results.tag 的 <code>orbital_charges</code> 是全精度的逐轨道布居，参考数据用它。</li>
+        <li>DFTB+ 的等价类还有一条规则：壳层分辨 SCC 时，同一原子上 Hubbard U 相同的壳层合为一类。参考数据集里各壳层的 U 都不同，所以不起作用。pydftb 不照搬这一条：它会把三阶项（每个壳层的 U<sub>d</sub> 可以不同）的壳层电荷混在一起。现有路径本来也按壳层混合，块路径与之一致。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>选项（<code>DFTB</code>）</th><th>含义</th><th>DFTB+</th></tr></thead>
+        <tbody>
+          <tr><td><code>plus_u</code></td><td>{类型标签: [(壳层, U−J), …]}。壳层可写成角动量字母（<code>"d"</code>、<code>"pd"</code>）或从 0 开始的壳层序号（<code>[1, 2]</code>）；U−J 以 Hartree 计</td><td><code>OrbitalPotential { &lt;Sp&gt; { Shells = {…}  UJ = … } }</code>（壳层序号从 1 开始）</td></tr>
+          <tr><td><code>plus_u_functional</code></td><td><code>"fll"</code>（默认）或 <code>"psic"</code></td><td><code>Functional = FLL | pSIC</code></td></tr>
+          <tr><td><code>onsite_corrections</code></td><td>{类型标签: {"uu": 矩阵, "ud": 矩阵}}（或 (uu, ud) 二元组），矩阵为 n<sub>壳层</sub> × n<sub>壳层</sub>，Hartree；结构中每个类型都要给出</td><td><code>OnSiteCorrection { &lt;Sp&gt;uu = {…}  &lt;Sp&gt;ud = {…} }</code></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>常数表</strong>：<code>pydftb.blockpot.ONSITE_PBE</code> 收录 DFTB+ 手册的 PBE 值（H：s；C、N、O：sp；S、Ti、Au：spd），可以直接传给 <code>onsite_corrections</code>。用于壳层结构不同的参数集时会报错，而不是悄悄截取。</li>
+        <li><strong>与 DFTB+ 相同的限制</strong>：需要 SCC；U−J ≤ 1e-10 报错；同一壳层在一个元素的两组里出现报错；DFTB+U 配 SOC 时要求 dual 模型。</li>
+        <li><strong>比 DFTB+ 多的</strong>：只含 s 壳层的 +U 组可以用（DFTB+ 崩溃）。</li>
+        <li><strong>pydftb 自己的限制</strong>：<code>backend="torch"</code>、<code>pydftb.autodiff</code> 报错；SP2 求解器若不能给出所需的密度矩阵也报错（实现时确认）。</li>
+        <li><strong>结果</strong>（<code>DFTBResult</code>，新字段有默认值，追加在末尾）：<code>e_plus_u</code>（“Energy DFTB+U”）、<code>e_onsite</code>（“Energy onsite”）；<code>terms</code> 增加 “+U”、“onsite”。<code>q_in</code> 为块路径的完整混合向量，可直接用于重启和能带计算。<code>q_spin</code>、<code>magmoms</code> 的含义不变。</li>
+        <li><strong>ASE 与 <code>api.SCC</code></strong>：新选项原样传给 <code>DFTB</code>；<code>reuse_charges</code> 与重启使用块路径的混合向量。</li>
+        <li><strong>能带与 DOS</strong>：<code>eigenstates</code> 把块势加进每个 k 点的 H，与 DFTB+ 的能带计算（读入电荷，第一轮就有 onsite 势）相同。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>位置</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/blockpot.py</code>（新）</td><td>选项解析（壳层字母、序号、矩阵对称化）；<code>ONSITE_PBE</code>；<code>BlockTerms</code>：每个原子的 +U 组与 onsite 系数、混合向量的布局（等价类、块元素、虚部块）、向量与布居块的互换、块势、E<sub>U</sub>、E<sub>ons</sub>；½(SV + VS) 与力系数的块乘法</td></tr>
+            <tr><td><code>calculator.py</code></td><td>选项检查；<code>_Setup.block</code>（新字段，旧路径为 None）；初始布居、电荷与磁化、H 的组装、布居、能量、力的块分支</td></tr>
+            <tr><td><code>bands.py</code></td><td><code>eigenstates</code> 加块势</td></tr>
+            <tr><td><code>api.py</code>、<code>ase_calc.py</code></td><td>新选项；重启向量</td></tr>
+            <tr><td><code>autodiff/api.py</code>、<code>backend</code></td><td>遇到块势报错</td></tr>
+            <tr><td><code>validation/</code></td><td><code>Case</code> 新字段 <code>plus_u</code>、<code>onsite</code>；DFTB+ 输入块；参考数据增加 E<sub>U</sub>、E<sub>ons</sub>、逐轨道布居、本征值、共线自旋的磁矩</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>块路径的混合向量</h3>
+        <ul>
+          <li><strong>通道</strong>：无自旋 1 个（q）；共线 2 个（↑、↓）；两分量 4 个（q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub>）。</li>
+          <li><strong>等价类</strong>：对每个通道 c、原子、轨道 μ，键为：μ 是 +U 轨道或开了 onsite 时 (c, μ)；否则为 (c, 位点(μ))，位点即现有路径的原子或壳层（有自旋或两分量时为壳层）。按 (通道, 原子, 轨道) 的顺序第一次出现时编号，与 DFTB+ 的 <code>OrbitalEquiv_merge</code> 相同。</li>
+          <li><strong>块元素</strong>：+U 时按 DFTB+ <code>blockIndx</code> 的循环顺序（通道 → 原子 → 组 → 组内壳层对 → 轨道对，取行 &gt; 列）；onsite 时按 <code>ons_blockIndx</code>（通道 → 原子 → i &lt; j）。虚部块用同样的轨道对，接在后面。</li>
+          <li><strong>向量 → 布居</strong>（<code>expandCharges</code>）：每类的总数放在该类的第一个轨道上，其余为零（只影响按位点求和以外的用途，块路径里没有）；块的对角元取单独成类的轨道布居，非对角元对称填入，虚部反对称填入；共线时再由 ↑、↓ 换成 (q, m)。</li>
+          <li><strong>布居 → 向量</strong>（<code>reduceCharges</code>）：逐轨道 Mulliken 布居按类求和；块元素取 ½(Q<sub>ij</sub> + Q<sub>ji</sub>)；共线时块和布居都用 ↑、↓。</li>
+          <li>旧路径（无块势）的混合向量与代码一行不改。块路径只在 <code>st.block is not None</code> 时进入。</li>
+        </ul>
+
+        <h3>SCC 一轮</h3>
+        <ol>
+          <li>由向量展开得到逐轨道布居（每个通道）与块 Q、Qi。位点电荷、壳层磁化由逐轨道布居求和，电荷势、自旋势照旧。</li>
+          <li>块势：+U（第一轮也有）与 onsite（第一轮没有），每个原子、每个分量（q、m 或 q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub>）一个小矩阵；有 dual SOC 时还有虚部。</li>
+          <li>H<sub>s</sub> = （现有的对角部分）+ ½(S B<sup>s</sup> + B<sup>s</sup> S)，B<sup>s</sup> 为块对角矩阵。按原子分块计算：(S B)[:, A] = S[:, A] B<sub>A</sub>，B S = (S B)<sup>†</sup>，代价 O(n<sub>k</sub> N² n<sub>A</sub>)，不做 N³ 的整体乘法。虚部：X = ½(S Bi − (S Bi)<sup>†</sup>)，加 iX。</li>
+          <li>对角化、填充照旧。输出：逐轨道 Mulliken 布居与块布居 ½Σ<sub>k</sub> w<sub>k</sub>(ρ<sub>k</sub>S<sub>k</sub> + S<sub>k</sub>ρ<sub>k</sub>)<sub>AA</sub>（只算需要的原子），拼成输出向量。</li>
+          <li>第一轮不混合；有 +U、自旋或两分量时至少两轮（没有 <code>q_init</code> 时）。</li>
+        </ol>
+
+        <h3>能量、力</h3>
+        <ul>
+          <li>E<sub>U</sub>、E<sub>ons</sub> 由最后一轮的输出向量展开得到的块算出，加入总能量。</li>
+          <li>力：输出块的块势（含 onsite），对每个自旋分量 s 的实空间密度 R<sup>s</sup>(T)（Γ 点为 Σ<sub>k</sub>w<sub>k</sub>ρ<sub>k</sub>），系数 ½(B<sup>s</sup>R<sup>s</sup> + R<sup>s</sup>B<sup>s</sup>)[元素] 加到现有的 S 导数系数上；虚部项照 dual SOC 的写法推广到四个分量。应力随之得到。</li>
+        </ul>
+
+        <h3>不改的部分</h3>
+        <p>无块势的所有路径（无自旋、共线、两分量）一行不改。golden 只会多出新字段（结果的 <code>e_plus_u</code>、<code>e_onsite</code>，以及 <code>_Setup.block</code>，旧算例中为 None），用 <code>--allow-new block e_plus_u e_onsite</code>。</p>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例（冻结在 <code>tests/data/ref</code>）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>设置</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>cu4co_plusu</code>、<code>cu4co_plusu_psic</code></td><td>Cu d，U−J = 0.15 Ha，300 K</td><td>两种泛函；d 块的势与能量</td></tr>
+            <tr><td><code>cu4co_plusu_groups_shell</code></td><td>Cu {p, d} 一组 + O p，壳层分辨 SCC</td><td>跨壳层的块、两个元素、壳层电荷</td></tr>
+            <tr><td><code>cuo_chain_spin_plusu_k422</code></td><td>共线自旋 + Cu d，k 点</td><td>(q, m) 两个分量、↑/↓ 混合、力与应力</td></tr>
+            <tr><td><code>gdo_spin_plusu</code></td><td>GdO，共线自旋 + Gd f，壳层分辨</td><td>f 壳层（7 × 7 块）</td></tr>
+            <tr><td><code>oh_noncolinear_plusu</code></td><td>非共线 + O p</td><td>两分量的四个分量</td></tr>
+            <tr><td><code>oh_noncolinear_soc_plusu</code></td><td>非共线 + dual SOC + O p</td><td>虚部 +U 势与虚部块的混合</td></tr>
+            <tr><td><code>cu4co_soc_plusu</code></td><td>dual SOC（无自旋）+ Cu d</td><td>无自旋的两分量</td></tr>
+            <tr><td><code>h2o_ons</code>、<code>ch3oh_ons</code></td><td>onsite（手册常数）</td><td>f<sup>±</sup>、转动不变性修正、第一轮缺席</td></tr>
+            <tr><td><code>ch3oh_ons_dftb3</code></td><td>+ DFTB3</td><td>与三阶项同用</td></tr>
+            <tr><td><code>oh_radical_ons</code></td><td>共线自旋 + onsite</td><td>磁化分量用 f<sup>−</sup></td></tr>
+            <tr><td><code>water_box_ons</code></td><td>Γ 点周期体系</td><td>周期像的块布居、应力</td></tr>
+            <tr><td><code>cuo_chain_spin_ons_k422</code></td><td>k 点 + 共线自旋 + onsite（Cu 借用 Au 的常数）</td><td>spd 元素、k 点的力与应力</td></tr>
+            <tr><td><code>oh_noncolinear_soc_ons</code></td><td>非共线 + dual SOC + onsite</td><td>虚部 onsite 势</td></tr>
+            <tr><td><code>cu4co_plusu_ons</code></td><td>Cu d + onsite</td><td>两种块势同用</td></tr>
+            <tr><td><code>cuo_chain_spin_plusu_bands</code></td><td>+U 的 Klines 能带与投影</td><td><code>eigenstates</code> 的块势</td></tr>
+          </tbody>
+        </table></div>
+        <p>比较：能量（总能、Mermin、外推到 0 K）、E<sub>U</sub>、E<sub>ons</sub>（及 E<sub>spin</sub>、E<sub>LS</sub>、E<sub>3rd</sub>）、力、应力、净电荷、逐轨道布居（results.tag 的 <code>orbital_charges</code>）、SCC 网格上的本征值、磁矩（共线和两分量）。容差与现有算例相同（1e-6；能带 1e-8）。SCC 轮数列出对照。这些算例跳过 torch 参数化（<code>Case(torch=False)</code>）。</p>
+        <p><strong>动力学</strong>：<code>h2o_ons_md</code>，DFTB+ 的 VelocityVerlet 与 pydftb（ASE，<code>reuse_charges=True</code>）逐帧对照，检验每个几何步第一轮缺少 onsite 势、块向量在几何步之间的传递。</p>
+
+        <h3>不依赖 DFTB+ 的测试（<code>tests/test_blockpot.py</code>）</h3>
+        <ul>
+          <li>力、应力与能量的中心差分一致：FLL、pSIC、onsite；无自旋、共线、两分量 + dual SOC（虚部块）；分子与 k 点。</li>
+          <li>E<sub>U</sub> 的两种写法（Q 的二次式与 Σ<sub>σ</sub>Tr(n − n²)）一致；onsite 常数全为零时与无修正的结果相同。</li>
+          <li>只有 s 壳层的 +U 组（DFTB+ 崩溃）：差分检查。</li>
+          <li>混合向量布局：类的个数、块元素个数与 DFTB+ 的规则一致；向量 → 布居 → 向量还原。</li>
+          <li>用 <code>q_in</code> 重启：1–2 轮收敛到同一结果；<code>eigenstates</code> 在 SCC 的 k 点上重现 SCC 的本征值。</li>
+          <li>报错：非 SCC、U−J ≤ 0、壳层重复、未知壳层字母、SOC onsite 模型 + U、torch、autodiff、onsite 缺少某个类型、矩阵形状不对、<code>ONSITE_PBE</code> 用于壳层不同的参数集。</li>
+          <li><code>PyDFTB</code>、<code>api.SCC</code> 传递新选项。</li>
+        </ul>
+
+        <h3>门槛</h3>
+        <ul>
+          <li>golden：两个环境（conda、最小环境）对 M6b 之前的提交逐位相同，<code>--allow-new block e_plus_u e_onsite</code>；新算例只记数，不比较。</li>
+          <li><code>refgen --check</code>（全部，NumPy；torch 只跑旧算例）、<code>dynamics --check</code>。</li>
+          <li>pydftb 测试三个环境；PTBP 测试；<code>engine_parity</code> 确认 PTBP 不受影响。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：torch 后端与自动求导的块势版本；DFTB+ 等价类中“U 相同的壳层合并”这一条（第二节）；U−J、onsite 常数的计算（hotcent 没有现成的 f<sub>uu</sub>/f<sub>ud</sub> 算法；DFTB+ 也不提供 U−J 的默认值，需要用户给出）。</li>
+        <li><strong>风险：长 SCC</strong>。CuO 链 + U 要 73 轮，舍入差别可能让轮数与 DFTB+ 相差一两轮。对策：结果按容差比较，轮数只列出对照。</li>
+        <li><strong>风险：块乘法的代价</strong>。onsite 修正每轮要对所有原子做 S 的分块乘法和块布居，大体系里与对角化相比不可忽略。先保证正确，报告中给出耗时。</li>
+        <li><strong>风险：输入写法</strong>。DFTB+ 的壳层序号从 1 开始，pydftb 用从 0 开始的序号或字母；文档和报错信息都写明，参考算例由同一份设置生成两边的输入。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6a-spin-orbit.html">← M6a 报告</a><a href="../index.html">文档索引</a><a href="../reports/M6b-dftbu-onsite.html">M6b 报告 →</a></nav>
+    <span>M6b</span>
+  </footer>
+</div>
+</body>
+</html>

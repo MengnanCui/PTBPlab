@@ -71,7 +71,9 @@ class PyDFTB(Calculator):
     ``hubbard_derivs``, ``h_damping``, for collinear spin ``spin``,
     ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``, for two-component
     calculations ``spin="noncolinear"``, ``initial_spins``, ``spin_orbit``,
-    ``spin_orbit_dual``, and ``dispersion``) are passed to :class:`pydftb.DFTB`.
+    ``spin_orbit_dual``, for DFTB+U and onsite corrections ``plus_u``,
+    ``plus_u_functional``, ``onsite_corrections``, and ``dispersion``) are passed to
+    :class:`pydftb.DFTB`.
     Dispersion parameters stay in atomic units (Bohr, Hartree) as in DFTB+; the elements
     come from ``atoms``.  With ``spin="noncolinear"`` and no ``initial_spins`` the atoms'
     initial magnetic moments are used ((N, 3) vectors, or (N,) along z); ``magmoms`` are
@@ -92,7 +94,9 @@ class PyDFTB(Calculator):
                  dispersion=None, reuse_charges: bool = False, k_threads=1,
                  backend=None, device: str | None = None, dtype: str | None = None,
                  initial_spins=None, spin_orbit: dict | None = None,
-                 spin_orbit_dual: bool = True, **kwargs):
+                 spin_orbit_dual: bool = True, plus_u: dict | None = None,
+                 plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -107,7 +111,9 @@ class PyDFTB(Calculator):
                                 relax_total_spin=relax_total_spin, spin_constants=spin_constants,
                                 backend=backend, device=device, dtype=dtype,
                                 initial_spins=initial_spins, spin_orbit=spin_orbit,
-                                spin_orbit_dual=spin_orbit_dual)
+                                spin_orbit_dual=spin_orbit_dual, plus_u=plus_u,
+                                plus_u_functional=plus_u_functional,
+                                onsite_corrections=onsite_corrections)
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.k_threads = as_kthreads(k_threads)       # one pool for all calculations

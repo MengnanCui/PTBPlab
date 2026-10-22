@@ -31,6 +31,12 @@ def two_component(options: dict) -> bool:
             or options.get("spin_orbit") is not None)
 
 
+def block_terms(options: dict) -> bool:
+    """Whether :class:`pydftb.DFTB` options ask for block potentials (DFTB+U, onsite
+    corrections; milestone M6b)."""
+    return options.get("plus_u") is not None or options.get("onsite_corrections") is not None
+
+
 def make_kpoints(kpts, time_reversal: bool = True):
     """None | (n1, n2, n3) Monkhorst-Pack grid | (kpts, weights) | path points -> (kpts, weights)
     or None.
@@ -98,6 +104,8 @@ class SCC:
     def _site_populations(self):
         """Restart charges from the previous run (the vector the SCC loop mixes)."""
         r = self.result
+        if block_terms(self.options):          # DFTB+U / onsite: the block vector (M6b)
+            return r.q_in
         if r.q_spin is not None:
             return r.q_spin.ravel()
         return r.q_shell if self.params.shell_resolved else r.charges

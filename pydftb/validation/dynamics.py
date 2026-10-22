@@ -92,6 +92,11 @@ DYN_CASES = [
             note="spin; two atoms"),
     DynCase("cuo_chain_md", "cuo_chain_k422", "md", ewald_tolerance=1e-12, tol=TOL_MD,
             note="k-points, Fermi 500 K"),
+    # M6b: DFTB+ leaves the onsite corrections out of the first SCC iteration of every
+    # geometry step, pydftb only when it starts without charges (reused charges count as
+    # read in): the SCC paths differ, the trajectory does not
+    DynCase("h2o_ons_md", "h2o_ons", "md", tol=TOL_MD,
+            note="onsite corrections; the block vector carried between steps"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -145,7 +150,8 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 scc=base.scc, scc_tol=1e-10, max_scc=500, repulsive=base.repulsive,
                 shell_resolved=base.shell_resolved, labels=inp["labels"], fd_delta=FD_DELTA,
                 dispersion=inp.get("dispersion"), reuse_charges=True,
-                **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}))
+                **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}),
+                **refgen.block_options(base, inp["labels"]))
     opts.update(overrides)
     return PyDFTB(SKF_SETS[base.skf_set], **opts)
 
@@ -231,7 +237,8 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         skdir = refgen._plain_skf_dir(base, tmp)
         extra = (dftbplus.dftb3_block(base.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(base.spin, set(inp["labels"]), base.shell_resolved)
-                 + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"]))
+                 + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
+                 + refgen.block_hsd(base, inp))
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"

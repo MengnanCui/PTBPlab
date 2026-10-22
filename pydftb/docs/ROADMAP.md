@@ -20,7 +20,7 @@
 | M4d | 设备选项（CUDA/ROCm、MPS、XPU，按设备能力把部分步骤留在 CPU，CUDA 上确定性）、GPU 自检脚本（`python -m pydftb.validation.gpu_check`）、PTBP 的 `--pydftb_backend`/`--device`/`--dtype` | ✅ 完成（本机没有 GPU，GPU 的正确性和速度未实测，由用户运行自检脚本；在 CPU 上用 meta 设备检查查出并改正自动求导中约 50 处建在 CPU 上的张量，MPS/XPU 布局的退回 CPU 分支与正常路径逐位相同，自检脚本 155 项检查全部通过；PTBP 用 GPU 时 DFTB 阶段在主进程串行，与 parallel_bo/pso 同用时拒绝，梯度优化器只用 NumPy 后端，`plan.json` 记录后端；顺带修正自动求导的两处色散错误；默认 NumPy 路径逐字节不变） | `design/M4d-devices.html`，`reports/M4d-devices.html` |
 | M4e | 恢复 r0_d 的作用：hotcent 原子计算默认用自洽约束（hotcent 1.x 的做法），`--confinement perturbative` 保留旧行为；参数化坚持每个元素三个参数（r0_w、r0_d、σ_rep） | ✅ 完成（r0_d 不起作用的原因是 hotcent 在 2023-02 把微扰约束改成默认，而 PTBP 是按 1.x 写的；自洽约束下 Cu 的 r0_d 从 12.036 改到 13 时 SK 表变化 0.011；发表参数下 energygeometry 损失 1.899 → 0.920（论文 0.288），μ_V 0.120 → 0.0129（论文 0.0182），μ_E 剩下的差距最可能来自 hotcent 2021-10 修正的 GGA 错误；两个引擎仍一致；`--confinement perturbative` 时与 M4 之前逐字节相同） | `design/M4e-r0d-confinement.html`，`reports/M4e-r0d-confinement.html` |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划，排在 M6 之后（离散类型的基础已在 M0 完成） | — |
-| M6 | DFTB+ 功能补齐·第二波，按顺序：M6a 自旋轨道耦合与非共线自旋 → M6b DFTB+U 与 onsite 修正 → M6c 外电场、点电荷与隐式溶剂 → M6d 激发态 Casida 与 XL-BOMD；新功能先只做 NumPy 引擎（torch 后端、自动求导遇到时报错） | 进行中：M6a ✅（两分量计算：非共线自旋，onsite 与 dual 两种 SOC 模型，可与 DFTB3、壳层分辨 SCC、k 点、力、应力、能带/DOS 同用；16 个 DFTB+ 参考算例全部通过，能量差 ≤ 4.9e-11 Ha，SCC 轮数全部相同（最长 166 轮），磁矩向量、自旋与轨道角动量 ≤ 7.6e-9，dual 模型的力与能量差分一致到 6e-9；旧路径逐位不变；发现磁矩方向是 SCC 的软模，周期体系倾斜的磁矩或很弱的 SOC 下 DFTB+ 的 Broyden 混合发散（pydftb 相同，Pulay 混合可收敛），以及 SOC 下约化的 k 点网格让 DFTB+ 算错磁矩）；M6b、M6c、M6d 计划 | `design/M6a-spin-orbit.html`，`reports/M6a-spin-orbit.html` |
+| M6 | DFTB+ 功能补齐·第二波，按顺序：M6a 自旋轨道耦合与非共线自旋 → M6b DFTB+U 与 onsite 修正 → M6c 外电场、点电荷与隐式溶剂 → M6d 激发态 Casida 与 XL-BOMD；新功能先只做 NumPy 引擎（torch 后端、自动求导遇到时报错） | 进行中：M6a ✅（两分量计算：非共线自旋，onsite 与 dual 两种 SOC 模型，可与 DFTB3、壳层分辨 SCC、k 点、力、应力、能带/DOS 同用；16 个 DFTB+ 参考算例全部通过，能量差 ≤ 4.9e-11 Ha，SCC 轮数全部相同（最长 166 轮），磁矩向量、自旋与轨道角动量 ≤ 7.6e-9，dual 模型的力与能量差分一致到 6e-9；旧路径逐位不变；发现磁矩方向是 SCC 的软模，周期体系倾斜的磁矩或很弱的 SOC 下 DFTB+ 的 Broyden 混合发散（pydftb 相同，Pulay 混合可收敛），以及 SOC 下约化的 k 点网格让 DFTB+ 算错磁矩）；M6b ✅（DFTB+U 的 FLL 与 pSIC、onsite 修正，两者共用块布居、½(SV + VS) 的块势和 DFTB+ 的混合向量（被修正的轨道各自混合，块的非对角元也混合）；可与无自旋、共线、非共线自旋、dual SOC（虚部块势）、DFTB3、k 点、力、应力、能带同用；18 个 DFTB+ 参考算例全部通过，能量差 ≤ 5.6e-11 Ha，逐轨道布居 ≤ 8e-11，17 个的 SCC 轮数相同、另一个差 1 轮；水的 onsite MD 与 DFTB+ 一致到 4.5e-8 Å；发现只有 s 壳层的 +U 组让 DFTB+ 25.1 崩溃，以及带隙中点费米能级在近简并能级对下让力与能量差分相差 2.7e-7）；M6c、M6d 计划 | `design/M6a-spin-orbit.html`，`reports/M6a-spin-orbit.html`；`design/M6b-dftbu-onsite.html`，`reports/M6b-dftbu-onsite.html` |
 | M7 | 大体系：GPU 混合精度 SP2、Chebyshev、分治多机 | 计划，排在 M6 之后（CPU 原型见 `RESEARCH.md`） | — |
 | M8 | AI 层：随环境连续变化的参数、ML 排斥势、主动学习 | 计划，排在 M6 之后 | — |
 
@@ -55,7 +55,7 @@
 | | 非共线自旋（三维磁矩向量）、自旋轨道耦合（onsite 与 dual 模型，s/p/d/f），含力、应力、能带/DOS、轨道角动量；SOC 要求完整的 k 点网格 | ✅ M6a（只有 NumPy） |
 | 修正项 | 色散：Lennard-Jones/UFF、Slater-Kirkwood（原生，周期体系用 r⁻⁶ Ewald 求和）；D3、SimpleDftD3、D4（调用 `dftd3`/`dftd4` 参考库）；D3H5 的 H–H 排斥 | ✅ M2d |
 | | 色散：TS/MBD、D4 自洽电荷（`ChargeModel = SelfConsistent`） | — 按需（libmbd） |
-| | DFTB+U、onsite 修正 | ⬜ M6b |
+| | DFTB+U（FLL、pSIC，可按组耦合多个壳层）、onsite 修正（附 DFTB+ 手册的 PBE 常数），含力、应力、能带；可与自旋、SOC（dual）、DFTB3 同用 | ✅ M6b（只有 NumPy） |
 | | 长程校正 LC/CAM | — 按需（需要专门的 SKF） |
 | | 外电场、外部点电荷（静电嵌入）、隐式溶剂 GBSA/ALPB | ⬜ M6c |
 | 驱动 | 结构优化（含晶格）、NVE 分子动力学（通过 ASE），与 DFTB+ 的 `GeometryOptimisation`、`VelocityVerlet` 对照 | ✅ M2f |

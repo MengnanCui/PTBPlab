@@ -13,15 +13,33 @@ import pytest
 from ase.build import molecule
 
 from pydftb.ase_calc import PyDFTB
+from pydftb.calculator import DFTB
 from pydftb.validation import dynamics, refgen
+from pydftb.validation.cases import CASES_BY_NAME
 
 from .conftest import SKF_HCOCU
 
 REFS = sorted(glob.glob(os.path.join(dynamics.REF_DIR, "*.json")))
 
 
+def _dftbplus_onsite_rule(monkeypatch):
+    """DFTB+ leaves the onsite corrections out of the first SCC iteration of every geometry
+    step (main.F90: iSCCIter > 1 .or. tReadChrg); pydftb counts reused charges as read in."""
+    scc, pots, first = DFTB._scc, DFTB._block_potentials, []
+
+    def _scc(self, *args):
+        first.append(True)
+        return scc(self, *args)
+
+    def _pots(self, st, qvec, onsite=True):
+        return pots(self, st, qvec, onsite=onsite and not (first and first.pop()))
+
+    monkeypatch.setattr(DFTB, "_scc", _scc)
+    monkeypatch.setattr(DFTB, "_block_potentials", _pots)
+
+
 @pytest.mark.parametrize("path", REFS, ids=[os.path.basename(p)[:-5] for p in REFS])
-def test_against_dftbplus_driver(path):
+def test_against_dftbplus_driver(path, monkeypatch):
     doc = dynamics.load(os.path.basename(path)[:-5])
     why = refgen.missing_requirement(doc)
     if why:
@@ -32,6 +50,12 @@ def test_against_dftbplus_driver(path):
         # charge reuse gives DFTB+'s SCC starting points: the same iterations in every step, give
         # or take one where the last SCC error lands at the tolerance (O2: 3 pairs of steps swap)
         n_py, n_ref = np.array(r["result"]["n_scc"]), np.array(doc["reference"]["n_scc"])
+        if CASES_BY_NAME[doc["base"]].onsite is not None:
+            # pydftb starts every step with the onsite corrections in H: never more iterations
+            # (water: 463 against 557); with DFTB+'s rule the iterations of DFTB+
+            assert (n_py <= n_ref).all() and n_py.sum() < n_ref.sum()
+            _dftbplus_onsite_rule(monkeypatch)
+            n_py = np.array(dynamics.compare(doc)["result"]["n_scc"])
         assert np.abs(n_py - n_ref).max() <= 1 and abs(n_py.sum() - n_ref.sum()) <= 2
 
 

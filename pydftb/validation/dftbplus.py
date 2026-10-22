@@ -160,6 +160,40 @@ def spinorbit_block(opts, labels) -> str:
     return "\n".join(lines) + "\n"
 
 
+def orbital_potential_block(opts, shells) -> str:
+    """HSD ``OrbitalPotential`` (DFTB+U, M6b) for ``opts`` = {"groups": {label: groups},
+    "functional": "fll" | "psic"} (groups as pydftb's ``plus_u``), for the types in ``shells``
+    ({label: angular momenta of its shells}); DFTB+ numbers shells from 1."""
+    if not opts:
+        return ""
+    from ..blockpot import plus_u_pairs, shell_indices
+    lines = ["  OrbitalPotential {", f"    Functional = {{{opts.get('functional', 'fll')}}}"]
+    for lab, spec in opts["groups"].items():
+        if lab not in shells:
+            continue
+        for shell_spec, uj in plus_u_pairs(spec):
+            idx = shell_indices(shell_spec, shells[lab], lab)
+            lines += [f"    {lab} {{", f"      Shells = {{{' '.join(str(i + 1) for i in idx)}}}",
+                      f"      UJ = {_f(uj)}", "    }"]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def onsite_block(onsite, labels) -> str:
+    """HSD ``OnSiteCorrection`` (M6b): the f_uu and f_ud matrices of every type in ``labels``
+    (DFTB+ needs all), as pydftb's ``onsite_corrections`` entries."""
+    if not onsite:
+        return ""
+    lines = ["  OnSiteCorrection {"]
+    for lab in labels:
+        e = onsite[lab]
+        uu, ud = (e["uu"], e["ud"]) if isinstance(e, dict) else e
+        lines.append(f"    {lab}uu = {{{' '.join(_f(x) for x in np.ravel(uu))}}}")
+        lines.append(f"    {lab}ud = {{{' '.join(_f(x) for x in np.ravel(ud))}}}")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
 def parse_angular_momenta(text) -> dict:
     """detailed.out's ``Electron``/``Orbital angular momentum (mu_B/hbar)`` tables (M6a):
     {"spin": (n_shell, 3), "orbital": (n_shell, 3)} as printed (8 decimals: -g/4 m and
@@ -490,7 +524,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                           ("e_zero", "Extrapolated to 0"), ("e_rep", "Repulsive energy"),
                           ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
                           ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
-                          ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd")]:
+                          ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
+                          ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))
@@ -506,6 +541,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         res["charges_net"] = tag["gross_atomic_charges"]
         if "gross_atomic_spins" in tag:
             res["spins"] = tag["gross_atomic_spins"]       # (n_atom,) or (3, n_atom)
+        if "orbital_charges" in tag:      # (n_spin, n_atom, max orbitals): electrons per
+            res["orbital_charges"] = tag["orbital_charges"]   # orbital; collinear: up, down
         res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
