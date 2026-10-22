@@ -21,6 +21,7 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     parameters:     # list[str]
     multi_element:  # list[str]
     superposition:  # density / potential
+    confinement:    # selfconsistent / perturbative (hotcent's confinement scheme)
     checkpoint:     # str
     engine:         # dftbplus / pydftb
     smearing:       # none / fermi / gaussian / mp
@@ -56,6 +57,7 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'parameters':    'parameters',
     'multi_element': 'multi_element',
     'superposition': 'superposition',
+    'confinement':   'confinement',
     'checkpoint':    'checkpoint',
     'engine':        'engine',
     'smearing':      'smearing',

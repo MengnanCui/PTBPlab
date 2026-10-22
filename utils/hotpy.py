@@ -38,6 +38,29 @@ from math import pi, sqrt
 
 from utils.parameters_set import get_PTBP, get_QNplusRep
 
+# hotcent's confinement scheme for the confined atoms (M4e).  "selfconsistent" is the
+# default of hotcent 1.x, for which this module was written (its hotcent.slako API): every
+# confinement potential is applied in a self-consistent atom, so r0_w shapes the orbitals
+# and r0_d the density.  "perturbative" became hotcent's default on 2023-02-05 (released in
+# 2.0.0): the confinements are added to the free atom's fixed potential, and since every
+# valence subshell here has a wave-function confinement, r0_d then changes nothing.  The
+# setting is process-wide (forked hotcent workers inherit it).
+CONFINEMENTS = ("selfconsistent", "perturbative")
+_CONFINEMENT = "selfconsistent"
+
+
+def set_confinement(name: str) -> None:
+    """Choose hotcent's confinement scheme for this process (see CONFINEMENTS)."""
+    global _CONFINEMENT
+    if name not in CONFINEMENTS:
+        raise ValueError(f"confinement must be one of {CONFINEMENTS}, got {name!r}")
+    _CONFINEMENT = name
+
+
+def confinement() -> str:
+    """The confinement scheme in use (see set_confinement)."""
+    return _CONFINEMENT
+
 
 class hotpy():
     def __init__(self,
@@ -194,6 +217,7 @@ class hotpy():
                             confinement=conf_dens,
                             wf_confinement=conf_wf,
                             txt='-',
+                            perturbative_confinement=_CONFINEMENT == "perturbative",
                             )
             atom.run()
 

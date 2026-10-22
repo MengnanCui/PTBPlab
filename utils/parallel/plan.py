@@ -56,6 +56,8 @@ class Plan:
     workload: dict = field(default_factory=dict)
     # M4d: pydftb on torch (backend, device, dtype, torch version); empty for NumPy
     backend: dict = field(default_factory=dict)
+    # M4e: hotcent's confinement scheme and version (set by cli/run.py)
+    hotcent: dict = field(default_factory=dict)
 
     def stage(self, name: str) -> StagePlan:
         return self.stages.get(name) or StagePlan(reasons=["serial"])
@@ -90,6 +92,9 @@ class Plan:
             b = self.backend
             lines.append(f"[plan]   pydftb on {b.get('pydftb_backend')} ({b.get('device')}, "
                          f"{b.get('dtype')}; torch {b.get('torch')})")
+        if self.hotcent:
+            lines.append(f"[plan]   hotcent {self.hotcent.get('version')}: "
+                         f"{self.hotcent.get('confinement')} confinement")
         if self.particles > 1:
             shares = sorted(set(core_shares(self.budget.ncores, self.particles)))
             lines.append(f"[plan]   {self.particles} BO points evaluated at a time, "
@@ -141,7 +146,8 @@ class Plan:
                 "share_stages": {str(c): {k: asdict(v) for k, v in st.items()}
                                  for c, st in self.share_stages.items()},
                 "costs": list(self.costs),
-                **({"backend": dict(self.backend)} if self.backend else {})}
+                **({"backend": dict(self.backend)} if self.backend else {}),
+                **({"hotcent": dict(self.hotcent)} if self.hotcent else {})}
 
     @classmethod
     def from_json(cls, data: dict) -> Plan:
@@ -158,6 +164,7 @@ class Plan:
                              for c, st in data.get("share_stages", {}).items()}
         plan.costs = list(data.get("costs", []))
         plan.backend = dict(data.get("backend", {}))
+        plan.hotcent = dict(data.get("hotcent", {}))
         return plan
 
     def save(self, path) -> None:

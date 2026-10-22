@@ -110,6 +110,11 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('--superposition', default='density',
                    choices=['density', 'potential'],
                    help="Density vs potential superposition. Default: density.")
+    p.add_argument('--confinement', default='selfconsistent',
+                   choices=['selfconsistent', 'perturbative'],
+                   help="hotcent's confinement scheme: selfconsistent (hotcent 1.x; r0_d "
+                        "confines the density) or perturbative (hotcent >= 2.0 default; r0_d "
+                        "has no effect, as in runs before M4e). Default: %(default)s.")
     p.add_argument('--checkpoint', default='checkpoint.pkl',
                    help="Checkpoint filename (for skopt resume). Default: %(default)s.")
     p.add_argument('--postprocess-only', action='store_true',
@@ -240,6 +245,8 @@ def run(args: argparse.Namespace) -> int:
         '--mp_order', str(args.mp_order),
         '--pydftb_forces', args.pydftb_forces,
     ]
+    if getattr(args, 'confinement', 'selfconsistent') != 'selfconsistent':   # M4e
+        legacy_argv += ['--confinement', args.confinement]
     if getattr(args, 'pydftb_backend', 'numpy') != 'numpy':        # M4d
         legacy_argv += ['--pydftb_backend', args.pydftb_backend, '--device', args.device,
                         '--dtype', args.dtype]

@@ -305,6 +305,16 @@ log line and should pass `--E0s` explicitly.
 
   Pass `--n_calls` to control how many additional iterations to run on
   top of what's stored. To force a cold start, delete `checkpoint.pkl`.
+- **Confinement scheme (`--confinement`, three parameters per element).** Each element
+  has three parameters: r0_w (wave-function confinement), r0_d (density confinement) and
+  sigma_rep (repulsion). By default hotcent's confined atoms are solved self-consistently
+  (`selfconsistent`, the default of hotcent 1.x, for which PTBP was written): r0_w shapes
+  the orbitals and r0_d the density used for the two-centre integrals. hotcent >= 2.0
+  defaults to a "perturbative" scheme in which r0_d has no effect when every valence
+  subshell has a wave-function confinement, as in PTBP; runs before this change (M3, M4)
+  used it, and `--confinement perturbative` (YAML key `confinement`) reproduces them,
+  also when resuming their checkpoints. The scheme is printed at start-up and stored in
+  `plan.json`. Details: `pydftb/docs/reports/M4e-r0d-confinement.html`.
 
 ### 4. Choosing the outer-loop optimiser
 

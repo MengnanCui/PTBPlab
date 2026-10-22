@@ -81,6 +81,11 @@ print("[engine]", _configure_engine(
     pydftb_device=_device,
     pydftb_dtype=getattr(ptbp_args, 'dtype', None),
 ))
+# hotcent's confinement scheme (M4e): self-consistent (hotcent 1.x, r0_d confines the density)
+# unless --confinement perturbative; process-wide, so the forked hotcent workers inherit it
+from utils.hotpy import set_confinement as _set_confinement
+_set_confinement(getattr(ptbp_args, 'confinement', None) or 'selfconsistent')
+print(f"[hotcent] confinement {getattr(ptbp_args, 'confinement', None) or 'selfconsistent'}")
 from utils.engines import is_gpu as _is_gpu
 if _is_gpu() and getattr(ptbp_args, 'optimizer', 'bo') in ('parallel_bo', 'pso'):
     raise SystemExit("--optimizer parallel_bo/pso evaluate BO points in parallel processes; "
@@ -126,6 +131,9 @@ def _parallel_plan(dft_input, bolt, opt_elem=()):
         eos = max(1, int(ptbp_args.eos_points))
         plan = _simple_plan(budget, int(len(dft_input) / eos) * eos, engine=engine,
                             optimizer=ptbp_args.optimizer, particles=ptbp_args.n_particles)
+    import hotcent as _hotcent
+    from utils.hotpy import confinement as _confinement
+    plan.hotcent = {'confinement': _confinement(), 'version': _hotcent.__version__}   # M4e
     _set_plan(plan)
     print(plan.render())
     if engine == 'dftbplus':

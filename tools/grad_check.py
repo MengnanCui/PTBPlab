@@ -268,7 +268,12 @@ def main(argv=None):
     ap.add_argument("--l1-temperature", type=float, nargs="+", default=[0.0],
                     help="L1 with Fermi smearing at these temperatures (K; 0: PTBP's T = 0)")
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--confinement", default="selfconsistent",
+                    choices=["selfconsistent", "perturbative"],
+                    help="hotcent's confinement scheme (M4e; perturbative: as before M4e)")
     a = ap.parse_args(argv)
+    from utils.hotpy import set_confinement
+    set_confinement(a.confinement)
     import ase.io
 
     import utils.data as data

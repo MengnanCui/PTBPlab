@@ -7,11 +7,13 @@ the BO step (:meth:`utils.loss.Loss.set_parameters`, the run's hotcent workers).
 arrays have the keys and shapes of :class:`pydftb.autodiff.Params`, so that a gradient
 from ``pydftb.autodiff`` contracts with it directly.
 
-hotcent 2.1 solves the density-confined atom perturbatively and keeps, for every subshell
-that has a wave-function confinement (hotpy confines them all), the wave-function-confined
-orbital: r0_d then changes no byte of the SKF files.  :func:`compute` probes r0_d once per
-run (one hotcent run at r0_d + h_d compared byte by byte with the base files) and uses a
-zero tangent while that holds; otherwise it takes central differences as for r0_w.
+With PTBP's default self-consistent confinement (M4e; hotcent 1.x's scheme) r0_d confines
+the density and changes the tables.  With ``--confinement perturbative`` (the default of
+hotcent >= 2.0) the density comes from the wave-function-confined orbitals of every subshell
+that has one (hotpy confines them all), and r0_d changes no byte of the SKF files.
+:func:`compute` probes r0_d once per run setting (one hotcent run at r0_d + h_d compared
+byte by byte with the base files) and uses a zero tangent while that holds; otherwise it
+takes central differences as for r0_w.
 
 Step study (M4c design, section 5): the r0_w tangent of Cu changes by 0.3-1 % (rms)
 between neighbouring steps of 0.005-0.32 Bohr, the default 0.04 Bohr is in the flat part.

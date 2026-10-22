@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4e r0_d 恢复报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M4e</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4e · 完成报告</p>
+    <h1>恢复 r0_d 的作用：hotcent 的约束方式</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M4e-r0d-confinement.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">PTBP 现在又是每个元素三个有效参数：r0_w、r0_d、σ_rep。hotcent 的原子计算默认改用自洽约束（hotcent 1.x 的做法，PTBP 最初就是按它写的），r0_d 重新进入 SKF。<code>--confinement perturbative</code> 保留旧行为，用来复现 M3、M4 的运行：G1 门槛下它与 M4 之前的提交逐字节相同。</p>
+    <ul>
+      <li><strong>原因</strong>：hotcent 在 2023-02-05 把“微扰约束”改成了默认（2024-03-18 随 2.0.0 发布）。微扰约束下，只要每个价层都有波函数约束（PTBP 正是这样），密度就只由 r0_w 决定。PTBP 的 <code>hotpy.py</code> 最初按 hotcent 1.x 的接口写（<code>hotcent.slako.SlaterKosterTable</code>，2021-11 以前的接口），那时默认是自洽约束；同项目的 <code>get_sto_coefficients.py</code> 也显式写了 <code>perturbative_confinement=False</code>。后来改用 2.x 时只改了接口，没有处理这个默认值的变化。</li>
+      <li><strong>r0_d 起作用了</strong>：Cu 的 r0_d 从 12.036 改到 13.0 Bohr，SK 表最大变化 0.011（微扰约束下为 0），energygeometry 损失从 0.920 变为 0.986。</li>
+      <li><strong>发表的 Cu 参数下更接近论文</strong>：energygeometry 损失从 1.899 降到 0.920（论文 0.288）。其中 μ_V 从 0.120 降到 0.0129，与论文的 0.0182 同一量级；μ_E 从 0.510 降到 0.293，仍比论文的 0.0775 大 3.8 倍。剩下的差距最可能来自 hotcent 在 2021-10-25 修正的二中心积分 GGA 错误（PTBP 最初用的版本还带着这个错误），这一部分不应恢复。</li>
+      <li><strong>两个引擎仍一致</strong>：新的 SKF 下，pydftb 与 DFTB+ 每个结构的能量差 ≤ 1.8e-9 eV。dataset 模式的损失相对差 7e-10；energygeometry 模式为 3e-6，来自 PTBP 内层 σ_rep 搜索的宽松收敛，不是引擎差异。</li>
+      <li><strong>默认结果改变（有意）</strong>：同一组参数的 SKF 变了，损失、BO 路径随之改变。dataset 模式在发表参数下的损失从 446.2 变为 837.8：发表参数不是用这个模式拟合的，这个数不与论文比较。</li>
+      <li><strong>代价</strong>：hotcent 多做几次原子自洽计算，一次 Cu 的 SKF 生成 47 → 50 s（单进程）。dataset 模式有一个 2 原子结构在 T = 0 下 SCC 从 7 轮变为 629 轮，DFTB 阶段（4 核）从约 10 s 变为约 30 s。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">3</span><span class="lbl">每个元素的有效参数</span></li>
+      <li><span class="num">1.899 → 0.920</span><span class="lbl">发表参数下的 energygeometry 损失（论文 0.288）</span></li>
+      <li><span class="num">0.120 → 0.0129</span><span class="lbl">其中的 μ_V（论文 0.0182）</span></li>
+      <li><span class="num">0</span><span class="lbl"><code>--confinement perturbative</code> 时与 M4 之前改变的字节</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#history">三、原因：hotcent 的时间线</a></li>
+      <li><a href="#effect">四、r0_d 的作用与发表参数下的损失</a></li>
+      <li><a href="#parity">五、两个引擎的一致性</a></li>
+      <li><a href="#cost">六、代价与梯度</a></li>
+      <li><a href="#tests">七、测试与门槛</a></li>
+      <li><a href="#deviations">八、与设计的偏差</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/hotpy.py</code></td><td>进程级设置 <code>set_confinement()</code>、<code>confinement()</code>，默认 <code>"selfconsistent"</code>；<code>hot_hamiltonian</code> 调用 <code>AtomicDFT</code> 时显式传 <code>perturbative_confinement</code>。派生的 hotcent 进程继承这个设置，<code>utils/hotcent_tangent.py</code> 自建的 <code>hotpy</code> 也用它</td></tr>
+            <tr><td><code>cli/arg_parser.py</code>、<code>cli/cmd_optimize.py</code>、<code>cli/config.py</code></td><td><code>--confinement selfconsistent|perturbative</code>，YAML 键 <code>confinement</code>；<code>ptbp optimize</code> 只在不是默认值时才往旧命令行里加这个选项</td></tr>
+            <tr><td><code>cli/run.py</code></td><td>启动时设置并打印 <code>[hotcent] confinement …</code>；<code>plan.json</code> 新增 <code>hotcent</code> 字段（约束方式和 hotcent 版本），方案的打印多一行</td></tr>
+            <tr><td><code>utils/parallel/plan.py</code></td><td><code>Plan.hotcent</code>，写入、读回、打印</td></tr>
+            <tr><td><code>utils/loss_grad.py</code></td><td>r0_d 探测结果的缓存键加上约束方式，避免把微扰约束下“r0_d 不起作用”的结论用到自洽约束上</td></tr>
+            <tr><td><code>utils/hotcent_tangent.py</code></td><td>说明文字（代码已支持 r0_d 的非零切向）</td></tr>
+            <tr><td><code>tools/engine_parity.py</code>、<code>grad_check.py</code>、<code>bo_vs_grad.py</code></td><td><code>--confinement</code>，用来复现 M3、M4 的结果</td></tr>
+            <tr><td><code>tests/test_confinement.py</code>（新）</td><td>见第七节</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>ptbp optimize dft/dft.xyz --mode energygeometry                      # 默认：自洽约束，r0_d 起作用
+ptbp optimize dft/dft.xyz --mode energygeometry --confinement perturbative   # M3、M4 时的行为
+python tools/engine_parity.py dft/dft.xyz --mode energygeometry --points 2.749,12.036 \
+    --engines pydftb dftbplus --confinement perturbative                     # 复现 M4 的数字</code></pre>
+      <p>YAML 写 <code>confinement: perturbative</code>。运行开头打印 <code>[hotcent] confinement selfconsistent</code>，<code>plan.json</code> 里记下约束方式和 hotcent 版本。旧运行的检查点（skopt）是在微扰约束下得到的，续跑时要加 <code>--confinement perturbative</code>，否则同一参数点的损失不同。</p>
+    </section>
+
+    <section id="history">
+      <h2>三、原因：hotcent 的时间线</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>日期</th><th>hotcent（<code>/opt/hotcent</code> 的 git 历史）</th><th>与 PTBP 的关系</th></tr></thead>
+        <tbody>
+          <tr><td>2019-12-26</td><td>1.0 发布；<code>perturbative_confinement</code> 默认 False（自洽约束）</td><td>PTBP 的 <code>hotpy.py</code> 最初用 1.x 的接口 <code>hotcent.slako.SlaterKosterTable</code></td></tr>
+          <tr><td>2021-10-25</td><td>修正二中心积分中 GGA 交换关联梯度修正的错误（<code>65c5f82</code>）</td><td>用旧接口时的 hotcent 还带着这个错误</td></tr>
+          <tr><td>2021-11-02</td><td><code>SlaterKosterTable</code> 改名为 <code>offsite_twocenter.Offsite2cTable</code></td><td><code>hotpy.py</code> 后来改用新名字，旧 import 留在注释里</td></tr>
+          <tr><td>2023-02-05</td><td>微扰约束成为默认（<code>fe79493</code>，开发版）</td><td><code>hotpy.py</code> 没有指定这个选项，从此 r0_d 不起作用</td></tr>
+          <tr><td>2024-02</td><td>—</td><td>PTBP 参数发布在 Zenodo</td></tr>
+          <tr><td>2024-03-18</td><td>2.0.0 发布（变更说明里写明了上面两项）</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p>同一项目的 <code>utils/get_sto_coefficients.py</code> 显式写了 <code>perturbative_confinement=False</code>，说明作者用的是自洽约束。发表的参数究竟是用哪个版本的 hotcent 生成的，从仓库里无法确定；但损失的对比（第四节）支持“自洽约束、且带着 2021 年以前的 GGA 错误”这一判断。</p>
+    </section>
+
+    <section id="effect">
+      <h2>四、r0_d 的作用与发表参数下的损失</h2>
+      <h3>SKF</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>约束方式</th><th>r0_d：12.036 → 13.0 Bohr</th><th>与另一种方式（r0_d = 12.036）</th></tr></thead>
+        <tbody>
+          <tr><td>微扰（M3、M4）</td><td>Cu-Cu.skf 逐字节相同</td><td rowspan="2">SK 表最大差 0.80</td></tr>
+          <tr><td>自洽（M4e 默认）</td><td>SK 表最大差 0.011</td></tr>
+        </tbody>
+      </table></div>
+      <p>onsite 能量和 Hubbard U 取自 PTBP 的参数表，不随约束方式变化；变的是二中心积分（H、S 表）。</p>
+      <h3>发表的 Cu 参数（r0_w = 2.749，r0_d = 12.036 Bohr）下的损失（pydftb，4 核）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>微扰约束（M4 前）</th><th>自洽约束（M4e）</th><th>论文</th></tr></thead>
+        <tbody>
+          <tr><td>energygeometry 损失</td><td>1.899324742</td><td>0.9198548</td><td>0.288</td></tr>
+          <tr><td>　μ_E</td><td>0.510</td><td>0.2926</td><td>0.0775</td></tr>
+          <tr><td>　μ_V</td><td>0.120</td><td>0.01285</td><td>0.0182</td></tr>
+          <tr><td>　罚函数 P</td><td>6.0235</td><td>6.0235</td><td>（由论文数值反推约 6.02）</td></tr>
+          <tr><td>energygeometry，r0_d = 13.0</td><td>1.899324742（不变）</td><td>0.9860758</td><td>—</td></tr>
+          <tr><td>dataset 损失</td><td>446.2016018</td><td>837.8367392</td><td>—（论文没有这个模式）</td></tr>
+          <tr><td>dataset，r0_d = 13.0</td><td>446.2016018（不变）</td><td>889.0565336</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>μ_V 回到论文的量级</strong>（0.0129 对 0.0182），μ_E 减小近一半但仍差 3.8 倍。论文损失 0.288 = ½(0.0775 + 0.0182) × 6.02，罚函数一致，差别全在 μ_E、μ_V 本身。</li>
+        <li>剩下的差距最可能来自第三节的 GGA 错误：PTBP 最初用的 hotcent 版本二中心积分里的交换关联梯度修正有误。M4e 不恢复这个错误。要确认，可以在单独的环境里编译 2021-10 以前的 hotcent，只用于对照（未做，见第九节）。</li>
+        <li>dataset 模式在发表参数下变差（446 → 838）：发表的参数是用 energygeometry 模式拟合的，dataset 模式和这个数据集不是它的目标。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>五、两个引擎的一致性</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模式</th><th>pydftb</th><th>DFTB+</th><th>相对差</th></tr></thead>
+        <tbody>
+          <tr><td>energygeometry</td><td>0.9198547924</td><td>0.9198520597</td><td>3.0e-6</td></tr>
+          <tr><td>dataset</td><td>837.8367392</td><td>837.8367386</td><td>6.9e-10</td></tr>
+        </tbody>
+      </table></div>
+      <p>energygeometry 模式的 3e-6 不是引擎差异：66 个结构的能量差都 ≤ 1.8e-9 eV。差异来自 PTBP 内层的 σ_rep 搜索（L-BFGS-B，ftol 1e-3，M3b、M4c 已记录）：两个引擎选出的 σ_rep 分别为 0.40322096 和 0.40322213，μ 随之差 3e-6。微扰约束下损失面在这里更平，两个引擎碰巧一致到 1e-7。</p>
+    </section>
+
+    <section id="cost">
+      <h2>六、代价与梯度</h2>
+      <ul>
+        <li><strong>hotcent</strong>：自洽约束要为每个价层、再为密度各做一次完整的原子自洽计算。Cu 的一次 SKF 生成（参考实现，单进程）47 → 50 s（+6%）；一个 BO 步（4 核）中 hotcent 阶段 从约 5.0–5.1 s 变为 6.0–6.4 s：原子计算在主进程里串行，SK 表的行才分给各进程。</li>
+        <li><strong>DFTB 阶段（dataset 模式）</strong>：第 15 个结构（2 原子，T = 0）的 SCC 从 7 轮变为 629 轮（20.7 s），另有两个结构变为 105 和 88 轮；其余结构不变（6–8 轮），没有不收敛的。4 核上 DFTB 阶段从约 10 s 变为约 30 s，成为一个 BO 步里最长的部分。成本模型（M3c）按轮数正常的情况估计，这时会低估；从第二步起任务按实测时间排序，影响有限。energygeometry 模式不受影响。</li>
+        <li><strong>梯度（M4c 的梯度优化器）</strong>：r0_d 现在改变 SKF，r0_d 的切向不再是零，要多做两次 hotcent（r0_d ± 0.2 Bohr）。一次“值 + 梯度”（4 核）：energygeometry 54 s（M4c 为 38 s），dataset 106 s（M4c 为 41 s，另有 SCC 轮数变多的影响）；其中切向部分 25–29 s。</li>
+      </ul>
+      <h3>梯度</h3>
+      <p>M4c 的梯度原样可用：r0_d 的导数现在除了罚函数，还有能量和力的部分。<code>tools/grad_check.py</code> 在发表点比较梯度与差分（L3：σ_rep 固定在 σ*；L4：PTBP 的损失，σ_rep 重新搜索）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模式</th><th>导数</th><th>梯度</th><th>中心差分</th><th>相对差</th></tr></thead>
+        <tbody>
+          <tr><td>dataset</td><td>dμ*/dr0_w（h = 0.04）</td><td>−546.385</td><td>−546.438</td><td>9.7e-5</td></tr>
+          <tr><td>dataset</td><td>dμ*/dr0_d（h = 0.2）</td><td>45.038</td><td>45.048</td><td>2.3e-4</td></tr>
+          <tr><td>energygeometry</td><td>dμ*/dr0_w（h = 0.01）</td><td>−1.45054</td><td>−1.45043</td><td>7.8e-5</td></tr>
+          <tr><td>energygeometry</td><td>dμ*/dr0_d（h = 0.2）</td><td>0.059791</td><td>0.059811</td><td>3.4e-4</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>σ_rep 固定在 σ* 时（L3），dataset 模式一致到 4.9e-4（r0_w）和 1.2e-4（r0_d）；energygeometry 模式的中心差分一致到 4.5e-3 和 1.0e-3，但左右两侧的差分相差很大（例如 r0_w：−1.73 和 −0.92）。这是折点：σ* 恰好让一个结构的误差为零，固定 σ* 改变 r0 时这一项的绝对值在发表点有折角，梯度给出两侧斜率的平均。</li>
+        <li>energygeometry 模式沿 r0_w 用 h = 0.04 时，两侧差分也不一致（−1.87 和 −1.34），中心差分 −1.60 与 h = 0.04 的梯度 −1.55 差 3%：损失在这个尺度上弯曲很大（M4c 在微扰约束下也是这样）。h = 0.01 时一致到 8e-5。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>七、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>tests/test_confinement.py</code>（新，5 个）</td><td>默认值与设置、非法值报错；<code>AtomicDFT</code> 收到的 <code>perturbative_confinement</code>、r0_w 与 r0_d 各约束哪里（用替身）；命令行与 YAML（默认不往旧命令行加选项）；<code>plan.json</code> 的 <code>hotcent</code> 字段往返；真实 hotcent 的 H-H：自洽约束下 r0_d 改变 SKF、微扰约束下不变（标为 slow，约 35 s）</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G1 第一部分</td><td><code>--confinement perturbative</code> 与 M4 之前的 <code>65115d1</code> 在发表点逐字节比较（损失、<code>log.out</code>、<code>par.out</code>、BO 步的全部文件），并 1 核对 4 核</td><td>通过：energygeometry 1.899324742（BO 步 17 个文件）、dataset 446.2016018（8 个文件）与 <code>65115d1</code> 逐字节相同，1 核与 4 核逐位相同</td></tr>
+          <tr><td>G1 第二部分</td><td>默认的自洽约束：1 核与 4 核逐位相同</td><td>通过：energygeometry 0.9198547924、dataset 837.8367392，1 核与 4 核的损失和 5 个文件逐位相同</td></tr>
+          <tr><td>两个引擎</td><td>第五节</td><td>一致</td></tr>
+          <tr><td>dμ/dr0（M4c 的梯度）</td><td><code>tools/grad_check.py</code> 的 L3/L4，自洽约束，两种模式</td><td>一致，见第六节的“梯度”</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>224 个通过（M4d 为 219，加上新的 5 个），7 个已知的界面冒烟测试失败（与之前相同），1 个跳过</td></tr>
+        </tbody>
+      </table></div>
+      <p>pydftb 没有改动，不跑 golden。</p>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与设计的偏差</h2>
+      <ul>
+        <li><code>utils/get_sto_coefficients.py</code> 不用改：它本来就显式写了 <code>perturbative_confinement=False</code>（这也是第三节的证据之一）。</li>
+        <li><code>par.out</code>、<code>log.out</code> 的格式不变，设置只记在运行开头的打印和 <code>plan.json</code> 里：下游脚本按列读取这两个文件。</li>
+        <li>没有重新标定成本模型：自洽约束只让 hotcent 多 6%；dataset 模式变慢来自 SCC 轮数，成本模型本来就不预测轮数。</li>
+        <li>三个工具（<code>engine_parity</code>、<code>grad_check</code>、<code>bo_vs_grad</code>）也加了 <code>--confinement</code>，用来复现之前的结果。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li>M6a：自旋轨道耦合与非共线自旋。</li>
+        <li>（可选）在单独的环境里编译 2021-10 以前的 hotcent，确认 μ_E 剩下的差距是否全部来自 GGA 错误；只用于对照，不改变默认。</li>
+        <li>是否在自洽约束下重新拟合已发表的参数，由用户决定。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M4e-r0d-confinement.html">← M4e 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M4e</span>
+  </footer>
+</div>
+</body>
+</html>

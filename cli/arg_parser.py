@@ -63,6 +63,15 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        '--confinement', help="hotcent's confinement scheme for the confined atoms: "
+                              "'selfconsistent' (default; hotcent 1.x, r0_w shapes the "
+                              "orbitals and r0_d the density) or 'perturbative' (hotcent "
+                              ">= 2.0 default, with which r0_d has no effect; reproduces "
+                              "runs before M4e)",
+        choices=['selfconsistent', 'perturbative'],
+        default='selfconsistent',
+    )
+    parser.add_argument(
         '--superposition', help="Type of the superposition",
         type=str,
         default=None,

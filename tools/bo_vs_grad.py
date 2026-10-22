@@ -109,9 +109,14 @@ def main(argv=None):
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--resume", action="store_true",
                     help="keep the runs already in --json and do only the missing ones")
+    ap.add_argument("--confinement", default="selfconsistent",
+                    choices=["selfconsistent", "perturbative"],
+                    help="hotcent's confinement scheme (M4e; perturbative: as before M4e)")
     a = ap.parse_args(argv)
     if a.resume and a.json is None:
         ap.error("--resume needs --json")
+    from utils.hotpy import set_confinement
+    set_confinement(a.confinement)
 
     import utils.engines as eng
     from tools.engine_parity import build_loss

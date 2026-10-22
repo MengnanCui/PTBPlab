@@ -658,8 +658,9 @@ class GradRequest:
             from hotcent import __version__ as version
         except ImportError:                          # hotcent missing: the tangent fails below
             version = None
-        key = (version, tuple(labels), loss.args_input.xc, sup, tuple(loss.opt_elem),
-               str(loss.args_input.multi_element))
+        from utils.hotpy import confinement
+        key = (version, confinement(), tuple(labels), loss.args_input.xc, sup,
+               tuple(loss.opt_elem), str(loss.args_input.multi_element))
         self._failure, self.grad_pass = "", None
         try:
             self._tangents = hotcent_tangent.compute(

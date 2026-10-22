@@ -99,7 +99,12 @@ def main(argv=None):
     ap.add_argument("--compare-serial", action="store_true",
                     help="--ncores 1 auto, and check that the results are identical")
     ap.add_argument("--json", type=Path, default=None, help="write results here")
+    ap.add_argument("--confinement", default="selfconsistent",
+                    choices=["selfconsistent", "perturbative"],
+                    help="hotcent's confinement scheme (M4e; perturbative: as before M4e)")
     a = ap.parse_args(argv)
+    from utils.hotpy import set_confinement
+    set_confinement(a.confinement)
 
     import utils.engines as eng
     from utils.parallel import detect_cpu, set_plan
