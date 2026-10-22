@@ -34,13 +34,14 @@ DENSE_FALLBACK = 512    # GMRES failed: dense solve up to this size
 class Bloch:
     """Folding of pair values to the k-point matrices of a calculation, and back."""
 
-    def __init__(self, pb, norb: int, kpts, gamma_only: bool):
+    def __init__(self, pb, norb: int, kpts, gamma_only: bool, device=None):
         shifts, t_of = shift_index(pb)
         self.norb, self.gamma = norb, gamma_only
-        self.rows, self.cols = torch.as_tensor(pb.rows), torch.as_tensor(pb.cols)
-        self.t_of, self.nt, self.nk = torch.as_tensor(t_of), len(shifts), len(kpts)
+        t = lambda a: torch.as_tensor(a, device=device)             # noqa: E731
+        self.rows, self.cols = t(pb.rows), t(pb.cols)
+        self.t_of, self.nt, self.nk = t(t_of), len(shifts), len(kpts)
         if not gamma_only:
-            self.phase = torch.as_tensor(np.exp(2j * np.pi * (kpts @ shifts.T)))   # (nk, nT)
+            self.phase = t(np.exp(2j * np.pi * (kpts @ shifts.T)))   # (nk, nT)
 
     def fold(self, values, diag):
         """M(k) = sum_T M(T) exp(2 pi i k.T) + diag, (nk, N, N)."""
@@ -57,7 +58,7 @@ class Bloch:
     def pairs(self, mats, weights):
         """P_e = Re sum_k w_k M_k[col, row] exp(2 pi i k.T) at every pair element, for a stack
         of matrices (k-points, repeated per spin) with one weight each."""
-        w = torch.as_tensor(np.asarray(weights, float), dtype=torch.float64)
+        w = torch.as_tensor(np.asarray(weights, float), dtype=torch.float64, device=mats.device)
         if self.gamma:
             return w @ mats[:, self.cols, self.rows].real
         n = self.norb
@@ -67,7 +68,7 @@ class Bloch:
 
 
 def _segment_sum(x, index, n):
-    return x.new_zeros(n).index_add(0, torch.as_tensor(index), x)
+    return x.new_zeros(n).index_add(0, torch.as_tensor(index, device=x.device), x)
 
 
 class SCCMap:
@@ -78,7 +79,7 @@ class SCCMap:
         self.eng, self.st = eng, st
         b = st.basis
         self.norb, self.nk = b.norb, len(st.kw)
-        self.bloch = Bloch(st.pairs, b.norb, st.kpts, st.gamma_only)
+        self.bloch = Bloch(st.pairs, b.norb, st.kpts, st.gamma_only, device=pos.device)
         h, s = pair_terms(st, eng.sk, params, pos, cell)
         # Hermitian parts (equal to the matrices to rounding): the two copies of an integral
         # that the files A-B and B-A both store then get equal shares of its gradient, as in
@@ -88,7 +89,7 @@ class SCCMap:
         smat = self.bloch.fold(s, h.new_ones(b.norb))
         self.h0, self.smat = 0.5 * (h0 + h0.mH), 0.5 * (smat + smat.mH)
         chol = torch.linalg.cholesky(self.smat)
-        eye = torch.eye(b.norb, dtype=chol.dtype).expand_as(chol)
+        eye = torch.eye(b.norb, dtype=chol.dtype, device=chol.device).expand_as(chol)
         self.linv = torch.linalg.solve_triangular(chol, eye, upper=False)
         self.gamma = self.third = self.wspin = None
         if eng.scc:
@@ -111,7 +112,7 @@ class SCCMap:
         else:
             groups = [(np.arange(nk), st.spin.n_up, 1.0), (np.arange(nk, 2 * nk), st.spin.n_down, 1.0)]
         self.occ = Occupation(self.kw_mat, groups, eng.smearing, need_w)
-        self.q0 = torch.as_tensor(st.q0, dtype=torch.float64)
+        self.q0 = torch.as_tensor(st.q0, dtype=torch.float64, device=pos.device)
 
     # ---- populations and potentials (the engine's _charge_and_magnetisation / _potentials)
     def charge_and_magnetisation(self, q):
@@ -130,12 +131,13 @@ class SCCMap:
         """E3 and dE3/dq (pydftb.thirdorder.ThirdOrder.energy_shift)."""
         th = self.st.third
         natom = th.natom
+        site = torch.as_tensor(th.site_atom, device=dq.device)
         dq_atom = _segment_sum(dq, th.site_atom, natom)
-        qa = dq_atom[torch.as_tensor(th.site_atom)]
+        qa = dq_atom[site]
         gq = self.third @ dq
         e = (qa * dq * gq).sum() / 3.0
         v = (qa * gq + self.third.T @ (qa * dq)
-             + _segment_sum(dq * gq, th.site_atom, natom)[torch.as_tensor(th.site_atom)]) / 3.0
+             + _segment_sum(dq * gq, th.site_atom, natom)[site]) / 3.0
         return e, v
 
     def potentials(self, q):
@@ -147,8 +149,10 @@ class SCCMap:
         v_site = self.gamma @ dq
         if self.third is not None:
             v_site = v_site + self.third_shift(dq)[1]
-        vs = None if m is None else (self.wspin @ m)[torch.as_tensor(st.basis.orb_shell)]
-        return v_site[torch.as_tensor(st.site_of_orb)], vs
+        dev = v_site.device
+        vs = None if m is None else (self.wspin @ m)[torch.as_tensor(st.basis.orb_shell,
+                                                                      device=dev)]
+        return v_site[torch.as_tensor(st.site_of_orb, device=dev)], vs
 
     # ---- one SCC step
     def solve(self, q):
@@ -169,7 +173,7 @@ class SCCMap:
         rho = linv.mH @ rho_p @ linv
         wdm = None if w_p is None else linv.mH @ w_p @ linv
         smat = self.smat if vs is None else torch.cat([self.smat, self.smat])
-        kw = torch.as_tensor(self.kw_mat, dtype=torch.float64)
+        kw = torch.as_tensor(self.kw_mat, dtype=torch.float64, device=rho.device)
         per = (rho * smat.mT).sum(-1).real                     # (rho S)_mu,mu per matrix
         b = st.basis
         if vs is None:
@@ -202,7 +206,7 @@ class _Adjoint:
     def dense(self):
         if self.a is None:
             n = self.q_c.numel()
-            eye = torch.eye(n, dtype=torch.float64)
+            eye = torch.eye(n, dtype=torch.float64, device=self.q_c.device)
             jac = torch.stack([self.jtv(eye[j]) for j in range(n)])     # row j: dPhi_j/dq
             self.a = eye - jac.T
         return self.a
@@ -231,7 +235,7 @@ def gmres(matvec, b, tol: float, maxiter: int):
     n = b.numel()
     beta = b.norm()
     q = [b / beta]
-    h = torch.zeros((maxiter + 1, maxiter), dtype=b.dtype)
+    h = torch.zeros((maxiter + 1, maxiter), dtype=b.dtype, device=b.device)
     x = torch.zeros_like(b)
     for k in range(min(maxiter, n)):
         w = matvec(q[k])
@@ -239,7 +243,7 @@ def gmres(matvec, b, tol: float, maxiter: int):
             h[i, k] = torch.dot(q[i], w)
             w = w - h[i, k] * q[i]
         h[k + 1, k] = w.norm()
-        e1 = torch.zeros(k + 2, dtype=b.dtype)
+        e1 = torch.zeros(k + 2, dtype=b.dtype, device=b.device)
         e1[0] = beta
         yk = torch.linalg.lstsq(h[:k + 2, :k + 1], e1[:, None]).solution[:, 0]
         res = (h[:k + 2, :k + 1] @ yk - e1).norm() / beta
@@ -253,7 +257,8 @@ def gmres(matvec, b, tol: float, maxiter: int):
 def attach(phi: SCCMap, q_star):
     """q_hat (see the module docstring) and the hook's solver (its ``residual`` is the
     relative residual of the last adjoint solve)."""
-    q_c = torch.as_tensor(np.asarray(q_star, float)).clone().requires_grad_(True)
+    q_c = torch.as_tensor(np.asarray(q_star, float),
+                          device=phi.q0.device).clone().requires_grad_(True)
     p1 = phi(q_c)
     q_hat = q_c.detach() + (p1 - p1.detach())
     adj = _Adjoint(p1, q_c)
@@ -265,7 +270,7 @@ def unrolled(phi: SCCMap, q_start, mixing: float = 0.2, iterations: int = 300):
     """The fixed point by plain linear mixing with every step on the autograd graph: an
     independent reference for the implicit derivative on small systems (tests; the memory
     grows with the iterations, and metals may need many)."""
-    q = torch.as_tensor(np.asarray(q_start, float))
+    q = torch.as_tensor(np.asarray(q_start, float), device=phi.q0.device)
     for _ in range(iterations):
         q = q + mixing * (phi(q) - q)
     return q

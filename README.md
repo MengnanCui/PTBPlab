@@ -364,6 +364,7 @@ Related options (also accepted as YAML keys):
 | `--smearing {none,fermi,gaussian,mp}` | Electronic smearing that really takes effect in both engines. `none` (default) keeps PTBP's historical behaviour (T = 0). For DFTB+, the `Filling` block is written correctly and the filling DFTB+ actually used is checked after every run. |
 | `--smearing-temperature K`, `--mp-order N` | Temperature (default 2000 K) and Methfessel-Paxton order (default 2). |
 | `--pydftb-forces {dftbplus,exact}` | `dftbplus` (default) reproduces DFTB+'s 0.01 Bohr finite-difference forces; `exact` uses exact derivatives. |
+| `--pydftb-backend {numpy,torch}`, `--device`, `--dtype` | pydftb on PyTorch, on the CPU or a GPU (section 4f). |
 
 To check the two engines against each other on your own dataset, run `python tools/engine_parity.py`, which evaluates the real loss at fixed parameter points.
 
@@ -439,6 +440,49 @@ ptbp optimize dft/dft.xyz --mode dataset --engine pydftb --optimizer bo_grad --n
   the sampled volumes, the sigma_rep search switching branch); the optimiser treats such
   points as rejected steps.  `ptbp plan` still estimates the time of BO steps.  See
   `pydftb/docs/reports/M4c-ptbp-gradient.html`.
+
+### 4f. pydftb on PyTorch and GPUs: `--pydftb-backend`, `--device`, `--dtype`
+
+With `--engine pydftb`, the SCC linear algebra (k-point matrices, Cholesky factor, eigensolver,
+density matrices) can run on PyTorch, on the CPU or on a GPU (milestones M4a and M4d):
+
+```bash
+python -m pydftb.validation.gpu_check --json gpu_check.json      # check the GPU first
+ptbp optimize dft/dft.xyz --engine pydftb --pydftb-backend torch --device cuda
+ptbp optimize dft/dft.xyz --engine pydftb --pydftb-backend torch --device mps --dtype float32
+```
+
+| Flag (YAML key) | Values | Default |
+|---|---|---|
+| `--pydftb-backend` (`pydftb_backend`) | `numpy`, `torch` | `numpy` |
+| `--device` (`device`) | `cpu`, `auto`, `cuda`, `cuda:1`, `mps`, `xpu` | `cpu` |
+| `--dtype` (`dtype`) | `float64`, `float32` | `float64` |
+
+- **The defaults change nothing**: NumPy on the CPU in float64, every number and file as
+  before.  `--device` other than `cpu` and `--dtype float32` need `--pydftb-backend torch`.
+- **On a GPU the DFTB stage runs in the main process, one structure after the other** (a
+  process that has used CUDA should not hand CUDA work to forked workers); the other stages
+  still use every core.  A GPU therefore pays only if it computes the structures faster
+  than the CPU processes do side by side, which `gpu_check` measures on your machine (its
+  Cu timings).  PTBP refuses a GPU with `--optimizer parallel_bo` or `pso`, and the gradient
+  optimisers (section 4e) use the NumPy backend only.
+- **torch on the CPU** runs like NumPy (one process per core, one torch thread each).  Its
+  results agree with NumPy to about 1e-13, not bit for bit (MKL vs OpenBLAS).
+- **Devices**: NVIDIA and AMD GPUs are `cuda` (AMD with a ROCm build of torch).  Apple's
+  `mps` has no float64, so it needs `--dtype float32` and its float64 parts run on the CPU.
+  On `mps` and Intel's `xpu`, Cholesky and eigh run on the CPU unless a probe at first use
+  shows they work on the device.  On CUDA pydftb uses torch's deterministic algorithms
+  while it computes, so a run is reproducible on the same machine; GPU and CPU agree to
+  about 1e-12 (float64), not bit for bit.
+- `--device auto` looks for a GPU in a subprocess (the main process does not initialise
+  CUDA) and prints what it picked.  `plan.json` records the backend, device, precision and
+  torch version; on a GPU the DFTB stage has no time estimate.  With the NumPy backend on a
+  machine with a GPU, the plan prints a suggestion (also `ptbp plan --probe`); it is never
+  applied.
+- **Not measured here**: the development machine has no GPU, so every GPU number is still
+  "not measured".  Please send the JSON written by `gpu_check` back.  float32 is not
+  advisable for the forces of metals at T = 0.  Details:
+  `pydftb/docs/reports/M4d-devices.html`.
 
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 

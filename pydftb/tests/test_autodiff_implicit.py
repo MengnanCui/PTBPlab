@@ -118,10 +118,14 @@ def test_implicit_matches_finite_differences(name):
 
 
 @pytest.mark.parametrize("name", ["h2o", "cu4co_shell_resolved", "cuo_chain_spin_k422",
-                                  "gdo_rocksalt_k444"])
+                                  "gdo_rocksalt_k444",
+                                  # dispersion: an external term without strain (M4d fix)
+                                  "water_box_d3bj_3body", "water_dimer_uff"])
 def test_hf_and_implicit_gradients_agree(name):
     """dF/dtheta is the same in both modes, entry by entry (F is stationary), with the
     fixed-N variational F of mode "hf"."""
+    if refgen.missing_requirement(refgen.load(name)):
+        pytest.skip("reference needs an optional library")
     calc, (species, pos, cell, pbc) = gradcheck.reference_engine(name)
     grads = {}
     for mode in ("hf", "implicit"):

@@ -54,6 +54,8 @@ class Plan:
     costs: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     workload: dict = field(default_factory=dict)
+    # M4d: pydftb on torch (backend, device, dtype, torch version); empty for NumPy
+    backend: dict = field(default_factory=dict)
 
     def stage(self, name: str) -> StagePlan:
         return self.stages.get(name) or StagePlan(reasons=["serial"])
@@ -84,6 +86,10 @@ class Plan:
     def render(self) -> str:
         head = f"[plan] {self.budget.describe()}; engine {self.engine}; optimizer {self.optimizer}"
         lines = [head]
+        if self.backend:
+            b = self.backend
+            lines.append(f"[plan]   pydftb on {b.get('pydftb_backend')} ({b.get('device')}, "
+                         f"{b.get('dtype')}; torch {b.get('torch')})")
         if self.particles > 1:
             shares = sorted(set(core_shares(self.budget.ncores, self.particles)))
             lines.append(f"[plan]   {self.particles} BO points evaluated at a time, "
@@ -134,7 +140,8 @@ class Plan:
                 "workload": dict(self.workload),
                 "share_stages": {str(c): {k: asdict(v) for k, v in st.items()}
                                  for c, st in self.share_stages.items()},
-                "costs": list(self.costs)}
+                "costs": list(self.costs),
+                **({"backend": dict(self.backend)} if self.backend else {})}
 
     @classmethod
     def from_json(cls, data: dict) -> Plan:
@@ -150,6 +157,7 @@ class Plan:
         plan.share_stages = {int(c): {k: StagePlan(**v) for k, v in st.items()}
                              for c, st in data.get("share_stages", {}).items()}
         plan.costs = list(data.get("costs", []))
+        plan.backend = dict(data.get("backend", {}))
         return plan
 
     def save(self, path) -> None:

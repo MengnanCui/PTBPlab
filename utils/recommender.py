@@ -319,7 +319,8 @@ def _stages_for(model, workload, ncores, memory_avail) -> dict:
 
 def make_plan(budget, workload: Workload, *, optimizer: str = "bo", n_particles: int = 4,
               n_calls: int | None = None, model: CostModel | None = None,
-              memory: float | None = None, probe: bool = False) -> Plan:
+              memory: float | None = None, probe: bool = False, backend: dict | None = None,
+              accelerators: dict | None = None) -> Plan:
     """The plan of a run over ``workload`` on ``budget`` (utils.parallel.CpuBudget).
 
     ``n_particles``: BO points per batch (parallel_bo, evaluated at the same time) or
@@ -327,6 +328,10 @@ def make_plan(budget, workload: Workload, *, optimizer: str = "bo", n_particles:
     ``memory``: bytes the run may still allocate (default: MemAvailable / cgroup).
     ``model``: cost model (default: calibration constants, scaled by a cached probe of
     this machine if there is one; ``probe=True`` runs the probe when none is cached).
+    ``backend`` (M4d): pydftb on torch, ``{"pydftb_backend", "device", "dtype", "torch"}``;
+    on a GPU the DFTB stage is serial in this process and not estimated (the cost model
+    knows CPUs only).  ``accelerators``: what ``pydftb.backend.devices.probe_accelerators``
+    found, for the suggestions.
     """
     if model is None:
         speed = load_probe(probe_cache_path(), run=probe)
@@ -364,8 +369,47 @@ def make_plan(budget, workload: Workload, *, optimizer: str = "bo", n_particles:
         plan.notes.append(f"{particles} BO points at a time on {budget.ncores} cores: "
                           f"the machine is oversubscribed {particles / budget.ncores:.1f}x; "
                           f"use --n-particles {budget.ncores} or fewer")
+    if backend and backend.get("pydftb_backend") == "torch":
+        _torch_stage(plan, backend)
     plan.suggestions = suggestions(plan, workload, model, memory)
+    gpu = gpu_suggestion(workload, backend, accelerators)
+    if gpu:
+        plan.suggestions.append(gpu)
     return plan
+
+
+def _torch_stage(plan: Plan, backend: dict) -> None:
+    """pydftb on torch (M4d): record it; on a GPU, one structure after the other in this
+    process and no estimates."""
+    plan.backend = dict(backend)
+    device = str(backend.get("device", "cpu"))
+    if device.split(":")[0] == "cpu":
+        plan.notes.append("pydftb on torch (CPU): the cost model is calibrated with NumPy; "
+                          "torch measured about 10% faster on the CPU (M4a)")
+        return
+    why = [f"GPU {device}: in this process, one structure after the other "
+           f"(a process using the GPU does not fork workers)"]
+    plan.stages["dftb"] = StagePlan(1, 1, 1, "index", why)
+    plan.share_stages = {plan.ncores: dict(plan.stages)}
+    plan.estimates = {k: v for k, v in plan.estimates.items() if k in ("speed", "memory_available")}
+    plan.notes.append("no time estimate with a GPU (the cost model knows CPUs only); "
+                      "python -m pydftb.validation.gpu_check measures the device")
+
+
+def gpu_suggestion(workload: Workload, backend: dict | None, accelerators: dict | None) -> str:
+    """A GPU that pydftb could use while it runs on NumPy: suggested, never applied."""
+    if workload.engine != "pydftb" or not accelerators:
+        return ""
+    if backend and backend.get("pydftb_backend") == "torch":
+        return ""
+    names = accelerators.get("cuda") or accelerators.get("xpu") or (
+        ["Apple GPU (mps)"] if accelerators.get("mps") else [])
+    if not names:
+        return ""
+    return (f"GPU available ({names[0]}): check it with python -m pydftb.validation.gpu_check, "
+            f"then try --pydftb_backend torch --device auto; the DFTB stage then runs serially on "
+            f"the GPU, which pays only if the check shows it faster than the {workload.engine} "
+            f"processes on the CPU for these {workload.n} structures")
 
 
 def suggestions(plan: Plan, workload: Workload, model: CostModel, memory) -> list:
@@ -378,7 +422,7 @@ def suggestions(plan: Plan, workload: Workload, model: CostModel, memory) -> lis
     per_process = est.get("memory_per_process", 0.0) * MEMORY_SAFETY
     if memory is not None and per_process > 0:
         points = min(points, int(memory // per_process))
-    if plan.optimizer == "bo" and points > 1:
+    if plan.optimizer == "bo" and points > 1 and "step" in est:     # no estimate on a GPU
         serial_stages = _stages_for(model, workload, 1, None)
         one = step_estimate(model, workload, serial_stages, 1)["step"]
         per_point_bo = est["step"]

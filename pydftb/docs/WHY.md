@@ -18,7 +18,7 @@ DFTB+ 的 GPU 支持有限：MAGMA 只能单机，跨节点只有 ELPA-GPU。pyd
 - M4 阶段接入 PyTorch，一套代码可以跑在 CPU、NVIDIA、AMD/国产 GPU 和 Apple M 系列芯片上；
 - 按原子数 / 轨道数自动推荐算法和并行方式（M3 阶段的计算策略推荐器）。实测已经说明，400 原子量级“加节点”没有意义，应该换算法或换硬件。
 
-现状（M4a）：PyTorch 后端已能在 CPU 上逐项复现 NumPy 和 DFTB+ 的结果，代码不假设设备是 CPU；GPU 的加速还没有实测（本机没有 GPU，M4d 提供自检脚本）。也要说清楚预期：PTBP 的 Cu 数据集上，DFTB 阶段只占一个 BO 步的 37%（energygeometry，27.1 s 中的 10.0 s）和 57%（dataset，18.0 s 中的 10.3 s），GPU 即使把它降到 0，一个 BO 步也最多快 1.6 倍和 2.3 倍。GPU 的价值在更大的数据集、更大的晶胞和更多的 k 点。
+现状（M4d）：PyTorch 后端已能在 CPU 上逐项复现 NumPy 和 DFTB+ 的结果。M4d 加上了设备选项：NVIDIA 和 AMD（ROCm）的 GPU 全部在设备上算，Apple 的 MPS 和 Intel 的 XPU 按设备能力把 float64 的部分和本征分解留在 CPU；PTBP 可以用 `--pydftb_backend torch --device cuda`。GPU 上的正确性和加速还没有实测：本机没有 GPU，设备逻辑只能在 CPU 上验证（第一次求导时会出错的约 50 处已用 meta 设备查出并改正），用户运行自检脚本 `python -m pydftb.validation.gpu_check` 后才有实测数字。也要说清楚预期：PTBP 的 Cu 数据集上，DFTB 阶段只占一个 BO 步的 37%（energygeometry，27.1 s 中的 10.0 s）和 57%（dataset，18.0 s 中的 10.3 s），GPU 即使把它降到 0，一个 BO 步也最多快 1.6 倍和 2.3 倍。GPU 的价值在更大的数据集、更大的晶胞和更多的 k 点。
 
 ## 3. 天生可微，方便接入 AI
 

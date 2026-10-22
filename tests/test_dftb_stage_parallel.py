@@ -78,6 +78,18 @@ def test_files_are_identical_for_any_core_budget(tmp_path, dataset, monkeypatch)
     assert kept == list(range(9))
 
 
+def test_torch_backend_files_are_identical_for_any_core_budget(tmp_path, dataset, monkeypatch):
+    """M4d: pydftb on torch (CPU): serial, 4 processes (torch on one thread each, set before
+    the fork) and the GPU path (this process, one structure after the other; simulated)
+    write the same files."""
+    pytest.importorskip("torch")
+    eng.configure(engine="pydftb", pydftb_backend="torch")
+    serial = _stage(tmp_path / "serial", dataset, None, "pydftb", monkeypatch)[1]
+    assert _stage(tmp_path / "n4", dataset, 4, "pydftb", monkeypatch)[1] == serial
+    monkeypatch.setattr(eng, "is_gpu", lambda: True)
+    assert _stage(tmp_path / "gpu", dataset, 4, "pydftb", monkeypatch)[1] == serial
+
+
 def test_pydftb_k_threads_when_cores_outnumber_structures(tmp_path, dataset, monkeypatch):
     images, bolt = dataset
     one = (images[6:7], bolt[6:7])                              # 1372 k-points

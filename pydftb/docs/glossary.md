@@ -136,3 +136,10 @@
 | 损失的断崖 | 损失随参数突然跳变的地方，例如某组结构的 EOS 拟合跑出采样的体积范围、体积比从 +0.13 跳到 −1.06。跨过断崖的差分没有意义；梯度只描述断崖一侧的局部变化（M4c 报告）。 |
 | 失败值 | PTBP 的一步失败时（DFTB+ 或 pydftb 报错、hotcent 没有生成 SKF、EOS 拟合出错等）损失记为 97–99 的随机整数。energygeometry 模式的真实损失只有 1–4，失败值远大于它；dataset、reaction 模式的真实损失可能更大，失败值反而像“最好的点”（M4c 报告第七节）。 |
 | 初始随机点 | skopt 的 `gp_minimize` 先在参数范围内随机取 `n_initial_points`（默认 10）个点，之后才由高斯过程挑点。PTBP 给了种子点、默认又只调用 11 次，所以默认的 BO 是种子加 10 个随机点（M4c）。 |
+| meta 设备 | torch 的一种“空”设备：张量只有形状，没有数据。把默认设备设成 meta 再计算，凡是没写明设备就新建的张量都落到 meta 上，一与真实数据相遇就报错。M4d 用它在没有 GPU 的机器上查出“张量建在了错误的设备上”这类只有在 GPU 上才会暴露的错误。 |
+| 确定性算法 | GPU 上有些运算（原子加法、部分矩阵乘法）每次累加的顺序不同，结果的最后几位会变。torch 的确定性模式改用顺序固定的实现，同一台机器上重算逐位相同。pydftb 在 CUDA 上计算期间自动打开，算完恢复用户原来的设置（M4d）。 |
+| ROCm | AMD GPU 的计算平台。ROCm 版的 torch 里 AMD GPU 也叫 `cuda`；本征分解等由 hipSOLVER 或 MAGMA 完成，批量计算的速度与 NVIDIA 不同（M4d）。 |
+| MPS | Apple M 系列芯片的 GPU 接口。没有 float64，所以 pydftb 在 MPS 上只能用 float32，float64 的部分（S 的 Cholesky 分解、求和）放在 CPU 上（M4d）。 |
+| 能力探测 | 第一次用 MPS、XPU 时，用 2×2 的小矩阵试一下 float64、复数、Cholesky、本征分解能不能运行，按结果决定哪些步骤留在 CPU，而不依赖可能过时的支持列表（M4d）。 |
+| GPU 自检脚本 | `python -m pydftb.validation.gpu_check`：在用户的 GPU 上重算 DFTB+ 参考算例、与 CPU 对照、检查确定性和自动求导，并计时；任何一项正确性检查失败都以非零状态退出（M4d）。 |
+| fork 与 CUDA | fork 复制出的子进程不能再使用父进程已经初始化的 CUDA。所以 PTBP 用 GPU 时 DFTB 阶段在主进程里逐个结构计算，探测 GPU 放在单独启动的子进程里（M4d）。 |

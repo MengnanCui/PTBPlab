@@ -6,7 +6,8 @@ L^-1 H L^-H for every k, ``eigh``, and the back-transformation C = L^-H Y.  L^-1
 from a triangular solve; batched LU on the CPU is avoided (pytorch#142815).  The factor
 and L^-1 are computed in double precision also in float32 mode and only then cast.
 Occupations and the Fermi level are found on the host with DFTB+'s rules
-(:func:`pydftb.occupations.fill`).
+(:func:`pydftb.occupations.fill`).  On a device without Cholesky/eigh (M4d) they run on
+``backend.linalg`` (the CPU) and the results go back to the device.
 """
 from __future__ import annotations
 
@@ -25,7 +26,8 @@ class TorchSolver:
         self.threads = None                  # no k-point threads on torch
 
     def prepare(self, s):
-        """``s``: the overlap stack in double precision on the device."""
+        """``s``: the overlap stack in double precision (on ``backend.precise``)."""
+        s = s.to(self.backend.linalg)            # the same tensor unless done elsewhere
         l, info = torch.linalg.cholesky_ex(s)
         if int(info.max()) > 0:
             raise np.linalg.LinAlgError("the overlap matrix is not positive definite")
@@ -36,7 +38,12 @@ class TorchSolver:
 
     def eig(self, h):
         """Eigenvalues and S-orthonormal eigenvectors for every k (on the device)."""
-        e, y = torch.linalg.eigh(self.linv @ h @ self.linv_h)
+        hp = self.linv @ h @ self.linv_h
+        if self.backend.linalg_device is None:
+            e, y = torch.linalg.eigh(hp)
+        else:                                    # e.g. MPS: eigh on the CPU
+            e, y = torch.linalg.eigh(hp.to(self.backend.linalg_device))
+            e, y = e.to(self.backend.device), y.to(self.backend.device)
         return e, self.linv_h @ y
 
     def solve(self, h, kw, nelec, smearing, need_w=True):

@@ -233,6 +233,23 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default='dftbplus',
     )
     parser.add_argument(
+        '--pydftb_backend', help="pydftb arrays: 'numpy' (default) or 'torch' (PyTorch, on "
+                                 "the CPU or a GPU, see --device)",
+        choices=['numpy', 'torch'],
+        default='numpy',
+    )
+    parser.add_argument(
+        '--device', help="torch device of --pydftb_backend torch: cpu (default), auto, cuda, "
+                         "cuda:1, mps, xpu. On a GPU the DFTB stage runs in the main process.",
+        type=str,
+        default='cpu',
+    )
+    parser.add_argument(
+        '--dtype', help="precision of --pydftb_backend torch: float64 (default) or float32",
+        choices=['float64', 'float32'],
+        default='float64',
+    )
+    parser.add_argument(
         '--dft_file', help="The XYZ file that stores reference structure and info",
         type=str,
         default='dft.xyz',

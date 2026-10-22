@@ -62,18 +62,35 @@ print("PTBP args: ", ptbp_args)
 # DFTB engine + electronic smearing for every calculation of this run
 # (module-level settings, inherited by the forked workers of parallel_bo).
 from utils.engines import configure as _configure_engine
+_device = getattr(ptbp_args, 'device', None)
+if _device == 'auto' and getattr(ptbp_args, 'pydftb_backend', None) == 'torch':
+    # M4d: look for a GPU in a subprocess, so that this process does not initialise CUDA
+    # before it forks workers (with NumPy, configure refuses 'auto' on every machine)
+    from pydftb.backend.devices import best_device as _best_device, probe_accelerators as _probe
+    _found = _probe()
+    _device = _best_device(_found)
+    print(f"[engine] --device auto: {_device} (torch {_found.get('torch')}, GPUs "
+          f"{_found.get('cuda') or _found.get('xpu') or ('mps' if _found.get('mps') else 'none')})")
 print("[engine]", _configure_engine(
     engine=getattr(ptbp_args, 'engine', None),
     smearing=getattr(ptbp_args, 'smearing', None),
     smearing_temperature=getattr(ptbp_args, 'smearing_temperature', None),
     mp_order=getattr(ptbp_args, 'mp_order', None),
     pydftb_forces=getattr(ptbp_args, 'pydftb_forces', None),
+    pydftb_backend=getattr(ptbp_args, 'pydftb_backend', None),
+    pydftb_device=_device,
+    pydftb_dtype=getattr(ptbp_args, 'dtype', None),
 ))
+from utils.engines import is_gpu as _is_gpu
+if _is_gpu() and getattr(ptbp_args, 'optimizer', 'bo') in ('parallel_bo', 'pso'):
+    raise SystemExit("--optimizer parallel_bo/pso evaluate BO points in parallel processes; "
+                     "with a GPU (--device) use --optimizer bo (M4d)")
 if getattr(ptbp_args, 'optimizer', 'bo') in ('gradient', 'bo_grad'):
     # the gradient optimisers (M4c) need pydftb.autodiff (torch) and an r0 loss
     from utils.gradient_opt import check_requirements as _check_gradient
     _check_gradient(getattr(ptbp_args, 'engine', None) or 'dftbplus',
-                    ptbp_args.optimization_option.lower())
+                    ptbp_args.optimization_option.lower(),
+                    getattr(ptbp_args, 'pydftb_backend', None) or 'numpy')
 
 from utils.parallel import detect_cpu as _detect_cpu, set_plan as _set_plan, simple_plan as _simple_plan
 
@@ -86,12 +103,24 @@ def _parallel_plan(dft_input, bolt, opt_elem=()):
     engine = getattr(ptbp_args, 'engine', None) or 'dftbplus'
     try:
         from utils.recommender import make_plan, workload_from_dataset
+        from utils.engines import settings as _engine_settings
         workload = workload_from_dataset(
             dft_input, bolt, kpts_density=ptbp_args.kpt_density, eos_points=ptbp_args.eos_points,
             engine=engine, mode=ptbp_args.optimization_option.lower(), opt_elem=opt_elem)
+        es, backend, accelerators = _engine_settings(), None, None
+        if engine == 'pydftb' and es['pydftb_backend'] == 'torch':      # M4d
+            import torch
+            backend = {'pydftb_backend': 'torch', 'device': es['pydftb_device'],
+                       'dtype': es['pydftb_dtype'], 'torch': torch.__version__}
+        elif engine == 'pydftb':
+            import importlib.util
+            if importlib.util.find_spec('torch') is not None:            # a GPU to suggest?
+                from pydftb.backend.devices import probe_accelerators
+                accelerators = probe_accelerators()
         plan = make_plan(budget, workload, optimizer=ptbp_args.optimizer,
                          n_particles=ptbp_args.n_particles,
-                         n_calls=ptbp_args.n_calls if ptbp_args.n_calls is not None else 11)
+                         n_calls=ptbp_args.n_calls if ptbp_args.n_calls is not None else 11,
+                         backend=backend, accelerators=accelerators)
     except Exception as err:                    # planning must never stop a run
         print(f"[plan] cost model unavailable ({type(err).__name__}: {err}); simple rule")
         eos = max(1, int(ptbp_args.eos_points))

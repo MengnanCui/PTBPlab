@@ -90,6 +90,16 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    dest='pydftb_forces',
                    help="pydftb derivatives: 'dftbplus' reproduces DFTB+'s finite "
                         "differences (bit-level parity), 'exact' is exact. Default: %(default)s.")
+    p.add_argument('--pydftb-backend', default='numpy', choices=['numpy', 'torch'],
+                   dest='pydftb_backend',
+                   help="pydftb arrays: numpy, or torch on the CPU or a GPU (--device). "
+                        "Default: %(default)s.")
+    p.add_argument('--device', default='cpu', metavar='DEV',
+                   help="torch device for --pydftb-backend torch: cpu, auto, cuda, cuda:1, mps, "
+                        "xpu. Check a GPU first: python -m pydftb.validation.gpu_check. "
+                        "Default: %(default)s.")
+    p.add_argument('--dtype', default='float64', choices=['float64', 'float32'],
+                   help="precision for --pydftb-backend torch. Default: %(default)s.")
     p.add_argument('--params', nargs='+', default=['r0_w', 'r0_d', 'sigma_rep'],
                    metavar='P', dest='parameters',
                    help="Parameters to optimise. Default: r0_w r0_d sigma_rep.")
@@ -230,6 +240,9 @@ def run(args: argparse.Namespace) -> int:
         '--mp_order', str(args.mp_order),
         '--pydftb_forces', args.pydftb_forces,
     ]
+    if getattr(args, 'pydftb_backend', 'numpy') != 'numpy':        # M4d
+        legacy_argv += ['--pydftb_backend', args.pydftb_backend, '--device', args.device,
+                        '--dtype', args.dtype]
     if args.n_calls is not None:
         legacy_argv += ['--n_calls', str(args.n_calls)]
     if args.E0s is not None:

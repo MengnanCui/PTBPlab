@@ -182,8 +182,8 @@ iteration counts as DFTB+; against the NumPy backend the largest differences are
 4e-14 Ha (energy), 4e-14 Ha/Bohr (forces) and 1.4e-13 e (charges).  `dtype="float32"` runs
 H, the eigensolver and the densities in single precision (the Cholesky factor of S stays
 double): energies within about 4e-6 Ha.  `threads` sets torch's thread count too; set it in
-processes forked from one that ran torch on several threads.  No GPU was available for
-M4a, so GPU speed-ups are not measured yet; see
+processes forked from one that ran torch on several threads.  GPU speed-ups are not
+measured yet (see *Devices and the GPU self-check* below); see
 [`docs/reports/M4a-torch-backend.html`](docs/reports/M4a-torch-backend.html).
 
 ### Derivatives (`pydftb.autodiff`)
@@ -225,6 +225,43 @@ mode="hf")` runs the calculation of `calculate` -- its `results` are bit for bit
 and returns `(Result, Params)` with the derivatives.  PTBP builds the gradient of its loss on
 it (M4c, [`docs/reports/M4c-ptbp-gradient.html`](docs/reports/M4c-ptbp-gradient.html)).
 
+### Devices and the GPU self-check
+
+`device` is `"cpu"`, `"cuda"`/`"cuda:i"` (NVIDIA, or AMD with a ROCm build of torch), `"mps"`
+(Apple), `"xpu"` (Intel) or `"auto"` (the first of these that is available, else the CPU).
+What the device can do decides where each step runs (`pydftb.backend.devices`):
+
+| Device | Precision | Cholesky, eigh | float64 arrays and sums |
+|---|---|---|---|
+| CPU, CUDA (NVIDIA, ROCm) | float64, float32 | device | device |
+| MPS | float32 only | device if a probe works, else CPU | CPU |
+| XPU | float64 if a probe works | device if a probe works, else CPU | CPU without float64 |
+
+MPS and XPU are probed once with 2 x 2 matrices instead of a list of supported operations.
+On CUDA a calculation runs with torch's deterministic algorithms (switched on for the
+calculation, the previous setting restored afterwards; `CUBLAS_WORKSPACE_CONFIG=:4096:8` is
+set before the first CUDA call unless already set), so a repeated run gives the same bits;
+GPU and CPU differ in the last digits.  `pydftb.autodiff` computes on the device of its
+`Params` (`Params.from_skset(..., device="cuda")`).
+
+No GPU was available while this was written.  The device logic was checked on the CPU: the
+branches that move work to the CPU give the same bits as the plain path, and under
+`torch.device("meta")` no tensor is created off its device.  GPU correctness and speed are
+**not measured**.  To check a GPU:
+
+```bash
+python -m pydftb.validation.gpu_check --json gpu_check.json      # first GPU, everything
+python -m pydftb.validation.gpu_check --device cuda:1 --dtype both --json gpu_check.json
+python -m pydftb.validation.gpu_check --quick                    # a subset, a few minutes
+```
+
+It recomputes the frozen DFTB+ references on the device and compares them with torch on the
+CPU (float64: within 1e-10), runs calculations twice (bit for bit), compares autodiff
+gradients of both modes with the CPU (1e-9), checks that a process that used CUDA can fork a
+CPU-only worker, and times `eigh` (N = 9-288, batches of 1-2048), Cu cells as PTBP computes
+them, and stacks of several structures.  It exits with status 1 if a check fails; please
+send the JSON back.  See [`docs/reports/M4d-devices.html`](docs/reports/M4d-devices.html).
+
 ## Tests and validation
 
 ```bash
@@ -236,4 +273,5 @@ python -m pydftb.validation.dynamics --check        # optimisation and MD vs DFT
 python -m pydftb.validation.refgen --check --backend torch    # the same on the torch backend
 python -m pydftb.validation.golden --base COMMIT    # NumPy path bitwise unchanged since COMMIT
 python -m pydftb.validation.gradcheck --check       # pydftb.autodiff vs finite differences
+python -m pydftb.validation.gpu_check --device cpu --quick    # the GPU self-check, on the CPU
 ```

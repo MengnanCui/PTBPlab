@@ -150,17 +150,18 @@ def _structure(inp):
     return inp["labels"], pos, cell, (np.ones(3, bool) if periodic else None)
 
 
-def reference_engine(name: str, variational: bool = True):
+def reference_engine(name: str, variational: bool = True, **backend):
     """The case's calculator at SCC tolerance SCC_TOL; ``variational``: with the smearing's
     ``fermi_level="exact"`` and ``ts_convention="variational"`` (F is then the fixed-N
     Mermin free energy of mode "hf"), else with DFTB+'s conventions (mode "implicit"
-    differentiates them)."""
+    differentiates them).  ``backend``: ``backend``/``device``/``dtype`` of the engine."""
     doc = refgen.load(name)
     case = CASES_BY_NAME[doc["case"]]
     sm = Smearing.from_spec(tuple(case.filling))
     if variational:
         sm = dataclasses.replace(sm, ts_convention="variational", fermi_level="exact")
-    _, calc = refgen.run_pydftb(case, doc["input"], engine=True, scc_tol=SCC_TOL, smearing=sm)
+    _, calc = refgen.run_pydftb(case, doc["input"], engine=True, scc_tol=SCC_TOL, smearing=sm,
+                                **backend)
     return calc, _structure(doc["input"])
 
 

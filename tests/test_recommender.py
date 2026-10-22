@@ -197,6 +197,41 @@ def test_suggestions():
     assert any("--engine pydftb" in s for s in dftbplus.suggestions)
 
 
+def test_pydftb_on_a_gpu_is_serial_and_not_estimated():
+    """M4d: with a GPU the DFTB stage runs in this process, one structure after the
+    other; the cost model knows CPUs only, so there is no estimate; plan.json records it."""
+    shapes = [cu_cell((8, 8, 8))] * 8
+    gpu = {"pydftb_backend": "torch", "device": "cuda", "dtype": "float64", "torch": "2.14.1"}
+    plan = plan_of(shapes, 4, n_calls=11, backend=gpu)
+    st = plan.stage("dftb")
+    assert (st.workers, st.threads) == (1, 1) and "GPU cuda" in st.reasons[0]
+    assert "step" not in plan.estimates and "dftb" not in plan.estimates
+    assert any("no time estimate" in n for n in plan.notes)
+    text = plan.render()
+    assert "pydftb on torch (cuda, float64; torch 2.14.1)" in text
+    assert "estimated BO step" not in text
+    data = json.loads(json.dumps(plan.to_json()))
+    assert data["backend"] == gpu and Plan.from_json(data).backend == gpu
+    cpu = plan_of(shapes, 4, backend=dict(gpu, device="cpu"))
+    assert cpu.stage("dftb").workers == 4 and "step" in cpu.estimates
+    plain = plan_of(shapes, 4)
+    assert "backend" not in plain.to_json()          # plan.json of NumPy runs as before
+
+
+def test_gpu_suggestion_only_for_pydftb_on_numpy():
+    shapes = [cu_cell((8, 8, 8))] * 8
+    found = {"torch": "2.14.1", "cuda": ["NVIDIA A100"], "mps": False, "xpu": []}
+    plan = plan_of(shapes, 4, accelerators=found)
+    assert any("GPU available (NVIDIA A100)" in s and "gpu_check" in s for s in plan.suggestions)
+    torch_gpu = {"pydftb_backend": "torch", "device": "cuda", "dtype": "float64"}
+    assert not any("GPU" in s for s in plan_of(shapes, 4, accelerators=found,
+                                                backend=torch_gpu).suggestions)
+    assert not any("GPU" in s for s in plan_of(shapes, 4, engine="dftbplus",
+                                                accelerators=found).suggestions)
+    none = {"torch": "2.14.1", "cuda": [], "mps": False, "xpu": []}
+    assert not any("GPU" in s for s in plan_of(shapes, 4, accelerators=none).suggestions)
+
+
 def test_blas_threads_only_on_request(monkeypatch):
     assert plan_of([cu_cell((1, 1, 1), (4, 4, 4))], 4).stage("dftb").blas_threads == 1
     monkeypatch.setenv("PTBP_BLAS_THREADS", "3")

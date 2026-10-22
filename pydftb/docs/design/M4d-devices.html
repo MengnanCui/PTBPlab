@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4d 设备与 GPU 自检设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M4d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4d · 设计文档</p>
+    <h1>设备选项、GPU 自检与 PTBP 的后端开关</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M4d-devices.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M4a 的 PyTorch 后端已经能把 SCC 的线性代数放到任意 torch 设备上，但只在 CPU 上验证过。M4d 补齐三件事：pydftb 按设备的能力安排计算（哪些在设备上、哪些退回 CPU）；一个由用户在自己的 GPU 上运行的自检脚本；PTBP 的 <code>--pydftb_backend</code>、<code>--device</code>、<code>--dtype</code> 选项。默认仍是 NumPy、CPU、float64，结果逐字节不变。</p>
+    <ul>
+      <li><strong>本机没有 GPU。</strong>M4d 的代码在这里只能在 CPU 上验证：设备逻辑用 CPU 张量和模拟的能力表测试，退回 CPU 的分支与正常路径逐位相同。GPU 上是否正确、快多少，要由 <code>python -m pydftb.validation.gpu_check</code> 在用户的机器上测；任何正确性检查失败，脚本都以非零状态退出。用户运行之前，报告中 GPU 的数字一律写“未实测”。</li>
+      <li><strong>按设备能力安排。</strong>
+        <ul>
+          <li>CUDA（含 AMD 的 ROCm）：全部在设备上，默认用确定性算法。</li>
+          <li>Apple MPS：没有 float64，只能用 float32；Cholesky 分解和 float64 的求和放在 CPU 上。</li>
+          <li>Intel XPU 和 MPS 的本征分解、Cholesky：第一次使用时试一下，不支持就放到 CPU 上。</li>
+        </ul>
+      </li>
+      <li><strong>PTBP 用 GPU 时，DFTB 阶段在主进程里逐个结构计算。</strong>用了 CUDA 的进程不能再派生（fork）出也用 CUDA 的子进程，所以 GPU 不和多进程的 DFTB 阶段混用；与 <code>--optimizer parallel_bo</code>、<code>pso</code> 同用时直接拒绝。推荐器只把 GPU 列为建议，从不自动采用。</li>
+      <li><strong>先说清楚预期。</strong>M4a 实测：Cu 数据集上 torch 在 CPU 上比 NumPy 只快约一成；DFTB 阶段只占一个 BO 步的 37–57%，GPU 即使把它降到 0，一个 BO 步也最多快 1.6–2.3 倍。而 PTBP 现在用 4 个进程算 DFTB 阶段，GPU 串行算要比这更快才划算。PTBP 的矩阵只有 9–18 个轨道，GPU 处理这么小的矩阵未必快；自检脚本的计时网格就是用来回答这个问题的。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">4</span><span class="lbl">设备类型：CPU、CUDA/ROCm、MPS、XPU</span></li>
+      <li><span class="num">≤ 1e-10</span><span class="lbl">自检中 GPU 与 CPU（float64）的允许差</span></li>
+      <li><span class="num">0</span><span class="lbl">默认设置下允许改变的字节</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与范围</a></li>
+      <li><a href="#caps">二、设备与能力</a></li>
+      <li><a href="#determinism">三、确定性</a></li>
+      <li><a href="#ptbp">四、接入 PTBP</a></li>
+      <li><a href="#selfcheck">五、GPU 自检脚本</a></li>
+      <li><a href="#modules">六、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">七、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">八、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与范围</h2>
+      <ul>
+        <li><strong>pydftb</strong>：<code>device="auto"</code> 选第一个可用的加速器，否则用 CPU；按设备能力决定每一步在哪里算；CUDA 上默认确定性；新模块 <code>pydftb/backend/devices.py</code>。</li>
+        <li><strong>自检脚本</strong>：<code>pydftb/validation/gpu_check.py</code>，在用户的 GPU 上检查正确性并计时，输出 JSON。</li>
+        <li><strong>PTBP</strong>：三个新选项（命令行、<code>ptbp optimize</code>、YAML、界面），运行前的检查，GPU 时 DFTB 阶段的进程模型，<code>plan.json</code> 记录后端和设备，推荐器的建议。</li>
+      </ul>
+      <p>不改数值算法：设备上算的仍是 M4a 的那一套（Cholesky 化为标准问题、eigh、密度矩阵），NumPy 路径一字不改。</p>
+    </section>
+
+    <section id="caps">
+      <h2>二、设备与能力</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>设备</th><th>float64</th><th>Cholesky、本征分解</th><th>float64 的求和与 S 的分解</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>cpu</code></td><td>有</td><td>CPU</td><td>CPU</td><td>M4a 已验证；逐位与之前相同</td></tr>
+          <tr><td><code>cuda[:i]</code>（NVIDIA）</td><td>有</td><td>设备（cuSOLVER）</td><td>设备</td><td>默认确定性算法（第三节）</td></tr>
+          <tr><td><code>cuda[:i]</code>（AMD，ROCm 版 torch）</td><td>有</td><td>设备（hipSOLVER 或 MAGMA，取决于 torch 的构建）</td><td>设备</td><td>批量本征分解的速度未知，由自检的计时网格测出</td></tr>
+          <tr><td><code>mps</code>（Apple）</td><td><strong>没有</strong></td><td>第一次使用时试；不支持就在 CPU</td><td>CPU</td><td>只能 <code>dtype="float32"</code>，选 float64 直接报错并说明</td></tr>
+          <tr><td><code>xpu</code>（Intel）</td><td>试一下</td><td>第一次使用时试；不支持就在 CPU</td><td>没有 float64 时在 CPU</td><td>没有 float64 时与 MPS 一样处理</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>做法</strong>：<code>Backend</code> 多两个字段。<code>linalg_device</code> 是 Cholesky 和本征分解所在的设备，<code>precise_device</code> 是 float64 数组（S 的 Cholesky 因子、双精度求和）所在的设备。在 CPU 和 CUDA 上两者就是设备本身，代码路径与 M4a 完全相同。在 MPS 上两者都是 CPU：</p>
+      <ul>
+        <li>S 在 CPU 上以 float64 分解，L⁻¹ 转成 float32 再送到设备；</li>
+        <li>每轮 SCC 的 H′ = L⁻¹HL⁻ᴴ 在设备上算，送回 CPU 做本征分解，结果再送回设备；</li>
+        <li>密度矩阵、布居、能量的迹在设备上算，求和时先送回 CPU 再升到 float64。</li>
+      </ul>
+      <p><strong>能力怎么知道</strong>：CUDA 视为全部支持。MPS 和 XPU 在第一次使用时，用一个 2×2 的矩阵试 float64、Cholesky 和 eigh，结果按设备缓存；失败就退回 CPU，并发出一次警告说明原因。这样不依赖文档里可能过时的支持列表；torch 以后支持了，自动就用上。</p>
+      <p><strong><code>device="auto"</code></strong>：依次看 CUDA、MPS、XPU，都没有就用 CPU。在 pydftb 里，<code>auto</code> 在构造计算器时就地解析（会初始化 CUDA）。PTBP 则在一个子进程里探测（第四节），不在主进程里初始化 CUDA。</p>
+    </section>
+
+    <section id="determinism">
+      <h2>三、确定性</h2>
+      <ul>
+        <li>CUDA 上有些运算默认不确定：原子加法的求和顺序不固定，cuBLAS 的部分 GEMM 也不确定。所以同一台机器上算两次，最后几位可能不同。</li>
+        <li><strong>做法</strong>：DFTB 在 CUDA 上计算时，临时打开 <code>torch.use_deterministic_algorithms(True, warn_only=True)</code>，算完恢复用户原来的设置，不留下全局副作用。第一次选用 CUDA 时，如果环境里还没有 <code>CUBLAS_WORKSPACE_CONFIG</code>，就设成 <code>:4096:8</code>（cuBLAS 要求在第一次调用之前设好；已经初始化过 cuBLAS 的进程里设置无效，这时给出警告）。</li>
+        <li><strong>warn_only 的含义</strong>：没有确定性实现的运算只警告、不报错，以免影响用户自己的其它代码。自检脚本实际检查“同一计算两次逐位相同”。</li>
+        <li><strong>GPU 与 CPU 不会逐位相同</strong>：算法和舍入顺序不同，差在 1e-12 量级（float64）。自检的门槛是 1e-10。</li>
+      </ul>
+    </section>
+
+    <section id="ptbp">
+      <h2>四、接入 PTBP</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>选项（<code>ptbp optimize</code> 用连字符）</th><th>取值</th><th>默认</th></tr></thead>
+        <tbody>
+          <tr><td><code>--pydftb_backend</code></td><td><code>numpy</code>、<code>torch</code></td><td><code>numpy</code></td></tr>
+          <tr><td><code>--device</code></td><td><code>cpu</code>、<code>auto</code>、<code>cuda</code>、<code>cuda:1</code>、<code>mps</code>、<code>xpu</code></td><td><code>cpu</code></td></tr>
+          <tr><td><code>--dtype</code></td><td><code>float64</code>、<code>float32</code></td><td><code>float64</code></td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>运行前的检查</strong>（不满足就报错退出，说明怎么改）：</p>
+      <ul>
+        <li>这三个选项只对 <code>--engine pydftb</code> 有意义；<code>--device</code> 不是 <code>cpu</code> 或 <code>--dtype float32</code> 时，要求 <code>--pydftb_backend torch</code>。</li>
+        <li>GPU 设备与 <code>--optimizer parallel_bo</code>、<code>pso</code> 不能同用：它们用多个进程同时算 BO 点，每个进程都要用 GPU。</li>
+        <li>梯度优化器（M4c）只支持 NumPy 后端：M4b 的自动求导只在 NumPy 引擎上验证过。</li>
+        <li><code>--device auto</code> 在一个子进程里探测 GPU，结果写进运行记录；探测不到就用 CPU 并打印一行说明。</li>
+      </ul>
+      <p><strong>DFTB 阶段的进程模型</strong>：</p>
+      <ul>
+        <li><strong>torch + CPU</strong>：与 NumPy 一样多进程并行。父进程派生子进程之前先把 torch 设为单线程（M4a 的 fork 规则），每个工作进程用 1 个 torch 线程。torch 后端不用 k 点线程。</li>
+        <li><strong>torch + GPU</strong>：在主进程里逐个结构计算。主进程初始化 CUDA 之后，PTBP 其它阶段仍会派生只用 CPU 的子进程（hotcent 分片等）；子进程不碰 CUDA，这是常见做法（PyTorch 的数据加载进程就是这样）。自检脚本里专门有一项检查：初始化 CUDA 之后派生一个跑 NumPy 计算的子进程，看它能否正常结束。</li>
+      </ul>
+      <p><strong>计划与建议</strong>：</p>
+      <ul>
+        <li><code>plan.json</code> 记下后端、设备、精度和 torch 版本。</li>
+        <li>GPU 时 DFTB 阶段标为“主进程、串行”，不给耗时估计：成本模型没有在 GPU 上标定过。</li>
+        <li>推荐器在探测到 GPU、而用户用的是 NumPy 后端时，只打印一条建议（先跑自检脚本，再试 <code>--pydftb_backend torch --device cuda</code>），从不自动改用。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>五、GPU 自检脚本</h2>
+<pre><code>python -m pydftb.validation.gpu_check                         # 自动选设备，全部检查和计时
+python -m pydftb.validation.gpu_check --device cuda:1 --json gpu_check.json
+python -m pydftb.validation.gpu_check --quick                 # 子集，约几分钟</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>部分</th><th>内容</th><th>判据</th></tr></thead>
+        <tbody>
+          <tr><td>环境</td><td>torch、CUDA/HIP 版本，设备名、显存、算力；NumPy、Python、CPU 型号、核数；能力表（第二节）</td><td>只记录</td></tr>
+          <tr><td>参考算例</td><td>冻结的 DFTB+ 参考（<code>tests/data/ref</code>）在设备上重算</td><td>与 <code>refgen --check</code> 相同的容差</td></tr>
+          <tr><td>与 CPU 对照</td><td>同样的算例在 torch CPU 上</td><td>float64：能量、力、电荷 ≤ 1e-10；float32 只报告</td></tr>
+          <tr><td>确定性</td><td>同一计算算两次</td><td>逐位相同</td></tr>
+          <tr><td>自动求导</td><td>小算例上 hf 与 implicit 模式的梯度，以及与 CPU 的梯度</td><td>≤ 1e-9</td></tr>
+          <tr><td>fork</td><td>（只对 CUDA）子进程里初始化 CUDA、算一次，再派生只用 CPU 的孙进程算 NumPy</td><td>60 s 内正常结束</td></tr>
+          <tr><td>计时：本征分解网格</td><td>N = 9–288 个轨道 × 批量 1–2048 × float64/complex128/complex64，设备与 NumPy 的耗时</td><td>只报告</td></tr>
+          <tr><td>计时：Cu 结构</td><td>与 PTBP 同样设置的 Cu 晶胞（不同 k 网格）：NumPy 单线程、NumPy k 点线程（全部核心）、设备</td><td>只报告</td></tr>
+          <tr><td>计时：多结构堆叠</td><td>把多个结构的 k 点矩阵堆成一批做本征分解，与逐个结构做比较</td><td>只报告：决定以后要不要做跨结构的批量</td></tr>
+        </tbody>
+      </table></div>
+      <p>输出：终端上一张摘要表，加一个 JSON 文件（环境、每项检查的数值和结论、计时）。任何一项正确性检查失败，退出码为 1。用户把 JSON 发回来，就能据此决定 GPU 是否值得用、跨结构批量是否值得做。</p>
+    </section>
+
+    <details class="dev" id="modules">
+      <summary><span class="tag">开发细节</span><span class="title">六、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/backend/devices.py</code>（新）</td><td><code>resolve(device)</code>：auto 与名字检查；<code>capabilities(device)</code>：返回 <code>Capabilities</code>（kind、rocm、float64、linalg、名称、说明），MPS/XPU 第一次用时试运算并缓存；<code>deterministic(backend)</code>：CUDA 上的确定性上下文；<code>probe_accelerators()</code>：在子进程里探测，返回可 JSON 化的字典（不在调用进程里初始化 CUDA）</td></tr>
+            <tr><td><code>pydftb/backend/spec.py</code></td><td><code>Backend</code> 加 <code>linalg_device</code>、<code>precise_device</code>；<code>asarray(precise=True)</code>、<code>widen</code> 用 <code>precise_device</code>；<code>make_backend</code> 解析设备、检查 MPS 的 float64、设置 <code>CUBLAS_WORKSPACE_CONFIG</code></td></tr>
+            <tr><td><code>pydftb/backend/torch_solver.py</code></td><td>Cholesky 与 L⁻¹ 在 <code>linalg_device</code> 上以 float64 算，再转精度送到设备；<code>eig</code> 在 <code>linalg_device</code> 不同于设备时把 H′ 送过去再送回</td></tr>
+            <tr><td><code>pydftb/calculator.py</code></td><td>CUDA 时整个 <code>calculate</code> 包在确定性上下文里；<code>_mulliken</code>、<code>_trace</code> 的双精度求和经 <code>widen</code>（MPS 上先回 CPU）</td></tr>
+            <tr><td><code>pydftb/validation/gpu_check.py</code>（新）</td><td>第五节；复用 <code>refgen.compare</code>、<code>autodiff.evaluate</code>；<code>--device cpu</code> 也能跑，用来在本机验证脚本本身</td></tr>
+            <tr><td><code>utils/engines.py</code></td><td>设置 <code>pydftb_backend</code>、<code>pydftb_device</code>、<code>pydftb_dtype</code>；<code>_pydftb_calculator</code> 传给 <code>PyDFTB</code>；<code>is_gpu()</code></td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td>GPU 时 1 个工作进程（主进程内）；torch 后端时不给 k 点线程、派生前设单线程</td></tr>
+            <tr><td><code>cli/</code>、<code>cli/run.py</code></td><td>选项、YAML 键、界面、运行前检查、auto 的子进程探测</td></tr>
+            <tr><td><code>utils/recommender.py</code>、<code>utils/parallel/plan.py</code></td><td>GPU 时 DFTB 阶段串行、不估时；<code>plan.json</code> 的 <code>backend</code> 字段；GPU 建议</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">七、验证计划</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>内容</th><th>在哪里</th><th>要求</th></tr></thead>
+          <tbody>
+            <tr><td>NumPy 路径</td><td>golden（两个环境）</td><td>逐位相同</td></tr>
+            <tr><td>torch CPU 路径</td><td><code>refgen --check --backend torch</code>、<code>dynamics --check --backend torch</code>、torch 测试</td><td>与 M4a 相同的结果</td></tr>
+            <tr><td>退回 CPU 的分支</td><td><code>test_devices.py</code>：CPU 设备上强制走“Cholesky/eigh 在别处”“float64 在别处”的分支</td><td>与正常路径逐位相同</td></tr>
+            <tr><td>能力表与 auto</td><td><code>test_devices.py</code>：模拟 CUDA、ROCm、MPS、XPU 的可用性和失败的试运算</td><td>选择与警告符合第二节</td></tr>
+            <tr><td>MPS 的 float64</td><td>同上</td><td>报错并说明</td></tr>
+            <tr><td>确定性上下文</td><td>同上</td><td>进入时打开、退出时恢复原设置</td></tr>
+            <tr><td>自检脚本</td><td><code>gpu_check --device cpu --quick</code></td><td>全部通过，退出码 0；人为制造一个不一致时退出码 1</td></tr>
+            <tr><td>PTBP 选项与检查</td><td><code>tests/test_engines.py</code> 等</td><td>选项到达 <code>PyDFTB</code>；不允许的组合报错</td></tr>
+            <tr><td>PTBP 的 torch CPU 阶段</td><td><code>test_dftb_stage_parallel.py</code></td><td>串行与 4 进程逐位相同、文件相同</td></tr>
+            <tr><td>默认不变</td><td>G1</td><td>损失 1.899324742、446.2016018 逐位不变，BO 步的文件与 M4 之前逐字节相同</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>八、不做的事与风险</h2>
+      <ul>
+        <li><strong>跨结构的批量</strong>（把很多结构的 k 点矩阵合成一批、同步 SCC）：等自检的“多结构堆叠”计时出来再决定（M7 或单列 M4e）。</li>
+        <li><strong>GPU 的成本模型</strong>：这里无法标定，不做；GPU 时 DFTB 阶段不给估计。</li>
+        <li><strong>机器指纹加入 torch</strong>（计划里的 D4）：不做。指纹只用来缓存 NumPy 的探测结果，torch 的版本不影响它；等有了 torch 自己的探测再加。</li>
+        <li><strong>MPS、XPU 只保证能运行</strong>：本机和 CI 都无法检查它们的正确性，自检脚本是唯一的检验手段。</li>
+        <li><strong>多 GPU、GPU 上的梯度优化器、GPU 上的 SP2 与能带</strong>：不做。</li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>主进程用过 CUDA 之后再派生子进程：子进程只用 CPU，自检里有专门的检查。</li>
+            <li>确定性模式变慢：只在 DFTB 计算期间打开，自检会给出耗时。</li>
+            <li>小矩阵上 GPU 不划算：如实报告，不改默认值。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M4c-ptbp-gradient.html">← M4c 报告</a><a href="../index.html">文档索引</a><a href="../reports/M4d-devices.html">M4d 报告 →</a></nav>
+    <span>M4d</span>
+  </footer>
+</div>
+</body>
+</html>

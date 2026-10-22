@@ -239,6 +239,6 @@ def fold_all(pb: PairBlocks, values: np.ndarray, norb: int, kpts: np.ndarray,
     mt = backend.asarray(mt, precise=True, complex_=True)
     m = (phase @ mt.reshape(len(shifts), -1)).reshape(len(kpts), norb, norb)
     if diag is not None:
-        idx = backend.index(np.arange(norb))
+        idx = backend.index(np.arange(norb), precise=True)
         m[:, idx, idx] += backend.asarray(diag, precise=True)
     return m

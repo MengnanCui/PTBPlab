@@ -10,10 +10,16 @@ control flow (potentials, Fermi level, mixer) stay NumPy float64 on the host.
 ``dtype="float32"`` runs H, the eigensolver and the densities in single precision (complex64
 at k-points); the Cholesky factor of S is still computed in double precision, and
 everything on the host stays float64.
+
+Devices (M4d, :mod:`pydftb.backend.devices`): ``precise_device`` holds the float64 arrays
+(the overlap for its Cholesky factor, the double-precision sums) and ``linalg_device`` runs
+Cholesky and eigh; both are the device itself (None) unless it lacks float64 or these
+operations, e.g. Apple's MPS, where they are the CPU.
 """
 from __future__ import annotations
 
 import contextlib
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +33,8 @@ class Backend:
     name: str = "numpy"
     device: str = "cpu"
     dtype: str = "float64"
+    linalg_device: str | None = None        # Cholesky and eigh (None: the device)
+    precise_device: str | None = None       # float64 arrays (None: the device)
 
     def __post_init__(self):
         if self.name not in BACKENDS:
@@ -36,10 +44,22 @@ class Backend:
         if self.name == "numpy" and (self.device != "cpu" or self.dtype != "float64"):
             raise ValueError("the NumPy backend runs on the CPU in float64; "
                              "use backend='torch' for other devices or float32")
+        if self.precise_device is not None and self.dtype == "float64":
+            raise ValueError(f"{self.device} has no float64: use dtype='float32'")
 
     @property
     def is_torch(self) -> bool:
         return self.name == "torch"
+
+    @property
+    def precise(self) -> str:
+        """Where the float64 arrays live."""
+        return self.precise_device or self.device
+
+    @property
+    def linalg(self) -> str:
+        """Where Cholesky and eigh run."""
+        return self.linalg_device or self.device
 
     @property
     def xp(self):
@@ -58,8 +78,8 @@ class Backend:
 
     # ---- conversions (identities for NumPy) ----------------------------------------------
     def asarray(self, a, precise: bool = False, complex_: bool = False):
-        """Host data on the device in the working precision (``precise``: double;
-        ``complex_``: as a complex array, for products with complex ones)."""
+        """Host data on the device in the working precision (``precise``: double, on
+        ``self.precise``; ``complex_``: as a complex array, for products with complex ones)."""
         if not self.is_torch:
             return a
         import torch
@@ -69,28 +89,33 @@ class Backend:
         else:
             t = torch.from_numpy(np.ascontiguousarray(a))
         dt = cplx if (complex_ or t.is_complex()) else real
-        return t.to(device=self.device, dtype=dt)
+        return t.to(device=self.precise if precise else self.device, dtype=dt)
 
     def cast(self, t):
-        """A device array in the working precision (identity for float64)."""
-        if not self.is_torch or self.dtype == "float64":
+        """An array in the working precision on the device (the same tensor for float64
+        on the device: ``Tensor.to`` returns ``self`` when nothing changes)."""
+        if not self.is_torch:
             return t
         real, cplx = self._dtypes(False)
-        return t.to(cplx if t.is_complex() else real)
+        return t.to(device=self.device, dtype=cplx if t.is_complex() else real)
 
     def widen(self, t):
-        """A device array in double precision (identity for NumPy and for float64)."""
-        if not self.is_torch or self.dtype == "float64":
+        """An array in double precision on ``self.precise`` (the same tensor for NumPy
+        and for float64 on the device)."""
+        if not self.is_torch:
             return t
         import torch
-        return t.to(torch.complex128 if t.is_complex() else torch.float64)
+        return t.to(device=self.precise,
+                    dtype=torch.complex128 if t.is_complex() else torch.float64)
 
-    def index(self, idx):
-        """Integer index array for device arrays."""
+    def index(self, idx, precise: bool = False):
+        """Integer index array for device arrays (``precise``: for those on
+        ``self.precise``)."""
         if not self.is_torch:
             return idx
         import torch
-        return torch.as_tensor(np.asarray(idx), dtype=torch.long, device=self.device)
+        return torch.as_tensor(np.asarray(idx), dtype=torch.long,
+                               device=self.precise if precise else self.device)
 
     def to_host(self, x):
         """Device array -> NumPy float64/complex128 (NumPy arrays pass through)."""
@@ -143,5 +168,18 @@ def make_backend(backend=None, device: str | None = None, dtype: str | None = No
     except ImportError as err:               # pragma: no cover - depends on the environment
         raise ImportError("backend='torch' needs PyTorch: pip install 'torch>=2.14' "
                           "(CPU wheels: --index-url https://download.pytorch.org/whl/cpu)") from err
-    dev = str(torch.device(device or "cpu"))
-    return Backend("torch", dev, dtype or "float64")
+    from . import devices
+    dev = devices.resolve(device)
+    cap = devices.capabilities(dev)
+    dtype = dtype or "float64"
+    if not cap.float64 and dtype == "float64":
+        raise ValueError(f"{dev} has no float64 in this torch: use dtype='float32'")
+    if not cap.complex_:
+        raise ValueError(f"{dev} has no complex arithmetic in this torch (k-points need it); "
+                         "use device='cpu'")
+    if not cap.linalg:
+        warnings.warn(f"no Cholesky/eigh on {dev} in this torch: they run on the CPU",
+                      RuntimeWarning, stacklevel=3)
+    devices.prepare(dev)
+    return Backend("torch", dev, dtype, linalg_device=None if cap.linalg else "cpu",
+                   precise_device=None if cap.float64 else "cpu")

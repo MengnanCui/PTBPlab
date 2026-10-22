@@ -22,6 +22,11 @@ derivatives instead of DFTB+'s 0.01 Bohr finite differences.
 ``smearing`` other than ``"none"`` switches on a real electronic smearing in
 *both* engines (for DFTB+ the ``Filling`` block is written correctly and the
 temperature/order actually used is checked in ``dftb_pin.hsd``).
+
+``pydftb_backend``/``pydftb_device``/``pydftb_dtype`` (M4d) put pydftb's SCC linear algebra
+on PyTorch, on the CPU or a GPU (``pydftb.backend.devices``); the default NumPy/CPU/float64
+leaves every calculation as before.  On a GPU the DFTB stage runs in this process, one
+structure after the other (:func:`is_gpu`).
 """
 from __future__ import annotations
 
@@ -34,6 +39,8 @@ from ase import Atoms
 ENGINES = ("dftbplus", "pydftb")
 SMEARINGS = ("none", "fermi", "gaussian", "mp")
 PYDFTB_FORCES = ("dftbplus", "exact")
+PYDFTB_BACKENDS = ("numpy", "torch")
+PYDFTB_DTYPES = ("float64", "float32")
 KB_HARTREE = 3.16681534524639e-6      # Boltzmann constant in Hartree/K (DFTB+, = pydftb's)
 LEGACY_FD_DELTA = 1.0e-2               # DFTB+ finite-difference step for ParserVersion 1
 
@@ -43,12 +50,16 @@ _SETTINGS: dict[str, Any] = {
     "smearing_temperature": 2000.0,   # K, used only if smearing != none
     "mp_order": 2,
     "pydftb_forces": "dftbplus",
+    "pydftb_backend": "numpy",        # M4d: numpy | torch
+    "pydftb_device": "cpu",           # torch device: cpu, cuda[:i], mps, xpu (auto: run.py)
+    "pydftb_dtype": "float64",
 }
 
 
 def configure(**kwargs) -> dict:
     """Set process-wide engine options (``engine``, ``smearing``,
-    ``smearing_temperature``, ``mp_order``, ``pydftb_forces``)."""
+    ``smearing_temperature``, ``mp_order``, ``pydftb_forces``, ``pydftb_backend``,
+    ``pydftb_device``, ``pydftb_dtype``)."""
     for key, value in kwargs.items():
         if value is None:
             continue
@@ -63,7 +74,35 @@ def configure(**kwargs) -> dict:
         raise ValueError(f"pydftb_forces must be one of {PYDFTB_FORCES}")
     if _SETTINGS["smearing"] == "mp" and int(_SETTINGS["mp_order"]) < 1:
         raise ValueError("Methfessel-Paxton order must be >= 1 (use smearing='gaussian' for 0)")
+    _check_pydftb_backend()
     return dict(_SETTINGS)
+
+
+def _check_pydftb_backend() -> None:
+    from pydftb.backend.devices import kind_of
+    backend, device = _SETTINGS["pydftb_backend"], str(_SETTINGS["pydftb_device"])
+    if backend not in PYDFTB_BACKENDS:
+        raise ValueError(f"pydftb_backend must be one of {PYDFTB_BACKENDS}, got {backend!r}")
+    if _SETTINGS["pydftb_dtype"] not in PYDFTB_DTYPES:
+        raise ValueError(f"pydftb_dtype must be one of {PYDFTB_DTYPES}")
+    if device != "auto":
+        kind_of(device)                               # cpu, cuda[:i], mps, xpu
+    if backend == "numpy" and (device != "cpu" or _SETTINGS["pydftb_dtype"] != "float64"):
+        raise ValueError("--device other than cpu and --dtype float32 need "
+                         "--pydftb_backend torch")
+    if backend == "torch" and _SETTINGS["engine"] != "pydftb":
+        raise ValueError("--pydftb_backend torch needs --engine pydftb")
+    if device.split(":")[0] == "mps" and _SETTINGS["pydftb_dtype"] == "float64":
+        raise ValueError("Apple's MPS has no float64: use --dtype float32 with --device mps")
+
+
+def is_gpu() -> bool:
+    """pydftb on a torch device other than the CPU: the DFTB stage then runs in this
+    process (a process that uses CUDA cannot hand it to forked workers)."""
+    from pydftb.backend.devices import kind_of
+    device = str(_SETTINGS["pydftb_device"])
+    return (_SETTINGS["engine"] == "pydftb" and _SETTINGS["pydftb_backend"] == "torch"
+            and device != "auto" and kind_of(device) != "cpu")
 
 
 def settings() -> dict:
@@ -179,6 +218,10 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
         else:
             kspec = {"kpts": kpts}
     fd_delta = LEGACY_FD_DELTA if _SETTINGS["pydftb_forces"] == "dftbplus" else None
+    backend = {}
+    if _SETTINGS["pydftb_backend"] != "numpy":       # M4d; the default calls stay as they were
+        backend = dict(backend=_SETTINGS["pydftb_backend"], device=_SETTINGS["pydftb_device"],
+                       dtype=_SETTINGS["pydftb_dtype"])
     return PyDFTB(dftb_args.get("slater_p", "./"),
                   kpts=kspec, time_reversal=not isinstance(kspec, dict),
                   smearing=pydftb_smearing(),
@@ -188,4 +231,4 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                   else "skf",
                   shell_resolved=True,          # DFTB+ under ASE (ParserVersion 1) default
                   fd_delta=fd_delta, threads=int(dftb_args.get("blas_threads", 1)),
-                  k_threads=int(dftb_args.get("k_threads", 1)))
+                  k_threads=int(dftb_args.get("k_threads", 1)), **backend)

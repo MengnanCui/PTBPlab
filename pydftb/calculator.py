@@ -301,6 +301,10 @@ class DFTB:
         ``stress`` (default: with forces for periodic systems) adds the stress
         tensor sigma = -(1/V) dE/d(strain), the sign convention of DFTB+.
         """
+        if self.backend.is_torch:                # CUDA: deterministic algorithms (M4d)
+            from .backend.devices import deterministic
+            with deterministic(self.backend):
+                return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
         if self.k_threads.n == 1:
             return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
         from threadpoolctl import threadpool_limits

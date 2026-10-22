@@ -43,7 +43,14 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('--multi-element', nargs='+', default=None, metavar='E', dest='multi_element',
                    help="Elements to optimise in a multi-element dataset.")
     p.add_argument('--probe', action='store_true',
-                   help="Measure this machine's speed first (about 1 s; cached per machine).")
+                   help="Measure this machine's speed first (about 1 s; cached per machine) "
+                        "and look for GPUs pydftb could use.")
+    p.add_argument('--pydftb-backend', default='numpy', choices=['numpy', 'torch'],
+                   dest='pydftb_backend', help="As `ptbp optimize`. Default: %(default)s.")
+    p.add_argument('--device', default='cpu', metavar='DEV',
+                   help="Torch device for --pydftb-backend torch. Default: %(default)s.")
+    p.add_argument('--dtype', default='float64', choices=['float64', 'float32'],
+                   help="Precision for --pydftb-backend torch. Default: %(default)s.")
     p.add_argument('--json', action='store_true', help="Print the plan as JSON.")
     p.set_defaults(func=run)
     return p
@@ -78,8 +85,21 @@ def run(args: argparse.Namespace) -> int:
     workload = workload_from_dataset(structures, bolt, kpts_density=args.kpts,
                                      eos_points=args.eos_points, engine=args.engine, mode=mode,
                                      opt_elem=args.multi_element or ())
+    backend = accelerators = None
+    if args.engine == 'pydftb' and getattr(args, 'pydftb_backend', 'numpy') == 'torch':   # M4d
+        import importlib.metadata
+        try:
+            version = importlib.metadata.version('torch')
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        backend = {'pydftb_backend': 'torch', 'device': args.device, 'dtype': args.dtype,
+                   'torch': version}
+    elif args.engine == 'pydftb' and args.probe:
+        from pydftb.backend.devices import probe_accelerators
+        accelerators = probe_accelerators()
     plan = make_plan(budget, workload, optimizer=args.optimizer, n_particles=args.n_particles,
-                     n_calls=args.n_calls if args.n_calls is not None else 11, probe=args.probe)
+                     n_calls=args.n_calls if args.n_calls is not None else 11, probe=args.probe,
+                     backend=backend, accelerators=accelerators)
     if args.json:
         print(json.dumps(plan.to_json(), indent=2))
     else:

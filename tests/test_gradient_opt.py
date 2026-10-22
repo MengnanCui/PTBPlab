@@ -167,6 +167,8 @@ def test_requirements():
         GO.check_requirements("dftbplus", "energygeometry")
     with pytest.raises(SystemExit, match="bandstructure"):
         GO.check_requirements("pydftb", "bandstructure")
+    with pytest.raises(SystemExit, match="--pydftb_backend numpy"):
+        GO.check_requirements("pydftb", "dataset", "torch")
     pytest.importorskip("torch")
     GO.check_requirements("pydftb", "dataset")
 

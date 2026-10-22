@@ -40,6 +40,7 @@ class SetupState:
     superposition: str = 'density'
     engine: str = 'dftbplus'             # dftbplus / pydftb
     ncores: str = 'auto'                 # cores of the parallel BO step: N or auto
+    pydftb_device: str = 'cpu'           # cpu = NumPy; cuda, mps, xpu, auto = torch (M4d)
 
     # ----- gen flow -----
     gen_symbols: List[str] = field(default_factory=list)
@@ -77,6 +78,11 @@ def assemble_optimize_yaml(state: SetupState) -> dict:
         out['multi_element'] = list(state.multi_element)
     if str(state.ncores).strip().lower() not in ('', 'auto'):
         out['ncores'] = int(state.ncores)
+    if state.engine == 'pydftb' and state.pydftb_device not in ('', 'cpu'):
+        out['pydftb_backend'] = 'torch'                  # a torch device (M4d)
+        out['device'] = state.pydftb_device
+        if state.pydftb_device.split(':')[0] == 'mps':
+            out['dtype'] = 'float32'                     # the only precision MPS has
 
     # E0s: only emit when the user chose explicit / cache. 'auto' means
     # leave the key out so `ptbp optimize` runs its auto-fit + cache.

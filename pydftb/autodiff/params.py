@@ -65,6 +65,14 @@ class Params:
         p.requires_grad_(*requires_grad)
         return p
 
+    @property
+    def device(self) -> torch.device:
+        """The device of the tensors: the derivatives are computed there (M4d)."""
+        for d in (self.tables, self.onsite):
+            for x in d.values():
+                return x.device
+        return torch.device("cpu")
+
     # ------------------------------------------------------------------
     def groups(self) -> dict:
         """Name -> list of the tensors of that kind."""

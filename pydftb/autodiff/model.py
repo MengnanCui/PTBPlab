@@ -77,8 +77,9 @@ def spin_matrix(basis, params, like):
         v = params.spin_constants[lab]
         blk = v.reshape(-1)[0].expand(len(idx), len(idx)) if v.numel() == 1 else \
             v.reshape(len(idx), len(idx))
-        w = w.index_put((torch.as_tensor(np.repeat(idx, len(idx))),
-                         torch.as_tensor(np.tile(idx, len(idx)))), blk.reshape(-1))
+        w = w.index_put((torch.as_tensor(np.repeat(idx, len(idx)), device=w.device),
+                         torch.as_tensor(np.tile(idx, len(idx)), device=w.device)),
+                        blk.reshape(-1))
     return w
 
 
@@ -100,21 +101,24 @@ def _damping(coul, i, j, sp_pair, sp_a, sp_b, tau, d_sp):
         return fac
     u = (tau[sp_a[m]] + tau[sp_b[m]]) / 6.4
     r = d_sp[m]
-    return fac.index_put((torch.as_tensor(np.nonzero(m)[0]),), torch.exp(-u ** coul.damp_exp * r * r))
+    return fac.index_put((torch.as_tensor(np.nonzero(m)[0], device=fac.device),),
+                         torch.exp(-u ** coul.damp_exp * r * r))
 
 
 def gamma_matrix(coul, pos, cell, tau):
     """The site gamma matrix of :class:`pydftb.coulomb.Coulomb` (same topology)."""
     sa = coul.site_atom
     same_atom = torch.as_tensor(sa[:, None] == sa[None, :], device=pos.device)
-    g = torch.where(same_atom, _gamma0(tau[:, None], tau[None, :]), torch.zeros((), dtype=pos.dtype))
+    g = torch.where(same_atom, _gamma0(tau[:, None], tau[None, :]),
+                    torch.zeros((), dtype=pos.dtype, device=pos.device))
     i, j, shift, _, d_host = coul.nl
     vec = bond_vectors(pos, cell if coul.periodic else None, i, j, shift)
     d = norm(vec)
     d_sp = d[coul.sp_pair]
     s, _ = _short(d_sp, tau[coul.sp_a], tau[coul.sp_b])
     s = s * _damping(coul, i, j, coul.sp_pair, coul.sp_a, coul.sp_b, tau, d_sp)
-    g = g.index_put((torch.as_tensor(coul.sp_a), torch.as_tensor(coul.sp_b)), -s, accumulate=True)
+    g = g.index_put((torch.as_tensor(coul.sp_a, device=g.device),
+                     torch.as_tensor(coul.sp_b, device=g.device)), -s, accumulate=True)
     n = coul.natom
     eye = torch.eye(n, dtype=pos.dtype, device=pos.device)
     if not coul.periodic:
@@ -124,7 +128,7 @@ def gamma_matrix(coul, pos, cell, tau):
     a = coul.alpha
     m = d_host < coul.rcut_ewald
     real = torch.zeros((n, n), dtype=pos.dtype, device=pos.device).index_put(
-        (torch.as_tensor(i[m]), torch.as_tensor(j[m])),
+        (torch.as_tensor(i[m], device=pos.device), torch.as_tensor(j[m], device=pos.device)),
         torch.special.erfc(a * d[m]) / d[m], accumulate=True)
     rec_basis = 2.0 * math.pi * torch.linalg.inv(cell).T
     gvec = torch.as_tensor(coul.gint, dtype=pos.dtype, device=pos.device) @ rec_basis
@@ -146,7 +150,8 @@ def third_matrix(third, coul, pos, cell, u, ud):
     ok = (pa >= 0) & (pb >= 0)
     pa, pb = pa[ok], pb[ok]
     mat = torch.zeros((third.nsite, third.nsite), dtype=pos.dtype, device=pos.device)
-    mat = mat.index_put((torch.as_tensor(pa), torch.as_tensor(pb)),
+    mat = mat.index_put((torch.as_tensor(pa, device=pos.device),
+                         torch.as_tensor(pb, device=pos.device)),
                         dgamma_du_onsite(u[pa], u[pb]) * ud[pa])
     if third.nl is not None:
         i, j, shift = third.nl[0], third.nl[1], third.nl[2]
@@ -154,7 +159,8 @@ def third_matrix(third, coul, pos, cell, u, ud):
         damped = (coul.damped[i] | coul.damped[j])[third.sp_pair]
         g_ab, _ = dgamma_du(u[third.sp_a], u[third.sp_b], d[third.sp_pair], damped,
                             coul.damp_exp)
-        mat = mat.index_put((torch.as_tensor(third.sp_a), torch.as_tensor(third.sp_b)),
+        mat = mat.index_put((torch.as_tensor(third.sp_a, device=pos.device),
+                             torch.as_tensor(third.sp_b, device=pos.device)),
                             g_ab * ud[third.sp_a], accumulate=True)
     return mat
 
@@ -162,7 +168,7 @@ def third_matrix(third, coul, pos, cell, u, ud):
 def third_energy(mat, dq, site_atom, natom):
     """E3 = 1/3 sum_ab Gamma_ab dQ_A(a) dq_a dq_b (the engine's ThirdOrder.energy_shift)."""
     dq_atom = torch.zeros(natom, dtype=dq.dtype, device=dq.device).index_add(
-        0, torch.as_tensor(site_atom), dq)
+        0, torch.as_tensor(site_atom, device=dq.device), dq)
     qa = dq_atom[site_atom]
     return (qa * dq * (mat @ dq)).sum() / 3.0
 

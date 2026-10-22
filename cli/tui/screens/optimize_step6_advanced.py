@@ -45,6 +45,10 @@ class OptimizeStep6Advanced(Screen):
                 RadioButton("pydftb", id="eng-pydftb"),
                 id="eng-set",
             ),
+            Static("pydftb device (pydftb only): cpu = NumPy (default); cuda, cuda:1, mps "
+                   "(float32), xpu or auto = PyTorch on that device (check a GPU first: "
+                   "python -m pydftb.validation.gpu_check):"),
+            Input(value="cpu", id="device"),
             Horizontal(
                 Button("Back", id="btn-back"),
                 Button("Next", id="btn-next", variant="primary"),
@@ -65,6 +69,7 @@ class OptimizeStep6Advanced(Screen):
         es = self.query_one('#eng-set', RadioSet)
         es._selected = 0 if s.engine == 'dftbplus' else 1
         self.query_one('#ncores', Input).value = str(s.ncores)
+        self.query_one('#device', Input).value = s.pydftb_device
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-back":
@@ -91,6 +96,7 @@ class OptimizeStep6Advanced(Screen):
             s.engine = 'dftbplus' if (es.pressed_index <= 0) else 'pydftb'
             raw = self.query_one('#ncores', Input).value.strip().lower()
             s.ncores = raw if raw.isdigit() and int(raw) >= 1 else 'auto'
+            s.pydftb_device = self.query_one('#device', Input).value.strip().lower() or 'cpu'
 
             from cli.tui.screens.optimize_step7_review import OptimizeStep7Review
             self.app.push_screen(OptimizeStep7Review())

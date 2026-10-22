@@ -232,10 +232,12 @@ def torch_one_thread() -> None:
 
 
 def _stage_settings():
-    """(workers, threads, BLAS threads, apply thread settings?) of the DFTB stage."""
+    """(workers, threads, BLAS threads, apply thread settings?) of the DFTB stage.  On a GPU
+    (M4d) one worker, this process: a process that uses CUDA does not fork workers for it."""
+    from utils.engines import is_gpu
     plan = current_plan()
-    if plan is None:
-        return 1, 1, 1, False
+    if plan is None or is_gpu():
+        return 1, 1, 1, plan is not None
     st = plan.stage("dftb")
     return st.workers, st.threads, max(1, int(st.blas_threads)), True
 
@@ -279,7 +281,8 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
     if grad is not None and engine != "pydftb":
         raise ValueError("the gradient of the DFTB stage needs engine='pydftb'")
     base = {"calc_type": "static", "poly_rep": poly_rep, "SCC": SCC, "slater_p": "./"}
-    if planned and engine == "pydftb":
+    torch_backend = engine == "pydftb" and settings()["pydftb_backend"] == "torch"
+    if planned and engine == "pydftb" and not torch_backend:      # no k threads on torch
         base["k_threads"] = threads
         if blas > 1:                               # PTBP_BLAS_THREADS (opt-in)
             base["blas_threads"] = blas
@@ -290,8 +293,9 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
     tasks = make_tasks(used, bolt, kpts_dens, base,
                        task_root=os.path.abspath(TASK_DIR) if parallel and engine == "dftbplus"
                        else None)
-    if grad is not None:
+    if grad is not None or torch_backend:
         torch_one_thread()                         # before the workers fork (M4a)
+    if grad is not None:
         for t in tasks:
             t.grad = grad
 

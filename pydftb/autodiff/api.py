@@ -79,8 +79,10 @@ class _External(torch.autograd.Function):
     @staticmethod
     def backward(ctx, g):
         grad, dcell, virial = ctx.saved_tensors
-        return (g * grad, None if dcell is None else g * dcell,
-                None if virial is None else g * virial, None, None, None, None)
+        need = ctx.needs_input_grad              # e.g. no strain for the energy of mode
+        return (g * grad if need[0] else None,   # "implicit" (failed before M4d)
+                g * dcell if need[1] and dcell is not None else None,
+                g * virial if need[2] and virial is not None else None, None, None, None, None)
 
 
 class _NoGrad(torch.autograd.Function):
@@ -114,17 +116,18 @@ def _blas_limit(n: int):
     return threadpool_limits(n, user_api="blas")
 
 
-def _tensor(x, dtype=torch.float64):
+def _tensor(x, dtype=torch.float64, device=None):
+    """A tensor of ``x`` (on ``device``; a tensor keeps its graph when moved)."""
     if x is None:
         return None
     if isinstance(x, torch.Tensor):
-        return x
-    return torch.as_tensor(np.asarray(x, dtype=float), dtype=dtype)
+        return x if device is None else x.to(device)
+    return torch.as_tensor(np.asarray(x, dtype=float), dtype=dtype, device=device)
 
 
 def _with_value(value, t):
     """``value`` (the engine's number) carrying the derivatives of the tensor ``t``."""
-    v = torch.as_tensor(np.asarray(value, dtype=float), dtype=torch.float64)
+    v = torch.as_tensor(np.asarray(value, dtype=float), dtype=torch.float64, device=t.device)
     return v + (t - t.detach()) if t.requires_grad else v
 
 
@@ -140,7 +143,8 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)
-    pos_in, cell_in = _tensor(positions), _tensor(cell)
+    dev = params.device                      # the derivatives are computed there
+    pos_in, cell_in = _tensor(positions, device=dev), _tensor(cell, device=dev)
     periodic = cell_in is not None and (pbc is None or np.any(pbc))
     if stress is None:
         stress = forces and periodic
@@ -168,7 +172,7 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
         out = phi.solve(q_hat)
         dens = _torch_densities(phi, out)
     else:
-        dens = _host_densities(eng, st, sc)
+        dens = _host_densities(eng, st, sc, dev)
     e_sur, f_t, s_t = None, None, None
     if not implicit or forces or stress:
         e_sur, f_t, s_t = _explicit(eng, st, params, pos_in, pc, dens, forces, stress,
@@ -181,7 +185,7 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
         energy = _with_value(res.energy, e_t)
         free = _with_value(res.free_energy, e_t - ts_t)
         qa = out["q_orb"].new_zeros(len(st.species)).index_add(
-            0, torch.as_tensor(st.basis.orb_atom), out["q_orb"])
+            0, torch.as_tensor(st.basis.orb_atom, device=dev), out["q_orb"])
         charges = _with_value(res.charges, qa)
         ev = _with_value(np.array(res.eigenvalues), out["evals"])
         fermi = _with_value(_fermi_levels(res, st), out["mu"])
@@ -190,8 +194,8 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     sm = eng.smearing
     kt_zero = sm.kt <= MIN_TEMP * (1 + 1e-12)
     shift = e_sur - e_sur.detach()
-    f0 = torch.as_tensor(res.free_energy, dtype=torch.float64)
-    e0 = torch.as_tensor(res.energy, dtype=torch.float64)
+    f0 = torch.as_tensor(res.free_energy, dtype=torch.float64, device=dev)
+    e0 = torch.as_tensor(res.energy, dtype=torch.float64, device=dev)
     if sm.variational:
         free = f0 + shift
     else:
@@ -203,9 +207,10 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     else:
         energy = _NoGrad.apply(e0, shift, "with smearing, mode='hf' gives the gradient of "
                                "the free energy only (use free_energy, or mode='implicit')")
-    ev = None if res.eigenvalues is None else torch.as_tensor(np.array(res.eigenvalues))
-    return Result(energy, free, f_val, s_val, torch.as_tensor(res.charges), ev,
-                  torch.as_tensor(_fermi_levels(res, st)), res, mode)
+    ev = (None if res.eigenvalues is None
+          else torch.as_tensor(np.array(res.eigenvalues), device=dev))
+    return Result(energy, free, f_val, s_val, torch.as_tensor(res.charges, device=dev), ev,
+                  torch.as_tensor(_fermi_levels(res, st), device=dev), res, mode)
 
 
 def _fermi_levels(res, st):
@@ -224,8 +229,8 @@ def _explicit(eng, st, params, pos_in, cell, dens, forces, stress, create_graph)
     pos_base = pos_leaf
     if forces and pos_in.requires_grad:
         pos_base = pos_leaf + (pos_in - pos_in.detach())
-    strain = (torch.zeros((3, 3), dtype=torch.float64, requires_grad=True)
-              if stress else None)
+    strain = (torch.zeros((3, 3), dtype=torch.float64, device=pos_in.device,
+                          requires_grad=True) if stress else None)
     pos, cell_t = deform(pos_base, cell, strain)
     fd_band = create_graph and eng.fd_delta is not None and (forces or stress)
     e_sur = _surrogate(eng, st, params, pos, cell_t, dens, pairs=not fd_band)
@@ -261,10 +266,11 @@ def _band_gradient_fd(eng, st, params, pos, cell, d):
     vec = bond_vectors(pos, cell, pb.i, pb.j, pb.shift)
     _, _, dh, ds = pair_values(pb, eng.sk, vec, tables=params.tables, fd_delta=eng.fd_delta)
     ge = d["p_e"][:, None] * dh + _coef_s(st, d)[:, None] * ds
-    gp = ge.new_zeros((len(pb.i), 3)).index_add(0, torch.as_tensor(pb.pair_of), ge)
+    idx = lambda a: torch.as_tensor(a, device=ge.device)            # noqa: E731
+    gp = ge.new_zeros((len(pb.i), 3)).index_add(0, idx(pb.pair_of), ge)
     natom = len(st.species)
-    grad = (ge.new_zeros((natom, 3)).index_add(0, torch.as_tensor(pb.j), gp)
-            - ge.new_zeros((natom, 3)).index_add(0, torch.as_tensor(pb.i), gp))
+    grad = (ge.new_zeros((natom, 3)).index_add(0, idx(pb.j), gp)
+            - ge.new_zeros((natom, 3)).index_add(0, idx(pb.i), gp))
     return grad, gp.T @ vec
 
 
@@ -278,12 +284,12 @@ def _host_onsite_density(st, sc):
     return out
 
 
-def _host_densities(eng, st, sc):
+def _host_densities(eng, st, sc, device=None):
     """The converged densities of the engine as constant tensors (mode "hf")."""
     p_e, w_e, p_m = eng._pair_densities(st, sc)
     v_orb, vs_orb = eng._potentials(st, sc.q_out)
     dq, m = eng._charge_and_magnetisation(st, sc.q_out)
-    t = _tensor
+    t = lambda a: _tensor(a, device=device)                         # noqa: E731
     return dict(p_e=t(p_e), w_e=t(w_e), p_m=t(p_m), v=t(v_orb), vs=t(vs_orb),
                 onsite=t(_host_onsite_density(st, sc)), dq=t(dq), m=t(m))
 
@@ -297,7 +303,7 @@ def _torch_densities(phi, out):
         p_m = b.pairs(rho, kw * np.repeat([1.0, -1.0], phi.nk))
     v, vs = phi.potentials(out["q_out"])
     dq, m = phi.charge_and_magnetisation(out["q_out"])
-    kwt = torch.as_tensor(kw, dtype=torch.float64)
+    kwt = torch.as_tensor(kw, dtype=torch.float64, device=rho.device)
     onsite = kwt @ torch.diagonal(rho, dim1=-2, dim2=-1).real
     return dict(p_e=b.pairs(rho, kw), w_e=None if out["wdm"] is None else b.pairs(out["wdm"], kw),
                 p_m=p_m, v=v, vs=vs, onsite=onsite, dq=dq, m=m)
@@ -307,7 +313,8 @@ def _coef_s(st, d):
     """The density multiplying each overlap element in E_sur: P (V_mu + V_nu) / 2 - W
     (+ the magnetisation density times the spin potentials)."""
     pb = st.pairs
-    rows, cols = torch.as_tensor(pb.rows), torch.as_tensor(pb.cols)
+    dev = d["p_e"].device
+    rows, cols = torch.as_tensor(pb.rows, device=dev), torch.as_tensor(pb.cols, device=dev)
     coef_s = d["p_e"] * 0.5 * (d["v"][rows] + d["v"][cols])
     if d["w_e"] is not None:
         coef_s = coef_s - d["w_e"]
@@ -340,7 +347,7 @@ def _surrogate(eng, st, params, pos, cell, d, pairs: bool = True):
 
 def _implicit_energies(eng, st, phi, out, params, pos, cell):
     """E and TS of the torch SCC step (the engine's _energies)."""
-    kw = torch.as_tensor(phi.kw_mat, dtype=torch.float64)
+    kw = torch.as_tensor(phi.kw_mat, dtype=torch.float64, device=out["rho"].device)
     h0 = phi.h0 if phi.nspin == 1 else torch.cat([phi.h0, phi.h0])
     e = kw @ (out["rho"] * h0.mT).sum((-1, -2)).real                    # Tr(rho H0)
     dq, m = phi.charge_and_magnetisation(out["q_out"])
@@ -364,13 +371,14 @@ def _dispersion(st, pos, cell, strain):
     """The dispersion energy as an :class:`_External` term.  Its cell derivative C follows
     from the virial W = dE/d(strain) = g^T R + C^T H (H: cell rows): C = H^-T (W - g^T R)^T."""
     if st.disp is None:
-        return torch.zeros((), dtype=pos.dtype)
+        return torch.zeros((), dtype=pos.dtype, device=pos.device)
     d = st.disp
     grad = np.asarray(d.gradient, dtype=float)
     vir = dcell = None
-    if d.virial is not None:
+    if d.virial is not None and st.cell is not None:     # a molecule has no cell derivative
         vir = np.asarray(d.virial, dtype=float)
         dcell = np.linalg.solve(np.asarray(st.cell, float).T, (vir - grad.T @ st.pos).T)
-    t = lambda a: None if a is None else torch.as_tensor(a)  # noqa: E731
-    return _External.apply(pos, cell, strain, torch.as_tensor(float(d.energy), dtype=torch.float64),
+    t = lambda a: None if a is None else torch.as_tensor(a, device=pos.device)  # noqa: E731
+    return _External.apply(pos, cell, strain, torch.as_tensor(float(d.energy), dtype=torch.float64,
+                                                               device=pos.device),
                            t(grad), t(dcell), t(vir))

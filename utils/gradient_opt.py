@@ -57,11 +57,15 @@ class History:
     message: str = ""
 
 
-def check_requirements(engine: str, mode: str) -> None:
-    """The gradient needs pydftb (autodiff) with torch and the r0 loss modes."""
+def check_requirements(engine: str, mode: str, backend: str = "numpy") -> None:
+    """The gradient needs pydftb (autodiff) with torch, its NumPy engine (on which the
+    autodiff was validated, M4b) and the r0 loss modes."""
     if engine != "pydftb":
         raise SystemExit("--optimizer gradient/bo_grad needs --engine pydftb (the gradient comes "
                          "from pydftb.autodiff)")
+    if backend != "numpy":
+        raise SystemExit("--optimizer gradient/bo_grad needs --pydftb_backend numpy (the "
+                         "gradient is validated with the NumPy engine)")
     if mode not in ("energygeometry", "dataset", "reaction"):
         raise SystemExit(f"--optimizer gradient/bo_grad: no gradient for the {mode} mode")
     try:

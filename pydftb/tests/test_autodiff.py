@@ -133,7 +133,8 @@ def test_repulsive_energy_and_autograd():
 # ---- mode "hf" ------------------------------------------------------------------------------
 HF_CASES = ["h2o", "ch3oh_dftb3", "water_dimer_hdamp", "cu4co_shell_resolved",
             "o2_triplet_wmatrix", "cuo_chain_spin_k422", "gdo_rocksalt_k444",
-            "water_box_d3bj_3body", "li_bcc_k666_1000K", "cu8_distorted_k355_mp2_2000K"]
+            "water_box_d3bj_3body", "li_bcc_k666_1000K", "cu8_distorted_k355_mp2_2000K",
+            "water_dimer_uff"]          # dispersion without a cell (failed before M4d)
 
 
 @pytest.mark.parametrize("name", HF_CASES)
