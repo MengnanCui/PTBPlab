@@ -55,7 +55,7 @@ from itertools import combinations
 from math import pi, sqrt
 from pathlib import Path
 from utils.hotpy import hotpy  
-from utils.calculator import run_calculator, dftbplus_calculator, calc_band_binary, delta_band_binary
+from utils.calculator import run_calculator, dftbplus_calculator, calc_band_binary, delta_band_binary, check_band_reference
 from math import pi, sqrt, floor
 from tools.physrep import physrep
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
@@ -1073,6 +1073,14 @@ class Loss():
 
         # Data preparation
         r0_w, r0_d, p = conf_parameters
+
+        # DFT reference band structure. A missing or unusable reference is an input
+        # error, so it is raised here rather than scored as unphysical parameters.
+        dft_band_file = Path(self.path) / self.args_input.ref_dir / self.args_input.dft_band_file
+        dft_band = read_json(dft_band_file)
+        for mole in self.dft_input:
+            check_band_reference(dft_band, mole)
+
         opt_directory = self.path / self.args_input.results_dir / f"opt_{r0_w:.3f}_{p:.3f}"
         opt_directory.mkdir(exist_ok=True, parents = True)
         os.chdir(opt_directory)
@@ -1103,11 +1111,12 @@ class Loss():
             bolt_f = [1.0]
 
             # The dftb_bandstructure is refer to DFTB1 not real band structure
-            calc_band_binary(conf_parameters, dft_incopy, self.args_input.kpt_density, bolt_f)
+            # (at the k-points of the DFT reference, which it is compared with)
+            calc_band_binary(conf_parameters, dft_incopy, self.args_input.kpt_density, bolt_f, ref_bandpath=dft_band.path)
 
     #       DELAT BAND STRUCTURE CALCULATION
             dft_incopy = copy.deepcopy(self.dft_input)
-            mu_homo, mu_lumo = delta_band_binary(conf_parameters, self.args_input.dft_band_file, dft_incopy, bolt_f)
+            mu_homo, mu_lumo = delta_band_binary(conf_parameters, dft_band_file, dft_incopy, bolt_f)
 
             mu = mu_homo + mu_lumo
 
@@ -1117,7 +1126,8 @@ class Loss():
             return mu
         
 
-        except(RuntimeError, AssertionError, UnboundLocalError, ase.io.formats.UnknownFileTypeError) as error:
+        # FileNotFoundError: no SKF (hotcent failed) or no DFTB+ output for these parameters
+        except(RuntimeError, AssertionError, UnboundLocalError, FileNotFoundError, ase.io.formats.UnknownFileTypeError) as error:
             print(f"Error in the bandstruture calculation:{error}")
             mu_homo, mu_lumo, mu = 10, 10, 20
             with open(self.args_input.para_file, 'a') as para:
@@ -1405,11 +1415,29 @@ class Loss():
                     x0 = [p['r0_w'], p['r0_d']]
                     print(f"BO seed from PTBP[{symbols[0]}]: "
                           f"r0_w={x0[0]}, r0_d={x0[1]}")
+                # Band structure: QUASINANO2013 confines the wavefunction and
+                # the density with the same (r0, p), as this mode does.
+                elif (len(symbols) == 1
+                        and symbols[0] in get_QNplusRep()
+                        and self.args_input.optimization_option.lower() == 'bandstructure'):
+                    q = get_QNplusRep()[symbols[0]]
+                    x0 = [q['r0'], q['p']]
+                    print(f"BO seed from QNplusRep[{symbols[0]}]: "
+                          f"r0={x0[0]}, p={x0[1]}")
             except Exception as _e:
                 print(f"PTBP-seed lookup failed ({_e}); falling back to heuristic")
             if x0 is None:
-                x0 = [cov_radius * 3, cov_radius * 5]  # DEFAULT_START_PARA
-                print(f"BO seed from heuristic: r0_w={x0[0]}, r0_d={x0[1]}")
+                if self.args_input.optimization_option.lower() == 'bandstructure':
+                    x0 = [cov_radius * 3, 2.0]
+                    print(f"BO seed from heuristic: r0={x0[0]}, p={x0[1]}")
+                else:
+                    x0 = [cov_radius * 3, cov_radius * 5]  # DEFAULT_START_PARA
+                    print(f"BO seed from heuristic: r0_w={x0[0]}, r0_d={x0[1]}")
+            if self.args_input.optimization_option.lower() == 'bandstructure':
+                # gp_minimize rejects a seed outside the bounds, and the
+                # QUASINANO p of some elements (e.g. Si, 12.8) exceeds them
+                _dims, lo, hi, _cost_fn = self._bo_dimensions_and_cost(cov_radius)
+                x0 = [float(np.clip(x, l, h)) for x, l, h in zip(x0, lo, hi)]
             y0 = None
             n_calls = n_calls
 
@@ -1451,7 +1479,7 @@ class Loss():
                             x0=x0,
                             y0=y0,
                             callback=[checkpoint_saver],
-                            random_state=self.args_input.random_state)
+                            random_state=123)
 
         
         return res

@@ -222,7 +222,7 @@ the loss function inside the inner `Repulsion_optimization` step.
 | `energygeometry` | An EOS scan of N phases × `--eos_points` volumes (i.e. `--eos_points 11` strict). | μ_E + μ_V + μ_B (Boltzmann-weighted EOS fit; matches the original PTBP paper). | `--eos_file fit.json` (DFT EOS results) |
 | `dataset` | Any ASE-readable trajectory (xyz, traj, …) of structures with DFT energies + forces. | (1−c)·μ_E + c·μ_F over all structures (per-atom formation energy + force MAE). | `--E0s '{"<Z>": <eV>, ...}'` (atomic ref energies as JSON dict) |
 | `reaction` | Same as `dataset`, but the trajectory is expected to span multiple chemical formulas. | Identical to `dataset` plus a `reaction_per_formula.csv` written next to `par.out` reporting per-formula mean / max ΔE per atom. | `--E0s` (same as dataset) |
-| `bandstructure` | A k-path band-structure reference. | HOMO/LUMO mismatch. | `--dft_band_file dft.json` |
+| `bandstructure` | One structure (`--dft_file`) and its DFT band structure, an ase `BandStructure` json with the valence electrons of PTBP's valence shells. DFTB+ runs at its k-points. | Mean \|ΔE\| of the highest occupied band and of the next one, within ±1 eV of the Fermi level (of the valence-band maximum for a gapped reference). | `--dft_band_file bands.json` |
 
 #### Examples
 
@@ -243,6 +243,11 @@ ptbp --ref_dir dft --dft_file mixed_formulas.xyz \
      --optimization_option reaction \
      --parameters r0_w r0_d sigma_rep --superposition density \
      --E0s '{"6": -37.8, "1": -0.5, "8": -75.0}'
+
+# Band-structure mode (optimises the confinement (r0, p); see examples/07_bandstructure_cu):
+ptbp --ref_dir examples/07_bandstructure_cu/ref --dft_file cu_fcc.xyz \
+     --dft_band_file cu_fcc_band.json \
+     --optimization_option bandstructure --superposition density
 ```
 
 `--E0s` accepts a JSON dict keyed by atomic number; in `dataset` / `reaction`
@@ -285,6 +290,9 @@ log line and should pass `--E0s` explicitly.
   `(3·r_cov, 5·r_cov)` heuristic. You'll see
   `BO seed from PTBP[<element>]: r0_w=..., r0_d=...` in the log.
   Multi-element datasets fall through to the heuristic seed.
+  In `bandstructure` mode the seed is the element's QUASINANO2013
+  `(r0, p)` from `get_QNplusRep()` (heuristic: `(3·r_cov, 2)`), clipped
+  to the search bounds.
 - **Resume from checkpoint.** PTBP writes `checkpoint.pkl` (skopt
   `OptimizeResult` snapshot) after every BO iteration. On rerun in the
   same cwd, the file is automatically loaded:

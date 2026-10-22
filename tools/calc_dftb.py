@@ -378,8 +378,8 @@ def run_one_by_one(atoms_file:str, num_list:list, args:dict):
     #     """
     atoms_output = []
     atoms_error = []
-    atoms_input = ase.io.read(atoms_infile, ':')
-    atoms_outfile = atoms_infile.split('/')[-1].replace('.xyz', '_dftb.xyz')
+    atoms_input = ase.io.read(atoms_file, ':')
+    atoms_outfile = Path(atoms_file).name.replace('.xyz', '_dftb.xyz')
 
 
     if len(num_list) > 0:

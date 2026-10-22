@@ -13,6 +13,7 @@ from utils.hotpy import hotpy
 from ase.utils.deltacodesdft import delta
 from ase.data import chemical_symbols, atomic_numbers
 from ase.io.jsonio import read_json
+from ase.spectrum.band_structure import BandStructure, get_band_structure
 import pprint as pp
 import matplotlib.pyplot as plt
 import pickle
@@ -20,6 +21,9 @@ hp = hotpy()
 
 
 
+# Band paths of known configurations, keyed by atoms.info['structure_name'] (the
+# phases of the bundled Cu dataset and a few compounds). get_band_path() uses them
+# when no DFT reference path is given; npoints is the number of k-points of the path.
 path_dict = {'dimer':  {'path':'MRGXMGR','npoints':101},
                 'fcc':    {'path':'WXGLKGL','npoints':101},
                 'bcc':    {'path':'PGHPGN','npoints':101}, #PGHPGN
@@ -67,50 +71,93 @@ def dist_min(atoms:Atoms) -> list:
         return(d_min)
 
 
-def get_bandpath_for_dftb(atoms:Atoms, kpts:int):
-    """This function sets up the band path according to Setyawan-Curtarolo conventions.
+def band_label(mole:Atoms, num:int) -> str:
+    """Label of a structure in the band-structure files and in path_dict:
+    its info['structure_name'], otherwise 'band_<num>'."""
+    return mole.info.get('structure_name', 'band_' + str(num))
+
+
+def band_json_name(label:str, conf_parameters:list, suffix:str='') -> str:
+    """File of the DFTB band structure written by calc_band_binary and read by
+    delta_band_binary, e.g. 'fcc_5.2_5.2_2.2.json'."""
+    para_name = '_'.join([str(round(i,3)) for i in conf_parameters])
+    return label + '_' + para_name + suffix + '.json'
+
+
+def num_valence_electrons(symbols:list) -> int:
+    """Number of valence electrons of PTBP's valence shells, e.g. 11 for ['Cu'] (3d10 4s1).
+
+    The DFT reference is assumed to treat the same electrons as valence, so that
+    band ceil(n/2) - 1 is the highest (partly) occupied band of DFT and of DFTB.
+    """
+    return sum(hp.get_orbit(get_PTBP()[syms]['valence_shell'])[3] for syms in symbols)
+
+
+def get_band_path(atoms:Atoms, configuration:str, ref_bandpath=None):
+    """Band path (ase BandPath) of the DFTB band-structure calculation.
 
     Parameters:
     -----------
-    atoms(Atoms): ase.Atoms object
-        The molecule or crystal structure.
-    kpts(int): The number of k-points among two special kpoint positions.
+    atoms(Atoms): the structure
+    configuration(str): its label (band_label), the key of path_dict
+    ref_bandpath(BandPath): path of the DFT reference band structure
 
-    Returns(Dict):
-    -------------
-
+    Returns the first of
+    (1) ref_bandpath, so that DFT and DFTB bands are compared at the same k-points,
+    (2) the path of path_dict[configuration],
+    (3) the standard path of the cell's Bravais lattice.
+    Cell.bandpath gives the special points in the basis of this cell, whatever
+    its orientation.
     """
-    from ase.dft.kpoints import kpoint_convert, parse_path_string
+    if ref_bandpath is not None:
+        return ref_bandpath
 
-    # atoms.pbc = pbc
-    # path = parse_path_string(
-    #     atoms.cell.get_bravais_lattice(pbc=atoms.pbc).bandpath().path
-    # )
+    if configuration in path_dict:
+        kpts_spe = path_dict[configuration]
+        return atoms.cell.bandpath(kpts_spe['path'], npoints=kpts_spe['npoints'], pbc=atoms.pbc)
 
-    path = parse_path_string(kpts['path'])
-    # lists of path segments
-    points = atoms.cell.get_bravais_lattice(pbc=atoms.pbc).bandpath().special_points
-    segments = []
-    for seg in path:
-        section = [(i, j) for i, j in zip(seg[:-1], seg[1:])]
-        segments.append(section)
+    print(f"No path for {configuration} in path_dict: using the standard path of its Bravais lattice")
+    return atoms.cell.bandpath(npoints=101, pbc=atoms.pbc)
 
 
-    output_bands = []
-    output_bands = np.empty(shape=(0, 3))
-    index = kpts['npoints']
-    for seg in segments:
-        # output_bands.append("## Brillouin Zone section Nr. {:d}\n".format(index))
-        for num, sec in enumerate(seg):
-            dist = np.array(points[sec[1]]) - np.array(points[sec[0]])
-            npoints = index
-            if num == 0:
-                dist_matrix = np.linspace(points[sec[0]], points[sec[1]], npoints)
-            else:
-                dist_matrix = np.linspace(points[sec[0]], points[sec[1]], npoints)[1:,:]
-            output_bands = np.vstack((output_bands, dist_matrix))
+def check_band_reference(ref_bs, atoms:Atoms):
+    """Raise ValueError if the DFT reference band structure cannot be compared with
+    the DFTB bands of atoms (see delta_band_binary).
 
-    return {'path':path, 'kpts':output_bands}
+    Parameters:
+    -----------
+    ref_bs: the DFT reference, as read by ase.io.jsonio.read_json
+    atoms(Atoms): the structure whose band structure it is
+    """
+    if not isinstance(ref_bs, BandStructure):
+        raise ValueError(f"The DFT band reference is a {type(ref_bs).__name__}, not an ase BandStructure "
+                         "(write it with BandStructure.write())")
+
+    # Same lattice, up to a rotation: the k-points are in units of its reciprocal vectors
+    if not np.allclose(ref_bs.path.cell.cellpar(), atoms.cell.cellpar(), atol=1e-3):
+        raise ValueError(f"The DFT band reference was computed for the cell {ref_bs.path.cell.cellpar()}, "
+                         f"the structure has the cell {atoms.cell.cellpar()}")
+
+    lumo = ceil(num_valence_electrons(atoms.get_chemical_symbols())/2)
+    num_bands = ref_bs.energies.shape[2]
+    if num_bands <= lumo:
+        raise ValueError(f"The DFT band reference has {num_bands} bands, at least {lumo + 1} are needed")
+
+    if ref_bs.energies[0, :, lumo].max() < ref_bs.reference:
+        raise ValueError(f"Band {lumo} of the DFT band reference lies below its Fermi level: it seems to "
+                         "count more electrons as valence (semicore states?) than PTBP's valence shells")
+
+
+def _window_mae(dft_e, dftb_e, window:float=1.0) -> float:
+    """Mean |DFT - DFTB| of a band at the k-points where the DFT band lies within
+    +-window eV of its reference energy; 0.0 if there is none (e.g. the band above
+    the Fermi level of a metal). The k-points depend on the DFT band only, so they
+    are the same at every step of the optimisation."""
+    dft_e, dftb_e = np.asarray(dft_e), np.asarray(dftb_e)
+    in_window = np.abs(dft_e) <= window
+    if not in_window.any():
+        return 0.0
+    return float(np.mean(np.abs(dft_e[in_window] - dftb_e[in_window])))
 
 
 
@@ -288,7 +335,7 @@ def dftbplus_calculator(mole:Atoms, dftb_args:dict):
     return calc
 
 
-def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
+def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f, ref_bandpath=None):
     """
     Band calculation for DFTB+
 
@@ -297,11 +344,12 @@ def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
     para_list : list
         List of parameters.
 
-    """
-    
-    # Label
-    para_name = '_'.join([str(round(i,3)) for i in conf_parameters])
+    ref_bandpath : BandPath, optional
+        k-points of the band structure, normally the path of the DFT reference band
+        structure; without it get_band_path() takes the path of path_dict or the
+        standard one.
 
+    """
 
     # Calculate the band structure for each structure
     for num, mole in enumerate(dft_atoms):
@@ -310,13 +358,10 @@ def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
         # print("\n#===========Electronic calculation for {}============#".format(config))
         print(f"\n#===========Electronic calculation for {num}/{len(dft_atoms)}============#")
         print("bolt_f:", bolt_f[num])
-        try:
-            configuration = mole.info['structure_name']
-        except:
-            configuration = 'band_' + str(num)
+        configuration = band_label(mole, num)
         print('Band structure:', configuration)
 
-        os.system('rm charges.bin')
+        os.system('rm -f charges.bin')
 
         if bolt_f[num] < 0.1:
             continue
@@ -355,24 +400,25 @@ def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
         # ============================================================================ #
         #   # Band structure calculation
 
-            # Two ways to get kpts path
-            # (1) Use the known path_dict
-            # (2) Use the default path from ase.dft.kpoints.bandpath
-            try:
-                kpts_spe = path_dict[configuration]
-                kpts_path= get_bandpath_for_dftb(mole, kpts=kpts_spe)
-            except Exception as e:
-                print('Find kpts path Error:')
-                path_dict = mole.cell.get_bravais_lattice().get_special_points()
-                kpts_path = ase.dft.kpoints.bandpath(path_dict, mole.cell)
+            # kpts path: the DFT reference path, path_dict or the standard path
+            bandpath = get_band_path(mole, configuration, ref_bandpath)
 
             mole_band = copy.deepcopy(mole_static)
             # mole_band.calc = self.dftbplus_calculator('band', mole_band, 'res', 'Yes', 'No', './',kpts_path)
-            dftb_args['kpts'] = kpts_path
+            # A dict with 'path' and 'kpts' is written by ASE's Dftb as the explicit
+            # list KPointsAndWeights = Klines { 1 kx ky kz ... }
+            dftb_args['kpts'] = {'path': bandpath.path, 'kpts': bandpath.kpts}
             mole_band.calc = dftbplus_calculator(mole_band, dftb_args)
+            # Bands in the self-consistent potential of the static calculation: start
+            # from its charges.bin and stop after one iteration. (An SCC over the
+            # k-points of a path is not the static density, and for a metal it does
+            # not even converge.)
+            mole_band.calc.set(Hamiltonian_ReadInitialCharges='Yes', Hamiltonian_MaxSCCIterations=1)
             print('------------\nStep2: Band structure calculation, \nEnergy:', mole_band.get_potential_energy())
 
-            bs = mole_band.calc.band_structure()
+            # Reference energy: the Fermi level of the static calculation (see below);
+            # the one of the band calculation comes from the k-points of the path only
+            bs = get_band_structure(calc=mole_band.calc, path=bandpath, reference=fermi_static)
             fermi_band = mole_band.calc.get_fermi_level()
             print("Band Fermi_level:", fermi_band, '\n')
 
@@ -398,7 +444,7 @@ def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
 
                 # Collect the valence shell information 
                 dftb_tot_chemical_symbols = mole.get_chemical_symbols() #eg:['Zn', 'Zn', 'O', 'O']
-                dftb_num_valence_electron = np.sum(hp.get_orbit(get_PTBP()[syms]['valence_shell'])[3] for syms in dftb_tot_chemical_symbols)
+                dftb_num_valence_electron = num_valence_electrons(dftb_tot_chemical_symbols)
 
                 # Get the band for HVB and LCB
                 dftb_json_energies = bs.energies
@@ -416,13 +462,13 @@ def calc_band_binary(conf_parameters, dft_atoms, kpt_dens, bolt_f):
                 # Save both orign and corrected one
                 origin_band = copy.deepcopy(bs)
                 origin_band._reference = fermi_static
-                origin_band.write(configuration + '_' + para_name + '_o.json') # save the original band structure just for reference
+                origin_band.write(band_json_name(configuration, conf_parameters, '_o')) # save the original band structure just for reference
 
                 bs._reference = dftb_HVB_e
-                bs.write(configuration + '_' + para_name + '.json')
+                bs.write(band_json_name(configuration, conf_parameters))
 
             else:
-                bs.write(configuration + '_' + para_name + '.json')
+                bs.write(band_json_name(configuration, conf_parameters))
 
     print('Output band.xyz and json files!')
     return(bs)
@@ -833,22 +879,24 @@ def delta_band(self, r_wave, r_dens, dft_folder, dft101, bolt_factor):
 
 # def delta_band_binary(self, para_list, json_file, atoms_list, bolt_factor):
 
-def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
+def delta_band_binary(conf_parameters, json_file, dft_atoms, bolt_f):
     '''
-    Calculate delta between AIMS and DFTB+
+    Calculate delta between DFT and DFTB+ band structures
 
     Parameters:
-    r_wave, r_dens: the parameters of wavefunction and density
-        Only used for label savefile here
+    conf_parameters: [r0_w, r0_d, p], the parameters of wavefunction and density
+        Only used for finding (and labelling) the files of calc_band_binary here
 
-    dft_directory: directory of DFT
-        eg. '../../'
+    json_file: the DFT band structure (ase BandStructure json)
 
-    dft101: dft six configurations, equivalent states, sorted by coordination.
+    dft_atoms: the structures, as given to calc_band_binary
 
     bolt_factor: list of boltzmann factor weight
         eg. [0.0, 0.0, 0.0, 0.0,0.86,  0.13]
-    
+
+    The bands are compared k-point by k-point, so the DFTB band structure must be
+    sampled at the k-points of the DFT one (calc_band_binary with ref_bandpath).
+    DFT is assumed to have the valence electrons of PTBP (num_valence_electrons).
     '''
 
     # dft_info = {'DFT':{'special_points':'', 'energies':'', 'bolt_factor':''},   'AA-graphite':{'special_points':'', 'energies':'', 'bolt_factor':''}}
@@ -862,7 +910,7 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
 
 
     for n, mole in enumerate(dft_atoms):
-        config = mole.info['structure_name']
+        config = band_label(mole, n)
         print("\n#===========Delta band structure for {}===========#".format(config))
         print(config, "\nbolt_factor:", bolt_f[n])
 
@@ -877,11 +925,11 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
         else:
             # Get the valence electron info for DFTB and DFT
             dftb_tot_chemical_symbols = mole.get_chemical_symbols()
-            dftb_num_valence_electron = np.sum(self.get_orbit(self.atoms_info[syms]['valence_shell'])[3] for syms in dftb_tot_chemical_symbols)
+            dftb_num_valence_electron = num_valence_electrons(dftb_tot_chemical_symbols)
 
 
             dft_tot_chemical_symbols = mole.get_chemical_symbols()
-            dft_num_valence_electron = np.sum(self.get_orbit(self.atoms_info_qe[syms]['valence_shell'])[3] for syms in dft_tot_chemical_symbols)
+            dft_num_valence_electron = num_valence_electrons(dft_tot_chemical_symbols)
 
             # dft_band_energies = np.empty(shape=(0, ceil(outer_ele/2) * num_binary))
             # dft_band_energies = np.empty(shape=(0, ceil(dft_num_valence_electron/2)))
@@ -907,8 +955,11 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
             dft_homo_e_check = dft_json_check[0, :, ceil(dft_num_valence_electron/2) - 1]
 
 
-            dft_bandgap = min(dft_lumo_e_check) - max(dft_homo_e_check) if min(dft_lumo_e_check) - max(dft_homo_e_check) > 0.0 else 0.0
-            if dft_bandgap > 0.0: # insulator or semi-conductor
+            # Insulator or semi-conductor: the Fermi level lies between the two bands.
+            # (The two bands of a metal need not overlap either, but its Fermi level
+            # crosses the lower one.)
+            ef_tolerance = 0.05
+            if max(dft_homo_e_check) <= dft_json.reference + ef_tolerance and min(dft_lumo_e_check) >= dft_json.reference - ef_tolerance:
                 dft_json._reference = max(dft_homo_e_check)
 
             # After correction
@@ -919,7 +970,7 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
 
             # Read DFTB JSON
             para_name = '_'.join([str(round(i,3)) for i in conf_parameters])
-            dftb_json = read_json(config  + '_' + para_name  + '.json')
+            dftb_json = read_json(band_json_name(config, conf_parameters))
             dftb_json_energies = dftb_json.subtract_reference().energies
 
         # ============================================================================ #
@@ -931,7 +982,10 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
             pp.pprint(dft_spe_kpts)
             print("\nDFTB_SPECIAL_KPTS:")
             pp.pprint(dftb_spe_kpts)
-            assert dft_spe_kpts.keys() == dftb_spe_kpts.keys(), "The special points are not the same for DFT and DFTB"
+            if dft_kpts.shape != dftb_kpts.shape or not np.allclose(dft_kpts, dftb_kpts, atol=1e-6):
+                raise ValueError(f"The DFTB band structure of {config} ({len(dftb_kpts)} k-points) is not sampled "
+                                 f"at the k-points of the DFT one ({len(dft_kpts)} k-points) in {json_file}: "
+                                 "give calc_band_binary the DFT path (ref_bandpath)")
 
             # dft_kpt_idx = self.get_kpt_position(dft_spe_kpts, dft_kpts)
             # dftb_kpt_idx = self.get_kpt_position(dftb_spe_kpts, dftb_kpts)
@@ -960,29 +1014,12 @@ def delta_band_binary(self, conf_parameters, json_file, dft_atoms, bolt_f):
             ax.legend()
             fig.tight_layout()
             fig.savefig('pic_' + para_name + '.png')
-            fig.clf()
+            plt.close(fig)
 
 
-            # save relative energies < +-1 eV to a new list
-            dft_fermi_homo_ee, dftb_fermi_homo_ee = [], []
-            dft_fermi_lumo_ee, dftb_fermi_lumo_ee = [], []
-
-            for nn, ee in enumerate(dft_homo_e):
-                if abs(ee) <= 1.0:
-                    dft_fermi_homo_ee.append(ee)
-                    dftb_fermi_homo_ee.append(dftb_homo_e[nn])
-
-            
-            for nn, ee in enumerate(dft_lumo_e):
-                if abs(ee) <= 1.0:
-                    dft_fermi_lumo_ee.append(ee)
-                    dftb_fermi_lumo_ee.append(dftb_lumo_e[nn])
-                # else:
-                #     dft_fermi_lumo_ee.append(0.0)
-                #     dftb_fermi_lumo_ee.append(0.0)
-
-            delta_fermi_homo = np.mean(np.abs(np.array(dft_fermi_homo_ee).flatten() - np.array(dftb_fermi_homo_ee).flatten())) * bolt_f[n]
-            delta_fermi_lumo = np.mean(np.abs(np.array(dft_fermi_lumo_ee).flatten() - np.array(dftb_fermi_lumo_ee).flatten())) * bolt_f[n]
+            # compare the energies within +-1 eV (of the DFT band)
+            delta_fermi_homo = _window_mae(dft_homo_e, dftb_homo_e) * bolt_f[n]
+            delta_fermi_lumo = _window_mae(dft_lumo_e, dftb_lumo_e) * bolt_f[n]
 
             delta_fermi_homos.append(delta_fermi_homo)
             delta_fermi_lumos.append(delta_fermi_lumo)
