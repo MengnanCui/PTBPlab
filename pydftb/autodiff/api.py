@@ -28,6 +28,7 @@ up to ~1e-5 relative in the checks; ``Smearing(fermi_level="exact")`` removes it
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 from dataclasses import dataclass
 
@@ -108,6 +109,11 @@ def _engine_for(calc, params: Params):
     return eng
 
 
+def _blas_limit(n: int):
+    from threadpoolctl import threadpool_limits
+    return threadpool_limits(n, user_api="blas")
+
+
 def _tensor(x, dtype=torch.float64):
     if x is None:
         return None
@@ -143,9 +149,16 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     eng = _engine_for(calc, params)
     pos_h = pos_in.detach().cpu().numpy()
     cell_h = None if cell_in is None else cell_in.detach().cpu().numpy()
-    res, st, sc = eng._run(species, pos_h, cell_h, pbc, True, q_init, stress)
+    # the engine's default outputs (forces, and the stress of a periodic system), so that
+    # Result.raw is what calc.calculate returns; forces/stress only choose what carries a graph
+    limit = (contextlib.nullcontext() if eng.k_threads.n == 1
+             else _blas_limit(1))                # as DFTB.calculate: k threads take the cores
+    with limit:
+        res, st, sc = eng._run(species, pos_h, cell_h, pbc, True, q_init, None)
     if eng.scc and not sc.converged:
-        raise GradientUnavailable(f"the SCC did not converge (max |dq| = {sc.error:.1e})")
+        err = GradientUnavailable(f"the SCC did not converge (max |dq| = {sc.error:.1e})")
+        err.raw = res                   # the engine's results all the same (PyDFTB.evaluate)
+        raise err
     pc = cell_in if periodic else None
     implicit = mode == "implicit"
     phi = out = adj = None

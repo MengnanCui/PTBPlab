@@ -9,7 +9,9 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     dataset:        # path string
     mode:           # energygeometry / dataset / reaction / bandstructure
     output:         # run-folder path
-    optimizer:      # bo / parallel_bo / pso
+    optimizer:      # bo / parallel_bo / pso / gradient / bo_grad
+    grad_maxiter:   # int (gradient optimisers)
+    hotcent_fd_step: # list of float, Bohr (gradient optimisers)
     n_calls:        # int
     n_particles:    # int
     E0s:            # dict {atomic_number: eV} or string '{"6": -37.8}'
@@ -58,6 +60,8 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'mp_order':      'mp_order',
     'pydftb_forces': 'pydftb_forces',
     'ncores':        'ncores',
+    'grad_maxiter':  'grad_maxiter',
+    'hotcent_fd_step': 'hotcent_fd_step',
 }
 
 

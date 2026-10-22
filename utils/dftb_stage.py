@@ -80,6 +80,34 @@ class StructureTask:
     workdir: str | None = None                      # DFTB+ task directory (parallel stage)
     cost: float = 1.0                               # nk * N^3, for the largest-first order
     keep_dir: bool = False                          # keep workdir after success (advisor)
+    grad: "GradPass | None" = None                  # gradient pass (M4c), pydftb only
+
+
+@dataclass
+class GradPass:
+    """Gradient work done with the DFTB stage (milestone M4c, design section 6).
+
+    Pass 1 (``weights`` None) is the stage itself: every structure is computed with
+    ``PyDFTB.evaluate`` -- the engine's results, so the files do not change -- and also
+    returns, for every tangent, Edot = <dE/dtheta, t> (eV per Bohr) and its converged
+    input charges.  Pass 2 (``weights``: task index -> dmu/dF in 1/(eV/A) per component)
+    returns <d(w . F)/dtheta, t> with the implicit mode, starting from ``q_init``.
+    ``mode``: the mode of pass 1 ("hf" at T = 0; "implicit" with smearing, where mode hf
+    has no dE).  torch runs on one thread, so the numbers do not depend on the cores.
+    """
+    tangents: dict                                   # name -> utils.hotcent_tangent.Tangent
+    mode: str = "hf"
+    weights: dict | None = None
+    q_init: dict | None = None
+    out: dict = field(default_factory=dict)          # task index -> {name: value}
+    q_in: dict = field(default_factory=dict)         # task index -> q_in (pass 1)
+    errors: dict = field(default_factory=dict)       # task index -> why it has no gradient
+
+    def kinds(self) -> tuple:
+        return tuple(sorted({k for t in self.tangents.values() for k in t.kinds()}))
+
+    def active(self) -> dict:
+        return {n: t for n, t in self.tangents.items() if t.kinds()}
 
 
 def make_tasks(structures, bolt, kpts_dens, dftb_args: dict, task_root: str | None = None):
@@ -98,8 +126,9 @@ def make_tasks(structures, bolt, kpts_dens, dftb_args: dict, task_root: str | No
     return tasks
 
 
-def run_structure(task: StructureTask) -> Atoms:
-    """Energy and forces of one structure: the Atoms, results in a SinglePointCalculator."""
+def run_structure(task: StructureTask):
+    """Energy and forces of one structure: the Atoms, results in a SinglePointCalculator
+    (with a gradient pass: (Atoms, {"edot": {name: eV/Bohr}, "q_in": charges}))."""
     from utils.calculator import dftbplus_calculator
     atoms = Atoms(task.symbols, positions=task.positions)
     atoms.set_cell(task.cell)
@@ -107,13 +136,99 @@ def run_structure(task: StructureTask) -> Atoms:
     args = task.dftb_args if task.workdir is None else dict(task.dftb_args, directory=task.workdir)
     calc = dftbplus_calculator(atoms, args)
     atoms.calc = calc
-    atoms.get_forces()
+    extra = None
+    if task.grad is None:
+        atoms.get_forces()
+    else:
+        extra = _energy_gradient(calc, atoms, task.grad)
     spc = SinglePointCalculator(atoms)
     spc.results = dict(calc.results)          # as computed: the extxyz output does not change
     atoms.calc = spc
     if task.workdir is not None and not task.keep_dir:
         shutil.rmtree(task.workdir, ignore_errors=True)
-    return atoms
+    return atoms if extra is None else (atoms, extra)
+
+
+def _grad_dict(params, grads) -> dict:
+    """{kind: {key: gradient array}} for the leaves of ``params`` (None: no dependence)."""
+    out, it = {}, iter(grads)
+    for kind, tensors in (("tables", params.tables), ("onsite", params.onsite),
+                          ("hubbard", params.hubbard)):
+        for key, x in tensors.items():
+            if x.requires_grad:
+                g = next(it)
+                out.setdefault(kind, {})[key] = None if g is None else g.detach().numpy()
+    return out
+
+
+def _leaves(params) -> list:
+    return [x for d in (params.tables, params.onsite, params.hubbard) for x in d.values()
+            if x.requires_grad]
+
+
+def _energy_gradient(calc, atoms, grad: GradPass) -> dict:
+    """Pass 1 for one structure: the calculator's results as ``atoms.get_forces()`` sets
+    them, and <dE/dtheta, t> for every active tangent (eV/Bohr)."""
+    import torch
+    from ase.calculators.calculator import CalculationFailed
+    from ase.units import Hartree
+    from utils.hotcent_tangent import contract
+    torch_one_thread()                    # before any torch operation in this process
+    active = grad.active()
+    try:
+        res, params = calc.evaluate(atoms, requires_grad=grad.kinds(), mode=grad.mode)
+    except CalculationFailed:             # the engine failed: so would a run without gradient
+        raise
+    except Exception as err:              # noqa: BLE001  no gradient (an SCC that did not
+        if getattr(err, "raw", None) is None:   # converge ...): the results as without one,
+            atoms.get_forces()                  # kept from the same run when there was one
+        return {"edot": None, "q_in": None, "error": f"{type(err).__name__}: {err}"}
+    edot = {name: 0.0 for name in grad.tangents}
+    if active:
+        if not res.energy.requires_grad:              # e.g. no parameter enters the energy
+            gd = {}
+        else:
+            gd = _grad_dict(params, torch.autograd.grad(res.energy, _leaves(params),
+                                                        allow_unused=True))
+        for name, t in active.items():
+            edot[name] = contract(gd, t) * Hartree
+    return {"edot": edot, "q_in": np.array(res.raw.q_in)}
+
+
+def _force_gradient(task: StructureTask):
+    """Pass 2 for one structure: <d(w . F)/dtheta, t> with F in eV/A (the units of w
+    times eV/A, per Bohr), by the implicit mode from the charges of pass 1."""
+    import torch
+    from ase.units import Bohr, Hartree
+    from utils.calculator import dftbplus_calculator
+    from utils.hotcent_tangent import contract
+    torch_one_thread()
+    grad = task.grad
+    atoms = Atoms(task.symbols, positions=task.positions)
+    atoms.set_cell(task.cell)
+    atoms.set_pbc(task.pbc)
+    calc = dftbplus_calculator(atoms, task.dftb_args)
+    active = grad.active()
+    fdot = {name: 0.0 for name in grad.tangents}
+    w = np.asarray(grad.weights[task.index], dtype=float)
+    if not active or not np.any(w):
+        return fdot
+    res, params = calc.evaluate(atoms, requires_grad=grad.kinds(), mode="implicit",
+                                forces=True, q_init=(grad.q_init or {}).get(task.index))
+    # forces in eV/A = Hartree/Bohr x the engine's (Ha/Bohr)
+    target = (torch.as_tensor(w * (Hartree / Bohr)) * res.forces).sum()
+    if not target.requires_grad:
+        return fdot
+    gd = _grad_dict(params, torch.autograd.grad(target, _leaves(params), allow_unused=True))
+    for name, t in active.items():
+        fdot[name] = contract(gd, t)
+    return fdot
+
+
+def torch_one_thread() -> None:
+    """torch on one thread in this process (before the DFTB stage forks; M4a fork rule)."""
+    import torch
+    torch.set_num_threads(1)
 
 
 def _stage_settings():
@@ -149,15 +264,20 @@ def measured_times(n: int):
 
 
 def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: str = "Yes",
-                SCC: str = "Yes"):
+                SCC: str = "Yes", grad: GradPass | None = None):
     """DFTB for every structure, in EOS groups -> (dftb Atoms, kept DFT structures,
-    kept indices); groups with a missing SKF are dropped as before."""
+    kept indices); groups with a missing SKF are dropped as before.
+
+    ``grad`` (M4c, pydftb only): also pass 1 of the gradient, collected in ``grad.out`` and
+    ``grad.q_in`` for the kept structures; the results and files are the same."""
     from utils.engines import settings
     eos = int(eos_points)
     ngroups = int(len(structures) / eos)
     used = list(structures[:ngroups * eos])
     workers, threads, blas, planned = _stage_settings()
     engine = settings()["engine"]
+    if grad is not None and engine != "pydftb":
+        raise ValueError("the gradient of the DFTB stage needs engine='pydftb'")
     base = {"calc_type": "static", "poly_rep": poly_rep, "SCC": SCC, "slater_p": "./"}
     if planned and engine == "pydftb":
         base["k_threads"] = threads
@@ -170,6 +290,21 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
     tasks = make_tasks(used, bolt, kpts_dens, base,
                        task_root=os.path.abspath(TASK_DIR) if parallel and engine == "dftbplus"
                        else None)
+    if grad is not None:
+        torch_one_thread()                         # before the workers fork (M4a)
+        for t in tasks:
+            t.grad = grad
+
+    def keep(i, value):
+        """The Atoms of task i; pass 1 of the gradient goes to ``grad``."""
+        if grad is None:
+            return value
+        atoms, extra = value
+        grad.out[i] = extra["edot"]
+        grad.q_in[i] = extra["q_in"]
+        if extra.get("error"):
+            grad.errors[i] = extra["error"]
+        return atoms
 
     advise = engine == "dftbplus" and advisor_hook.wants_check()
     dftb_out, dft_out, kept = [], [], []
@@ -202,7 +337,7 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
                     print(SKF_WARNING)
                     continue
                 dft_out.extend(used[i] for i in group)
-                dftb_out.extend(atoms)
+                dftb_out.extend(keep(i, a) for i, a in zip(group, atoms))
                 kept.extend(group)
         if len(kept) == len(tasks):
             _record(len(tasks), walls)
@@ -230,10 +365,40 @@ def run_dataset(structures, bolt, eos_points: int, kpts_dens: float, poly_rep: s
                 advisor_hook.explain_failure(tasks[failed.index].workdir, failed.error)
             raise failed.error
         dft_out.extend(used[i] for i in group)
-        dftb_out.extend(results[i].value for i in group)
+        dftb_out.extend(keep(i, results[i].value) for i in group)
         kept.extend(group)
     _remove_if_empty(TASK_DIR)
     return dftb_out, dft_out, kept
+
+
+def run_force_gradient(structures, bolt, kpts_dens: float, grad: GradPass, skf_dir: str,
+                       poly_rep: str = "Yes", SCC: str = "Yes") -> dict:
+    """Pass 2 of the gradient (M4c): {index: {name: <d(w . F)/dtheta, t>}} for the
+    structures with weights in ``grad.weights`` (indices of ``structures``, as in pass 1),
+    with the k-points of the DFTB stage and the SKF files in ``skf_dir`` (those of pass 1),
+    distributed like the stage (largest first); a failure is raised."""
+    workers, threads, blas, planned = _stage_settings()
+    idx = sorted(grad.weights)
+    base = {"calc_type": "static", "poly_rep": poly_rep, "SCC": SCC,
+            "slater_p": os.path.join(os.path.abspath(skf_dir), "")}
+    if planned:
+        base["k_threads"] = threads
+        if blas > 1:
+            base["blas_threads"] = blas
+    tasks = make_tasks([structures[i] for i in idx], [bolt[i] for i in idx], kpts_dens, base)
+    for t, i in zip(tasks, idx):
+        t.index, t.grad = i, grad
+    if not tasks:
+        return {}
+    torch_one_thread()
+    workers = min(workers, len(tasks))
+    order = sorted(range(len(tasks)), key=lambda k: (-tasks[k].cost, k))
+    results = map_tasks(_force_gradient, tasks, workers, order=order, threads=threads,
+                        blas_threads=blas)
+    for r in results:
+        if not r.ok:
+            raise r.error
+    return {t.index: r.value for t, r in zip(tasks, results)}
 
 
 def write_outputs(dftb_atoms, dft_atoms, kept) -> None:

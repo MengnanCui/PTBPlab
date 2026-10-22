@@ -104,6 +104,26 @@ def test_isolated_atom_in_a_periodic_box(sk):
     assert np.abs(box.stress).max() < 1e-12
 
 
+def test_a_failed_factorisation_is_an_ase_calculation_failure(monkeypatch):
+    """DFTB+ stops on a non-positive-definite overlap, which ASE reports as
+    CalculationFailed; PyDFTB raises the same, with the LinAlgError as its cause."""
+    import ase
+    from ase.calculators.calculator import CalculationFailed
+
+    from pydftb.ase_calc import PyDFTB
+    from pydftb.backend import ops
+    from pydftb.constants import BOHR
+
+    def not_positive_definite(a):
+        raise np.linalg.LinAlgError("Matrix is not positive definite")
+    monkeypatch.setattr(ops, "cholesky", not_positive_definite)
+    atoms = ase.Atoms("OH2", positions=WATER * BOHR)
+    atoms.calc = PyDFTB(SKDIR)
+    with pytest.raises(CalculationFailed, match="not positive definite") as info:
+        atoms.get_forces()
+    assert isinstance(info.value.__cause__, np.linalg.LinAlgError)
+
+
 def test_sp2_matches_diagonalisation(sk):
     cell = np.eye(3) * 9.0
     sym = ["O", "H", "H"]

@@ -276,3 +276,44 @@ def test_smearing_options_validated():
     assert Smearing("mp", 300.0, 2).variational is False
     assert Smearing("mp", 300.0, 2, "variational").variational
     assert Smearing("fermi", 300.0).variational
+
+
+def test_ase_evaluate_stores_what_calculate_stores():
+    """PyDFTB.evaluate (M4c): the calculator's results equal those of calculate bit for bit
+    (stress included), with a differentiable energy."""
+    import ase.build
+
+    from pydftb.ase_calc import PyDFTB
+    atoms = ase.build.bulk("Cu", "fcc", a=3.6) * (1, 1, 2)
+    atoms.rattle(0.02, seed=1)
+    opts = dict(kpts=(2, 2, 2), smearing=("fermi", 0.0), scc_tol=1e-6, repulsive="polynomial",
+                shell_resolved=True, fd_delta=0.01, threads=1)
+    ref = PyDFTB(SKF_HCOCU, **opts)
+    a = atoms.copy()
+    a.calc = ref
+    a.get_forces()
+    calc = PyDFTB(SKF_HCOCU, **opts)
+    res, params = calc.evaluate(atoms, requires_grad=("tables",))
+    assert sorted(calc.results) == sorted(ref.results)
+    for k in ref.results:
+        assert np.array_equal(np.asarray(calc.results[k]), np.asarray(ref.results[k])), k
+    assert res.raw.stress is not None
+    (g,) = torch.autograd.grad(res.energy, [params.tables[("Cu", "Cu")]])
+    assert torch.isfinite(g).all() and g.abs().max() > 0
+
+
+def test_ase_evaluate_failure_is_an_ase_calculation_failure(monkeypatch):
+    """PyDFTB.evaluate reports an engine failure as calculate does (CalculationFailed)."""
+    import ase.build
+    from ase.calculators.calculator import CalculationFailed
+
+    from pydftb.ase_calc import PyDFTB
+    from pydftb.backend import ops
+
+    def not_positive_definite(a):
+        raise np.linalg.LinAlgError("Matrix is not positive definite")
+    monkeypatch.setattr(ops, "cholesky", not_positive_definite)
+    calc = PyDFTB(SKF_HCOCU, kpts=(2, 2, 2), repulsive="polynomial", shell_resolved=True)
+    with pytest.raises(CalculationFailed, match="not positive definite") as info:
+        calc.evaluate(ase.build.bulk("Cu", "fcc", a=3.6), requires_grad=("tables",))
+    assert isinstance(info.value.__cause__, np.linalg.LinAlgError)

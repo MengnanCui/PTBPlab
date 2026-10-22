@@ -8,9 +8,12 @@ forces come back with ASE's constants (``ase.units``), exactly as
 """
 from __future__ import annotations
 
+import contextlib
+
 import numpy as np
 from ase import units
-from ase.calculators.calculator import Calculator, all_changes, kptdensity2monkhorstpack
+from ase.calculators.calculator import (CalculationFailed, Calculator, all_changes,
+                                        kptdensity2monkhorstpack)
 
 from .bands import States, eigenstates
 from .calculator import DFTB
@@ -19,6 +22,17 @@ from .dispersion import make_dispersion
 from .kpoints import monkhorst_pack, reduce_time_reversal
 from .parallel import as_kthreads
 from .params import ParamSet
+
+
+@contextlib.contextmanager
+def _as_calculation_failed():
+    """A linear-algebra failure of the engine as ASE's ``CalculationFailed``, the error
+    ``ase.calculators.dftb.Dftb`` raises when DFTB+ stops, e.g. on a non-positive-definite
+    overlap (atoms too close); the original stays as the cause."""
+    try:
+        yield
+    except np.linalg.LinAlgError as err:
+        raise CalculationFailed(f"pydftb: {err}") from err
 
 
 class PyDFTB(Calculator):
@@ -137,13 +151,54 @@ class PyDFTB(Calculator):
                                      a.cell.array / BOHR if periodic else None,
                                      a.pbc if periodic else None,
                                      forces=want_forces, q_init=q_init)
-        if self.threads is None:
-            r = run()
-        else:
-            from threadpoolctl import threadpool_limits
-            # torch's count first: it is read before threadpoolctl changes OpenMP's
-            with calc.backend.threads(self.threads), threadpool_limits(self.threads):
+        with _as_calculation_failed():
+            if self.threads is None:
                 r = run()
+            else:
+                from threadpoolctl import threadpool_limits
+                # torch's count first: it is read before threadpoolctl changes OpenMP's
+                with calc.backend.threads(self.threads), threadpool_limits(self.threads):
+                    r = run()
+        self._store(r, sk, labels)
+
+    def evaluate(self, atoms, params=None, requires_grad=(), mode: str = "hf",
+                 forces: bool = False, stress: bool = False, q_init=None):
+        """:func:`pydftb.autodiff.evaluate` for ``atoms`` (milestone M4c): the engine run of
+        :meth:`calculate` (forces, and the stress of periodic systems), whose results are
+        stored exactly as :meth:`calculate` stores them, plus the derivatives.  ``params``:
+        a :class:`pydftb.autodiff.Params` of this calculator's SK set for these atoms
+        (default: its values, with gradients for the kinds in ``requires_grad``);
+        ``forces``/``stress``: whether they carry a graph.  With ``threads`` the BLAS and
+        torch threads are limited during the calculation.  Returns (Result, Params)."""
+        from .autodiff import GradientUnavailable, Params, evaluate
+        Calculator.calculate(self, atoms, ["energy", "forces"], all_changes)
+        a = self.atoms
+        periodic = bool(a.pbc.any())
+        calc, labels, sk = self._engine(a)
+        if params is None:
+            params = Params.from_skset(sk, calc.repulsive, calc.hubbard_derivs,
+                                       calc.spin_constants, requires_grad=requires_grad)
+        limits = contextlib.ExitStack()
+        if self.threads is not None:
+            from threadpoolctl import threadpool_limits
+            from .backend.spec import _torch_threads
+            limits.enter_context(_torch_threads(self.threads))     # before threadpoolctl
+            limits.enter_context(threadpool_limits(self.threads))
+        with limits, _as_calculation_failed():
+            try:
+                res = evaluate(calc, labels, a.positions / BOHR,
+                               a.cell.array / BOHR if periodic else None,
+                               a.pbc if periodic else None, params, mode=mode, forces=forces,
+                               stress=stress and periodic, q_init=q_init)
+            except GradientUnavailable as err:
+                if getattr(err, "raw", None) is not None:   # e.g. an unconverged SCC: the
+                    self._store(err.raw, sk, labels)        # results of calculate, no gradient
+                raise
+        self._store(res.raw, sk, labels)
+        return res, params
+
+    def _store(self, r, sk, labels):
+        """``self.results`` (ASE units) from a :class:`pydftb.DFTBResult`."""
         self.raw = r
         self._raw_labels = list(labels)
         self.results["energy"] = r.energy * units.Hartree
@@ -155,7 +210,7 @@ class PyDFTB(Calculator):
         if r.stress is not None:
             # same conversion as ase.calculators.dftb.Dftb: -sigma_DFTB+, Voigt xx yy zz yz xz xy
             self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
-        magmoms = np.zeros(len(a)) if r.magmoms is None else r.magmoms
+        magmoms = np.zeros(len(labels)) if r.magmoms is None else r.magmoms
         self.results["magmoms"] = magmoms
         self.results["magmom"] = float(magmoms.sum())
 

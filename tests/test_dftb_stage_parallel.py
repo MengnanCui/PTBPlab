@@ -118,6 +118,30 @@ def test_other_errors_are_raised(tmp_path, dataset, monkeypatch, ncores):
         _stage(tmp_path, dataset, ncores, "pydftb", monkeypatch)
 
 
+@pytest.mark.parametrize("gradient", [False, True])
+def test_a_failed_pydftb_run_is_a_calculation_failure(tmp_path, dataset, monkeypatch, gradient):
+    """pydftb fails as DFTB+ does through ASE (CalculationFailed, a RuntimeError: the loss
+    scores the step as failed), also in pass 1 of the gradient."""
+    import numpy as np
+    from ase.calculators.calculator import CalculationFailed
+
+    from pydftb.backend import ops
+    grad = None
+    if gradient:
+        pytest.importorskip("torch")
+        from utils.hotcent_tangent import Tangent
+        grad = dftb_stage.GradPass({"r0_d": Tangent("r0_d", 0.0, zero=True)})
+
+    def not_positive_definite(a):
+        raise np.linalg.LinAlgError("Matrix is not positive definite")
+    monkeypatch.setattr(ops, "cholesky", not_positive_definite)
+    images, bolt = dataset
+    eng.configure(engine="pydftb")
+    monkeypatch.chdir(_skf_dir(tmp_path))
+    with pytest.raises(CalculationFailed, match="not positive definite"):
+        dftb_stage.run_dataset(images[:EOS], bolt[:EOS], EOS, KDENS, grad=grad)
+
+
 def test_remainder_that_does_not_fill_a_group_is_not_computed(tmp_path, dataset, monkeypatch):
     (dftb, _, kept), _ = _stage(tmp_path, dataset, 4, "pydftb", monkeypatch, eos=4)
     assert kept == list(range(8)) and len(dftb) == 8
@@ -160,3 +184,77 @@ def test_failed_dftbplus_task_directory_is_kept(tmp_path, dataset, monkeypatch):
         _stage(tmp_path, (bad, bolt), 4, "dftbplus", monkeypatch)
     kept = sorted(p.name for p in (tmp_path / dftb_stage.TASK_DIR).iterdir())
     assert kept == ["s0004"] and (tmp_path / dftb_stage.TASK_DIR / "s0004" / "dftb_in.hsd").exists()
+
+
+def test_gradient_passes_change_no_file_and_no_bit(tmp_path, dataset, monkeypatch):
+    """M4c: the stage with pass 1 of the gradient writes the same files as without it;
+    Edot and the pass-2 force contractions are bitwise the same for any core budget."""
+    pytest.importorskip("torch")
+    import numpy as np
+
+    from pydftb.skf import SKFile
+    from utils.hotcent_tangent import Tangent
+    images, bolt = dataset
+    shape = SKFile.read(str(_skf_dir(tmp_path / "shape") / "Cu-Cu.skf"), homo=True).table.shape
+    tan = {"r0_w": Tangent("r0_w", 0.04, tables={
+        ("Cu", "Cu"): np.random.default_rng(0).normal(size=shape) * 1e-3}),
+        "r0_d": Tangent("r0_d", 0.0, zero=True)}
+    eng.configure(engine="pydftb")
+    plain = _stage(tmp_path / "plain", dataset, 2, "pydftb", monkeypatch)[1]
+    out = []
+    for n in (None, 1, 4):
+        wd = _skf_dir(tmp_path / f"g{n}")
+        monkeypatch.chdir(wd)
+        set_plan(None if n is None else simple_plan(CpuBudget(n, {"--ncores": n}), len(images),
+                                                    "pydftb"))
+        grad = dftb_stage.GradPass(tan)
+        res = dftb_stage.run_dataset(images, bolt, EOS, KDENS, grad=grad)
+        dftb_stage.write_outputs(*res)
+        files = {f: hashlib.sha256((wd / f).read_bytes()).hexdigest() for f in FILES}
+        grad.weights = {i: np.random.default_rng(i).choice([-1.0, 1.0], size=(len(images[i]), 3))
+                        for i in res[2]}
+        grad.q_init = grad.q_in
+        fdot = dftb_stage.run_force_gradient(images, bolt, KDENS, grad, str(wd))
+        set_plan(None)
+        assert files == plain
+        out.append((dict(grad.out), fdot))
+    assert all(o == out[0] for o in out[1:])
+    assert all(v["r0_d"] == 0.0 and np.isfinite(v["r0_w"]) for v in out[0][0].values())
+
+
+def test_gradient_pass_without_convergence_keeps_the_results(tmp_path, dataset, monkeypatch):
+    """An SCC that does not converge has no gradient: the stage keeps the results of that
+    same run (no second SCC), writes the files of a plain stage and records why."""
+    pytest.importorskip("torch")
+    import numpy as np
+
+    import pydftb.calculator as pc
+    from pydftb.skf import SKFile
+    from utils.hotcent_tangent import Tangent
+    images, bolt = dataset
+    orig = eng._pydftb_calculator
+
+    def few_iterations(mole, args):
+        calc = orig(mole, args)
+        calc.engine_opts["max_scc"] = 2
+        return calc
+    monkeypatch.setattr(eng, "_pydftb_calculator", few_iterations)
+    eng.configure(engine="pydftb")
+    plain = _stage(tmp_path / "plain", dataset, None, "pydftb", monkeypatch)[1]
+    runs = []
+    orig_run = pc.DFTB._run
+
+    def counted(self, *a, **k):
+        runs.append(1)
+        return orig_run(self, *a, **k)
+    monkeypatch.setattr(pc.DFTB, "_run", counted)
+    shape = SKFile.read(str(_skf_dir(tmp_path / "shape") / "Cu-Cu.skf"), homo=True).table.shape
+    grad = dftb_stage.GradPass({"r0_w": Tangent("r0_w", 0.04, tables={("Cu", "Cu"): np.ones(shape)})})
+    wd = _skf_dir(tmp_path / "grad")
+    monkeypatch.chdir(wd)
+    out = dftb_stage.run_dataset(images, bolt, EOS, KDENS, grad=grad)
+    dftb_stage.write_outputs(*out)
+    assert {f: hashlib.sha256((wd / f).read_bytes()).hexdigest() for f in FILES} == plain
+    assert len(runs) == len(images)                      # one SCC per structure
+    assert grad.errors and all("SCC did not converge" in e for e in grad.errors.values())
+    assert all(grad.out[i] is None for i in grad.errors)

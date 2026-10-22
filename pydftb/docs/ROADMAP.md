@@ -16,7 +16,7 @@
 | M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | ✅ 完成（18 条规则，各有出处；11 次冻结的 DFTB+ 25.1 运行上结论全部符合预期；PTBP 的历史输入被查出 5 条：ParserVersion 1 带来的壳层分辨 SCC 和 0.01 Bohr 差分步长、写在 Filling 外被忽略的展宽（实际 T = 0）、8 MB 的栈、默认 Ewald 容差，前两项标为预期；PTBP 用 DFTB+ 时自动检查第一个运行和失败的运行，只报告，结果逐字节相同） | `design/M3d-advisor.html`，`reports/M3d-advisor.html` |
 | M4a | PyTorch 后端（前向）：k 点折叠、Cholesky、本征分解、密度矩阵、布居、能量的迹和力用到的实空间密度在 torch 设备上算；`backend="torch"`、`device`、`dtype`；NumPy 路径逐字节不变（golden 工具） | ✅ 完成（74 个单点和 11 个优化/MD 的 DFTB+ 参考在 torch 上全部通过，SCC 轮数与 DFTB+ 相同；与 NumPy 的最大差能量 3.6e-14 Ha、力 4.1e-14 Ha/Bohr、电荷 1.4e-13 e；float32 下能量差 ≤ 4.3e-6 Ha；发现 threadpoolctl 管不到 torch 的 MKL，fork 后子进程会卡死，已修正） | `design/M4a-torch-backend.html`，`reports/M4a-torch-backend.html` |
 | M4b | 自动求导：两种后端通用的核函数、`pydftb.autodiff`（可微参数、密度矩阵的差商反向、SCC 隐式微分、HF 替代能量），与有限差分对照 | ✅ 完成（`evaluate(mode="hf" | "implicit")`：SK 表、onsite、U、Ud、自旋常数、排斥势系数和坐标、晶胞的导数，返回值即引擎的数；与引擎有限差分对照 346 项全部通过（导数 > 1e-4 的项：hf 最大 7.6e-7，implicit 最大 2.8e-6，中位数 2e-9）；hf 与 implicit 逐项 ≤ 8.7e-10，implicit 与展开的 SCC ≤ 4e-12；以力为损失用 PTBP 的 0.01 Bohr 差分核；发现 DFTB+ 的带隙中点费米能级与 MP 的 TS 使 F 不是电子数固定的 Mermin 自由能，新增 `Smearing(fermi_level="exact")`） | `design/M4b-autodiff.html`，`reports/M4b-autodiff.html` |
-| M4c | PTBP 损失对 r0_w、r0_d 的梯度（自动求导 × hotcent 有限差分），可选的梯度优化器，与 BO 对比 | 计划 | — |
+| M4c | PTBP 损失对 r0_w、r0_d 的梯度（自动求导 × hotcent 有限差分），可选的梯度优化器，与 BO 对比 | ✅ 完成（hotcent 的中心差分切向 × pydftb 的导数 × 损失的解析偏导，σ_rep 用包络定理，含折点和边界；torch 与独立的 NumPy 收缩差 1e-15，沿真实切向的参数差分 2e-11–5e-10，dataset 模式整条流程的差分 2e-4；默认 BO 逐字节不变；一次“值 + 梯度”约 1.4–2.6 个 BO 步；与 BO 对比（Cu，4 核）：energygeometry 模式梯度法 635 s 把损失从 1.899 降到 0.760，3 次 BO（各 11 次）最好 0.855，用同样时间的 BO 没有比种子好；dataset 模式打平（209.9 对 208.5），梯度法受 T = 0 下 SCC 不收敛拖累，BO 被失败值（97–99，低于这个模式的真实损失）引到失败区；发现 hotcent 2.1 下 r0_d 不改变 SKF、energygeometry 损失在发表点附近不连续、PTBP 默认的 BO 是种子加 10 个随机点；pydftb 的重叠矩阵不正定改报 `CalculationFailed`，与 DFTB+ 一致） | `design/M4c-ptbp-gradient.html`，`reports/M4c-ptbp-gradient.html` |
 | M4d | 设备选择、GPU 自检脚本、PTBP 的 `--pydftb_backend torch --device` | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
 | M6 | DFTB+ 功能补齐·第二波（按需）：自旋轨道耦合、DFTB+U、长程校正、溶剂、外场、TD-DFTB、XL-BOMD | 计划 | — |
@@ -69,4 +69,4 @@
 | | PyTorch 后端（CPU 已验证；GPU 待自检脚本实测） | ✅ M4a |
 | | GPU 实测、分治、多机 | ⬜ M4d/M7 |
 | 自动求导 | 对 SK 表、onsite、U、Ud、自旋常数、排斥势系数及坐标、晶胞的导数（hf：变分的 dF/dθ；implicit：电荷、本征值、力等的全导数） | ✅ M4b |
-| | PTBP 损失对 r0 的梯度、梯度优化器 | ⬜ M4c |
+| | PTBP 损失对 r0 的梯度、梯度优化器（`--optimizer gradient`、`bo_grad`） | ✅ M4c |

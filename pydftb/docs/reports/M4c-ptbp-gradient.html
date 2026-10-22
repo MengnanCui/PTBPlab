@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4c PTBP 梯度报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M4c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4c · 完成报告</p>
+    <h1>PTBP 损失的梯度与梯度优化器</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M4c-ptbp-gradient.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">PTBP 现在能算出损失 μ 对两个约束半径 r0_w、r0_d 的导数，并新增两个可选优化器：<code>--optimizer gradient</code>（投影 BFGS）和 <code>--optimizer bo_grad</code>（先 BO，再做几步梯度）。梯度由三段相乘：hotcent 的差分切向、pydftb 的自动求导（M4b）、损失本身的解析偏导，σ_rep 的内层搜索用包络定理处理。默认的 BO 不受影响：损失值和所有文件逐字节不变。</p>
+    <ul>
+      <li><strong>验证</strong>：torch 的梯度与独立写的 NumPy 切向收缩一致到 1e-15；沿真实 hotcent 切向的参数差分（只用 Γ 点的结构在 T = 0 下，以及 1000 K 展宽的 k 点金属）一致到 2e-11–5e-10，力的反向到 6e-11。整条流程：dataset 模式 h = 0.01 时梯度与差分差 2e-4（含折点修正）；energygeometry 模式的损失在发表点两侧有 EOS 拟合跳变（第七节），在同一拟合分支上一致到 0.5–1%；r0_d 的导数（只来自罚函数）差 2e-4。hotcent 的数值噪声让单个结构的 dE/dr0_w 有 0.6–3% 的不确定度。</li>
+      <li><strong>代价</strong>：一次“值 + 梯度”在 Cu 数据集、4 核上 energygeometry 38 s（普通 BO 步 27 s），dataset 41 s（16 s），约合 1.4 和 2.6 个 BO 步。多出的时间主要是 2–3 次 hotcent（每次约 4 s）和 dataset 模式里“力的反向”那一遍（约 11–14 s）；DFTB 阶段顺带算能量梯度只多 0–24%。</li>
+      <li><strong>发现</strong>：（1）hotcent 2.1 的微扰约束下，r0_d 不改变任何 SKF 字节，损失只经罚函数依赖 r0_d；Cu 的罚函数在 r0_d = 9.98 Bohr 最小，发表值 12.036 让损失高 4.3%。（2）发表点不是 energygeometry 损失沿 r0_w 的局部极小：r0_w = 2.709 时 μ = 1.723，比 2.749 的 1.899 低 9%，梯度（+4.53/Bohr）正指向这一边。（3）r0_w = 2.789 处损失有断崖：最后一组的 EOS 拟合跑出采样体积，体积比从 +0.13 跳到 −1.06，μ 跳到 3.33。（4）dataset 模式的 σ_rep 极小正好落在一个能量项的折点上（两侧斜率 −310、+376），需要折点修正。</li>
+      <li><strong>BO 与梯度法</strong>：energygeometry 模式（Cu，4 核）梯度法 635 s 把损失从 1.899 降到 0.760，第 4 次求值（155 s）就低于 3 次 BO（各 11 次）中最好的 0.855，用同样时间的 BO 没有比种子点更好；dataset 模式两者打平（209.9 对 208.5），梯度法 23 次求值中 17 次因 T = 0 下 SCC 不收敛没有梯度，BO 则有一半的点被失败值（97–99，低于这个模式的真实损失）引到失败区。PTBP 默认的 BO（11 次）其实是种子加 10 个随机点。</li>
+      <li><strong>默认不变</strong>：G1 门槛（<code>engine_parity --compare-serial</code> 在发表点两种模式，并与 M4 之前的提交逐字节比较）通过：损失 1.899324742 和 446.2016018 不变，1 核与 4 核逐位相同，BO 步的全部文件（17 个和 8 个）与 M4 之前逐字节相同；带梯度的求值本身也与不带梯度时逐位相同（测试）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 1e-15</span><span class="lbl">torch 与 NumPy 的切向收缩之差（L1）</span></li>
+      <li><span class="num">2e-4</span><span class="lbl">dataset 模式整条流程的差分与梯度之差（L4，h = 0.01）</span></li>
+      <li><span class="num">1.899 → 0.760</span><span class="lbl">energygeometry 损失，梯度法 635 s（同样时间 BO 最好 0.855）</span></li>
+      <li><span class="num">0</span><span class="lbl">默认 BO 改变的字节</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#same">三、默认行为不变</a></li>
+      <li><a href="#check">四、梯度的验证（L1–L4）</a></li>
+      <li><a href="#perf">五、代价</a></li>
+      <li><a href="#bench">六、BO 与梯度法的对比</a></li>
+      <li><a href="#findings">七、发现</a></li>
+      <li><a href="#tests">八、测试与门槛</a></li>
+      <li><a href="#deviations">九、与计划的偏差</a></li>
+      <li><a href="#repro">十、复现命令</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">十一、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/hotcent_tangent.py</code></td><td><code>compute()</code>：在 r0_w ± h 跑 hotcent（与 BO 步同样的设置和进程数），对 SK 表、onsite、U 取中心差分；r0_d 每次运行只探测一次（r0_d + h 的 SKF 与基准逐字节相同就记为零切向）；表的网格变了、SKF 的排斥势变了都报错；<code>contract()</code> 把梯度与切向做内积</td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td><code>GradPass</code>；第一遍就是原来的 DFTB 阶段，工作进程改用 <code>PyDFTB.evaluate</code>，顺带返回每个结构的 Ė 和收敛电荷，文件不变；求导失败时退回普通计算，损失不受影响（引擎本身失败时直接报错，不重算）；<code>run_force_gradient()</code> 第二遍（implicit 模式，从第一遍的电荷起步）；torch 固定单线程</td></tr>
+            <tr><td><code>utils/loss_grad.py</code></td><td><code>StepData</code>；纯函数 <code>mu()</code>（与 <code>Loss</code> 逐位相同）；<code>terms()</code>：把损失写成 P Σ w|r|，给出每个残差及其对 σ、对能量的导数；physrep 样条对 σ 的解析导数；EOS 拟合的隐函数导数；<code>refine_sigma()</code>（σ*，光滑/折点/边界）；<code>assemble()</code>（含折点修正）；<code>GradRequest</code>（<code>Loss</code> 的钩子）</td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>grad_request</code> 属性和四处调用（目录名、hotcent 之后、DFTB 阶段、σ 搜索之后/失败时）；<code>optimize()</code> 分派新优化器。未设置时行为不变</td></tr>
+            <tr><td><code>utils/gradient_opt.py</code></td><td><code>Evaluator</code>（写 <code>grad.out</code>）、<code>projected_bfgs()</code>（回溯时把投影到盒子里的步长减半，同一点不会算两次）、<code>optimize_gradient()</code>、<code>optimize_bo_grad()</code>、<code>check_requirements()</code>；结果与 BO 一样取算过的最低损失（没有梯度的点也算，失败值 97–99 不算）</td></tr>
+            <tr><td><code>cli/</code></td><td><code>--optimizer gradient|bo_grad</code>、<code>--grad_maxiter</code>、<code>--hotcent_fd_step</code>（<code>ptbp optimize</code> 用连字符），YAML 键，TUI 的优化器页；<code>run.py</code> 检查条件，并按结果的 <code>best_dir</code> 复制最佳目录</td></tr>
+            <tr><td><code>pydftb/ase_calc.py</code></td><td><code>PyDFTB.evaluate()</code>：与 <code>calculate</code> 同一次引擎运行、同样的 <code>results</code>（共用 <code>_store</code>），返回 (Result, Params)。引擎的线性代数失败（重叠矩阵不正定）改报 ASE 的 <code>CalculationFailed</code>，与 DFTB+ 经 ASE 的行为一致（第七节）</td></tr>
+            <tr><td><code>pydftb/autodiff/api.py</code></td><td>引擎那一次运行总给默认输出（周期体系含应力），<code>Result.raw</code> 因此等于 <code>calculate</code> 的结果；k 线程时与 <code>calculate</code> 一样把 BLAS 限为 1 线程</td></tr>
+            <tr><td><code>pydftb/hamiltonian.py</code>、<code>backend/ops.py</code></td><td>（单独提交 <code>8099ceb</code>）孤立原子在周期盒子里没有原子对时的两个崩溃：<code>pair_values</code> 拼接空列表、<code>segment_sum</code> 对空输入返回整数</td></tr>
+            <tr><td><code>tools/grad_check.py</code></td><td>L1–L4 分层验证，JSON 输出</td></tr>
+            <tr><td><code>tools/bo_vs_grad.py</code></td><td>相同墙钟时间下 BO（多个 random_state）与梯度法的对比；每完成一个运行写一次 JSON，<code>--resume</code> 接着跑</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>ptbp optimize dft/dft.xyz --mode energygeometry --engine pydftb --optimizer gradient --grad-maxiter 20
+ptbp optimize dft/dft.xyz --mode dataset --engine pydftb --optimizer bo_grad --n-calls 11 --grad-maxiter 5
+ptbp optimize ... --hotcent-fd-step 0.04 0.2      # hotcent 差分步长：r0_w [r0_d]，Bohr</code></pre>
+      <p>每次求值在 <code>results/opt_&lt;r0_w&gt;_&lt;r0_d&gt;</code>（6 位小数）下，写进 <code>par.out</code>、<code>log.out</code> 的内容与 BO 相同；另在 <code>grad.out</code> 记一行：r0_w、r0_d、μ、两个偏导、σ̂、σ*、情形（光滑/折点/边界）、内层差距、耗时（梯度额外花的时间：切向、σ* 精确化、第二遍，不含与 BO 步相同的部分）和说明（例如“EOS 极小在采样体积之外”）。拿不到梯度的求值（损失失败、SCC 不收敛……）在说明里写原因，优化器把它当作被拒绝的一步；但它的损失是真实的，最后的结果与 BO 一样取所有求值里最低的损失。<code>ptbp plan</code> 的时间估计仍按普通 BO 步算，梯度法每次求值约为 1.4–2.6 个 BO 步（第五节）。</p>
+      <p>在 Python 里也可以单独算一次梯度：</p>
+<pre><code>from utils.loss_grad import GradRequest
+loss.grad_request = GradRequest()                 # 下一次求值顺带算梯度
+mu = loss.Loss_EnergyGeometry([2.749, 12.036])
+res = loss.grad_request.result                    # res.grad["r0_w"], res.case, res.parts ...</code></pre>
+    </section>
+
+    <section id="same">
+      <h2>三、默认行为不变</h2>
+      <ul>
+        <li><strong>默认 BO</strong>：<code>tools/engine_parity.py --compare-serial</code> 在发表点 (2.749, 12.036)：energygeometry 损失 1.899324742、dataset 446.2016018，1 核与自动（4 核）逐位相同；与 M4 之前的提交 <code>65115d1</code> 的同一步相比，<code>log.out</code>、<code>par.out</code> 和 BO 步的全部文件（energygeometry 17 个，dataset 8 个）逐字节相同。<code>result.pkl</code> 只在梯度优化器下多存一个 <code>best_dir</code>。</li>
+        <li><strong>带梯度的求值</strong>：同一点上带不带梯度，损失的 64 位值相同，<code>dft_final.xyz</code>、<code>dftb_band.xyz</code>、<code>dftb_full.xyz</code>、<code>search_index.txt</code>、SKF 逐字节相同（两种模式实测；另有测试）。DFTB 阶段第一遍的 Ė 和第二遍的力收缩在 1、2、4 核下逐位相同（测试）。</li>
+        <li><strong>纯函数 μ</strong>：在 G1 的两步上，任意 σ 的 <code>loss_grad.mu</code> 与 <code>Loss.parallel_repulsion</code>/<code>unparallel_repulsion</code> 的返回值逐位相同（10 个 σ，以及测试里的 8 个）。</li>
+        <li><strong>pydftb</strong>：<code>api.py</code>、<code>ase_calc.py</code> 的改动不碰 NumPy 计算路径（<code>ase_calc.py</code> 只是把失败时的异常换成 <code>CalculationFailed</code>）；golden（<code>--allow-new dev groups gint</code>，237 次计算、41,519 个量；最小环境 198 次、36,176 个量）逐位相同；pydftb 测试 conda 435 个通过，最小环境 259 个通过、93 个跳过，最小环境加 torch 404 个通过、31 个跳过。</li>
+      </ul>
+    </section>
+
+    <section id="check">
+      <h2>四、梯度的验证（L1–L4）</h2>
+      <p><code>tools/grad_check.py</code>，Cu 数据集，发表点 (2.749, 12.036)。</p>
+      <h3>L1：pydftb 在 PTBP 结构上、沿真实的 hotcent 切向</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>结构</th><th>展宽</th><th>Ė vs NumPy 收缩</th><th>Ė vs 参数空间差分（误差棒）</th><th>w·Ḟ vs 差分（误差棒）</th></tr></thead>
+        <tbody>
+          <tr><td>#0（2 原子，只用 Γ 点）</td><td>T = 0（PTBP）</td><td>5.0e-16</td><td>5.1e-10（5.1e-10）</td><td>4.9e-10（6.0e-10）</td></tr>
+          <tr><td>#5（2 原子，只用 Γ 点）</td><td>T = 0（PTBP）</td><td>9.4e-16</td><td>3.8e-10（4.6e-10）</td><td>两者都为 0（对称）：-5.59e-18 / -3.37e-14</td></tr>
+          <tr><td>#33（2 原子，1688 个 k 点）</td><td>T = 0（PTBP）</td><td>1.6e-16</td><td>3.7e-4（7.7e-4）</td><td>2.5e-1（1.0e+0）</td></tr>
+          <tr><td>#60（1 原子，1372 个 k 点）</td><td>T = 0（PTBP）</td><td>1.6e-16</td><td>差分不收敛（T = 0 金属，费米能级二分）</td><td>—（单原子：力为零）</td></tr>
+          <tr><td>#0（2 原子，只用 Γ 点）</td><td>Fermi 1000 K（F）</td><td>4.9e-16</td><td>2.0e-11（8.3e-11）</td><td>5.6e-11（4.2e-11）</td></tr>
+          <tr><td>#5（2 原子，只用 Γ 点）</td><td>Fermi 1000 K（F）</td><td>1.6e-15</td><td>4.5e-10（4.8e-10）</td><td>两者都为 0（对称）：-3.20e-17 / 4.93e-14</td></tr>
+          <tr><td>#33（2 原子，1688 个 k 点）</td><td>Fermi 1000 K（F）</td><td>0.0e+0</td><td>3.8e-10（6.1e-10）</td><td>1.1e-5（绝对差 3.4e-12 Ha/Bohr²，误差棒 2.7e-6）</td></tr>
+          <tr><td>#60（1 原子，1372 个 k 点）</td><td>Fermi 1000 K（F）</td><td>3.2e-16</td><td>2.4e-10（2.4e-10）</td><td>—（单原子：力为零）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>torch 的 hf 梯度与独立写的 NumPy 收缩（P·H0[t] + (P v̄ − W)·S[t]）一致到 1e-15：切向收缩本身没有错。</li>
+        <li>只用 Γ 点的结构在 T = 0 下，能量和力的反向与参数空间的 Richardson 差分一致到 5e-10，在差分自己的误差棒之内。</li>
+        <li>有上千个 k 点的 T = 0 金属，参数的微小变化会让能级跨过费米能级，差分本身就是噪声（误差棒 1e-4 到 100%）；#60 在扰动的参数下费米能级二分甚至不收敛。同样的结构加 1000 K 的 Fermi 展宽（自由能 F 与 implicit 的力）后一致到 2e-11–5e-10，力的反向绝对差 3e-12 Ha/Bohr²。</li>
+      </ul>
+      <h3>L2：hotcent 步长研究</h3>
+
+      <div class="table-wrap"><table>
+        <thead><tr><th>结构</th><th>h = 0.005</th><th>h = 0.01</th><th>h = 0.02</th><th>h = 0.04</th><th>h = 0.08</th><th>h = 0.16</th><th>h = 0.32</th><th>h = 0.01–0.16 间的离散</th></tr></thead>
+        <tbody>
+          <tr><td>#0（2 原子，只用 Γ 点）</td><td>-0.3821</td><td>-0.3885</td><td>-0.3853</td><td>-0.3802</td><td>-0.3881</td><td>-0.3896</td><td>-0.4098</td><td>2.5%</td></tr>
+          <tr><td>#5（2 原子，只用 Γ 点）</td><td>0.3002</td><td>0.2968</td><td>0.2985</td><td>0.3005</td><td>0.2998</td><td>0.2975</td><td>0.2920</td><td>1.2%</td></tr>
+          <tr><td>#33（2 原子，1688 个 k 点）</td><td>-4.7818</td><td>-4.6918</td><td>-4.7374</td><td>-4.7829</td><td>-4.7992</td><td>-4.8448</td><td>-5.0127</td><td>3.2%</td></tr>
+          <tr><td>#60（1 原子，1372 个 k 点）</td><td>2.3280</td><td>2.3166</td><td>2.3221</td><td>2.3258</td><td>2.3253</td><td>2.3115</td><td>2.2721</td><td>0.6%</td></tr>
+        </tbody>
+      </table></div>
+      <p>表中是 dE/dr0_w（eV/Bohr）：用步长 h 的 hotcent 切向乘 pydftb 的梯度（SCC 1e-10）。h = 0.01–0.16 之间的离散 0.6–3.2% 就是 hotcent 数值噪声带来的不确定度；切向本身在相邻步长之间的差（按每列最大值归一）rms 为 2.7e-3（0.04 与 0.08）到 9.6e-3（0.005 与 0.01）。默认 h = 0.04 在平坦的一段。</p>
+      <h3>L3 / L4：整条流程</h3>
+      <p>L3 在固定的 σ* 上比较（只验证 DFTB 与损失的链式部分），L4 用 PTBP 自己的损失（每个点重新搜索 σ_rep）。差分的步长与切向相同。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模式 / 方向</th><th>梯度</th><th>整条流程的差分</th><th>相对差</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>dataset，r0_w，h = 0.01</td><td>−470.61（L3）/ −470.89（L4）</td><td>−470.57 / −470.79（中心）</td><td>7.7e-5 / 2.0e-4</td><td>折点修正 −0.28</td></tr>
+          <tr><td>dataset，r0_w，h = 0.04</td><td>−470.63 / −470.91</td><td>−462.49 / −469.03</td><td>1.8e-2 / 4.0e-3</td><td>固定 σ 时有残差在 ±h 内换号，|·| 的弯折进入差分</td></tr>
+          <tr><td>dataset，r0_d，h = 0.2</td><td>18.0655</td><td>18.0690</td><td>2.0e-4</td><td>只来自罚函数；差分的截断误差</td></tr>
+          <tr><td>energygeometry，r0_w，同一拟合分支</td><td>4.529（h = 0.04）/ 4.502（h = 0.01）</td><td>4.550（r0_w = 2.734 与 2.749）</td><td>4.6e-3 / 1.1e-2</td><td>L3 与 L4 相同（σ̂ 不变）</td></tr>
+          <tr><td>energygeometry，r0_w，h = 0.04 中心差分</td><td>4.529</td><td>20.0</td><td>—</td><td>右侧 2.789 跨过断崖（组 5 的 EOS 拟合，μ = 3.33）；左侧单侧差分 4.40（2.9e-2）</td></tr>
+          <tr><td>energygeometry，r0_w，h = 0.01 中心差分</td><td>4.502</td><td>5.40</td><td>—</td><td>2.739 落在组 4 拟合的另一个解上，2.759 拟合失败</td></tr>
+          <tr><td>energygeometry，r0_d，h = 0.2</td><td>0.076898</td><td>0.076914</td><td>2.0e-4</td><td>只来自罚函数</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>energygeometry 的损失在发表点附近不连续。</strong>沿 r0_w 扫描（σ 固定为 σ*）：组 4（Boltzmann 权重 0.40）的 Birch–Murnaghan 拟合有两个最小二乘解，r0_w = 2.729、2.734、2.749 时得到 B = +2.7 eV/Å³、v0 = 13.49 Å³（体积比 +0.12），2.739、2.744 时得到 B = −5.0 eV/Å³、v0 = 10.34 Å³（体积比 −0.14），2.751 时拟合失败（maxfev）；组 3 的能量在采样的最小体积处最低，拟合的 B 在所有点上都为负。PTBP 的损失因此在 2.734–2.751 之间跳变好几次，跨跳变的差分没有意义；梯度是当前这个拟合分支的导数，在同一分支上与差分一致到 0.5–1%（hotcent 噪声的量级）。<code>grad.out</code> 对这样的拟合给出提示（“EOS fit has no minimum”）。</p>
+    </section>
+
+    <section id="perf">
+      <h2>五、代价</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>一次求值（Cu，4 核）</th><th>energygeometry</th><th>dataset</th></tr></thead>
+        <tbody>
+          <tr><td>普通 BO 步</td><td>27 s（DFTB 10.5 s）</td><td>15.9 s（DFTB 9.0 s）</td></tr>
+          <tr><td>值 + 梯度</td><td>38.0 s</td><td>41.1 s</td></tr>
+          <tr><td>　切向（hotcent 2 次 + 首次的 r0_d 探测）</td><td>11.9 s</td><td>11.7 s</td></tr>
+          <tr><td>　DFTB 阶段（含第一遍的能量梯度）</td><td>10.5 s（+0%）</td><td>11.1 s（+24%）</td></tr>
+          <tr><td>　σ* 精确化</td><td>1.2 s</td><td>0.6 s</td></tr>
+          <tr><td>　第二遍：力的反向 + E0</td><td>—</td><td>11.4 s</td></tr>
+          <tr><td>约合 BO 步</td><td>1.4</td><td>2.6</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>单线程逐结构（大 k 网格的 Cu 结构）：第一遍的 hf 求值约为引擎的 0.9–1.2 倍（本身含 SCC），第二遍约 1.4–1.6 倍；小结构 5–7 倍，但绝对时间不到 0.5 s。</li>
+        <li>r0_d 的探测每次运行只做一次，之后每次梯度少跑一次 hotcent（约 4 s）。</li>
+        <li>参数变多时，DFTB 部分的代价不变（一次反向给出对所有 SK 参数的梯度），只多跑 hotcent。</li>
+      </ul>
+    </section>
+
+    <section id="bench">
+      <h2>六、BO 与梯度法的对比</h2>
+      <p><code>tools/bo_vs_grad.py</code>，Cu 数据集，4 核，pydftb 引擎，全部从 BO 的种子点（发表的参数 r0_w = 2.749、r0_d = 12.036 Bohr）出发：</p>
+      <ul>
+        <li>BO 照 PTBP 的做法调用 <code>gp_minimize</code>（EI，种子点在前，11 次），取 3 个 random_state；</li>
+        <li>梯度法 <code>--grad-maxiter 8</code>；</li>
+        <li>再让 BO（random_state 123）的调用次数与梯度法的墙钟时间相当（按 3 次 BO 的平均每次耗时折算）。</li>
+      </ul>
+      <p>“最好的 μ”只计真实的损失；失败的点（PTBP 记为 97–99）单列。</p>
+      <p class="callout note"><strong>先看清 BO 是什么。</strong>skopt 默认先取 10 个随机点，PTBP 又给了种子点，所以 11 次调用 = 种子 + 10 个随机点，高斯过程没有选过点；与梯度法同样时间的那次 BO 多出的调用才由高斯过程选点（第七节）。</p>
+      <h3>energygeometry（种子点 μ = 1.8993）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>运行</th><th>求值次数</th><th>失败</th><th>墙钟 s</th><th>最好的 μ</th><th>位置 (r0_w, r0_d)</th></tr></thead>
+        <tbody>
+          <tr><td>梯度法（<code>--grad-maxiter 8</code>）</td><td>16；1 次没有梯度</td><td>0</td><td>635</td><td>0.7602</td><td>(2.387, 12.002)</td></tr>
+          <tr><td>BO，11 次（random_state 123）</td><td>11</td><td>0</td><td>329</td><td>1.8993</td><td>(2.749, 12.036)</td></tr>
+          <tr><td>BO，11 次（random_state 7）</td><td>11</td><td>2</td><td>563</td><td>0.8551</td><td>(2.344, 13.454)</td></tr>
+          <tr><td>BO，11 次（random_state 2024）</td><td>11</td><td>2</td><td>231</td><td>1.3194</td><td>(2.382, 18.241)</td></tr>
+          <tr><td>BO，与梯度法同样时间（19 次，random_state 123）</td><td>19</td><td>2</td><td>504</td><td>1.8993</td><td>(2.749, 12.036)</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>梯度法最好</strong>：16 次求值、635 s 降到 0.7602（−60%），第 4 次求值（155 s）就低于所有 BO 运行的最好值 0.8551。</li>
+        <li><strong>BO 很依赖运气</strong>：3 个 random_state 的结果是 1.8993（一个随机点都没有比种子好）、0.8551、1.3194；同样时间的 BO（19 次）也没有比种子好，它由高斯过程选的 8 个点里有 2 个落在 r0_w 的上界 17.46 Bohr 上并失败。</li>
+        <li><strong>失败的点</strong>：BO 一共 6 次失败，5 次是 r0_w ≥ 15.4 Bohr 时重叠矩阵不正定（M4c 之前 pydftb 在这里让整个运行崩溃，第七节），1 次是 r0_d = 20.9 Bohr 时 hotcent 没有生成 SKF。</li>
+        <li><strong>梯度法的局限</strong>：r0_w 方向上损失有很多折点，2.38–2.40 Bohr 之间导数在 −1.3 和 +0.16 之间跳，BFGS 在这里来回试探；r0_d 方向的导数一直是 +0.030/Bohr（只来自罚函数），8 次迭代里没有沿它走远。把 r0_d 移到罚函数的最优点 9.98 Bohr 还能再降 4%（到约 0.729，第七节第 1 条）。另有 1 次求值因一个结构 SCC 1000 轮不收敛而没有梯度（耗时 104 s）。</li>
+      </ul>
+      <h3>dataset（种子点 μ = 446.20）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>运行</th><th>求值次数</th><th>失败</th><th>墙钟 s</th><th>最好的 μ</th><th>位置 (r0_w, r0_d)</th></tr></thead>
+        <tbody>
+          <tr><td>梯度法（<code>--grad-maxiter 8</code>）</td><td>23；17 次没有梯度</td><td>0</td><td>2559</td><td>209.9058</td><td>(4.066, 11.979)</td></tr>
+          <tr><td>BO，11 次（random_state 123）</td><td>11</td><td>0</td><td>378</td><td>211.2709</td><td>(4.250, 11.039)</td></tr>
+          <tr><td>BO，11 次（random_state 7）</td><td>11</td><td>2</td><td>574</td><td>220.5066</td><td>(3.432, 11.389)</td></tr>
+          <tr><td>BO，11 次（random_state 2024）</td><td>11</td><td>2</td><td>262</td><td>446.2016</td><td>(2.749, 12.036)</td></tr>
+          <tr><td>BO，与梯度法同样时间（70 次，random_state 123）</td><td>70</td><td>30</td><td>3038</td><td>208.4930</td><td>(3.555, 11.347)</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>两者打平</strong>：梯度法 2559 s 降到 209.9（−53%）；同样时间的 BO（70 次，3038 s）在第 51 次求值（2523 s）降到 208.5，在此之前一直停在第 6 次（随机点）的 211.3。在同样的 2559 s 时 BO 好 0.7%。只做 11 次的 BO 是 211.3、220.5 和 446.2（一个随机点都没有比种子好）。</li>
+        <li><strong>梯度法卡在 SCC 不收敛的区域</strong>：r0_w ≈ 4.07–4.21 Bohr 一带，总有一两个结构的 SCC 在 T = 0 下 1000 轮也不收敛，23 次求值里 17 次没有梯度，每次 80–120 s。梯度指向更小的 r0_w，那边的损失确实更低（209.9 就在那里），但没有梯度的点线搜索不接受，只能缩回，最后步长小于 xtol 而停下。</li>
+        <li><strong>BO 被失败值误导</strong>：失败的点 PTBP 记为 97–99，比 dataset 模式的所有真实损失都低。高斯过程接手后的 59 个点里 30 个落在失败区（r0_w ≈ 15–17.5 Bohr），只做 11 次的 BO 有两次把失败点当成了最优（第七节）。</li>
+      </ul>
+      <h3>结论</h3>
+      <ul>
+        <li><strong>energygeometry 模式梯度法明显更好</strong>：同样的时间，梯度法把损失降到 0.760，BO 最好是 0.855（3 个 random_state 中最好的一个），用同样时间的 BO 一个点都没有比种子好。</li>
+        <li><strong>dataset 模式打平</strong>：两者各有各的问题，梯度法受 T = 0 下 SCC 不收敛拖累，BO 被失败值引向失败区。</li>
+        <li><strong>建议</strong>：energygeometry 模式用 <code>--optimizer gradient</code>，或 <code>bo_grad</code>（先 BO 探索全局，再用梯度精修）。dataset、reaction 模式先解决失败值的问题（留给用户决定）；SCC 收敛困难时可考虑加电子温度。BO 本身的调用次数要明显多于 11，高斯过程才起作用。</li>
+        <li>这只是一个元素、两个参数、一个数据集上的结果，每种设置只跑了一次，随机性不小（3 个 random_state 之间的差别就很大）。梯度法的优势会随参数个数增长（WHY.md §3），这里还看不出来。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>七、发现</h2>
+      <ol>
+        <li><strong>r0_d 不影响 SKF。</strong>hotcent 2.1 默认 <code>perturbative_confinement=True</code>。在这种做法下，密度约束那一步只对没有波函数约束的价层生效（<code>atomic_dft.py</code>：<code>if nl not in self.wf_confinement</code>），而 hotpy 给每个价层都设了波函数约束，所以电子密度完全由 r0_w 约束的轨道决定。r0_d = 5、12.036、30 Bohr 时 SKF 逐字节相同；PTBP 的损失只经罚函数依赖 r0_d，Cu 的最优是 4 r_cov = 9.98 Bohr，发表值 12.036 让损失高 4.3%。要让 r0_d 起作用，需要关掉微扰约束或改 hotpy——这会改变已发表参数的复现，留给用户决定。</li>
+        <li><strong>发表点不是局部极小。</strong>energygeometry 损失在 r0_w = 2.709 时为 1.723，比发表点 2.749 的 1.899 低 9%；梯度 +4.53/Bohr 预测的下降（0.18）与实测（0.176）一致。BO 只试了 11 个点（PTBP 的默认），它的“最好点”不一定是局部极小。</li>
+        <li><strong>损失的断崖。</strong>r0_w = 2.789 时，最后一组 EOS 的拟合给出负的平衡体积（体积比 −1.06，拟合跑出了采样的体积范围），σ_rep 搜索随之退到边界 0.1，μ = 3.33。跨过断崖的差分没有意义；梯度描述的是断崖这一侧的局部变化。<code>grad.out</code> 在拟合的极小落到采样体积之外时给出提示。</li>
+        <li><strong>dataset 模式的极小在折点上。</strong>σ_rep 的最优点正好让一个结构的形成能误差为零（第 15 个），两侧斜率 −310、+376。此时 σ* 随 r0 移动，导数要加折点修正（发表点上为 −0.28/Bohr，占 0.06%）；在 energygeometry 模式里极小是光滑的（斜率 7e-5）。</li>
+        <li><strong>PTBP 的内层搜索并不精确</strong>：L-BFGS-B 的 ftol 是 1e-3，但发表点上 σ̂ 与精确极小 σ* 的损失只差 2e-8（energygeometry）和 2.5e-6（dataset，相对 6e-9）。</li>
+        <li><strong>T = 0 金属的差分参照</strong>：有很多 k 点时，参数的微小变化会让能级跨过费米能级，差分本身就有 1e-4 到 100% 的噪声；一个单原子 Cu 结构（1372 个 k 点）在扰动的参数下，DFTB+ 式的费米能级二分甚至不收敛。L1 对这些结构另用 1000 K 的展宽验证（自由能 F 与 implicit 的力）。</li>
+        <li><strong>孤立原子的两处崩溃</strong>（已单独修复）：周期盒子里没有任何原子对时，<code>segment_sum</code> 返回整数数组、<code>pair_values</code> 拼接空列表。PTBP dataset 模式的 E0 正是这种计算。</li>
+        <li><strong>PTBP 默认的 BO 其实是随机搜索。</strong>skopt 的 <code>gp_minimize</code> 默认先取 10 个随机点（<code>n_initial_points=10</code>）。PTBP 给了一个种子点，默认又只调用 11 次，于是 11 次求值就是种子加 10 个随机点，高斯过程一次也没有用来选点。这也解释了第 2 条：发表点不是局部极小。要让高斯过程起作用，<code>--n_calls</code> 要明显大于 11（或减少初始随机点）。</li>
+        <li><strong>重叠矩阵不正定。</strong>BO 的随机点里有 r0_w = 15.4–17.5 Bohr 的；r0_w = 17.127 时 Cu 的波函数延伸到 17.8 Bohr，energygeometry 数据集的 66 个结构中有 17 个（k 网格 14³–15³ 的 1–2 原子晶胞）在某个 k 点上重叠矩阵数值上不正定，Cholesky 分解失败。DFTB+ 在同一结构上同样报错退出（“Failure in LAPACK routine zpotrf, unable to complete Cholesky factorization of B”，退出码 1，经 ASE 是 <code>CalculationFailed</code>），PTBP 把这一步记为失败值。pydftb 之前抛出 NumPy 的 <code>LinAlgError</code>（<code>ValueError</code> 的子类），PTBP 的 except 不捕获，整个优化中断：基准第一次运行时 BO 的 random_state 7 在第 3 次求值就这样崩溃了。现在 pydftb 报 <code>CalculationFailed</code>（原异常作为 cause），这一点的损失是失败值 99，与 DFTB+ 一致（<code>dftbplus_map.md</code> 第 36 条）。</li>
+        <li><strong>dataset 模式的失败值比真实损失还低。</strong>失败时 PTBP 返回 97–99 的随机整数。energygeometry 模式的真实损失在 1–4 之间，失败值远大于它们；dataset 模式里 Cu 的真实损失在 210 到 7000 之间，失败值反而最低。基准中 dataset 模式 BO 的 random_state 7 和 2024 各失败 2 次，skopt 把 97 当成最小值：照 PTBP 的做法，这两次报告的“最优参数”就是失败点（r0_w = 17.127 Bohr，或 r0_d = 20.86 Bohr）。与梯度法同样时间的那次 BO，高斯过程选的 59 个点里有 30 个落在失败区。改法（例如按模式给失败值，或取已有损失的最大值）会改变这两种模式下默认 BO 的行为，留给用户决定。梯度优化器的结果和本报告的统计都已排除失败值。</li>
+        <li><strong>T = 0 下 SCC 不收敛，梯度缺失。</strong>PTBP 的 DFTB 输入是 T = 0（M3d 报告），金属 Cu 的 SCC 在某些参数下 1000 轮也不收敛；PTBP 设了 <code>ConvergentSCCOnly = No</code>，用最后一轮的结果照算损失。没有收敛的 SCC 不是不动点，隐式微分不成立，这些点就没有梯度。dataset 模式的基准中 23 次求值有 17 次如此（r0_w ≈ 4.07–5.5 Bohr），energygeometry 模式 16 次中 1 次；这样的求值也最慢（80–120 s，普通 BO 步约 17–30 s）。加电子温度（<code>--smearing</code>）能让 SCC 收敛，但会改变损失的定义。</li>
+      </ol>
+    </section>
+
+    <section id="tests">
+      <h2>八、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试文件</th><th>个数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>tests/test_loss_grad.py</code></td><td>14</td><td>纯函数 μ 与 <code>parallel_repulsion</code>/<code>unparallel_repulsion</code> 逐位相同；残差项给出损失，对 σ 的导数 vs 差分；EOS 隐函数导数 vs 牛顿精确拟合的差分（≤ 1e-8）和 PTBP 拟合的差分；合成的一维损失（光滑、折点、边界、四项折点）上 σ* 的分类与梯度 vs 精确 μ* 的差分（≤ 1e-6）；折点修正不可省；罚函数的导数；力权重跳过折点和恒零项；一个 BO 步带梯度钩子时损失和文件不变</td></tr>
+          <tr><td><code>tests/test_gradient_opt.py</code></td><td>13</td><td>投影 BFGS：无约束极小、边界上的极小、失败区域（拒绝的步）、起点失败、可复现、大于 97 的损失不算失败、被边界截断的步不重复求值；结果取最低的真实损失（无梯度的点算，失败值不算）；替身损失上的 <code>optimize_gradient</code>、<code>optimize_bo_grad</code>（BO 的最低值是失败值时从真实损失起步）；条件检查；命令行选项及其转发</td></tr>
+          <tr><td><code>tests/test_hotcent_tangent.py</code></td><td>5</td><td>用改表的替身代替 hotcent：中心差分、r0_d 探测及其缓存、r0_d 起作用时的中心差分、网格或排斥势改变时报错、内积</td></tr>
+          <tr><td><code>tests/test_dftb_stage_parallel.py</code></td><td>+4</td><td>带梯度的 DFTB 阶段写出的文件与不带时相同；Ė 和力的收缩在 1、4 核及无计划时逐位相同；SCC 不收敛时结果照常、记下原因；引擎失败（重叠矩阵不正定）在带不带梯度时都报 <code>CalculationFailed</code></td></tr>
+          <tr><td><code>pydftb/tests/test_autodiff.py</code></td><td>+2</td><td><code>PyDFTB.evaluate</code> 的 <code>results</code> 与 <code>calculate</code> 逐位相同（含应力），能量可求导；引擎失败报 <code>CalculationFailed</code></td></tr>
+          <tr><td><code>pydftb/tests/test_core.py</code></td><td>+1</td><td><code>PyDFTB</code> 把引擎的 <code>LinAlgError</code> 报成 <code>CalculationFailed</code>（原异常作为 cause）</td></tr>
+          <tr><td><code>pydftb/tests/test_core.py</code> 等</td><td>+3</td><td>（提交 <code>8099ceb</code>）周期盒子里的孤立原子：引擎、hf、implicit</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>PTBP 测试（conda 环境）：207 个通过，7 个已知的界面冒烟测试失败（与之前相同），1 个跳过。</li>
+        <li>G0：golden 两个环境逐位相同；pydftb 测试三个环境全部通过（见第三节）。</li>
+        <li>G1：见第三节。</li>
+        <li>多元素：B、N、Na 的 reaction 模式（22 个结构，3 种元素、6 个 SK 表）一次带梯度的求值，损失和文件与不带时相同；dμ/dr0_w = −69.91，整条流程的中心差分 −69.92（相对差 1.2e-4），极小在折点上（修正 +1.59）。</li>
+      </ul>
+    </section>
+
+    <section id="deviations">
+      <h2>九、与计划的偏差</h2>
+      <ul>
+        <li>计划写 4 次 hotcent（r0_w、r0_d 各两次）；实测发现 r0_d 不影响 SKF，改为 r0_w 两次加每次运行一次的 r0_d 探测。</li>
+        <li>σ_rep 的处理比计划多了一步：先在 σ̂ 附近精确找到 σ*（有界 Brent，再对折点项做牛顿），再按光滑/折点/边界用对应公式。</li>
+        <li>能量的梯度没有单独一遍，而是并进原来的 DFTB 阶段（<code>PyDFTB.evaluate</code> 返回与 <code>calculate</code> 相同的结果）；力的反向仍是第二遍。</li>
+        <li>L3、L4 的比较改为同时给出中心差分和两侧的单侧差分：损失有断崖时，中心差分没有意义。</li>
+        <li>梯度优化器的结果与 BO 一样取所有求值里最低的真实损失（计划里只取接受的迭代点）：SCC 不收敛的点没有梯度，但损失是真的。</li>
+        <li>计划外修了一处 pydftb 与 DFTB+ 的不一致：重叠矩阵不正定时 pydftb 现在报 <code>CalculationFailed</code>（第七节）。基准测试因此能跑完；之前 BO 碰到这样的点整个运行就中断了。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">十、复现命令</span></summary>
+      <div class="body">
+<pre><code># 分层验证（conda 环境，约 30 分钟）
+python tools/grad_check.py dft/dft.xyz --levels 1 2 3 4 --json grad_check.json
+python tools/grad_check.py dft/dft.xyz --levels 1 3 4 --l1-temperature 1000 --l34-steps 0.04 0.01
+# BO 与梯度法（每种模式约 1 小时；中断后加 --resume 接着跑）
+python tools/bo_vs_grad.py dft/dft.xyz --mode energygeometry --n-calls 11 --random-states 123 7 2024 \
+    --grad-maxiter 8 --workdir bench --json bench/eg.json --resume
+python tools/bo_vs_grad.py dft/dft.xyz --mode dataset --n-calls 11 --random-states 123 7 2024 \
+    --grad-maxiter 8 --workdir bench --json bench/ds.json --resume
+# 默认 BO 不变（G1）
+python tools/engine_parity.py dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines pydftb --compare-serial
+# 测试
+pytest -q tests/test_loss_grad.py tests/test_gradient_opt.py tests/test_hotcent_tangent.py tests/test_dftb_stage_parallel.py</code></pre>
+        <p>实验脚本（不入库，在会话的 scratchpad <code>m4c/</code> 中）：<code>tangent_steps.py</code>（步长研究）、<code>energy_chain.py</code>（链式法则与直接差分）、<code>probe_cost.py</code>（单结构代价）、<code>stage_probe.py</code>（两遍的逐位检查）、<code>mu_check.py</code>、<code>terms_check*.py</code>、<code>drep_check.py</code>、<code>e2e.py</code>（带不带梯度的整步对照）、<code>l3_debug.py</code>（断崖的定位）、<code>gate_g1.sh</code>。</p>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>十一、下一步</h2>
+      <ul>
+        <li>M4d：设备选项、GPU 自检脚本、PTBP 的 <code>--pydftb_backend/--device/--dtype</code>。</li>
+        <li>梯度真正有优势要等参数变多：分壳层的 r0、幂次 p、多元素同时优化，或直接拟合 SK 表；DFTB 部分的代价不随参数个数增长。</li>
+        <li>是否让 r0_d 起作用（hotcent 的微扰约束），由用户决定。</li>
+        <li>dataset、reaction 模式的失败值（97–99）要不要改，由用户决定（第七节）；改了会改变这两种模式下默认 BO 碰到失败点时的行为。</li>
+        <li>pydftb 补上 DFTB+ 的原子距离检查（相距不到 0.01 Bohr 时报错），已列为待办。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M4c-ptbp-gradient.html">← M4c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M4c</span>
+  </footer>
+</div>
+</body>
+</html>

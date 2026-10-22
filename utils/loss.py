@@ -189,6 +189,9 @@ class Loss():
         self.path = path
         self.hp = hotpy()
         self.opt_elem = opt_elem
+        # utils.loss_grad.GradRequest: the next evaluation also computes the gradient
+        # (gradient optimisers, M4c); None: the loss exactly as before
+        self.grad_request = None
     
 
     def penalty(self, r0_w: float, r0_d: float) -> float:
@@ -365,9 +368,10 @@ class Loss():
         """
         # poly_rep = 'Yes': switch polynomial repulsion (default 0.0 for hotcent skf generator)
         # SCC = 'Yes': switch the self charge consistent calculation(DFTB2)
+        grad = getattr(self, 'grad_request', None)
         dftb_bandstructure_final, dft_subincopy_final, kept_indices = dftb_stage.run_dataset(
             dft_incopy, self.bolt_f11, self.args_input.eos_points, self.args_input.kpt_density,
-            poly_rep='Yes', SCC='Yes')
+            poly_rep='Yes', SCC='Yes', grad=None if grad is None else grad.grad_pass)
         dftb_stage.write_outputs(dftb_bandstructure_final, dft_subincopy_final, kept_indices)
         return dftb_bandstructure_final, dft_subincopy_final
 
@@ -926,7 +930,9 @@ class Loss():
         # the inner brute scan recomputes against the new band structure.
         self._E0_dftb_cache = {}
 
-        opt_directory = self.path / self.args_input.results_dir / f"opt_{r0_w:.3f}_{r0_d:.3f}"
+        grad = getattr(self, 'grad_request', None)
+        opt_directory = self.path / self.args_input.results_dir / (
+            f"opt_{r0_w:.3f}_{r0_d:.3f}" if grad is None else grad.directory_name(r0_w, r0_d))
         opt_directory.mkdir(exist_ok=True, parents = True)
 
         os.chdir(opt_directory)
@@ -951,6 +957,10 @@ class Loss():
                             )        
 
             t_hotcent = perf_counter()
+            if grad is not None:
+                grad.after_hotcent(self, conf_parameters)     # tangents (own timings)
+                t_ini += perf_counter() - t_hotcent           # stage times: the BO step's
+                t_hotcent = perf_counter()
 
         
         #2. DFTB Calculation for Band Structure Energy term
@@ -1051,6 +1061,8 @@ class Loss():
                 \nTotal: {t_end - t_ini}""")              
             if current_plan() is not None and current_plan().estimates:
                 print(current_plan().step_line(self.step_timings))
+            if grad is not None:
+                grad.after_step(self, conf_parameters, sigma_rep, mu)
             return mu
             
 
@@ -1066,6 +1078,8 @@ class Loss():
             
             with open(self.args_input.log_file, 'a') as output:
                 output.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.8f}, {mu_E:15.8f}, {mu_V:20.8f}, {mu_logb: 20.8f}, {penalty:15.5f}, {mu:25.11f}\n')
+            if grad is not None:
+                grad.fail(conf_parameters, mu, f"{type(error).__name__}: {error}")
             return mu
         
 
@@ -1226,6 +1240,20 @@ class Loss():
             return self._optimize_parallel_bo(cov_radius, checkpoint_saver, n_calls)
         if opt == 'pso':
             return self._optimize_pso(cov_radius, n_calls)
+        if opt in ('gradient', 'bo_grad'):                  # M4c
+            from utils import gradient_opt
+            maxiter = getattr(self.args_input, 'grad_maxiter', None)
+            steps = getattr(self.args_input, 'hotcent_fd_step', None)
+            if steps is not None and len(steps) > 2:
+                raise SystemExit("--hotcent_fd_step takes one or two steps: r0_w [r0_d]")
+            if steps is not None and len(steps) == 1:
+                from utils.hotcent_tangent import DEFAULT_STEPS
+                steps = [steps[0], DEFAULT_STEPS[1]]
+            if opt == 'gradient':
+                return gradient_opt.optimize_gradient(self, cov_radius, maxiter=maxiter or 20,
+                                                      steps=steps)
+            return gradient_opt.optimize_bo_grad(self, cov_radius, checkpoint_saver, n_calls,
+                                                 maxiter=maxiter or 5, steps=steps)
         raise ValueError(f"Unknown optimizer: {opt!r}")
 
     def _bo_dimensions_and_cost(self, cov_radius):

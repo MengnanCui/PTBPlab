@@ -26,7 +26,7 @@ class SetupState:
     dataset_path: Optional[Path] = None
     dataset_report: Optional[DatasetReport] = None
     mode: str = 'auto'                   # auto / dataset / reaction / ...
-    optimizer: str = 'bo'                # bo / parallel_bo / pso
+    optimizer: str = 'bo'                # bo / parallel_bo / pso / gradient / bo_grad
     n_calls: Optional[int] = None
     n_particles: int = 4
     e0s_strategy: str = 'auto'           # auto / cache / manual

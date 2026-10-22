@@ -40,8 +40,18 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                         "fit.json sits next to the dataset, reaction when the "
                         "dataset spans multiple chemical formulas, and dataset "
                         "otherwise. Override explicitly to skip detection.")
-    p.add_argument('--optimizer', default='bo', choices=['bo', 'parallel_bo', 'pso'],
-                   help="Outer-loop optimiser. Default: bo.")
+    p.add_argument('--optimizer', default='bo',
+                   choices=['bo', 'parallel_bo', 'pso', 'gradient', 'bo_grad'],
+                   help="Outer-loop optimiser. Default: bo. 'gradient' (projected BFGS on "
+                        "the loss gradient) and 'bo_grad' (BO, then gradient steps) need "
+                        "--engine pydftb and torch.")
+    p.add_argument('--grad-maxiter', type=int, default=None, metavar='N', dest='grad_maxiter',
+                   help="Iterations of the gradient optimiser (default: 20; 5 after BO in "
+                        "bo_grad).")
+    p.add_argument('--hotcent-fd-step', type=float, nargs='+', default=None,
+                   metavar='H', dest='hotcent_fd_step',
+                   help="hotcent difference steps of the gradient, r0_w [r0_d] in Bohr "
+                        "(default: 0.04 0.2).")
     p.add_argument('--n-calls', type=int, default=None, metavar='N',
                    dest='n_calls',
                    help="Total BO/PSO evaluations. Default: 11 for energygeometry/"
@@ -228,6 +238,10 @@ def run(args: argparse.Namespace) -> int:
         legacy_argv += ['--multi_element', *args.multi_element]
     if args.postprocess_only:
         legacy_argv += ['--postprocess_only']
+    if getattr(args, 'grad_maxiter', None) is not None:
+        legacy_argv += ['--grad_maxiter', str(args.grad_maxiter)]
+    if getattr(args, 'hotcent_fd_step', None):
+        legacy_argv += ['--hotcent_fd_step', *[str(h) for h in args.hotcent_fd_step]]
 
     sys.argv = legacy_argv
     started_at = time.time()

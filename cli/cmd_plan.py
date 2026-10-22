@@ -30,8 +30,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    help="k-point density. Default: %(default)s.")
     p.add_argument('--eos-points', type=int, default=11, metavar='N', dest='eos_points',
                    help="Structures per EOS group. Default: %(default)s.")
-    p.add_argument('--optimizer', default='bo', choices=['bo', 'parallel_bo', 'pso'],
-                   help="Outer-loop optimiser. Default: bo.")
+    p.add_argument('--optimizer', default='bo',
+                   choices=['bo', 'parallel_bo', 'pso', 'gradient', 'bo_grad'],
+                   help="Outer-loop optimiser. Default: bo (the step estimates are those of "
+                        "a BO step; a gradient evaluation costs more, see the M4c report).")
     p.add_argument('--n-particles', type=int, default=4, metavar='N', dest='n_particles',
                    help="Batch width (parallel_bo) or swarm size (pso). Default: 4.")
     p.add_argument('--n-calls', type=int, default=None, metavar='N', dest='n_calls',

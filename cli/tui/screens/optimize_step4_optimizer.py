@@ -11,6 +11,8 @@ OPTIMIZER_DESCRIPTIONS = {
     'bo':          "skopt gp_minimize — sequential, sample-efficient",
     'parallel_bo': "skopt Optimizer (batched) — fork-pool parallel evaluations",
     'pso':         "pyswarms GlobalBestPSO — population-based, multi-modal",
+    'gradient':    "projected BFGS on the loss gradient — needs engine pydftb + torch",
+    'bo_grad':     "BO, then a few gradient steps — needs engine pydftb + torch",
 }
 
 

@@ -26,7 +26,9 @@ print(mf.mulliken)   # net Mulliken charges
 
 Periodic systems take a Monkhorst-Pack grid, e.g. `pydftb.SCC(system, params, kpts=(4, 4, 4), temperature=1000)`.
 
-ASE users can call `pydftb.ase_calc.PyDFTB` instead; it works in eV and Angstrom.
+ASE users can call `pydftb.ase_calc.PyDFTB` instead; it works in eV and Angstrom.  When the
+engine fails where DFTB+ would stop (a non-positive-definite overlap, e.g. very diffuse
+basis functions), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
 
 ### Several parameter sets for one element
 
@@ -217,6 +219,11 @@ With Methfessel-Paxton smearing and DFTB+'s TS, F is not variational: mode "hf" 
 `Smearing(fermi_level="exact")` replaces DFTB+'s mid-gap Fermi level (which lets the
 electron count drift by up to 1e-7) by the exact count.  See
 [`docs/reports/M4b-autodiff.html`](docs/reports/M4b-autodiff.html).
+
+The ASE calculator has the same entry point: `PyDFTB.evaluate(atoms, requires_grad=("tables",),
+mode="hf")` runs the calculation of `calculate` -- its `results` are bit for bit the same --
+and returns `(Result, Params)` with the derivatives.  PTBP builds the gradient of its loss on
+it (M4c, [`docs/reports/M4c-ptbp-gradient.html`](docs/reports/M4c-ptbp-gradient.html)).
 
 ## Tests and validation
 

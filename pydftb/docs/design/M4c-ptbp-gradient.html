@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4c PTBP 梯度设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M4c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4c · 设计文档</p>
+    <h1>PTBP 损失的梯度与梯度优化器</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M4c-ptbp-gradient.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M4c 算出 PTBP 损失 μ 对两个约束半径 r0_w、r0_d 的梯度，并加两个可选的梯度优化器。梯度由三段相乘：hotcent 的切向（差分）、pydftb 的自动求导（M4b）、损失本身的偏导（解析）。默认仍是 BO，损失值和所有文件逐字节不变；梯度功能要求 <code>--engine pydftb</code> 并安装 torch。</p>
+    <ul>
+      <li><strong>调研发现：在现在的 hotcent 里，r0_d 不改变 SKF。</strong>hotcent 2.1 默认 <code>perturbative_confinement=True</code>，而 hotpy 给每个价层都设了波函数约束；密度约束解出的轨道随后被丢弃，电子密度由波函数约束的轨道重建。r0_d 取 5、12.036、30 Bohr 时，SKF 文件逐字节相同。所以损失只经罚函数依赖 r0_d。对 Cu，罚函数在 r0_d = 4 r_cov = 9.98 Bohr 处最小；发表值 12.036 让损失高 4.3%（其它不变）。梯度会把 r0_d 推向 9.98。要不要让 r0_d 真正起作用会改变结果，由用户决定，M4c 不改 hotpy。</li>
+      <li><strong>hotcent 有数值噪声。</strong>r0_w 的切向在相邻步长之间相差 0.3%–1%（rms）；单个结构的 dE/dr0_w 随步长变化 1–2%。默认步长 0.04 Bohr，梯度本身带约 1–2% 的误差，报告给出误差棒。</li>
+      <li><strong>σ_rep 的内层搜索用包络定理处理。</strong>在最优的 σ 处，σ 的变化不进入一阶导数。σ 落在搜索边界上、或落在某一项 |·| 的折点上时，各用相应的公式。PTBP 的 L-BFGS-B 只收敛到 ftol 1e-3，所以先在它给的 σ̂ 附近精确找到局部极小 σ*，并报告两者的差。</li>
+      <li><strong>预计代价。</strong>每次“值 + 梯度”多跑 2–3 次 hotcent（每次约 4 秒）。DFTB 阶段第一遍顺带算出能量梯度，实测与只算能量同一量级。dataset/reaction 模式还要第二遍“力的反向”，实测约为引擎的 1.4–1.6 倍。合起来，energygeometry 约 1.6 个 BO 步，dataset 约 2.5–3 个 BO 步。只有两个参数时，梯度法很可能赢不了 BO，报告会如实写出对比结果。</li>
+      <li><strong>验证分四层。</strong>L1 是 pydftb 内部对照（与 NumPy 的切向收缩、与参数空间的差分）；L2 是 hotcent 的步长研究；L3 在固定 σ 时与整条流程的差分比较；L4 连同 σ 搜索一起做差分，只报告。另外，纯函数 μ 与 <code>Loss</code> 的值逐位相同。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2</span><span class="lbl">参数：r0_w、r0_d（r0_d 当前只经罚函数起作用）</span></li>
+      <li><span class="num">3</span><span class="lbl">损失模式：energygeometry、dataset、reaction</span></li>
+      <li><span class="num">0</span><span class="lbl">默认 BO 允许改变的字节</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与范围</a></li>
+      <li><a href="#loss">二、损失函数回顾</a></li>
+      <li><a href="#chain">三、梯度的链式结构</a></li>
+      <li><a href="#sigma">四、σ_rep：包络定理、边界与折点</a></li>
+      <li><a href="#tangent">五、hotcent 切向</a></li>
+      <li><a href="#stage">六、DFTB 阶段：两遍计算</a></li>
+      <li><a href="#optimizer">七、梯度优化器与命令行</a></li>
+      <li><a href="#modules">八、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">九、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#cost">十、代价、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与范围</h2>
+      <p>PTBP 用 BO 在 (r0_w, r0_d) 平面上找损失 μ 的最小值。每一步要：用 hotcent 生成 SKF，对数据集里每个结构算 DFTB（只有能带部分），再在 [0.1, 0.8] 上搜索排斥势参数 σ_rep，最后得到 μ。M4c 要给出：</p>
+      <ul>
+        <li>∂μ/∂r0_w、∂μ/∂r0_d：可用于敏感度分析，也可用于梯度优化。</li>
+        <li>两个可选的优化器：<code>--optimizer gradient</code>（投影 BFGS）和 <code>--optimizer bo_grad</code>（先 BO，再做几步梯度精修）。</li>
+        <li>分层的验证工具，以及在相同墙钟时间下与 BO 的对比。</li>
+      </ul>
+      <p>覆盖 energygeometry、dataset、reaction 三种模式，单元素和多元素（<code>--multi_element</code>）都支持。bandstructure 模式不做。</p>
+    </section>
+
+    <section id="loss">
+      <h2>二、损失函数回顾</h2>
+      <p>以下都是 <code>utils/loss.py</code> 现有的定义，M4c 不改它们。E、F 的单位是 eV、eV/Å；E_band、F_band 来自 DFTB 阶段，E_rep、F_rep 来自 physrep，只依赖 σ。</p>
+      <p><strong>energygeometry</strong>：结构按 EOS 分组，每组 n = eos_points 个结构，组的 Boltzmann 权重为 b<sub>g</sub>，L = Σ<sub>b<sub>g</sub>≥0.1</sub> b<sub>g</sub>。</p>
+      <p class="formula">μ = P(r0) · [ ½ μ<sub>V</sub> + ½ μ<sub>E</sub> ]</p>
+      <p class="formula">μ<sub>E</sub> = (1/L) Σ<sub>g</sub> b<sub>g</sub> · (1/B<sub>g</sub>) Σ<sub>m∈g</sub> |x<sub>m</sub>|，x<sub>m</sub> = (e<sub>m</sub> − e<sub>g,min</sub>) − (e<sup>DFT</sup><sub>m</sub> − e<sup>DFT</sup><sub>g,min</sub>)，e = E/N</p>
+      <p class="formula">μ<sub>V</sub> = (1/L) Σ<sub>g</sub> b<sub>g</sub> |v0<sub>g</sub> / v0<sup>DFT</sup><sub>g</sub> − 1|，v0<sub>g</sub> 来自对 (V/N, E/N) 的 Birch–Murnaghan 拟合</p>
+      <p><strong>dataset、reaction</strong>：E0<sub>Z</sub> 是孤立原子（20 Å 的盒子）的 DFTB 能量，N<sub>F</sub> 是力分量的总数。</p>
+      <p class="formula">μ = P(r0) · [ 0.9 Σ<sub>i</sub> |e<sub>i</sub> − e<sup>DFT</sup><sub>i</sub>| + 0.1 (1/N<sub>F</sub>) Σ<sub>i,c</sub> |F<sub>ic</sub> − F<sup>DFT</sup><sub>ic</sub>| ]，e<sub>i</sub> = (E<sub>i</sub> − Σ<sub>Z</sub> n<sub>iZ</sub> E0<sub>Z</sub>) / N<sub>i</sub></p>
+      <p>两种模式都有 E = E<sub>band</sub>(θ(r0)) + E<sub>rep</sub>(σ)、F = F<sub>band</sub> + F<sub>rep</sub>(σ)。罚函数 P = ((r0_w/2r − 1)² + 1)² · ((r0_d/4r − 1)² + 2)²，r 是被优化元素的共价半径。BO 看到的值是 μ*(r0) = min<sub>σ</sub> μ(r0, σ)，最小值由 11 点网格加 L-BFGS-B（ftol 1e-3，最多 20 次）近似求出。失败时 μ 取 97–99 的随机整数；EOS 拟合失败时四个参数取 1000；NaN 记为 100。</p>
+    </section>
+
+    <section id="chain">
+      <h2>三、梯度的链式结构</h2>
+      <p>θ 表示 SKF 里的全部参数：SK 表、onsite 能量、Hubbard U。hotcent 把 r0 映射到 θ，DFTB 把 θ 映射到 E<sub>band</sub>、F<sub>band</sub>，损失再把它们映射到 μ。在 σ = σ*（下一节）处：</p>
+      <p class="formula">dμ/dr0 = Σ<sub>i</sub> (∂μ/∂E<sub>i</sub>) Ė<sub>i</sub> + Σ<sub>i,c</sub> (∂μ/∂F<sub>ic</sub>) Ḟ<sub>ic</sub> + Σ<sub>Z</sub> (∂μ/∂E0<sub>Z</sub>) Ė0<sub>Z</sub> + (μ/P) ∂P/∂r0</p>
+      <p class="formula">Ė<sub>i</sub> = ⟨∂E<sub>band,i</sub>/∂θ, t⟩，Ḟ<sub>ic</sub> = ⟨∂F<sub>band,ic</sub>/∂θ, t⟩，t = ∂θ/∂r0（hotcent 切向）</p>
+      <ul>
+        <li><strong>∂μ/∂E、∂μ/∂F</strong> 是解析的：绝对值取符号；energygeometry 中每组能量最低的结构通过其它结构的相对能量进入；恰好为零的残差单独标出（见下一节）。</li>
+        <li><strong>EOS 拟合</strong>用隐函数定理。拟合参数 p = (E0, B0, B′, V0) 使 S = Σ<sub>j</sub> (f(V<sub>j</sub>; p) − ê<sub>j</sub>)² 最小，于是 dp/dê<sub>j</sub> = H⁻¹ ∇<sub>p</sub>f<sub>j</sub>，H = Σ<sub>j</sub> (∇f<sub>j</sub> ∇f<sub>j</sub>ᵀ + r<sub>j</sub> ∇²f<sub>j</sub>)，r<sub>j</sub> 是拟合残差。μ 只用到 V0（B、B′ 只写进日志）。</li>
+        <li><strong>孤立原子 E0</strong>：没有原子对落在截断内，onsite 能量和 U 取自 PTBP 的参数表，所以对 hotpy 来说 Ė0 = 0。仍然用自动求导算一次（一个原子，Γ 点，代价可以忽略），这样换了 SKF 来源也成立。</li>
+        <li><strong>罚函数</strong>：∂ln P/∂r0_w = 2a / (r(a² + 1))，a = r0_w/2r − 1；∂ln P/∂r0_d = b / (r(b² + 2))，b = r0_d/4r − 1。Cu 在发表点上 ∂ln P/∂r0_d = 4.05%/Bohr。</li>
+        <li><strong>失败点不求导</strong>：μ 为失败值（97–99、EOS 的 1000、NaN 的 100）、SCC 没有收敛、或某一步拿不到导数时，梯度记为“不可用”，并写明原因，由优化器当作失败点处理。</li>
+      </ul>
+      <div class="callout note"><strong>为什么用自动求导而不是直接差分 r0？</strong>只有 r0_w 一个方向真正起作用时，“DFTB 阶段跑两遍差分”与“自动求导 + 切向”的代价相近。但自动求导一次就给出对所有 SKF 参数的梯度，再与任意多个切向做内积几乎不花时间；参数变多时（分壳层半径、幂次 p、多元素同时优化），DFTB 的代价不随参数个数增长，只多跑 hotcent。</div>
+    </section>
+
+    <section id="sigma">
+      <h2>四、σ_rep：包络定理、边界与折点</h2>
+      <p>μ*(r0) = min<sub>σ</sub> μ(r0, σ)。设 σ*(r0) 是局部极小。</p>
+      <ul>
+        <li><strong>光滑的内部极小</strong>：∂μ/∂σ = 0，所以 dμ*/dr0 = ∂μ/∂r0（包络定理），σ 怎么移动不影响一阶导数。</li>
+        <li><strong>在边界上</strong>（σ* = 0.1 或 0.8，且导数指向外侧）：σ 留在边界上，同样 dμ*/dr0 = ∂μ/∂r0。</li>
+        <li><strong>在折点上</strong>：μ 是绝对值之和，极小常常正好落在某一项 r<sub>k</sub>(r0, σ) = 0 的折点上。这时 σ* 随 r0 沿 r<sub>k</sub> = 0 移动：</li>
+      </ul>
+      <p class="formula">dσ*/dr0 = −(∂r<sub>k</sub>/∂r0) / (∂r<sub>k</sub>/∂σ)，dμ*/dr0 = ∂μ̃/∂r0 + (∂μ̃/∂σ) · dσ*/dr0，μ̃ = 去掉第 k 项的 μ</p>
+      <p>修正量最多是“第 k 项的权重 × 它对 r0 的敏感度”。dataset 模式里单个力分量的权重很小，修正可以忽略；energygeometry 的 μ<sub>V</sub> 只有几组，体积恰好与 DFT 相等的那一组可能贡献可观的修正，所以必须处理。若几项的折点重合（例如对称的原子给出相同的力残差），按一组处理；它们给出的 dσ*/dr0 不一致时，退回 ∂μ/∂r0 并给出警告。</p>
+      <p><strong>先找 σ*</strong>：PTBP 的 L-BFGS-B 用差分梯度、ftol 1e-3，给出的 σ̂ 只是近似极小。M4c 用同一个纯函数 μ(σ)（不写文件，几十毫秒一次），在 σ̂ 附近沿下降方向找到包住极小的区间，再用 Brent 法收敛到 1e-9；然后按 σ* 处到最近折点的距离和是否在边界上分类。报告 σ̂、σ*、两者的 μ 之差（内层搜索的差距）和所属情形。损失值本身仍是 PTBP 的 μ(σ̂)，不改。</p>
+      <p><strong>需要的 σ 导数</strong>：∂E<sub>rep</sub>/∂σ、∂F<sub>rep</sub>/∂σ。physrep 的势是 V(r) = Z₁Z₂ erfc(γr)/r（k_xc = 0），γ = 1/√(a₁² + a₂²)，a = R<sub>cov</sub>·σ。在 physrep 的节点上解析算出 ∂V/∂σ，用同样的节点和自然边界条件建一条样条，代入 physrep 自己的 <code>evaluate_pbc</code>，就得到节点固定时样条对 σ 的精确导数。节点集合（截断 rcut）随 σ 离散跳动，带来约 1e-8 Ha 的跳变，忽略不计。μ<sub>V</sub> 项再经 EOS 的隐函数导数：∂v0/∂σ = Σ<sub>j</sub> (∂v0/∂ê<sub>j</sub>) ∂ê<sub>j</sub>/∂σ。</p>
+    </section>
+
+    <section id="tangent">
+      <h2>五、hotcent 切向</h2>
+      <p>hotcent 不能求导，用中心差分：在 r0_w ± h 各跑一次 hotcent（与主流程同样的并行设置，写到临时目录），对每个 SKF 文件的表、onsite、U 取差分，得到 t = ∂θ/∂r0_w。表的形状、键与 <code>pydftb.autodiff.Params</code> 一致，可以直接与梯度做内积。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>相邻步长（Bohr）</th><th>切向的相对差（rms）</th><th>中位数</th><th>最大</th></tr></thead>
+        <tbody>
+          <tr><td>0.005 / 0.01</td><td>9.6e-3</td><td>1.2e-5</td><td>0.41</td></tr>
+          <tr><td>0.01 / 0.02</td><td>4.8e-3</td><td>5.7e-6</td><td>0.20</td></tr>
+          <tr><td>0.02 / 0.04</td><td>4.0e-3</td><td>3.2e-6</td><td>0.13</td></tr>
+          <tr><td>0.04 / 0.08</td><td>2.7e-3</td><td>4.0e-6</td><td>0.067</td></tr>
+          <tr><td>0.08 / 0.16</td><td>1.5e-3</td><td>1.0e-5</td><td>0.029</td></tr>
+          <tr><td>0.16 / 0.32</td><td>2.4e-3</td><td>4.0e-5</td><td>0.043</td></tr>
+        </tbody>
+      </table></div>
+      <p>（Cu，发表点 r0_w = 2.749、r0_d = 12.036；按每列的最大值归一。）步长小时误差来自 hotcent 积分格点的噪声，步长大时来自截断误差，中间段最平。代入能量后，单个结构的 dE/dr0_w 在 h = 0.005–0.16 之间变化 1–2%，链式结果与“SKF 在 r0 ± h 上的 DFTB 能量直接差分”之间的差只有 4e-6–3e-4（相对），说明误差几乎全部来自切向本身。默认 h = 0.04 Bohr，可用 <code>--hotcent_fd_step</code> 改。</p>
+      <p><strong>r0_d 的探测</strong>：每次运行第一次求梯度时，在 r0_d + h<sub>d</sub>（默认 0.2 Bohr）跑一次 hotcent。所有 SKF 文件与基准逐字节相同，就记下“r0_d 不影响 SKF”，切向为零，本次运行不再探测；否则在 r0_d − h<sub>d</sub> 再跑一次，用中心差分。原因见关键信息：<code>AtomicDFT</code> 在 <code>perturbative_confinement=True</code> 时，对设了波函数约束的价层，密度约束那一步解出的轨道不会被采用（<code>atomic_dft.py</code> 的 <code>if nl not in self.wf_confinement</code>），密度由约束后的轨道重新计算。</p>
+      <p>SKF 里随 r0 变化的只有表（onsite 和 U 取自参数表；PTBP 的多项式排斥势系数全为零）。如果某个文件的排斥势部分发生变化，给出错误，因为 physrep 之外的排斥势不在这次的范围里。</p>
+    </section>
+
+    <section id="stage">
+      <h2>六、DFTB 阶段：两遍计算</h2>
+      <p><strong>第一遍</strong>（所有模式）就是原来的 DFTB 阶段。工作进程改用 <code>PyDFTB.evaluate</code>：它运行同一个引擎，结果（能量、力、应力、电荷）逐位就是引擎的，所以 <code>dftb_band.xyz</code> 等文件逐字节不变。顺带用自动求导算出每个非零切向上的 Ė<sub>i</sub>，并返回收敛的输入电荷 q<sub>in</sub>。没有展宽（PTBP 默认，T = 0）时用 hf 模式（E 的导数就是 F 的导数）；有展宽时 hf 不能给 E 的导数，改用 implicit 模式。</p>
+      <p><strong>第二遍</strong>（只有 dataset、reaction）：σ* 定下来之后，力的权重 w<sub>i</sub> = ∂μ/∂F<sub>i</sub> 才知道。每个结构从 q<sub>in</sub> 起步（SCC 一两步就收敛），用 implicit 模式求 ⟨∂(w<sub>i</sub>·F<sub>i</sub>)/∂θ, t⟩。力按 PTBP 的设置用 DFTB+ 式的 0.01 Bohr 差分核，M4b 已经能对它求导。</p>
+      <ul>
+        <li>实测（Cu 结构，单线程）：第一遍的 hf 求值约为引擎的 0.9–1.2 倍（它本身包含 SCC，所以与原来的阶段相比几乎不加时间）；第二遍约为引擎的 1.4–1.6 倍（1372–1688 个 k 点的结构），小结构 5–7 倍但绝对时间不到 0.5 秒。</li>
+        <li><strong>线程与 fork</strong>：torch 在每个工作进程里固定 1 个线程，在任何 torch 运算之前设好（M4a 的 fork 规则）；父进程进入梯度模式时也设为 1 个线程。NumPy 引擎部分照旧用计划里的线程数。</li>
+        <li><strong>逐位可复现</strong>：引擎结果对任何线程数逐位相同；torch 部分固定单线程；梯度在父进程里按结构顺序求和。所以 1、2、4 核的梯度逐位相同（有测试）。</li>
+        <li>某组结构因缺少 SKF 被跳过时，梯度只对保留下来的结构求和，与 μ 的定义一致。</li>
+      </ul>
+    </section>
+
+    <section id="optimizer">
+      <h2>七、梯度优化器与命令行</h2>
+      <ul>
+        <li><code>--optimizer gradient</code>：在 BO 的边界内做投影 BFGS，加 Armijo 回溯。起点与 BO 相同（元素在 PTBP 表里时用表值，否则用 r_cov 的 3 倍和 5 倍）。某次求值失败（失败值或梯度不可用）时，这一步算作被拒绝，步长减半。停止条件：投影梯度足够小、步长小于 1e-3 Bohr，或达到 <code>--grad_maxiter</code>（默认 20）。</li>
+        <li><code>--optimizer bo_grad</code>：先按 <code>--n_calls</code> 跑 BO，再从 BO 的最好点出发做至多 <code>--grad_maxiter</code> 步（此时默认 5）梯度精修。</li>
+        <li><code>--hotcent_fd_step W [D]</code>：r0_w 和 r0_d 的差分步长，默认 0.04、0.2 Bohr。</li>
+        <li>没有 <code>--engine pydftb</code>、没有 torch、或是 bandstructure 模式时，拒绝运行并说明原因。</li>
+        <li>梯度模式的每次求值目录名用 6 位小数（<code>opt_2.749000_12.036000</code>），避免步长很小时与已有目录重名；BO 仍是 3 位。切向的 hotcent 跑在求值目录下的 <code>tangent/</code> 里，用完删除。</li>
+        <li>每次求值在 <code>grad.out</code> 记一行：r0_w、r0_d、μ、两个偏导、σ̂、σ*、情形（光滑/折点/边界）、内层差距、各段耗时。返回结果与 BO 相同的形式（<code>x</code>、<code>fun</code>、<code>x_iters</code>、<code>func_vals</code>），后处理与绘图不用改。</li>
+        <li>YAML 配置与 TUI 的优化器列表加上两个新选项。</li>
+      </ul>
+      <p>线搜索用的是 PTBP 自己的 μ（与 BO 看到的一样，写进 <code>par.out</code>）。梯度对应精确内层极小的 μ*；两者的差通常远小于 ftol，会随每次求值报告。</p>
+    </section>
+
+    <details class="dev" id="modules">
+      <summary><span class="tag">开发细节</span><span class="title">八、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/autodiff/api.py</code></td><td>引擎那一次运行总给出默认输出（周期体系含应力），于是 <code>Result.raw</code> 与 <code>DFTB.calculate</code> 的结果相同；<code>forces</code>、<code>stress</code> 只决定哪些输出可求导</td></tr>
+            <tr><td><code>pydftb/ase_calc.py</code></td><td><code>PyDFTB.evaluate(atoms, params, mode, forces, stress, q_init)</code>：与 <code>calculate</code> 同样的线程设置和 <code>results</code>（共用 <code>_store</code>），返回自动求导的 <code>Result</code></td></tr>
+            <tr><td><code>utils/hotcent_tangent.py</code></td><td><code>Tangent</code>（每个方向：表、onsite、U 的差分，零方向标记，逐字节比较的结果，耗时）；<code>compute(hp, confinement, opt_dir, steps, workers)</code>；r0_d 探测的缓存</td></tr>
+            <tr><td><code>utils/dftb_stage.py</code></td><td><code>StructureTask.grad</code>；带梯度的工作函数返回 (Atoms, 附加量)；<code>run_dataset(..., grad=None)</code> 的返回值不变，附加量交给 <code>grad</code> 对象；<code>force_vjp(...)</code> 第二遍</td></tr>
+            <tr><td><code>utils/loss_grad.py</code></td><td><code>StepData</code>；纯函数 <code>mu(step, sigma)</code>（与 <code>Loss</code> 逐位相同）；偏导；EOS 的隐函数导数；<code>refine_sigma</code>；<code>GradRequest</code>（挂在 <code>Loss</code> 上的钩子：hotcent 之后算切向，σ̂ 之后组装梯度）</td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>Loss.grad_request = None</code>；三处钩子调用和目录名格式；<code>optimize</code> 分派新优化器。未设置时行为完全不变</td></tr>
+            <tr><td><code>utils/gradient_opt.py</code></td><td><code>projected_bfgs</code>、<code>optimize_gradient</code>、<code>optimize_bo_grad</code></td></tr>
+            <tr><td><code>cli/</code></td><td><code>arg_parser</code>、<code>cmd_optimize</code>、<code>cmd_plan</code>、<code>config</code>、<code>run</code>（检查条件）、TUI 的优化器页</td></tr>
+            <tr><td><code>tools/grad_check.py</code></td><td>L1–L4 分层验证，输出表格和 JSON</td></tr>
+            <tr><td><code>tools/bo_vs_grad.py</code></td><td>相同墙钟时间下 BO（3 个 random_state）与梯度法的对比</td></tr>
+          </tbody>
+        </table></div>
+        <p>纯函数 μ 的逐位要求：它复用 PTBP 自己的 <code>data.get_full_dftb</code> 和 <code>_physrep</code>，按 <code>Loss</code> 的运算顺序重写其余算术（包括 <code>np.sum(np.abs(list) / np.sum(...))</code> 这样的写法）。<code>dftb_sub_*.xyz</code> 的写回读回只影响逐原子数组（<code>%16.8f</code>），能量、晶胞、<code>mu_E</code> 都是无损的，所以纯函数直接用内存里的值即可。</p>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">九、验证计划</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>层</th><th>比较</th><th>要求</th></tr></thead>
+          <tbody>
+            <tr><td>L1</td><td>torch hf 的 Ė vs NumPy 的切向收缩（Tr P·H0[t] − Tr W·S[t] + 电势项）</td><td>≤ 1e-12（相对）</td></tr>
+            <tr><td>L1</td><td>Ė vs 参数空间沿 t 的中心差分（SCC 1e-12）</td><td>≤ 1e-8</td></tr>
+            <tr><td>L1</td><td>w·Ḟ（implicit，0.01 Bohr 差分核）vs 参数空间差分</td><td>≤ 1e-6</td></tr>
+            <tr><td>L2</td><td>hotcent 步长研究（h = 0.005–0.32）</td><td>给出 t 与 Ė 的误差棒</td></tr>
+            <tr><td>L3</td><td>固定 σ* 时 ∂μ/∂r0 vs μ(r0 ± h, σ*) 的差分（hotcent 在 r0 ± h）</td><td>落在误差棒内</td></tr>
+            <tr><td>L4</td><td>整条流程（含 σ 搜索）的差分</td><td>只报告</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li>纯函数 μ 与 <code>Loss</code> 逐位相同：发表点 (2.749, 12.036) 两种模式（1.899324742、446.2016018），以及网格搜索的每个 σ。</li>
+          <li>EOS 隐函数导数 vs <code>_eos_fit</code> 的差分 ≤ 1e-6；σ 的样条导数 vs physrep 的差分。</li>
+          <li>合成的一维例子：光滑内部极小、边界、单个折点、重合折点；梯度 vs 精确的 μ* 差分。</li>
+          <li>优化器：带边界和注入失败的解析二维函数；结果可复现。</li>
+          <li><code>test_dftb_stage_parallel.py</code>：1、2、4 核的 Ė 和力的反向逐位相同；带梯度与不带梯度的文件逐字节相同。</li>
+          <li>G1：默认 BO 逐字节不变（<code>tools/engine_parity.py --compare-serial</code>，损失 1.899324742 和 446.2016018），PTBP 测试除已知的 7 个界面冒烟失败外全部通过。</li>
+          <li>G0：pydftb 改动（<code>api.py</code>、<code>ase_calc.py</code>）后 golden 两个环境逐位相同，pydftb 测试三个环境通过。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="cost">
+      <h2>十、代价、局限与不做的事</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>部分</th><th>energygeometry</th><th>dataset / reaction</th></tr></thead>
+        <tbody>
+          <tr><td>原来的一个 BO 步（4 核，M3b 实测）</td><td>27 s</td><td>18 s</td></tr>
+          <tr><td>切向：hotcent 2 次（首次再加 1 次 r0_d 探测）</td><td>+8–12 s</td><td>+8–12 s</td></tr>
+          <tr><td>第一遍顺带的能量梯度</td><td>+0–2 s</td><td>+0–2 s</td></tr>
+          <tr><td>第二遍：力的反向</td><td>—</td><td>+14–16 s</td></tr>
+          <tr><td>σ* 精确化、EOS 导数、E0</td><td>+1–3 s</td><td>+1 s</td></tr>
+          <tr><td>值 + 梯度，约合 BO 步</td><td>≈ 1.5–1.7</td><td>≈ 2.4–2.8</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>梯度的精度受 hotcent 噪声限制（约 1–2%），这对梯度下降够用，但在极小附近会让线搜索提前停下。</li>
+        <li>T = 0 的金属里，力对参数的导数在能级恰好碰到费米能级时可以很大（M4b 报告：只用 Γ 点的 2 原子 Cu 晶胞达 7e3）。dataset 模式的第二遍会如实给出这些值；需要时可加展宽（<code>--smearing</code>）。</li>
+        <li>不改损失的定义：仍用 E 而不是 F、绝对值、97–99 的失败值、σ 的搜索方式。</li>
+        <li>不改 hotpy 让 r0_d 起作用（会改变已发表参数的复现，由用户决定）。</li>
+        <li>不对 σ_rep、幂次 p 求梯度作为外层变量（p 在这些模式里固定为 2）；以后加参数只需多跑 hotcent。</li>
+        <li>bandstructure 模式不做梯度。</li>
+        <li>GPU、设备选项留给 M4d。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M4b-autodiff.html">← M4b 报告</a><a href="../index.html">文档索引</a><a href="../reports/M4c-ptbp-gradient.html">M4c 报告 →</a></nav>
+    <span>M4c</span>
+  </footer>
+</div>
+</body>
+</html>

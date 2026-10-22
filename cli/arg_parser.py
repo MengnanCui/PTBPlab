@@ -149,10 +149,25 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         '--optimizer', help="Outer-loop optimiser: 'bo' (sequential Gaussian-process "
                             "BO via skopt; default), 'parallel_bo' (skopt.Optimizer "
                             "with batched proposals evaluated in parallel via mp.Pool), "
-                            "or 'pso' (particle swarm via pyswarms).",
+                            "'pso' (particle swarm via pyswarms), 'gradient' (projected "
+                            "BFGS on the loss gradient; needs --engine pydftb and torch) "
+                            "or 'bo_grad' (BO, then a few gradient steps).",
         type=str,
-        choices=["bo", "parallel_bo", "pso"],
+        choices=["bo", "parallel_bo", "pso", "gradient", "bo_grad"],
         default="bo",
+    )
+    parser.add_argument(
+        '--grad_maxiter', help="Iterations of the gradient optimiser. Default: 20 for "
+                               "'gradient', 5 for the refinement of 'bo_grad'.",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        '--hotcent_fd_step', help="Steps (Bohr) of the hotcent central differences of the "
+                                  "gradient: r0_w [r0_d]. Default: 0.04 0.2.",
+        type=float,
+        nargs='+',
+        default=None,
     )
     parser.add_argument(
         '--n_particles', help="Population size for PSO and the batch width for "

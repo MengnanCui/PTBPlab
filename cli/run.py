@@ -69,6 +69,11 @@ print("[engine]", _configure_engine(
     mp_order=getattr(ptbp_args, 'mp_order', None),
     pydftb_forces=getattr(ptbp_args, 'pydftb_forces', None),
 ))
+if getattr(ptbp_args, 'optimizer', 'bo') in ('gradient', 'bo_grad'):
+    # the gradient optimisers (M4c) need pydftb.autodiff (torch) and an r0 loss
+    from utils.gradient_opt import check_requirements as _check_gradient
+    _check_gradient(getattr(ptbp_args, 'engine', None) or 'dftbplus',
+                    ptbp_args.optimization_option.lower())
 
 from utils.parallel import detect_cpu as _detect_cpu, set_plan as _set_plan, simple_plan as _simple_plan
 
@@ -246,6 +251,8 @@ Boltzmann factor: {bolt_f.tolist()}
                     'func_vals': list(map(float, getattr(res, 'func_vals', []))),
                     'optimizer': ptbp_args.optimizer,
                 }
+                if getattr(res, 'best_dir', None):       # gradient optimisers (M4c)
+                    _snapshot['best_dir'] = res.best_dir
                 from types import SimpleNamespace as _SN
                 with open(_result_pkl, 'wb') as _fh:
                     _pickle.dump(_SN(**_snapshot), _fh)
@@ -289,8 +296,10 @@ Boltzmann factor: {bolt_f.tolist()}
                     plt.savefig('convergence.png', dpi=300)
                     plt.clf()
 
-            best_folder = path / ptbp_args.results_dir / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
-            backup_dir  = path / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
+            # gradient optimisers name their directories with more digits (best_dir)
+            best_name = getattr(res, 'best_dir', None) or f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
+            best_folder = path / ptbp_args.results_dir / best_name
+            backup_dir  = path / best_name
 
             os.system(f"cp -r {best_folder} {backup_dir}")
             os.system("tar -zcvf results.tgz results && rm -r results")

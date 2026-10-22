@@ -309,13 +309,16 @@ log line and should pass `--E0s` explicitly.
 ### 4. Choosing the outer-loop optimiser
 
 The same modes (`energygeometry` / `dataset` / `reaction` / `bandstructure`)
-work with three different outer-loop optimisers:
+work with three different outer-loop optimisers, and the r0 modes also with two gradient
+optimisers (section 4e):
 
 | `--optimizer` | What it does | When to pick it | Library |
 |---|---|---|---|
 | `bo` (default) | Sequential Gaussian-process BO via skopt's `gp_minimize`. Strong sample efficiency, one evaluation at a time. | Few evaluations are expensive; you want the fewest possible. | `scikit-optimize` |
 | `parallel_bo` | Skopt `Optimizer` with batched ask (`strategy='cl_min'`). `--n_particles` evaluations are proposed per round; with the L-mode wiring (Phase L below) they run concurrently in a fork pool. | Multi-core machine, want wall-clock speedup. | `scikit-optimize` |
 | `pso` | Particle Swarm Optimisation via `pyswarms.single.GlobalBestPSO`. Population × iterations. | Loss surface is multi-modal / non-smooth, where GP assumptions break down. | `pyswarms` |
+| `gradient` | Projected BFGS on the gradient of the loss (section 4e), from BO's seed. | Local refinement; sensitivity of the loss to r0. Needs `--engine pydftb` and torch. | `torch` |
+| `bo_grad` | BO with `--n_calls`, then at most `--grad_maxiter` (default 5) gradient steps from its best point. | BO's global search plus a local finish. Needs `--engine pydftb` and torch. | `scikit-optimize`, `torch` |
 
 ```bash
 # Default sequential GP-BO
@@ -336,7 +339,7 @@ just work.
 
 ### 4b. DFTB engine: DFTB+ or pydftb
 
-Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`. With PyTorch installed, pydftb also gives the derivatives of energies, charges and forces with respect to the Slater-Koster tables and the other parameters (`pydftb.autodiff`, checked against finite differences); PTBP does not use them yet.
+Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`. With PyTorch installed, pydftb also gives the derivatives of energies, charges and forces with respect to the Slater-Koster tables and the other parameters (`pydftb.autodiff`, checked against finite differences); PTBP uses them for the gradient of its loss (section 4e).
 
 ```bash
 ptbp optimize dft/dft.xyz --mode dataset --engine pydftb
@@ -395,6 +398,47 @@ After every BO step it prints the measured stage times next to the estimates (`[
 ### 4d. DFTB+ configuration advisor
 
 With the DFTB+ engine, PTBP checks the first DFTB+ run of every optimisation (and every DFTB+ run that fails) with the DFTB+ configuration advisor and prints what it finds with an `[advisor]` prefix; the findings also go to `advisor.json` in the run folder. It only reports: no setting is changed and the results are byte-identical. On PTBP's historical input (`--smearing none`) it reports that DFTB+ converts the input from parser version 1 (shell-resolved SCC, H and S differentiated with a 0.01 Bohr step) and ignores the `Fermi`/`MethfesselPaxton` blocks written outside `Filling` (the calculation runs at T = 0); these are marked as expected, since the published parameters were fitted that way. `PTBP_ADVISOR=0` turns the check off; `python -m pydftb.advisor RUN_DIR` checks any DFTB+ run directory by hand. Details: `pydftb/docs/reports/M3d-advisor.html`.
+
+### 4e. Gradient of the loss: `--optimizer gradient` / `bo_grad`
+
+With `--engine pydftb` and PyTorch installed, PTBP can compute the derivative of the loss
+with respect to the confinement radii r0_w and r0_d (milestone M4c):
+
+```bash
+ptbp optimize dft/dft.xyz --mode energygeometry --engine pydftb --optimizer gradient --grad-maxiter 20
+ptbp optimize dft/dft.xyz --mode dataset --engine pydftb --optimizer bo_grad --n-calls 11 --grad-maxiter 5
+```
+
+- **How**: hotcent cannot be differentiated, so the change of the SKF tables with r0 is a
+  central difference of hotcent runs at r0 +- h (`--hotcent-fd-step`, default 0.04 Bohr for
+  r0_w); pydftb's automatic differentiation gives the derivative of every DFTB energy (and,
+  in the dataset/reaction modes, of the forces) with respect to the tables; the loss itself
+  is differentiated analytically (absolute values, the Birch-Murnaghan fits by the implicit
+  function theorem, the penalty).  The inner search over sigma_rep is handled with the
+  envelope theorem, including minima on a kink of the loss and on the search bounds.
+- **What does not change**: the loss value and every file of a step are bit for bit those
+  of a plain step (the gradient work runs alongside); the default optimiser is still BO.
+  Gradient evaluations use directories `results/opt_<r0_w>_<r0_d>` with six decimals, and
+  each one adds a line to `grad.out` (value, both derivatives, sigma_rep, timings).
+- **Cost**: one value + gradient costs about 1.4 BO steps in the energygeometry mode and
+  2.6 in the dataset mode (Cu, 4 cores: 38 s vs 27 s, 41 s vs 16 s): two or three extra
+  hotcent runs, and in the dataset mode a second DFTB pass for the forces.
+- **Benchmark** (Cu, 4 cores): in the energygeometry mode the gradient optimiser brought the
+  loss from 1.899 to 0.760 in 635 s; the best of three 11-call BO runs reached 0.855, and BO
+  given the same time did not improve on its seed.  In the dataset mode the two tied (209.9
+  vs 208.5).  Note that PTBP's default BO (`--n_calls 11`) evaluates the seed plus 10 random
+  points (skopt's default `n_initial_points` is 10): the Gaussian process never picks one.
+- **Result**: as with BO, the lowest loss evaluated (failed steps, whose loss is 97-99,
+  excluded).  An evaluation without a gradient (a failed step, or an SCC that did not
+  converge in 1000 iterations, which happens for metals at T = 0) still counts for the
+  result, but the optimiser treats it as a rejected step.
+- **Caveats**: hotcent's numerical noise makes the derivative uncertain by 1-3 %.  With
+  hotcent 2.1 (perturbative confinement, every valence subshell confined), r0_d does not
+  change the SKF files at all, so the loss depends on r0_d only through the penalty, whose
+  minimum is at r0_d = 4 r_cov.  The loss can jump (an equation-of-state fit that leaves
+  the sampled volumes, the sigma_rep search switching branch); the optimiser treats such
+  points as rejected steps.  `ptbp plan` still estimates the time of BO steps.  See
+  `pydftb/docs/reports/M4c-ptbp-gradient.html`.
 
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
