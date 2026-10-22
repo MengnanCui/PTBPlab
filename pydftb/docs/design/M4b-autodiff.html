@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4b 自动求导设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M4b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4b · 设计文档</p>
+    <h1>自动求导</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M4b-autodiff.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M4b 让 pydftb 的结果可以对参数和几何求导：SK 表的每个值、onsite 能量、Hubbard U、Hubbard 导数、自旋常数、排斥势系数，以及原子坐标和晶胞。新包 <code>pydftb.autodiff</code> 只在 torch 上工作；SCC 仍由已有的引擎（NumPy 或 M4a 的 torch）收敛，求导部分在 torch 上按同样的公式再算一遍，并接上两种求导方式。</p>
+    <ul>
+      <li><strong>hf 模式（默认）</strong>：利用 Mermin 自由能对密度是变分的，把收敛的密度 P、能量加权密度 W 和输出电荷当作常数，得到一个“替代能量”。它对任何参数或坐标的梯度就是精确的 dF/dθ、力和应力，不需要对本征分解求导，代价约等于一次 H0/S 的构建。PTBP 的损失只用能量时，用这个就够了（T ≈ 0 时 E 与 F 的导数相同）。</li>
+      <li><strong>implicit 模式</strong>：电荷、本征值、以力作损失时，需要“密度如何随参数变”。SCC 的不动点用隐函数定理求导：反向时解一个小线性方程（PTBP 只有 3–6 个电荷），不必展开迭代。密度矩阵对 H 的导数用占据函数的差商（Daleckii–Krein），加上费米能级随参数移动的修正；简并能级不会出现 NaN，T ≈ 0 金属里费米能级上的能级也能精确抵消。</li>
+      <li><strong>代码怎么共享</strong>：SK 表的插值与旋转、γ 的短程函数、三阶的 Γ、排斥势这些核函数改成 NumPy 和 torch 通用；NumPy 路径每改一次都用 golden 工具与 M4 之前逐字节比较。拓扑（邻居表、索引、截断、Ewald 的 α 和 G 的整数格点）仍在主机上，视为常数。</li>
+      <li><strong>怎么验证</strong>：hf 模式的力和应力与解析结果比较；对参数的导数与中心差分比较（SCC 收敛到 1e-12，随机方向）；implicit 模式的电荷、本征值、力的导数与差分比较，并与“把 SCC 循环整个展开求导”的结果比较；密度矩阵的反向用 gradcheck 检查，包括人为构造的简并。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2</span><span class="lbl">求导方式：hf（变分）、implicit（不动点）</span></li>
+      <li><span class="num">6</span><span class="lbl">可求导的参数类别 + 坐标、晶胞</span></li>
+      <li><span class="num">0</span><span class="lbl">NumPy 路径允许改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标</a></li>
+      <li><a href="#hf">二、hf 模式：替代能量</a></li>
+      <li><a href="#implicit">三、implicit 模式：密度矩阵与 SCC 不动点</a></li>
+      <li><a href="#forces">四、力、应力、以力为损失</a></li>
+      <li><a href="#modules">五、模块与接口</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">六、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">七、局限与不做的事</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标</h2>
+      <p>给定参数 θ 和几何，算出能量 E、Mermin 自由能 F、力、应力、电荷、本征值，以及它们对 θ 和几何的导数。θ 包括：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>参数</th><th>进入哪里</th></tr></thead>
+        <tbody>
+          <tr><td>SK 表（每个文件存储的列，H 和 S）</td><td>原子对块 h、s（插值对表值是线性的）</td></tr>
+          <tr><td>onsite 能量</td><td>H0 的对角</td></tr>
+          <tr><td>Hubbard U</td><td>γ（以及 DFTB3 的 Γ）</td></tr>
+          <tr><td>Hubbard 导数 Ud</td><td>DFTB3 的 Γ</td></tr>
+          <tr><td>自旋常数 W</td><td>自旋能</td></tr>
+          <tr><td>排斥势（样条或多项式系数）</td><td>排斥能</td></tr>
+        </tbody>
+      </table></div>
+      <p>色散（UFF、SK、D3、D4）不依赖这些参数，作为“只依赖几何”的项加入，坐标导数用它自己的解析梯度。</p>
+    </section>
+
+    <section id="hf">
+      <h2>二、hf 模式：替代能量</h2>
+      <p>收敛后，Mermin 自由能对密度是驻定的，所以它对任何参数的全导数等于“密度不动时”的偏导数（Hellmann–Feynman）。pydftb 的解析力（<code>calculator.py:_gradient</code>）正是这样算的。把同样的收缩写成一个能量：</p>
+      <p class="formula">E<sub>sur</sub>(θ, R) = Σ<sub>e</sub> [ p̂<sub>e</sub> h<sub>e</sub> + (p̂<sub>e</sub> v̄̂<sub>e</sub> − ŵ<sub>e</sub>) s<sub>e</sub> ] + Σ<sub>μ</sub> p̂<sub>μμ</sub> ε<sup>0</sup><sub>μ</sub> + ½ Δq̂ᵀ γ Δq̂ + E<sub>3</sub>(Γ, Δq̂) + E<sub>spin</sub>(W, m̂) + E<sub>rep</sub> + E<sub>disp</sub></p>
+      <p>e 遍历所有原子对的矩阵元（含周期镜像），p̂<sub>e</sub>、ŵ<sub>e</sub> 是收敛的 P、W 折回实空间后在这个元素上的值，v̄̂<sub>e</sub> = ½(v<sub>μ</sub> + v<sub>ν</sub>) 是输出电荷的电势；带帽子的量都当作常数。它对 R 的梯度就是 <code>_gradient</code> 的结果，对 θ 的梯度就是 dF/dθ。返回的能量数值取原来的结果，梯度取 E<sub>sur</sub> 的梯度。</p>
+      <ul>
+        <li>只对 F 精确。E = F + TS；T ≈ 0（PTBP 的默认）时 TS ≤ kT·ln2 量级，两者导数相同；有展宽时要 E 的导数，就用 implicit 模式（hf 模式此时拒绝给 E 的梯度）。</li>
+        <li>SCC 没有完全收敛时，误差与残差同阶；对照时把 SCC 收敛到 1e-12。</li>
+      </ul>
+    </section>
+
+    <section id="implicit">
+      <h2>三、implicit 模式：密度矩阵与 SCC 不动点</h2>
+      <h3>1. 密度矩阵的反向（<code>DensityMatrix</code>）</h3>
+      <p>在正交化后的问题上（H′ = L⁻¹HL⁻ᴴ，L、L⁻¹ 和回变换交给普通的自动求导）：P′ = Y f(ε) Yᴴ，W′ = Y (εf) Yᴴ。H′ 变化 dH′ 时，记 X = Yᴴ dH′ Y：</p>
+      <p class="formula">dP′ = Y [ D ∘ X − dμ · diag(f′) ] Yᴴ，D<sub>ij</sub> = (f<sub>i</sub> − f<sub>j</sub>) / (ε<sub>i</sub> − ε<sub>j</sub>)，D<sub>ii</sub> = f′<sub>i</sub>；dμ = Σ<sub>k,i</sub> w<sub>k</sub> f′<sub>ki</sub> X<sub>ii</sub><sup>(k)</sup> / Σ w f′</p>
+      <ul>
+        <li>差商 D 对简并的能级给出 f′，而不是 0/0；Fermi 展宽用不会相消的写法 D = −f<sub>a</sub>(1 − f<sub>b</sub>) expm1(d)/(d·kT)。</li>
+        <li>dμ 来自电子数守恒，k 点（和自旋）之间就是靠它耦合起来的。每个“μ 组”（一个结构，或固定磁矩时的一个自旋通道）单独守恒。</li>
+        <li>T ≈ 0（kT = 1e-8 Ha）的金属里，费米能级上分数占据的能级 f′ ≈ 2.5e7。把对角项写成 f′<sub>i</sub> · (X<sub>i</sub> − w·S/Z)：先在括号里相减，再乘 f′，这样单个分数占据能级的贡献精确为 0（它的占据数由电子数决定，不随参数变）。</li>
+        <li>μ 的导数跟着引擎实际用的规则走（<code>occupations.fermi_rule</code>）：按电子数二分时用上式；DFTB+ 的带隙中点规则（电子数为整数、中点处电子数误差 ≤ 1e-7 时采用，有展宽时也会用到）给出 dμ = ½(dε<sub>H</sub> + dε<sub>L</sub>)；二分落在能隙里、Σ w f′ = 0 时 μ 不确定，不耦合。</li>
+        <li>Gaussian 和 Methfessel–Paxton：能级间隔大时用普通差商，几乎相等（|Δx| &lt; 1e-3）时用中点展开 f′ + f‴ d²/24。</li>
+        <li>单个简并本征值没有导数（扰动劈裂简并的方式与方向有关）：本征值的梯度在每个简并能级内取平均，这对能级的任何对称函数（和、平均）是精确的。</li>
+      </ul>
+      <h3>2. SCC 不动点</h3>
+      <p>Φ(q, θ)：从输入电荷 q 出发、不混合的一次 SCC（电势 → H → 本征分解 → 密度 → Mulliken 电荷）。收敛解 q* = Φ(q*, θ)。前向仍用已有引擎的 Broyden 收敛；求导时：</p>
+      <p class="formula">q̂ = q* + Φ(q*, θ) − stopgrad(Φ(q*, θ))，并在 q̂ 上挂钩子：传进来的梯度 g 换成 y，(I − Jᵀ) y = g，J = ∂Φ/∂q</p>
+      <ul>
+        <li>q̂ 的数值精确等于 q*（a − a = 0），梯度则是隐函数定理给出的 dq*/dθ。再从 q̂ 走一次 Φ，得到的 P、W、ε、μ、输出电荷都带着完整的导数。</li>
+        <li>Jᵀ 由 Φ 的向量—雅可比积给出。电荷数 ≤ 64 时直接组出 Jᵀ 求解（PTBP 只有 3–6 个）；更多时用 GMRES 并检查残差。不用不动点迭代：金属的 J 谱半径大于 1，这正是前向需要 Broyden 混合的原因。</li>
+        <li>SCC 没收敛时抛出 <code>GradientUnavailable</code>。</li>
+        <li>另做一个“展开”模式（线性混合、整条 SCC 都求导），只用于测试 implicit 的结果。</li>
+      </ul>
+    </section>
+
+    <section id="forces">
+      <h2>四、力、应力、以力为损失</h2>
+      <ul>
+        <li><strong>力</strong>：F = −∂E<sub>sur</sub>/∂R。替代能量里的原子对块用一份单独的坐标（叶张量）计算，SCC 那部分用固定的坐标。</li>
+        <li><strong>应力</strong>：对坐标和晶胞施加应变 ε（叶张量，初值 0），σ = −(∂E<sub>sur</sub>/∂ε)/V；Ewald 的 α 和 G 的整数格点固定，G 和体积从晶胞重新计算。</li>
+        <li><strong>以力为损失</strong>（M4c 的 dataset 模式）：implicit 模式下，P、W、电势带着对 θ 的导数，再用 <code>create_graph=True</code> 求 F，于是 F 本身可以对 θ 求导。PTBP 用 DFTB+ 的 0.01 Bohr 差分算力（<code>fd_delta</code>），这时原子对块对键矢量的导数用同样的差分核（对表值仍是线性的），使梯度与 PTBP 实际用的力一致。</li>
+        <li><strong>返回的数值</strong>：两种模式返回的能量、力、应力、电荷、本征值、费米能级都是引擎自己算出的数（逐位相同），只是加上了导数（数值 + (t − t.detach())）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="modules">
+      <summary><span class="tag">开发细节</span><span class="title">五、模块与接口</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/slako.py</code></td><td>旋转与 SK 块改成 <code>xp</code> 通用（只把 <code>np.</code> 换成 <code>xp.</code>）</td></tr>
+            <tr><td><code>pydftb/skf.py</code></td><td><code>SKFile.evaluate_table(r, table)</code>：用给定的表（可以是叶张量）插值，拉格朗日权重 × 表行；NumPy 的 <code>evaluate</code> 不变。<code>Repulsive</code> 加通用的求值</td></tr>
+            <tr><td><code>pydftb/hamiltonian.py</code></td><td><code>build_pairs</code> 拆出每个元素对的分组（<code>PairBlocks.groups</code>）和通用的块计算，供 torch 重算</td></tr>
+            <tr><td><code>pydftb/coulomb.py</code>、<code>thirdorder.py</code></td><td><code>_short</code>、<code>_short_near</code>、<code>_gamma0</code>、<code>_short_terms</code>、<code>dgamma_du</code> 通用；<code>Coulomb.gint</code> 记下 G 的整数格点</td></tr>
+            <tr><td><code>pydftb/autodiff/params.py</code></td><td><code>Params</code>：参数的 torch 张量（可选哪些要梯度）；<code>from_skset</code>、<code>to_skset</code></td></tr>
+            <tr><td><code>pydftb/autodiff/model.py</code></td><td>用主机的拓扑在 torch 上重算原子对块、onsite、γ（短程、Ewald 或 1/R）、Γ、排斥能；应变</td></tr>
+            <tr><td><code>pydftb/autodiff/density.py</code></td><td><code>DensityMatrix</code>（<code>torch.autograd.Function</code>）、<code>Occupation</code>（每个矩阵的权重、μ 组、展宽）、占据函数与熵的 torch 版、稳定的差商</td></tr>
+            <tr><td><code>pydftb/autodiff/scc.py</code></td><td><code>Bloch</code>（可求导的折叠与反折叠）、<code>SCCMap</code>（Φ）、<code>attach</code>（隐式接入，伴随方程：稠密或 GMRES）、<code>unrolled</code>（展开，测试用）</td></tr>
+            <tr><td><code>pydftb/autodiff/api.py</code></td><td><code>evaluate(calc, species, positions, cell, pbc, params, mode, forces, stress)</code> → <code>Result</code>（能量、自由能、力、应力、电荷、本征值、费米能级，数值是引擎的）；<code>GradientUnavailable</code>；色散的外部项（含晶胞导数）</td></tr>
+            <tr><td><code>pydftb/calculator.py</code></td><td><code>_run</code> 额外返回 setup 和 SCC 状态；<code>_pair_densities</code> 从 <code>_gradient</code> 拆出；输出不变</td></tr>
+            <tr><td><code>pydftb/occupations.py</code></td><td><code>Smearing(fermi_level="dftb+" | "exact")</code>、<code>Smearing.variational</code>、<code>fermi_rule</code>（引擎用了哪条费米能级规则）；默认行为逐位不变</td></tr>
+            <tr><td><code>pydftb/validation/gradcheck.py</code></td><td>与差分对照的表格（两种模式）；<code>--check</code></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">六、验证计划</span></summary>
+      <div class="body">
+        <ul>
+          <li>每个改动核函数的提交：golden 两个环境逐字节相同，<code>refgen</code>、<code>dynamics</code> 两个后端通过。</li>
+          <li>通用核函数：torch 与 NumPy 在同样输入上 ≤ 1e-14（相对）。</li>
+          <li>hf：力 vs 解析 ≤ 1e-10 Ha/Bohr，应力 ≤ 1e-11；dF/dθ vs 中心差分（表、onsite、U、Ud、W、排斥势的随机方向，SCC 1e-13，Richardson 外推）相对差 ≤ 1e-7。</li>
+          <li>DensityMatrix：<code>torch.autograd.gradcheck</code>，实和复、精确简并、多个 k 组、自旋组，kT = 1e-3 和 1e-8。</li>
+          <li>implicit：电荷、本征值、力对 θ 的导数 vs 差分 ≤ 1e-6；与展开模式 ≤ 1e-8；伴随方程残差 ≤ 1e-10；hf 与 implicit 的 dF/dθ ≤ 1e-9。</li>
+          <li>算例：水、甲醇（分子）、Cu fcc 与 Cu₂（金属、k 点、T ≈ 0 和 1000 K）、CuO 链（自旋）、DFTB3 的水二聚体、GdO（f 轨道）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>七、局限与不做的事</h2>
+      <ul>
+        <li>拓扑和截断视为常数：原子跨过截断、U 跨过“相等/相近/一般”的分界时导数不连续（与能量本身的不连续一致）。DFTB3 的 Γ 在 |ΔU| = 3.125e-6 处按 DFTB+ 的约定翻倍：相等的 U 只有“一起变”的方向有导数。</li>
+        <li>异核的 A-B、B-A 两个 SK 文件都存 l₁ = l₂ 的积分（ss、pp、dd、ff），引擎的上、下三角各用一份：只有两份一起变的方向有意义（hotcent 给出的切向就是这样），梯度在两份之间平分。</li>
+        <li>hf 模式求的是“电子数固定的 Mermin 自由能”的导数。引擎的两条 DFTB+ 约定与之不同：MP 展宽配 DFTB+ 的 TS（F 不是变分的，hf 拒绝给 dF）；带隙中点的费米能级（引擎的 F 的导数多出 μ dN/dθ）。<code>Smearing(fermi_level="exact", ts_convention="variational")</code> 去掉两者；implicit 模式直接对引擎的约定求导。</li>
+        <li>不对 D3/D4 的参数求导；不做 torch 原生色散。</li>
+        <li>不对 hotcent 求导（M4c 用差分接上）。</li>
+        <li>二阶导数只到“力对参数”（以力为损失）；不做 Hessian。</li>
+        <li>不做跨结构的同步批量（见 M4 计划）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M4a-torch-backend.html">← M4a 报告</a><a href="../index.html">文档索引</a><a href="../reports/M4b-autodiff.html">M4b 报告 →</a></nav>
+    <span>M4b</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M4b 自动求导报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M4b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M4b · 完成报告</p>
+    <h1>自动求导</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M4b-autodiff.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">新包 <code>pydftb.autodiff</code>（需要 torch）给出 pydftb 结果对参数和几何的导数：SK 表的每个值、onsite 能量、Hubbard U、Hubbard 导数、自旋常数、排斥势系数，以及原子坐标和晶胞。SCC 仍由引擎（NumPy 或 M4a 的 torch）按 DFTB+ 的规则收敛，<code>evaluate()</code> 返回的数值就是引擎自己的数，只是带上了导数。</p>
+    <ul>
+      <li><strong>两种模式</strong>：<code>mode="hf"</code>（默认）利用 Mermin 自由能的变分性，把收敛的密度当作常数，得到 dF/dθ、力和应力，不对本征分解求导；<code>mode="implicit"</code> 在 torch 里重算一次 SCC，用隐函数定理接上不动点，能量、电荷、本征值、费米能级、力、应力都有完整的导数，包括“力对参数”的导数（以力为损失）。</li>
+      <li><strong>与有限差分对照</strong>（<code>validation/gradcheck.py --check</code>，11 个算例覆盖分子、T ≈ 0 与有展宽的金属、k 点、自旋、DFTB3、轨道分辨 SCC、H–X 阻尼、f 轨道、色散，随机方向，Richardson 外推）：346 项全部通过。导数大于 1e-4 的 259 项中，hf 的 39 项最大相对差 7.6e-7、中位数 2e-9；implicit 的 220 项最大 2.8e-6、中位数 2e-9。更小的导数受差分的舍入限制。</li>
+      <li><strong>互相对照</strong>：两种模式的 dF/dθ 逐项一致（≤ 8.7e-10，T ≈ 0 的 Cu₈ 金属 6e-12，说明费米能级上 f′ 的抵消成立）；implicit 与“整条 SCC 展开求导”一致到 1e-14–4e-12；伴随方程残差 ≤ 6e-15；密度矩阵的反向通过 11 组 gradcheck（实/复、简并、k 组、自旋组、Gaussian 与 MP、带隙中点规则、T ≈ 0）。</li>
+      <li><strong>以力为损失</strong>：PTBP 用 DFTB+ 的 0.01 Bohr 差分算力；implicit 模式的力用同样的差分核，与引擎的力差 ≤ 1e-11，它们对参数的导数与差分一致到 1e-8。这是 M4c 的力 VJP 需要的量。</li>
+      <li><strong>发现的问题</strong>（第六节）：DFTB+ 的两条约定使引擎的 F 不是“电子数固定的 Mermin 自由能”——MP 展宽配 DFTB+ 的 TS，以及电子数为整数时的带隙中点费米能级（电子数可漂移 1e-7）；异核 SK 文件对 ss、pp、dd、ff 积分各存一份；简并本征值单个没有导数。都已处理或写明。</li>
+      <li><strong>NumPy 路径不变</strong>：golden 两个环境逐字节相同；新选项 <code>Smearing(fermi_level=...)</code> 的默认值保持原行为。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">346</span><span class="lbl">与差分对照的项，全部通过</span></li>
+      <li><span class="num">≤ 8.7e-10</span><span class="lbl">hf 与 implicit 的 dF/dθ 逐项之差</span></li>
+      <li><span class="num">0</span><span class="lbl">NumPy 路径改变的位（golden 237 次计算、41,519 个量）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#same">三、结果是否与原来相同</a></li>
+      <li><a href="#check">四、导数的验证</a></li>
+      <li><a href="#perf">五、代价</a></li>
+      <li><a href="#findings">六、发现的问题</a></li>
+      <li><a href="#tests">七、单元测试</a></li>
+      <li><a href="#deviations">八、与计划的偏差</a></li>
+      <li><a href="#repro">九、复现命令</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">十、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/slako.py</code></td><td>键的坐标系、旋转矩阵、SK 块改成 NumPy/torch 通用（只把 <code>np.</code> 换成 <code>xp.</code>，新数组按输入的类型和设备建）</td></tr>
+            <tr><td><code>pydftb/skf.py</code></td><td><code>SKFile.evaluate_table(r, table)</code>：插值写成“拉格朗日权重 × 表行”，表可以是叶张量；尾部的 5 次多项式也写成表的线性函数。<code>Repulsive.energy(r, poly=, exp_coeffs=, coeffs=)</code> 通用，系数可以换成可求导的张量</td></tr>
+            <tr><td><code>pydftb/hamiltonian.py</code></td><td><code>PairBlocks.groups</code> 记下每种元素对的原子对；<code>pair_values()</code> 用任意的表和键矢量重算全部矩阵元（以及 DFTB+ 的差分导数）</td></tr>
+            <tr><td><code>pydftb/coulomb.py</code>、<code>thirdorder.py</code></td><td><code>_short</code>、<code>_short_near</code>、<code>_gamma0</code>、<code>_short_terms</code>、<code>dgamma_du</code>、<code>dgamma_du_onsite</code> 通用；<code>Coulomb.gint</code> 记下 Ewald 倒格矢的整数坐标</td></tr>
+            <tr><td><code>pydftb/calculator.py</code></td><td><code>_run()</code> 额外返回 setup 和 SCC 状态；<code>_pair_densities()</code> 从 <code>_gradient</code> 拆出；输出不变</td></tr>
+            <tr><td><code>pydftb/occupations.py</code></td><td><code>Smearing(fermi_level="dftb+" | "exact")</code>、<code>Smearing.variational</code>、<code>fermi_rule()</code>（引擎这次用了哪条费米能级规则）；<code>_middle_gap</code> 拆出 <code>_middle_gap_levels</code>，结果逐位不变</td></tr>
+            <tr><td><code>pydftb/autodiff/params.py</code>（新）</td><td><code>Params</code>：六类参数的 torch 张量（<code>requires_grad=</code> 选哪些要梯度）；<code>to_skset()</code> 生成带当前数值的主机副本，不改动解析缓存里的 SKF</td></tr>
+            <tr><td><code>pydftb/autodiff/model.py</code>（新）</td><td>用主机的拓扑在 torch 上重算原子对块、onsite、γ（短程含 H–X 阻尼，Ewald 或 1/R）、DFTB3 的 Γ、自旋常数矩阵、排斥能；应变</td></tr>
+            <tr><td><code>pydftb/autodiff/density.py</code>（新）</td><td><code>DensityMatrix</code>：正交基下的 ρ、W、本征值、费米能级，反向用差商；占据函数与熵的 torch 版</td></tr>
+            <tr><td><code>pydftb/autodiff/scc.py</code>（新）</td><td><code>Bloch</code>（可求导的折叠与反折叠）、<code>SCCMap</code>（Φ）、<code>attach</code>（隐式接入：钩子解伴随方程，稠密或 GMRES）、<code>unrolled</code>（展开，测试用）</td></tr>
+            <tr><td><code>pydftb/autodiff/api.py</code>（新）</td><td><code>evaluate()</code>、<code>Result</code>、<code>GradientUnavailable</code>；替代能量；色散作为外部项（坐标、晶胞、应变的导数来自库的梯度和维里）；<code>fd_delta</code> 时力的差分核</td></tr>
+            <tr><td><code>pydftb/validation/gradcheck.py</code>（新）</td><td>两种模式与引擎有限差分的对照表；<code>--check</code></td></tr>
+            <tr><td>测试</td><td><code>test_autodiff.py</code>、<code>test_autodiff_implicit.py</code>（新），<code>test_smearing.py</code> 加一项</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+      <pre><code>from pydftb import DFTB, ParamSet
+from pydftb.autodiff import Params, evaluate
+
+calc = DFTB(ParamSet(skdir).skset(labels), kpts=..., temperature=300.0)
+params = Params.from_skset(calc.sk, calc.repulsive, requires_grad=("tables", "hubbard"))
+
+res = evaluate(calc, labels, positions, cell, pbc, params)          # mode="hf"
+res.free_energy.backward()            # params.tables[("Cu", "O")].grad, params.hubbard["Cu"].grad
+
+res = evaluate(calc, labels, positions, cell, pbc, params, mode="implicit")
+loss = ((res.forces - f_ref) ** 2).sum() + (res.energy - e_ref) ** 2
+loss.backward()                       # 力和能量对参数的导数</code></pre>
+      <ul>
+        <li>坐标、晶胞可以传带 <code>requires_grad</code> 的 torch 张量，它们也会收到导数。</li>
+        <li>hf 模式下只有 F 带导数（T ≈ 0 时 E 也带）；有展宽时要 E 的导数，hf 会抛 <code>GradientUnavailable</code>，用 implicit。</li>
+        <li>SCC 没收敛时 <code>evaluate</code> 抛 <code>GradientUnavailable</code>。</li>
+        <li>参数的方向：异核文件 A-B、B-A 都存的 l₁ = l₂ 积分，以及相等的 Hubbard U，只有“一起变”的方向有导数（第六节）；hotcent 给出的切向就是这样的。</li>
+      </ul>
+    </section>
+
+    <section id="same">
+      <h2>三、结果是否与原来相同</h2>
+      <ul>
+        <li><strong>pydftb 的 NumPy 路径</strong>：golden 工具与 M4 之前的提交 <code>65115d1</code> 比较，conda 环境 237 次计算、41,519 个量，最小环境 198 次、36,176 个量，全部逐字节相同（新增的内部字段 <code>PairBlocks.groups</code>、<code>Coulomb.gint</code>）。golden 包括 PTBP 设置下的 Cu 运行，PTBP 的代码没有改动。</li>
+        <li><strong>与 DFTB+</strong>：<code>refgen --check</code> 两个后端 74 个参考全部通过；<code>dynamics --check</code> 两个后端 11 个参考全部通过。</li>
+        <li><code>import pydftb</code> 仍不导入 torch；<code>pydftb.autodiff</code> 只在显式导入时需要 torch。</li>
+      </ul>
+    </section>
+
+    <section id="check">
+      <h2>四、导数的验证</h2>
+      <h3>1. 核函数（torch 与 NumPy，同样的输入）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>核函数</th><th>数值之差</th><th>autograd 导数 vs 解析导数</th></tr></thead>
+        <tbody>
+          <tr><td>SK 插值（网格内）</td><td>≤ 1e-13 × 表的最大值（实测 5e-15 相对）</td><td>dI/dr ≤ 1e-11 × 表的最大值</td></tr>
+          <tr><td>SK 尾部（最后一个格点之后 1 Bohr）</td><td>≤ 1e-11 绝对</td><td>≤ 1e-6（DFTB+ 的尾部公式用步长 1e-5 的二阶差分，病态）</td></tr>
+          <tr><td>原子对块 H0/S（含 f 轨道、周期镜像），含 DFTB+ 差分导数</td><td>≤ 1e-11（实测 6e-15；GdO 尾部 1.9e-12）</td><td>—</td></tr>
+          <tr><td>γ 的短程函数（相等、相近、一般三个分支）</td><td>≤ 1e-14</td><td>dS/dr ≤ 1e-13，dS/dτ ≤ 1e-12</td></tr>
+          <tr><td>DFTB3 的 dγ/dU</td><td>≤ 1e-13 相对（U 相近时 DFTB+ 的闭式相消，≤ 1e-11）</td><td>—</td></tr>
+          <tr><td>排斥势（样条与多项式）</td><td>≤ 1e-13 相对</td><td>dE/dr ≤ 1e-12 相对</td></tr>
+        </tbody>
+      </table></div>
+      <h3>2. hf 模式</h3>
+      <ul>
+        <li>替代能量对坐标和应变的导数 = 引擎的解析力和应力：12 个算例最大差 3.6e-15 Ha/Bohr、6.7e-15 Ha/Bohr³。</li>
+        <li>晶胞的导数（固定笛卡尔坐标）：与引擎 F 对晶胞分量的差分一致到 ~1e-9；与位置梯度一起重建的维里 gᵀR + CᵀH 与应力一致到 1e-14。</li>
+      </ul>
+      <h3>3. 与引擎的有限差分（<code>gradcheck --check</code>）</h3>
+      <p>每个算例、每类参数取一个随机方向（按参数的大小缩放），SCC 收敛到 1e-13，中心差分在 2h、h、h/2（h = 2e-5）三个步长上做 Richardson 外推，两次外推之差作为差分的误差棒；另加舍入的噪声下限（30 ε|X|/h，对非变分的量再加 SCC 容差造成的 1e-13 × 项数 / h）。hf 的参照用 <code>fermi_level="exact"</code>、<code>ts_convention="variational"</code>，容差 1e-7；implicit 的参照用引擎默认的 DFTB+ 约定，容差 1e-6。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模式 / 量</th><th>项数（|导数| &gt; 1e-4）</th><th>中位相对差</th><th>最大相对差</th></tr></thead>
+        <tbody>
+          <tr><td>hf：F</td><td>39</td><td>2e-9</td><td>7.6e-7（GdO 的 U）</td></tr>
+          <tr><td>implicit：E</td><td>38</td><td>2.0e-9</td><td>1.9e-6</td></tr>
+          <tr><td>implicit：F</td><td>38</td><td>2.0e-9</td><td>9.0e-7</td></tr>
+          <tr><td>implicit：电荷</td><td>29</td><td>1.9e-9</td><td>2.4e-6</td></tr>
+          <tr><td>implicit：本征值</td><td>34</td><td>1.3e-9</td><td>2.8e-6</td></tr>
+          <tr><td>implicit：费米能级</td><td>32</td><td>2.3e-9</td><td>2.3e-7</td></tr>
+          <tr><td>implicit：力</td><td>37</td><td>5.7e-10</td><td>4.1e-7</td></tr>
+          <tr><td>implicit：应力</td><td>12</td><td>4.5e-10</td><td>1.6e-8</td></tr>
+        </tbody>
+      </table></div>
+      <p>共 346 项（hf 46、implicit 300），全部在容差内。最大的几项都在 T ≈ 0 的 Cu₈、带 f 态的 GdO 上，误差棒说明那里差分本身只有 1e-6 量级的精度；导数小于 1e-4 的项受差分舍入的限制（例如 Cu₈ 上 2e-6 Ha 的 U 导数，相对差 4e-4、绝对差 1e-9）。</p>
+      <h3>4. 互相对照</h3>
+      <ul>
+        <li><strong>hf 与 implicit</strong>：11 个算例 dF/dθ 逐项（每个张量的最大差 / 最大值）≤ 8.7e-10（GdO），其余 ≤ 3e-11；T ≈ 0 的金属 Cu₈ 6.2e-12。</li>
+        <li><strong>implicit 与展开</strong>：线性混合把 SCC 收敛到机器精度、整条循环求导，与隐式结果比较：水 1.2e-14，甲醇（DFTB3）4.0e-12，Cu₄CO（金属团簇，混合 0.05、1500 步）6.0e-13。</li>
+        <li><strong>伴随方程</strong>：稠密解的残差 ≤ 6e-15；强制走 GMRES 与稠密解一致到 1e-9 以内，残差 ≤ 1e-10。</li>
+        <li><strong>密度矩阵的反向</strong>：<code>torch.autograd.gradcheck</code> 对整个前向（含主机上的费米能级搜索）11 组全部通过，随机方向的最大相对差 1.5e-8。</li>
+        <li><strong>两种引擎后端</strong>：NumPy 引擎与 torch 引擎给出的梯度一致到 1.3e-14（水）、2.9e-11（CuO 自旋链，两边 SCC 各自收敛到 1e-12）。</li>
+      </ul>
+    </section>
+
+    <section id="perf">
+      <h2>五、代价</h2>
+      <p>PTBP 的 Cu 数据集（66 个结构，1–2 个原子，PTBP 的 k 点规则；已发表的 Cu 点上 PTBP 生成的表；PTBP 的 pydftb 设置：T ≈ 0、SCC 1e-5、0.01 Bohr 差分、轨道分辨 SCC、多项式排斥势），一个进程、一个线程：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>做什么</th><th>66 个结构合计</th><th>相对引擎</th></tr></thead>
+        <tbody>
+          <tr><td>引擎：能量和力（一个 BO 步里每个结构做的事）</td><td>29.0 s</td><td>1</td></tr>
+          <tr><td>hf：引擎 + 能量对表、onsite、U、排斥势系数的导数</td><td>35.5 s</td><td>1.22</td></tr>
+          <tr><td>implicit：引擎 + torch 里的 SCC 步 + 能量与“力之和”的导数（以力为损失的 VJP）</td><td>68.4 s</td><td>2.36</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>hf 的导数只多花 22%：替代能量对参数的梯度只需重算一次原子对块和 γ。最大的结构（2 个原子、1,688 个 k 点）引擎 1.97 s，hf 1.90 s（计时的波动大于差别）。</li>
+        <li>implicit 多出两次全部 k 点的本征分解（Φ 和下游各一次）、伴随方程的雅可比矩阵（每个电荷一次反向传播，轨道分辨的 Cu₂ 有 6 个）、以及对力的二阶反向；最大的结构 4.75 s。</li>
+        <li>对 M4c 的含义：一个 BO 步里 DFTB 阶段在 4 核上约 10 s（M3b），加 hf 梯度约 +2 s，加以力为损失的梯度约 +14 s；hotcent 的切向（4 次 hotcent，每次 4.6 s，可并行）仍是梯度的主要成本。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>六、发现的问题</h2>
+      <ul>
+        <li><strong>MP 展宽配 DFTB+ 的 TS 时，F 不是变分的</strong>（M4 之前就如此，DFTB+ 相同）。DFTB+ 的熵项把 MP 各阶的 Hermite 项都加上，只有最高阶那一项才与占据函数配套。实测 Cu₈、MP2、2000 K：引擎的解析力与 −dF/dx 差 1–9%，与 −dE/dx 也不同。<code>test_smearing.py</code> 早已记录这一点；现在 hf 模式遇到这种设置拒绝给 dF 的梯度（提示用 <code>ts_convention="variational"</code>），implicit 模式则直接对引擎的 F 求导（gradcheck 的 MP 算例用的就是 DFTB+ 约定）。</li>
+        <li><strong>带隙中点的费米能级让电子数漂移</strong>。电子数为整数时，DFTB+ 先试带隙中点，只要那里的电子数与目标差 ≤ 1e-7 就采用。有展宽、带隙小的体系（Cu₄CO 300 K：差 4e-8；CuO 链的上自旋：3e-9）因此不是“电子数固定”的 Mermin 自由能，F 的导数多出 μ dN/dθ：hf 模式与引擎 F 的差分差 1.7e-5（相对），引擎自己的解析力与 −dF/dx 差 1e-7 Ha/Bohr（DFTB+ 对照表的坑 7 早已记下力与能量导数的这一差别）。新增 <code>Smearing(fermi_level="exact")</code>：总是二分到准确的电子数（默认仍是 DFTB+ 的规则，结果逐位不变）。implicit 模式按引擎实际用的规则对 μ 求导（中点规则下 dμ = ½(dε<sub>H</sub> + dε<sub>L</sub>)）。另外，两条规则在 1e-7 的阈值处切换，F 在那里不连续（构造的测试里 1e-6 的扰动就让规则翻转）。</li>
+        <li><strong>异核 SK 文件的冗余积分</strong>。A-B 和 B-A 两个文件都存 l₁ = l₂ 的积分（ss、pp、dd、ff）。引擎的矩阵上、下三角各用一份，本征求解只读一个三角、Mulliken 求和两个都读（DFTB+ 只填下三角，用哪一份取决于原子编号的顺序），所以只改其中一份时，S 不再对称，引擎的响应取决于这些实现细节（实测：水的表方向 dF 差 5%，甲醇的连符号都不对）。只有两份一起变的方向有意义——hotcent 生成的两份数值相同，它的切向就是这样。梯度在两份之间平分（hf 的替代能量天然如此；implicit 模式在折叠后取 H0、S 的厄米部分，使两种模式逐项一致）。gradcheck 的随机方向按此绑定。同理，相等的 Hubbard U（DFTB+ 对 |ΔU| &lt; 3.125e-6 走另一个分支）只有一起变的方向有导数。</li>
+        <li><strong>简并本征值</strong>。单个简并本征值没有线性的导数（扰动劈裂的方式随方向变）；本征值的梯度在每个简并能级内取平均，对能级的任何对称函数是精确的。ρ、W、能量、电荷、力不受影响（差商对简并有定义）。</li>
+        <li><strong>D3（三体项、周期）的维里与能量不完全配套</strong>：库给的维里与它的能量在应变下的差分差 3e-4（相对），且差分随步长不收敛（实空间截断造成的不连续）。pydftb 的应力用的就是库的维里（与 DFTB+ 一致）；晶胞的导数由梯度和维里推出（C = H⁻ᵀ(W − gᵀR)ᵀ），因此同样以库的维里为准。</li>
+        <li><strong>差分作为参照的局限</strong>：GdO 的表方向上 f 态响应很强，单个中心差分在 h = 1e-4 时误差 3e-3；DFTB+ 的 SK 尾部公式（二阶差分，步长 1e-5）把表值的舍入放大 1e10，使本征值之和的差分带 ~4e-10 的噪声；E（有展宽时）、电荷、本征值、力不是变分的，带一阶的 SCC 误差，所以参照要收敛到 1e-13。gradcheck 因此用三步 Richardson 和误差棒。</li>
+        <li><strong>对 PTBP 的含义</strong>（留给 M4c）：在 PTBP 的设置下（SCC 1e-5、T ≈ 0），hf 与 implicit 的 dE/dθ 只一致到 7e-7–2.4e-5（Cu 数据集 4 个结构），非变分量（力、电荷）的导数也只有 SCC 容差量级的精度；求梯度时宜收紧 SCC。T ≈ 0 的金属里，费米能级上简并的能级被参数劈裂时，占据数在 kT = 1e-8 Ha 内翻转，力对参数的导数会很大：只用 Γ 点的 2 原子 Cu 晶胞，|F|² 对表的导数最大 7.3e3，用 k 网格的结构 ≤ 3e-2。数值是对的（kT = 1e-8 Ha 下的导数），但作为优化的方向没有意义；以力为损失求梯度时宜加展宽。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>七、单元测试</h2>
+      <p>新增 60 项：<code>test_autodiff.py</code> 29 项（核函数对照 7、hf 的力和应力 10 个算例、参数导数 vs 差分 7 个算例、坐标与晶胞的叶张量、拒绝的情形、<code>Params</code> 的往返、带隙中点规则的影响、选项检查）、<code>test_autodiff_implicit.py</code> 30 项（密度矩阵 gradcheck 11 组、简并能级、implicit vs 差分 6 个算例、hf 与 implicit 4 个算例、展开 3 个算例、伴随方程两种解法、0.01 与 1.22e-4 两种差分步长下的力、返回值即引擎的值、两种引擎后端）、<code>test_smearing.py</code> 1 项。conda 环境 pydftb 测试 429 个全部通过（约 2 分钟）；最小环境（无 torch）257 个通过、93 个跳过；最小环境加 torch 398 个通过、31 个跳过（没有 dftd3/dftd4）。PTBP 的 179 个测试：171 个通过、1 个跳过，失败的仍是已知的 7 个界面冒烟测试（与之前相同）。</p>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与计划的偏差</h2>
+      <ul>
+        <li>没有加 <code>DFTB.calculate(keep_state=True)</code>：内部的 <code>_run()</code> 返回 setup 和 SCC 状态，公开接口不变。</li>
+        <li><code>Params</code> 不把相等的 U 或冗余的 SK 积分“绑”成一个张量（那样会改变参数的形状）；改为写明只有一起变的方向有意义，gradcheck 按此取方向，梯度在各份之间平分。</li>
+        <li>MP 的 Σ w f′ 接近 0 时没有报错：Σ w f′ = 0 时不耦合 μ，其余情况照常（MP 的测试通过）。</li>
+        <li>没有另做 <code>value_and_grad</code>、<code>vjp</code>、<code>jvp_tangent</code>：<code>evaluate()</code> 返回 torch 张量，VJP 就是 <code>torch.autograd.grad</code>，沿切向 t 的导数是 grad·t（gradcheck 就这样用）。M4c 若需要把 hotcent 的切向打包成函数，再在那里加。</li>
+        <li>差分对照的步长与容差：计划写 SCC 1e-12、相对差 1e-7；实际用 SCC 1e-13、三步 Richardson、误差棒，implicit 的容差按计划取 1e-6（见第四节第 3 小节）。</li>
+        <li>新增了计划外的 <code>Smearing(fermi_level=...)</code>，用于把引擎的 F 变成电子数固定的 Mermin 自由能（第六节）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="repro">
+      <summary><span class="tag">开发细节</span><span class="title">九、复现命令</span></summary>
+      <div class="body">
+        <pre><code># 与引擎有限差分对照（两种模式，11 个算例，约 2.5 分钟）
+python -m pydftb.validation.gradcheck --check
+python -m pydftb.validation.gradcheck h2o --mode implicit --kinds tables hubbard
+# NumPy 路径与 M4 之前逐字节比较（两个环境各跑一次）
+python -m pydftb.validation.golden --base 65115d1 --allow-new dev groups gint
+# DFTB+ 参考，两个后端
+python -m pydftb.validation.refgen --check [--backend torch]
+python -m pydftb.validation.dynamics --check [--backend torch]
+# 测试
+PYTHONPATH=. pytest -q pydftb/tests</code></pre>
+        <p>实验脚本（不入库，在会话的 scratchpad <code>m4b/</code> 中）：<code>tab_probe*.py</code>（冗余积分的定位）、<code>steps*.py</code>（差分步长研究）、<code>mp_fd.py</code>（MP 与 Cu₄CO 的力 vs 能量差分）、<code>midgap.py</code>（带隙中点规则）、<code>asym.py</code>、<code>cell_probe.py</code>、<code>d3_cell.py</code>（D3 的维里）、<code>dm_gradcheck.py</code>、<code>implicit_*.py</code>、<code>unrolled_probe.py</code>、<code>fd_forces.py</code>、<code>bench_m4b.py</code>；门槛的输出在 <code>m4b/gates/</code>。</p>
+      </div>
+    </details>
+
+    <section id="next">
+      <h2>十、下一步</h2>
+      <ul>
+        <li>M4c：PTBP 的损失对 r0_w、r0_d 的梯度（pydftb 的导数 × hotcent 的有限差分切向），与整条流程的差分分层对照；可选的梯度优化器，与 BO 如实比较。</li>
+        <li>M4d：设备选项、GPU 自检脚本（含导数在 GPU 上的一致性）、PTBP 的后端开关。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M4b-autodiff.html">← M4b 设计</a><a href="../index.html">文档索引</a><a href="../ROADMAP.md">路线图 →</a></nav>
+    <span>M4b</span>
+  </footer>
+</div>
+</body>
+</html>

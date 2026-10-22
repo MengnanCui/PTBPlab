@@ -67,6 +67,7 @@ class PairBlocks:
     s: np.ndarray
     dh: np.ndarray | None = None   # (nelem, 3) derivative wrt bond vector
     ds: np.ndarray | None = None
+    groups: list | None = None     # (label a, label b, pair indices) in element order
 
 
 def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
@@ -79,7 +80,7 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
     which allows bit-level comparisons with DFTB+ forces.
     """
     i, j, shift, vec, dist = neighbor_list(pos, cell, pbc, sk.cutoff)
-    rows, cols, pidx, hv, sv, dhv, dsv = [], [], [], [], [], [], []
+    rows, cols, pidx, hv, sv, dhv, dsv, groups = [], [], [], [], [], [], [], []
     spec = np.array(species)
     elems = sorted(set(species))
     for a in elems:
@@ -88,6 +89,7 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
             sel = np.nonzero(mask)[0]
             if len(sel) == 0:
                 continue
+            groups.append((a, b, sel))
             shells_a, shells_b = sk.shells(a), sk.shells(b)
             na, nb = sk.norb(a), sk.norb(b)
 
@@ -135,11 +137,54 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
             sv.append(sb.ravel())
     cat = lambda x, dt: np.concatenate(x) if x else np.zeros(0, dt)
     pb = PairBlocks(i, j, shift, vec, dist, cat(rows, int), cat(cols, int), cat(pidx, int),
-                    cat(hv, float), cat(sv, float))
+                    cat(hv, float), cat(sv, float), groups=groups)
     if derivatives:
         pb.dh = np.concatenate(dhv) if dhv else np.zeros((0, 3))
         pb.ds = np.concatenate(dsv) if dsv else np.zeros((0, 3))
     return pb
+
+
+def pair_values(pb: PairBlocks, sk: SKSet, vec, tables=None, fd_delta: float | None = None):
+    """H0/S values of every pair element of ``pb`` (the order of ``pb.h``) for the bond
+    vectors ``vec`` (n_pair, 3), NumPy or torch (milestone M4b), interpolated from
+    ``tables[(a, b)]`` (default: the SKF tables; torch leaves make them differentiable).
+    With ``fd_delta`` also DFTB+'s central differences (n_elem, 3) w.r.t. the bond vector,
+    as :func:`build_pairs`; returns ``h, s`` or ``h, s, dh, ds``."""
+    xp = ops.namespace(vec)
+    hv, sv, dhv, dsv = [], [], [], []
+    for a, b, sel in pb.groups:
+        shells_a, shells_b = sk.shells(a), sk.shells(b)
+        lmax = max(max(shells_a), max(shells_b))
+        fab, fba = sk.files[(a, b)], sk.files[(b, a)]
+        tab = fab.table if tables is None else tables[(a, b)]
+        tba = fba.table if tables is None else tables[(b, a)]
+        cab, cba = fab.colmap, fba.colmap
+
+        def blocks(v):
+            d = xp.sqrt((v * v).sum(1))
+            dm = rotation_blocks(bond_frames(v), lmax)
+            iab, iba = fab.evaluate_table(d, tab), fba.evaluate_table(d, tba)
+            return (sk_block(v, iab, iba, shells_a, shells_b, 0, dm, cab, cba),
+                    sk_block(v, iab, iba, shells_a, shells_b, N_INTEGRALS, dm, cab, cba))
+
+        v = vec[sel]
+        hb, sb = blocks(v)
+        hv.append(hb.reshape(-1))
+        sv.append(sb.reshape(-1))
+        if fd_delta is not None:
+            dh, ds = [], []
+            for k in range(3):
+                step = ops.zeros(3, like=v)
+                step[k] = fd_delta
+                (hp, sp_), (hm, sm) = blocks(v + step), blocks(v - step)
+                dh.append(((hp - hm) / (2.0 * fd_delta)).reshape(-1))
+                ds.append(((sp_ - sm) / (2.0 * fd_delta)).reshape(-1))
+            dhv.append(xp.stack(dh, axis=-1))
+            dsv.append(xp.stack(ds, axis=-1))
+    h, s = xp.concatenate(hv), xp.concatenate(sv)
+    if fd_delta is None:
+        return h, s
+    return h, s, xp.concatenate(dhv), xp.concatenate(dsv)
 
 
 def onsite_energies(basis: Basis, sk: SKSet) -> np.ndarray:

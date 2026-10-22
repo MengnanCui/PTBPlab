@@ -15,7 +15,8 @@ Orbital order (identical to DFTB+):
     s ;  p: y, z, x ;  d: xy, yz, z2, xz, x2-y2 ;
     f: y(3x2-y2), xyz, yz2, z3, xz2, z(x2-y2), x(x2-3y2)
 All operations are complex-analytic, so derivatives can be taken with the
-complex-step trick (machine-precision, no truncation error).
+complex-step trick (machine-precision, no truncation error).  The same code runs on torch
+tensors (``ops.namespace``; milestone M4b), where autograd gives the derivatives.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import math
 
 import numpy as np
 
+from .backend import ops
 from .skf import SK_COLUMN
 
 # |m| of each real harmonic in DFTB+ order
@@ -80,33 +82,36 @@ def bond_frames(vec: np.ndarray) -> np.ndarray:
     Works for complex input (complex-step differentiation); branch choices
     are made on the real part only.
     """
-    r = np.sqrt((vec * vec).sum(-1))
+    xp = ops.namespace(vec)
+    r = xp.sqrt((vec * vec).sum(-1))
     ez = vec / r[:, None]
-    helper = np.zeros_like(vec)
-    use_x = np.abs(ez[:, 0].real) < 0.9
+    helper = xp.zeros_like(vec)
+    use_x = xp.abs(ez[:, 0].real) < 0.9
     helper[use_x, 0] = 1.0
     helper[~use_x, 1] = 1.0
-    ex = np.cross(helper, ez)
-    ex = ex / np.sqrt((ex * ex).sum(-1))[:, None]
-    ey = np.cross(ez, ex)
-    return np.stack([ex, ey, ez], axis=-1)
+    ex = xp.cross(helper, ez)
+    ex = ex / xp.sqrt((ex * ex).sum(-1))[:, None]
+    ey = xp.cross(ez, ex)
+    return xp.stack([ex, ey, ez], axis=-1)
 
 
 def rotation_blocks(rot: np.ndarray, lmax: int) -> list[np.ndarray]:
     """D^l matrices (n, 2l+1, 2l+1) for l = 0..lmax."""
     n = rot.shape[0]
-    out = [np.ones((n, 1, 1), dtype=rot.dtype)]
+    out = [ops.ones((n, 1, 1), like=rot)]
     if lmax >= 1:
         out.append(rot[:, _P_CART][:, :, _P_CART])
     if lmax >= 2:
         # D_ab = <Q_a, Rot Q_b Rot^T>_F = Q_a . (Rot (x) Rot) . Q_b over flattened indices
         rr = (rot[:, :, None, :, None] * rot[:, None, :, None, :]).reshape(n, 9, 9)
-        out.append(_QD9 @ rr @ _QD9.T)
+        q = ops.asarray(_QD9, like=rot)
+        out.append(q @ rr @ q.T)
     if lmax >= 3:
         # D_ab = <T_a, Rot.T_b>_F, Rot acting on all three indices
         rrr = (rot[:, :, None, None, :, None, None] * rot[:, None, :, None, None, :, None]
                * rot[:, None, None, :, None, None, :]).reshape(n, 27, 27)
-        out.append(_QF27 @ rrr @ _QF27.T)
+        q = ops.asarray(_QF27, like=rot)
+        out.append(q @ rrr @ q.T)
     return out
 
 
@@ -119,7 +124,7 @@ def bond_matrix(integrals: np.ndarray, l1: int, l2: int, kind: int,
     (integrals the file does not store are zero).
     """
     n = integrals.shape[0]
-    blk = np.zeros((n, 2 * l1 + 1, 2 * l2 + 1), dtype=integrals.dtype)
+    blk = ops.zeros((n, 2 * l1 + 1, 2 * l2 + 1), like=integrals)
     for i in range(2 * l1 + 1):
         m = i - l1
         c = kind + SK_COLUMN[(l1, l2, abs(m))]
@@ -142,20 +147,21 @@ def sk_block(vec: np.ndarray, integ_ab: np.ndarray, integ_ba: np.ndarray,
     For l_a > l_b we use  <a|O|b>(R) = <b|O|a>(-R)^T ; reflecting R flips
     the parity, giving the factor (-1)^(l_a + l_b).
     """
+    xp = ops.namespace(integ_ab)
     na = sum(2 * l + 1 for l in shells_a)
     nb = sum(2 * l + 1 for l in shells_b)
-    out = np.zeros((vec.shape[0], na, nb), dtype=integ_ab.dtype)
+    out = ops.zeros((vec.shape[0], na, nb), like=integ_ab)
     ia = 0
     for la in shells_a:
         ib = 0
         for lb in shells_b:
             if la <= lb:
                 m = bond_matrix(integ_ab, la, lb, kind, colmap_ab)
-                blk = dmats[la] @ m @ dmats[lb].transpose(0, 2, 1)
+                blk = dmats[la] @ m @ xp.swapaxes(dmats[lb], 1, 2)
             else:
                 m = bond_matrix(integ_ba, lb, la, kind, colmap_ba)
-                blk = dmats[lb] @ m @ dmats[la].transpose(0, 2, 1)
-                blk = np.swapaxes(blk, 1, 2) * (-1.0) ** (la + lb)
+                blk = dmats[lb] @ m @ xp.swapaxes(dmats[la], 1, 2)
+                blk = xp.swapaxes(blk, 1, 2) * (-1.0) ** (la + lb)
             out[:, ia:ia + 2 * la + 1, ib:ib + 2 * lb + 1] = blk
             ib += 2 * lb + 1
         ia += 2 * la + 1

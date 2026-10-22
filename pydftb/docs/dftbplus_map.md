@@ -29,6 +29,7 @@
 | 占据数与费米能级 | `occupations.py` | `dftb/etemp.F90`，`dftbplus/main.F90:getFillingsAndBandEnergies` | `Efilling`, `electronCount`, `electronFill`, `middleGap` | M1 已照搬：先试带隙中点，再按 DFTB+ 的方式二分；T 不低于 1e-8 Ha；Gaussian 即 MP 0 阶；另提供变分熵。玻尔兹曼常数与 DFTB+ 25.1 相同（M2e，坑 17）；带隙中点的搜索允许权重累加的舍入（M2e，坑 18） |
 | 本征求解与密度矩阵 | `solvers.py` | `math/eigensolver.F90`, `dftb/densitymatrix.F90` | `hegvd`, `getDensityMatrix`, `getEDensityMatrix` | pydftb 另有 SP2 纯化和批量求解器 |
 | 同一套计算在 PyTorch 上（M4a） | `backend/torch_solver.py`、`backend/spec.py` | （无对应：DFTB+ 的 GPU 版用 MAGMA / ELPA-GPU） | — | Cholesky + 三角求解化为标准问题，与 `hegvd` 同一算法；74 个单点、11 个优化/MD 参考在 torch 后端上用同样的容差通过，SCC 轮数与 DFTB+ 相同 |
+| 对参数和几何求导（M4b） | `autodiff/`：`density.py`（`DensityMatrix`）、`scc.py`（隐式微分）、`api.py`（`evaluate`） | `derivs/perturb.F90`、`derivs/linearresponse.F90`、`derivs/fermihelper.F90`、`derivs/rotatedegen.F90` | `dRhoReal`, `invDiff`, `deltamn`, `dEfda` | DFTB+ 不对参数求导；它的线性响应（对外场、原子位置、外部电荷：极化率、Born 电荷等）同样用占据数之差除以能级之差、加费米能级的修正（`fermihelper.F90`），自洽的响应用迭代混合求解，简并能级用简并微扰论旋转（`rotatedegen.F90`）。pydftb 用隐函数定理解一次伴随方程，简并本征值的梯度取能级平均 |
 | 力 | `calculator.py: DFTB._gradient` | `dftb/forces.F90`, `dftbplus/main.F90` | `derivative_shift`, `getGradients` | 电荷项和势用最后一轮的输出电荷（M2f 起，见坑 22） |
 | DFTB3 三阶项（M2b） | `thirdorder.py: ThirdOrder`, `dgamma_du`, `dgamma_du_onsite` | `dftb/thirdorder.F90`，`dftb/chargepenalty.F90`（`ThirdOrder`） | `gamma3`, `gamma2pU`, `gamma2pUpR`, `dGdUr0`, `updateCharges`, `getShifts`, `addGradientDc`, `addStressDc` | U 几乎相等时 pydftb 改用稳定的积分形式（见第 3 节第 6 条） |
 | H–X 阻尼（M2b） | `coulomb.py: Coulomb._sp_short`，`thirdorder.py: dgamma_du` | `dftb/shortgammafuncs.F90`，`dftbplus/initprogram.F90` | `expGammaDamped`, `expGammaDampedPrime`, `hh`, `hpU`；被阻尼的是质量 < 3.5 amu 的原子 | — |
@@ -75,7 +76,7 @@
 4. **数值求导跨过网格节点。** DFTB+ 用步长 1.22e-4 Bohr 的中心差分求 H0、S 的导数。如果某个原子间距离到最近网格节点的距离比这个步长还小，差分的两端会落在两个不同的插值多项式上，导数就有误差。在晶格常数 3.45 Å 的 Li bcc 中，a√2 那一层邻居离第 461 个节点只有 4.3e-5 Bohr，DFTB+ 的应力因此偏差 1.2e-8 Ha/Bohr³。pydftb 默认用复步长精确求导，没有这个问题；设 `fd_delta` 后能逐位复现 DFTB+ 的结果（差异 6e-13）。第 2 条中 Richardson 求导变差，很可能也是这个原因。
 5. **Γ 在 U 恰好相等时大一倍。** DFTB+ 的 `gamma2pU` 在 |U_a − U_b| < 3.125e-6 时对共同的 τ 求全导数，否则求偏导；按对称性，偏导恰好是全导数的一半。3ob 等参数按这个约定拟合，pydftb 照搬。
 6. **U 几乎相等时，DFTB+ 的 γ 闭式公式失效。**【顾问 H01】 公式里 1/(τ_a² − τ_b²)ⁿ 各项彼此几乎完全抵消。|ΔU| = 1e-5 时，S 的相对误差是 6e-4，∂γ/∂U 的相对误差是 24。DFTB3 下实测总能量错 0.5 eV（ΔU = 4e-6）。pydftb 在 U 相差不到 5% 时改用 Hermite–Genocchi 积分形式，误差 ≤ 4e-12（见 `reports/M2b-dftb3.html`）。
-7. **费米能级捷径影响力的自洽。** “带隙中点”只要让电子数误差 ≤ 1e-7 就被接受；电子数不严格守恒时，力与能量导数会相差约 5e-7 Ha/Bohr（实例：按壳层分辨的 Cu₄CO，300 K）。
+7. **费米能级捷径影响力的自洽。** “带隙中点”只要让电子数误差 ≤ 1e-7 就被接受；电子数不严格守恒时，力与能量导数会相差约 5e-7 Ha/Bohr（实例：按壳层分辨的 Cu₄CO，300 K）。M4b：此时 F 也不是电子数固定的 Mermin 自由能，变分的参数导数与 F 的差分差 1.7e-5（相对）；`Smearing(fermi_level="exact")` 总是二分到准确的电子数（默认仍照 DFTB+）。两条规则在 1e-7 处切换，F 在那里不连续。
 8. **开自旋时第一轮不混合。** `main.F90:getNextInputCharges` 在第一次 SCC 迭代、且开了自旋（或 DFTB+U 等）时，直接用输出电荷作为下一轮输入，不调用混合器。不照做，SCC 轮数就对不上（O₂：2 轮对 4 轮）。
 9. **“能级全部占满”按“能级数 × 自旋通道数”判断**（`etemp.F90:Efilling`）。把自旋通道当作额外的 k 点处理时，要乘上通道数，否则会误判。
 10. **DFTB+ 的 D4 对 Cu、Zn、Ag、Cd、Au、Hg 多用一个参考体系。** `external/dftd4refs/dftd4_references.fh` 中这 6 种元素的 `refn` 为 3，dftd4 3.6 为 2（第 3 个参考体系仍在数据里，但未启用）；其余 3366 项数据完全相同。Cu₄CO 的色散能因此差 2.1e-3 Ha。
@@ -102,3 +103,5 @@
 31. **两处输入写法。** `HubbardDerivs` 的每个元素要单独一行，写在同一行会报 “Superfluous data”；壳层分辨 SCC 时不能写 `SpinConstants` 中的 `ShellResolvedSpin`（被忽略的节点会让 DFTB+ 报错退出）。
 32. **OpenMP 线程在小矩阵上更慢。**【顾问 T03】 不设 `OMP_NUM_THREADS` 时 DFTB+ 用满全部核心。M3c 实测（Cu 晶胞，1000 K）：36 个轨道（864 个 k 点）用 4 个线程慢 3.3 倍，288 个轨道慢 1.2–1.3 倍，576 个轨道的 Γ 点不变快，576 个轨道 16 个 k 点快 1.4 倍、972 个轨道 4 个 k 点快 1.74 倍；PTBP 的 Cu 数据集（9–18 个轨道）整体慢 11%（M3a）。线程数还会改变应力的最后一位。PTBP 只在每个结构都有 ≥ 500 个轨道时给 DFTB+ 线程，其余情况每个进程 1 个线程。
 33. **库仑求和的内存。** 壳层分辨 SCC 的短程 γ 算到 1e-10，截断由最小的 Hubbard U 决定（Cu 的 4p 壳层 U = 0.08 Ha 时 96 Bohr）。64 个 Cu 原子的晶胞有约 300 万个原子对：DFTB+ 峰值内存 0.3 GB，pydftb 把所有原子对和壳层对展开成数组，要 2.2 GB（M3c）。
+34. **MP 展宽的 TS 不是变分的。** DFTB+ 的 Methfessel–Paxton 熵项把 0 到 N 阶的 Hermite 项都加上，与 N 阶占据函数配套的只有最高阶一项。F = E − TS 因此对密度不驻定，解析力既不是 −dF/dx 也不是 −dE/dx（Cu₈、MP2、2000 K：与 −dF/dx 差 1–9%）。pydftb 默认照 DFTB+，`Smearing(..., ts_convention="variational")` 只取最高阶；`pydftb.autodiff` 的 hf 模式遇到 DFTB+ 约定拒绝给 dF 的梯度（M4b）。
+35. **异核 SK 文件的冗余积分。** A-B 和 B-A 两个文件都存 l₁ = l₂ 的积分（ss、pp、dd、ff）。`parser.F90:getFullTable` 对 l₁ ≤ l₂ 取 A-B 文件，而稀疏的 H、S 只填矩阵的下三角（`sparse2dense.F90`），所以 DFTB+ 用哪一份取决于原子编号的顺序。pydftb 两个三角各用一份（本征求解只读下三角，Mulliken 两个都读）。两份数值相同时没有区别；只改其中一份（例如对 SK 表求导时取了不对称的方向），S 就不再对称，结果随这些实现细节变（M4b 实测 dF 差 5% 到符号相反）。所以对表的导数只在两份一起变的方向上有意义。

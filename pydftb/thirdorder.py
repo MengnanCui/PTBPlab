@@ -76,23 +76,24 @@ def _short_terms(ta, tb, r, same):
     Nearly equal tau use the Hermite-Genocchi form (:func:`pydftb.coulomb._short_near`):
     there DFTB+'s closed form loses all digits of dS/dtau_a.
     """
-    s, st, sr, str_ = (np.empty(r.shape) for _ in range(4))
+    xp = ops.namespace(ta, tb, r)
+    s, st, sr, str_ = (ops.zeros(r.shape, like=r) for _ in range(4))
     if same.any():
         t, x = 0.5 * (ta[same] + tb[same]), r[same]
-        e = np.exp(-t * x)
+        e = xp.exp(-t * x)
         g, gt, gr, gtr = _gg(t, x), _gpT(t, x), _gpR(t, x), _gpTpR(t, x)
         s[same] = e * g
         st[same] = e * (gt - x * g)
         sr[same] = e * (gr - t * g)
         str_[same] = e * ((t * x - 1.0) * g - t * gt + gtr - x * gr)
-    near = ~same & (np.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
+    near = ~same & (xp.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
     if near.any():
         s[near], sr[near], st[near], str_[near] = _short_near(r[near], ta[near], tb[near],
                                                               tau_derivs=True)
     nd = ~same & ~near
     if nd.any():
         a, b, x = ta[nd], tb[nd], r[nd]
-        ea, eb = np.exp(-a * x), np.exp(-b * x)
+        ea, eb = xp.exp(-a * x), xp.exp(-b * x)
         fab, fba = _ff(a, b, x), _ff(b, a, x)
         s[nd] = ea * fab + eb * fba
         st[nd] = ea * (_fpT1(a, b, x) - x * fab) + eb * _fpT2(b, a, x)
@@ -104,17 +105,23 @@ def _short_terms(ta, tb, r, same):
 
 
 def dgamma_du(ua, ub, r, damped=False, zeta=0.0):
-    """dgamma_ab/dU_a and d2gamma_ab/dU_a dr for r > 0 (DFTB+ gamma2pU, gamma2pUpR)."""
-    ua, ub, r, damped = np.broadcast_arrays(np.asarray(ua, float), np.asarray(ub, float),
-                                            np.asarray(r, float), np.asarray(damped, bool))
-    same = np.abs(ua - ub) < MIN_HUB_DIFF
+    """dgamma_ab/dU_a and d2gamma_ab/dU_a dr for r > 0 (DFTB+ gamma2pU, gamma2pUpR).
+    NumPy or torch (``ua``, ``ub``, ``r`` tensors; ``damped`` a NumPy bool array)."""
+    xp = ops.namespace(ua, ub, r)
+    if xp is np:
+        ua, ub, r, damped = np.broadcast_arrays(np.asarray(ua, float), np.asarray(ub, float),
+                                                np.asarray(r, float), np.asarray(damped, bool))
+    else:
+        damped = ops.asarray(np.asarray(damped, bool), like=r)
+        ua, ub, r, damped = xp.broadcast_arrays(ua, ub, r, damped)
+    same = xp.abs(ua - ub) < MIN_HUB_DIFF
     s, st, sr, str_ = _short_terms(3.2 * ua, 3.2 * ub, r, same)
     g = -3.2 * st
     gr = -3.2 * str_
     if damped.any():
         m = damped
         u, x = 0.5 * (ua[m] + ub[m]), r[m]
-        h = np.exp(-u ** zeta * x * x)
+        h = xp.exp(-u ** zeta * x * x)
         h_u = -0.5 * zeta * x * x * u ** (zeta - 1.0) * h
         h_r = -2.0 * x * u ** zeta * h
         h_ur = zeta * x * u ** (zeta - 1.0) * (x * x * u ** zeta - 1.0) * h
@@ -124,13 +131,15 @@ def dgamma_du(ua, ub, r, damped=False, zeta=0.0):
 
 
 def dgamma_du_onsite(ua, ub):
-    """dgamma_ab/dU_a for two sites on one atom (R = 0); DFTB+ dGdUr0."""
-    ua, ub = np.asarray(ua, float), np.asarray(ub, float)
+    """dgamma_ab/dU_a for two sites on one atom (R = 0); DFTB+ dGdUr0.  NumPy or torch."""
+    xp = ops.namespace(ua, ub)
+    if xp is np:
+        ua, ub = np.asarray(ua, float), np.asarray(ub, float)
     ta, tb = 3.2 * ua, 3.2 * ub
     inv = 1.0 / (ta + tb)
     general = 1.6 * inv * (tb + inv * (-ta * tb + inv * (2.0 * ta * tb * tb
                                                           + inv * (-3.0 * ta * ta * tb * tb))))
-    return np.where(np.abs(ua - ub) < MIN_HUB_DIFF, 0.5, general)
+    return xp.where(xp.abs(ua - ub) < MIN_HUB_DIFF, 0.5, general)
 
 
 class ThirdOrder:

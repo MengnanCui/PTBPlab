@@ -26,14 +26,14 @@
     <h2 id="key-title">关键信息</h2>
     <p class="lead">pydftb 是从零写成的 Python SCC-DFTB 程序，每一项功能都与 DFTB+ 逐项对照，参考结果冻结在仓库里，测试不需要 DFTB+。它已接入 PTBP，可以替代 DFTB+ 做参数优化。</p>
     <ul>
-      <li>已完成：原型、M0 底座、M1 接入 PTBP，M2 的全部七项（应力、DFTB3、共线自旋、色散、能带与 DOS/PDOS、结构优化与 MD 的验证、f 轨道），以及 M3 的四项：PTBP 的 BO 步默认用满可用核心，Cu 数据集 4 核上一个 BO 步从 147 s 降到 27 s，运行目录与原来逐字节相同；进程数和线程数由成本模型决定，启动时给出预计耗时（与实测差 2–4%），<code>ptbp plan</code> 不运行优化就能看到方案和建议；DFTB+ 配置顾问（<code>python -m pydftb.advisor</code>）按 18 条规则检查 DFTB+ 的输入和输出，PTBP 用 DFTB+ 时自动检查。M4 进行中：M4a 的 PyTorch 后端（<code>backend="torch"</code>）已完成，74 个单点和 11 个优化/MD 的 DFTB+ 参考在 torch 上全部通过，与 NumPy 的差 ≤ 1.4e-13。</li>
-      <li>下一步：M4b 自动求导（可微参数、密度矩阵的差商反向、SCC 隐式微分），然后 M4c PTBP 的梯度、M4d GPU 自检。</li>
+      <li>已完成：原型、M0 底座、M1 接入 PTBP，M2 的全部七项（应力、DFTB3、共线自旋、色散、能带与 DOS/PDOS、结构优化与 MD 的验证、f 轨道），以及 M3 的四项：PTBP 的 BO 步默认用满可用核心，Cu 数据集 4 核上一个 BO 步从 147 s 降到 27 s，运行目录与原来逐字节相同；进程数和线程数由成本模型决定，启动时给出预计耗时（与实测差 2–4%），<code>ptbp plan</code> 不运行优化就能看到方案和建议；DFTB+ 配置顾问（<code>python -m pydftb.advisor</code>）按 18 条规则检查 DFTB+ 的输入和输出，PTBP 用 DFTB+ 时自动检查。M4 进行中：M4a 的 PyTorch 后端（<code>backend="torch"</code>）已完成，74 个单点和 11 个优化/MD 的 DFTB+ 参考在 torch 上全部通过，与 NumPy 的差 ≤ 1.4e-13；M4b 的自动求导（<code>pydftb.autodiff</code>）已完成：能量、电荷、本征值、力、应力对 SK 表、U、排斥势系数等参数和坐标的导数，与引擎的有限差分对照 346 项全部通过（中位相对差 2e-9）。</li>
+      <li>下一步：M4c PTBP 损失对 r0 的梯度（pydftb 的导数 × hotcent 的差分切向）和可选的梯度优化器，然后 M4d GPU 自检。</li>
       <li>验收标准：与 DFTB+ 的能量差 &lt; 1e-6 Ha、力差 &lt; 1e-5 Ha/Bohr、应力差 &lt; 1e-7 Ha/Bohr³。实际差异通常小 3–5 个数量级，剩下的差异都已归因。</li>
       <li>对照中发现并记录了 DFTB+ 自身的几处问题：U 接近时 γ 公式数值崩溃（M2b）、原生 D4 的三处错误（M2d），以及 k 点权重有舍入时绝缘体的费米能级被放到导带底（M2e）。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">74 + 11</span><span class="lbl">DFTB+ 参考算例（单点 + 优化/MD），全部通过</span></li>
-      <li><span class="num">369 + 179</span><span class="lbl">离线测试：pydftb + PTBP（conda 环境）</span></li>
+      <li><span class="num">429 + 179</span><span class="lbl">离线测试：pydftb + PTBP（conda 环境）</span></li>
       <li><span class="num">&lt; 1e-7</span><span class="lbl">PTBP 损失函数与 DFTB+ 的相对差</span></li>
       <li><span class="num">5.4×</span><span class="lbl">PTBP 的一个 BO 步，4 核（pydftb，对 M3 之前）</span></li>
     </ul>
@@ -73,7 +73,8 @@
             <tr><td>M3c</td><td>计算策略推荐器：成本模型、内存检查、<code>ptbp plan</code></td><td><span class="chip done">已完成</span></td><td>耗时中位误差 pydftb 12%、DFTB+ 7%，一个 BO 步的预计与实测差 2–4%；发现大晶胞的瓶颈在库仑部分（Cu 的 4p 截断 96 Bohr）；运行目录与 M3b 逐字节相同</td><td><span class="links"><a href="design/M3c-recommender.html">设计</a><a href="reports/M3c-recommender.html">报告</a></span></td></tr>
             <tr><td>M3d</td><td>DFTB+ 配置顾问：HSD 读取器、18 条规则、<code>python -m pydftb.advisor</code>、PTBP 自动检查</td><td><span class="chip done">已完成</span></td><td>11 次冻结的 DFTB+ 运行上结论全部符合预期；PTBP 的历史输入查出 5 条（壳层分辨 SCC、0.01 Bohr 差分步长、展宽被忽略即 T = 0 等）；只报告，结果逐字节相同</td><td><span class="links"><a href="design/M3d-advisor.html">设计</a><a href="reports/M3d-advisor.html">报告</a></span></td></tr>
             <tr><td>M4a</td><td>PyTorch 后端（前向）：k 点折叠、本征分解、密度矩阵等在 torch 设备上算（<code>backend="torch"</code>）</td><td><span class="chip done">已完成</span></td><td>74 + 11 个 DFTB+ 参考在 torch 上全部通过；与 NumPy 的最大差 1.4e-13；NumPy 路径逐字节不变；修正 torch 的 MKL 线程数在 fork 后卡死的问题</td><td><span class="links"><a href="design/M4a-torch-backend.html">设计</a><a href="reports/M4a-torch-backend.html">报告</a></span></td></tr>
-            <tr><td>M4b–M8</td><td>自动求导、PTBP 梯度、GPU 自检；多套参数、DFTB+ 功能第二波、大体系、AI 层</td><td><span class="chip plan">计划</span></td><td>—</td><td><a href="ROADMAP.md">路线图</a></td></tr>
+            <tr><td>M4b</td><td>自动求导：<code>pydftb.autodiff</code>（hf 模式：变分的 dF/dθ；implicit 模式：密度矩阵的差商反向、SCC 隐式微分，电荷、本征值、力都有导数）</td><td><span class="chip done">已完成</span></td><td>与引擎有限差分对照 346 项全部通过；hf 与 implicit 逐项 ≤ 8.7e-10；implicit 与展开的 SCC ≤ 4e-12；发现 DFTB+ 的带隙中点费米能级与 MP 的 TS 使 F 不是电子数固定的自由能（新增 <code>Smearing(fermi_level="exact")</code>）；NumPy 路径逐字节不变</td><td><span class="links"><a href="design/M4b-autodiff.html">设计</a><a href="reports/M4b-autodiff.html">报告</a></span></td></tr>
+            <tr><td>M4c–M8</td><td>PTBP 梯度、GPU 自检；多套参数、DFTB+ 功能第二波、大体系、AI 层</td><td><span class="chip plan">计划</span></td><td>—</td><td><a href="ROADMAP.md">路线图</a></td></tr>
           </tbody>
         </table>
       </div>
@@ -100,6 +101,7 @@ python -m pydftb.validation.make_f_set                     # 重新生成 f 轨�
         <li>测试参数在 <code>pydftb/tests/data/skf/</code>，来源和校验和见其中的 <code>PROVENANCE.md</code>；<code>hotcent_gdo</code> 是带 f 轨道的 Gd/O 参数（扩展 SKF 格式，无排斥势）。</li>
         <li>PTBP 的引擎分发：<code>utils/engines.py</code>。</li>
         <li>PyTorch 后端（M4a）：<code>pydftb/backend/</code>（<code>spec.py</code> 的 <code>Backend</code>、<code>torch_solver.py</code>、<code>torch_xp.py</code>、<code>ops.py</code>）；改动 NumPy 路径后用 <code>python -m pydftb.validation.golden --base 提交</code> 与旧提交逐字节比较（两个 Python 环境各跑一次）。torch 是可选依赖，<code>import pydftb</code> 不导入它。</li>
+        <li>自动求导（M4b）：<code>pydftb/autodiff/</code>（<code>params.py</code> 可微参数，<code>model.py</code> torch 上重算的原子对块、γ、Γ、排斥能，<code>density.py</code> 密度矩阵的 autograd Function，<code>scc.py</code> SCC 映射与隐式微分，<code>api.py</code> 的 <code>evaluate</code>）；与差分对照用 <code>python -m pydftb.validation.gradcheck --check</code>。核函数（<code>slako.py</code>、<code>skf.py</code>、<code>coulomb.py</code>、<code>thirdorder.py</code>、<code>hamiltonian.pair_values</code>）对 NumPy 和 torch 通用，改动后跑 golden。</li>
         <li>DFTB+ 配置顾问（M3d）：<code>pydftb/advisor/</code>（HSD 读取器、屏幕输出解析、规则、命令行）；冻结的 DFTB+ 运行在 <code>pydftb/tests/data/advisor/</code>，由 <code>python -m pydftb.validation.advisor_cases --regenerate</code> 生成；PTBP 一侧是 <code>utils/advisor_hook.py</code>。</li>
         <li>PTBP 的并行（M3）：<code>utils/parallel/</code>（CPU 预算、方案、fork 进程池）、<code>utils/dftb_stage.py</code>（DFTB 阶段）、<code>utils/hotcent_parallel.py</code>（hotcent 分片与回放）、<code>utils/recommender.py</code>（推荐器）、<code>cli/cmd_plan.py</code>（<code>ptbp plan</code>）；pydftb 一侧是 <code>pydftb/parallel.py</code>（k 点线程）和 <code>pydftb/perfmodel.py</code>（成本模型）。</li>
       </ul>
@@ -137,6 +139,7 @@ python -m pydftb.validation.make_f_set                     # 重新生成 f 轨�
         <li>pydftb 的库仑准备把截断内的所有原子对和壳层对展开成数组：64 个 Cu 原子的周期晶胞要 2.2 GB 内存（DFTB+ 0.3 GB），耗时也是 DFTB+ 的 2.5 倍。推荐器会按内存减少进程；改为分块处理是后续的优化项（M3c 报告）。</li>
         <li>大的金属晶胞只用 Γ 点、T = 0（PTBP 历史输入的默认）时 SCC 很难收敛：64 个 Cu 原子的晶胞 DFTB+ 跑了 3 分半钟仍未收敛，1000 K 的展宽下 23 轮。PTBP 的数据集是小晶胞加 k 点，没有这个问题；用大晶胞时应开 <code>--smearing</code>。</li>
         <li>torch 后端（M4a）：float32 不要用于 T ≈ 0 的金属的力（Cu 数据集个别结构差 3e-2 eV/Å，加 1000 K 展宽后 ≤ 8e-5）；从多线程跑过 torch 的进程 fork 子进程时，子进程要先设 torch 的线程数（<code>PyDFTB(threads=n)</code> 会做），否则会卡死。</li>
+        <li>自动求导（M4b）：引擎的 F 有两处不是“电子数固定”的 Mermin 自由能——MP 展宽配 DFTB+ 的 TS（hf 模式拒绝给 dF，用 <code>ts_convention="variational"</code> 或 implicit 模式），以及电子数为整数时 DFTB+ 的带隙中点费米能级（电子数可漂移 1e-7；<code>fermi_level="exact"</code> 去掉）。异核 SK 文件 A-B、B-A 都存的 l₁ = l₂ 积分和相等的 U，只有一起变的方向有导数。T ≈ 0 的金属里力对参数的导数可以很大（只用 Γ 点的 2 原子 Cu 晶胞达 7e3），以力为损失求梯度时宜加展宽；PTBP 的 SCC 容差 1e-5 也限制非变分量导数的精度（M4b 报告第六节）。</li>
         <li>T ≈ 0、只用 Γ 点的单原子 Cu 晶胞，费米能级搜索可能失败（“Fermi level search did not converge”，与 DFTB+ 同一算法、同一容差）；PTBP 的 k 点规则下这些结构用 k 网格，实际运行不受影响（M4a 报告第六节）。</li>
         <li>用 PTBP 参数表中 Ga 的 r0、p，hotcent 2.1 算不出受限原子（“Eigensolver out of iterations”，4d 壳层几乎不束缚）。</li>
         <li><code>physrep.evaluate_pbc</code> 的超胞层数由最短的晶格矢量长度决定，晶胞很斜时会漏掉近邻（γ = 13° 的测试晶胞：22 对中只算 20 对）；Cu 数据集没有遗漏。为了结果不变，没有修。</li>

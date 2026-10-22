@@ -184,6 +184,40 @@ processes forked from one that ran torch on several threads.  No GPU was availab
 M4a, so GPU speed-ups are not measured yet; see
 [`docs/reports/M4a-torch-backend.html`](docs/reports/M4a-torch-backend.html).
 
+### Derivatives (`pydftb.autodiff`)
+
+`pydftb.autodiff` (needs torch) differentiates a converged calculation with respect to the
+parameters -- every value of the SK tables, on-site energies, Hubbard U and derivatives,
+spin constants, repulsive coefficients -- and to the positions and the cell.  The engine
+(NumPy or torch) converges the SCC with DFTB+'s rules; the returned values are its own
+numbers, carrying derivatives:
+
+```python
+from pydftb.autodiff import Params, evaluate
+
+params = Params.from_skset(calc.sk, calc.repulsive, requires_grad=("tables", "hubbard"))
+res = evaluate(calc, species, positions, cell, pbc, params)              # mode="hf"
+res.free_energy.backward()             # params.tables[("Cu", "O")].grad, params.hubbard["Cu"].grad
+
+res = evaluate(calc, species, positions, cell, pbc, params, mode="implicit")
+loss = ((res.forces - f_ref) ** 2).sum() + (res.energy - e_ref) ** 2
+loss.backward()                        # derivatives of energies and forces
+```
+
+`mode="hf"` uses the variational property of the Mermin free energy F: dF/dtheta, forces
+and stress without differentiating the eigensolver.  `mode="implicit"` attaches the SCC
+fixed point by the implicit function theorem, so the charges, eigenvalues, Fermi levels,
+forces and stress have full derivatives too (forces use DFTB+'s finite-difference kernel
+when `fd_delta` is set, as PTBP runs).  Against central differences of the engine
+(`python -m pydftb.validation.gradcheck --check`, 11 cases, 346 comparisons) the median
+relative deviation is 2e-9.  The l1 = l2 integrals that both files A-B and B-A store, and
+equal Hubbard U values, only have derivatives along directions that move them together.
+With Methfessel-Paxton smearing and DFTB+'s TS, F is not variational: mode "hf" refuses dF
+(use `Smearing(..., ts_convention="variational")` or mode "implicit").
+`Smearing(fermi_level="exact")` replaces DFTB+'s mid-gap Fermi level (which lets the
+electron count drift by up to 1e-7) by the exact count.  See
+[`docs/reports/M4b-autodiff.html`](docs/reports/M4b-autodiff.html).
+
 ## Tests and validation
 
 ```bash
@@ -194,4 +228,5 @@ python -m pydftb.validation.refgen --live           # fresh comparison with dftb
 python -m pydftb.validation.dynamics --check        # optimisation and MD vs DFTB+'s drivers
 python -m pydftb.validation.refgen --check --backend torch    # the same on the torch backend
 python -m pydftb.validation.golden --base COMMIT    # NumPy path bitwise unchanged since COMMIT
+python -m pydftb.validation.gradcheck --check       # pydftb.autodiff vs finite differences
 ```

@@ -46,6 +46,11 @@ class Smearing:
     temperature: float = 0.0
     order: int = 1                      # Methfessel-Paxton order (>= 1)
     ts_convention: str = "dftb+"        # "dftb+" | "variational"
+    # "dftb+": with an integer electron count the Fermi level is put mid-gap if the count
+    # there is within ELEC_TOL_MAX (1e-7) of it, as DFTB+ does; "exact": always the
+    # bisection to the exact count, so that F is the fixed-N Mermin free energy (whose
+    # gradients pydftb.autodiff gives in mode "hf")
+    fermi_level: str = "dftb+"          # "dftb+" | "exact"
 
     def __post_init__(self):
         if self.kind not in ("fermi", "gaussian", "mp"):
@@ -54,6 +59,14 @@ class Smearing:
             raise ValueError("Methfessel-Paxton order must be >= 1 (order 0 is 'gaussian')")
         if self.ts_convention not in ("dftb+", "variational"):
             raise ValueError(f"unknown ts_convention {self.ts_convention!r}")
+        if self.fermi_level not in ("dftb+", "exact"):
+            raise ValueError(f"unknown fermi_level {self.fermi_level!r}")
+
+    @property
+    def variational(self) -> bool:
+        """Whether F = E - TS is the fixed-N Mermin free energy (stationary in the density):
+        Methfessel-Paxton needs ``ts_convention="variational"``."""
+        return self.kind != "mp" or self.ts_convention == "variational"
 
     @property
     def kt(self) -> float:
@@ -114,8 +127,8 @@ def _electron_count(mu, evals, kw, sm: Smearing, kt) -> float:
     return float((kw[:, None] * f).sum())
 
 
-def _middle_gap(evals, kw, nfill) -> float:
-    """DFTB+ middleGap: half-way between the last filled and the next level."""
+def _middle_gap_levels(evals, kw, nfill) -> tuple[int, int]:
+    """Flat indices (into ``evals.ravel()``) of the last filled and the next level."""
     flat = evals.ravel()
     wts = np.repeat(kw, evals.shape[1])
     order = np.argsort(flat, kind="stable")
@@ -123,7 +136,14 @@ def _middle_gap(evals, kw, nfill) -> float:
     # first index with cum >= nfill, allowing for rounding in the sum (DFTB+ has no allowance)
     i_last = int(np.searchsorted(cum, nfill - CUM_WEIGHT_TOL, side="left"))
     i_next = min(i_last + 1, len(flat) - 1)
-    return 0.5 * (flat[order[i_last]] + flat[order[i_next]])
+    return int(order[i_last]), int(order[i_next])
+
+
+def _middle_gap(evals, kw, nfill) -> float:
+    """DFTB+ middleGap: half-way between the last filled and the next level."""
+    flat = evals.ravel()
+    a, b = _middle_gap_levels(evals, kw, nfill)
+    return 0.5 * (flat[a] + flat[b])
 
 
 def _electron_fill(mu, evals, kw, sm: Smearing, kt):
@@ -152,6 +172,26 @@ def _electron_fill(mu, evals, kw, sm: Smearing, kt):
     return f, ts, eband
 
 
+def fermi_rule(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
+    """How :func:`fill` sets the Fermi level for these levels: ``("count",)`` (bisection to
+    the electron count), ``("midgap", a, b)`` (DFTB+'s mid-gap rule: mu is the mean of the
+    levels with flat indices a and b of ``evals``) or ``("fixed",)`` (no electrons, or all
+    levels full: mu outside the spectrum).  :mod:`pydftb.autodiff` differentiates mu by it."""
+    sm = Smearing.from_spec(smearing)
+    ev = np.asarray(evals, float)
+    if ev.ndim == 1:
+        ev = ev[None]
+    kw = np.asarray(weights, float)
+    nfill = nelec / spin_factor
+    if nfill < np.finfo(float).eps or ev.shape[1] * round(kw.sum()) <= nfill:
+        return ("fixed",)
+    if sm.fermi_level == "dftb+" and abs(nfill - round(nfill)) <= ELEC_TOL:
+        mu = _middle_gap(ev, kw, nfill)
+        if abs(nfill - _electron_count(mu, ev, kw, sm, sm.kt)) <= ELEC_TOL_MAX:
+            return ("midgap",) + _middle_gap_levels(ev, kw, nfill)
+    return ("count",)
+
+
 def fill(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
     """Occupations (incl. spin factor), Fermi level and T*S (Hartree).
 
@@ -176,7 +216,7 @@ def fill(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
         f, ts, _ = _electron_fill(mu, ev, kw, sm, kt)
         return [spin_factor * fk for fk in f], mu, spin_factor * ts
 
-    if abs(nfill - round(nfill)) <= ELEC_TOL:
+    if sm.fermi_level == "dftb+" and abs(nfill - round(nfill)) <= ELEC_TOL:
         mu = _middle_gap(ev, kw, nfill)
         if abs(nfill - _electron_count(mu, ev, kw, sm, kt)) <= ELEC_TOL_MAX:
             f, ts, _ = _electron_fill(mu, ev, kw, sm, kt)

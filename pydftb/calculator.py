@@ -308,6 +308,11 @@ class DFTB:
             return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
 
     def _calculate(self, species, positions, cell, pbc, forces, q_init, stress) -> DFTBResult:
+        return self._run(species, positions, cell, pbc, forces, q_init, stress)[0]
+
+    def _run(self, species, positions, cell, pbc, forces, q_init, stress):
+        """The calculation of :meth:`calculate`, also returning its setup and SCC state
+        (``pydftb.autodiff`` builds on them)."""
         t0 = time.perf_counter()
         timings = {}
         periodic = cell is not None and (pbc is None or np.any(pbc))
@@ -330,7 +335,7 @@ class DFTB:
             timings["forces"] = time.perf_counter() - t1
         timings["total"] = time.perf_counter() - t0
         res.timings = timings
-        return res
+        return res, setup, state
 
     # ------------------------------------------------------------------
     def _sites(self, basis: Basis):
@@ -628,6 +633,39 @@ class DFTB:
         pb = st.pairs
         v_orb, vs_orb = self._potentials(st, sc.q_out)
         grad, w_rep = self._repulsive_gradient(st)
+        p_e, w_e, p_m = self._pair_densities(st, sc)
+        vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
+        coef_s = p_e * vsum - w_e
+        if p_m is not None:
+            coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
+        ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
+        gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
+        natom = len(st.pos)
+        grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
+        dq, _ = self._charge_and_magnetisation(st, sc.q_out)
+        if self.scc:
+            g_scc, w_scc = st.coulomb.gradient(dq, virial=virial)
+            grad = grad + g_scc                                    # already per atom
+        if st.third is not None:
+            g_3rd, w_3rd = st.third.gradient(dq, virial=virial)
+            grad = grad + g_3rd
+        if st.disp is not None:
+            grad = grad + st.disp.gradient
+        if not virial:
+            return grad, None
+        w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
+        if self.scc:
+            w = w + w_scc
+        if st.third is not None:
+            w = w + w_3rd
+        if st.disp is not None:
+            w = w + st.disp.virial
+        return grad, 0.5 * (w + w.T)
+
+    def _pair_densities(self, st: _Setup, sc: _SCCState):
+        """Real-space density, energy-weighted density and (with spin) magnetisation
+        density at every pair element, summed over spins and k (host arrays)."""
+        pb = st.pairs
         nk = len(st.kw)
         nspin = len(sc.rho) // nk
         kw = np.tile(st.kw, nspin)                        # weights of the stacked channels
@@ -662,33 +700,7 @@ class DFTB:
             if nspin == 2:
                 p_m = b.to_host((b.asarray(ph * sgn[None, :]) @ rho2)
                                 .reshape(-1, norb, norb)[ti, ci, ri].real)
-        vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
-        coef_s = p_e * vsum - w_e
-        if p_m is not None:
-            coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
-        ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
-        gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
-        natom = len(st.pos)
-        grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
-        dq, _ = self._charge_and_magnetisation(st, sc.q_out)
-        if self.scc:
-            g_scc, w_scc = st.coulomb.gradient(dq, virial=virial)
-            grad = grad + g_scc                                    # already per atom
-        if st.third is not None:
-            g_3rd, w_3rd = st.third.gradient(dq, virial=virial)
-            grad = grad + g_3rd
-        if st.disp is not None:
-            grad = grad + st.disp.gradient
-        if not virial:
-            return grad, None
-        w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
-        if self.scc:
-            w = w + w_scc
-        if st.third is not None:
-            w = w + w_3rd
-        if st.disp is not None:
-            w = w + st.disp.virial
-        return grad, 0.5 * (w + w.T)
+        return p_e, w_e, p_m
 
     # ------------------------------------------------------------------
     def _repulsive_pairs(self, st: _Setup):

@@ -27,12 +27,17 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .backend import ops
+
 _READ_CACHE: dict = {}
 
 N_INTER = 8          # points used for polynomial interpolation
 N_RIGHT = 4          # points right of the evaluation point
 DIST_FUDGE = 1.0     # tail length (Bohr) beyond the last grid point
 DELTA_R = 1e-5       # displacement used by DFTB+ for tail derivatives
+
+# monomial -> Lagrange weights of the 8-point stencil, nodes u = -3.5 .. 3.5
+_VINV = np.linalg.inv(np.vander(np.arange(N_INTER) - 3.5, N_INTER, increasing=True))
 
 N_INTEGRALS = 20     # H (or S) integrals per table; the S columns start here
 # (l1, l2, |m|) -> column of the H integral, l1 <= l2 (DFTB+ parser.F90:getFullTable, skMap)
@@ -168,6 +173,36 @@ class Repulsive:
         e[m_spl] = c[:, 0] + x * (c[:, 1] + x * (c[:, 2] + x * (c[:, 3] + x * (c[:, 4] + x * c[:, 5]))))
         de[m_spl] = c[:, 1] + x * (2 * c[:, 2] + x * (3 * c[:, 3] + x * (4 * c[:, 4] + x * 5 * c[:, 5])))
         return e, de
+
+    def energy(self, r, poly=None, exp_coeffs=None, coeffs=None):
+        """E(r) for any array type (milestone M4b): ``r`` may be a torch tensor, and the
+        coefficients may be given as (differentiable) arrays in place of the stored ones;
+        the interval of every distance is chosen from its value.  Derivatives come from
+        autograd; :meth:`__call__` is the NumPy evaluation with dE/dr."""
+        poly = ops.asarray(self.poly if poly is None else poly, like=r)
+        exp_coeffs = ops.asarray(self.exp_coeffs if exp_coeffs is None else exp_coeffs, like=r)
+        coeffs = ops.asarray(self.coeffs if coeffs is None else coeffs, like=r)
+        rh = np.asarray(ops.to_host(r), dtype=float)
+        e = ops.zeros(rh.shape, like=r)
+        if self.poly is not None:
+            mask = rh < self.cutoff
+            x = (self.cutoff - r[mask])[:, None]
+            powers = ops.asarray(np.arange(2, 10), like=r)
+            e[mask] = (poly[None, :] * x ** powers).sum(1)
+            return e
+        if self.knots is None:
+            return e
+        xp = ops.namespace(r)
+        first = self.knots[0]
+        m_exp = rh < first
+        e[m_exp] = xp.exp(-exp_coeffs[0] * r[m_exp] + exp_coeffs[1]) + exp_coeffs[2]
+        m_spl = (rh >= first) & (rh < self.cutoff)
+        idx = np.clip(np.searchsorted(self.knots, rh[m_spl], side="right") - 1,
+                      0, len(self.coeffs) - 1)
+        c = coeffs[idx]
+        x = r[m_spl] - ops.asarray(self.knots[idx], like=r)
+        e[m_spl] = c[:, 0] + x * (c[:, 1] + x * (c[:, 2] + x * (c[:, 3] + x * (c[:, 4] + x * c[:, 5]))))
+        return e
 
 
 @dataclass
@@ -338,6 +373,59 @@ class SKFile:
             out = self._full_layout(out)
             dout = self._full_layout(dout) if deriv else None
         return (out, dout) if deriv else out
+
+    def evaluate_table(self, r, table):
+        """Interpolated integrals at ``r`` from ``table`` (same shape as :attr:`table`, the
+        stored columns) -- for torch tensors, where the table values are differentiable
+        parameters (milestone M4b).  Same scheme as :meth:`evaluate` (DFTB+'s 8-point
+        stencils and 5th-order tail), written as weights times table rows, both linear in
+        the table: the Lagrange weights of the stencil at u, and fixed weights for the tail.
+        Returns the stored-column layout (:meth:`evaluate` with ``full=False``)."""
+        n = self.ngrid
+        rh = np.atleast_1d(np.asarray(ops.to_host(r))).real
+        out = ops.zeros(rh.shape + (table.shape[1],), like=table)
+        ind = np.floor(rh / self.dr).astype(int)
+        inside = ind < n
+        if inside.any():
+            ii = np.maximum(ind[inside], 0)
+            ilast = np.maximum(np.minimum(n, ii + N_RIGHT), N_INTER)
+            u = r[inside] / self.dr - ops.asarray(ilast - 3.5, like=r)
+            w = (u[:, None] ** ops.asarray(np.arange(N_INTER), like=r)) @ ops.asarray(_VINV, like=r)
+            rows = table[(ilast - N_INTER)[:, None] + np.arange(N_INTER)[None, :]]   # (m, 8, nc)
+            out[inside] = (w[:, :, None] * rows).sum(1)
+        rmax = n * self.dr + DIST_FUDGE
+        tail = (~inside) & (rh < rmax)
+        if tail.any():
+            w0, w2 = self._tail_weights()
+            y = table[n - N_INTER: n]
+            y0, y2 = ops.asarray(w0, like=r) @ y, ops.asarray(w2, like=r) @ y
+            y1 = table[n - 1]
+            y1p = (y2 - y0) / (2.0 * DELTA_R)
+            y1pp = (y2 + y0 - 2.0 * y1) / (DELTA_R * DELTA_R)
+            dx = -DIST_FUDGE
+            dx1 = y1p * dx
+            dx2 = y1pp * dx * dx
+            dd = 10.0 * y1 - 4.0 * dx1 + 0.5 * dx2
+            ee = -15.0 * y1 + 7.0 * dx1 - 1.0 * dx2
+            ff = 6.0 * y1 - 3.0 * dx1 + 0.5 * dx2
+            xr = ((r[tail] - rmax) / dx)[:, None]
+            out[tail] = ((ff * xr + ee) * xr + dd) * xr ** 3
+        return out
+
+    def _tail_weights(self):
+        """Weights of the table's last 8 rows that give, like :meth:`_tail_data`, the
+        Lagrange polynomial at the last grid point -/+ DELTA_R."""
+        n = self.ngrid
+        x = np.arange(n - N_INTER + 1, n + 1) * self.dr
+
+        def weights(xx):
+            w = np.ones(N_INTER)
+            for k in range(N_INTER):
+                for j in range(N_INTER):
+                    if j != k:
+                        w[k] *= (xx - x[j]) / (x[k] - x[j])
+            return w
+        return weights(x[-1] - DELTA_R), weights(x[-1] + DELTA_R)
 
     def _full_layout(self, a: np.ndarray) -> np.ndarray:
         full = np.zeros(a.shape[:-1] + (2 * N_INTEGRALS,), dtype=a.dtype)

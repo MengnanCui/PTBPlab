@@ -28,11 +28,51 @@ def namespace(*arrays):
 
 def to_host(x):
     """A torch tensor as a NumPy array (float64/complex128); anything else unchanged."""
-    if type(x).__module__.startswith("torch"):
+    if _is_torch(x):
         import torch
         t = x.detach().resolve_conj()
         return t.to(torch.complex128 if t.is_complex() else torch.float64).cpu().numpy()
     return x
+
+
+def _is_torch(x) -> bool:
+    return type(x).__module__.startswith("torch")
+
+
+def _real_dtype(t):
+    import torch
+    return {torch.complex128: torch.float64, torch.complex64: torch.float32}.get(t.dtype, t.dtype)
+
+
+# ---- array creation that follows an existing array (milestone M4) -------------------------
+# NumPy branches make exactly the calls the NumPy code made before.
+def zeros(shape, like, dtype=None):
+    """Zeros with the dtype (or ``dtype``) and device of ``like``."""
+    if _is_torch(like):
+        import torch
+        return torch.zeros(shape, dtype=like.dtype if dtype is None else dtype,
+                           device=like.device)
+    return np.zeros(shape, dtype=like.dtype if dtype is None else dtype)
+
+
+def ones(shape, like):
+    if _is_torch(like):
+        import torch
+        return torch.ones(shape, dtype=like.dtype, device=like.device)
+    return np.ones(shape, dtype=like.dtype)
+
+
+def asarray(a, like):
+    """A constant (NumPy array or number) next to ``like``: unchanged for NumPy, a tensor in
+    the real dtype of ``like`` on its device for torch."""
+    if _is_torch(like) and a is not None:
+        import torch
+        if _is_torch(a):
+            return a.to(device=like.device)
+        arr = np.asarray(a)
+        dt = _real_dtype(like) if arr.dtype.kind == "f" else None
+        return torch.as_tensor(arr, dtype=dt, device=like.device)
+    return a
 
 
 def scatter_add(target: np.ndarray, index, values) -> np.ndarray:

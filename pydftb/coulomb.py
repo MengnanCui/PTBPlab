@@ -48,12 +48,13 @@ def _short_near(r, ta, tb, tau_derivs=False):
     first derivatives agree with 60-digit mpmath values to < 4e-12 (relative) for
     |tau_a - tau_b| < 10 % and r < 18 Bohr.
     """
-    s = _GL_S[:, None]
-    w = _GL_W[:, None]
+    xp = ops.namespace(r, ta, tb)
+    s = ops.asarray(_GL_S, like=r)[:, None]
+    w = ops.asarray(_GL_W, like=r)[:, None]
     a2, b2 = ta * ta, tb * tb
-    q = np.sqrt(a2 + s * (b2 - a2))
+    q = xp.sqrt(a2 + s * (b2 - a2))
     x = q * r
-    e = np.exp(-x)
+    e = xp.exp(-x)
     q8 = q ** 8
     e3 = -e * (((x + 9.0) * x + 33.0) * x + 48.0) / (8.0 * r * q8)               # E'''
     e3r = e * ((((x + 7.0) * x + 24.0) * x + 48.0) * x + 48.0) / (8.0 * r * r * q8)
@@ -71,31 +72,32 @@ def _short_near(r, ta, tb, tau_derivs=False):
 
 
 def _short(r, ta, tb):
-    """Short-range S(r) and dS/dr, vectorised (broadcasting); r > 0."""
-    r, ta, tb = np.broadcast_arrays(r, ta, tb)
-    s = np.zeros(r.shape)
-    ds = np.zeros(r.shape)
-    same = np.abs(ta - tb) < SAME_TAU
+    """Short-range S(r) and dS/dr, vectorised (broadcasting); r > 0.  NumPy or torch."""
+    xp = ops.namespace(r, ta, tb)
+    r, ta, tb = xp.broadcast_arrays(r, ta, tb)
+    s = ops.zeros(r.shape, like=r)
+    ds = ops.zeros(r.shape, like=r)
+    same = xp.abs(ta - tb) < SAME_TAU
     if same.any():
         t, x = 0.5 * (ta[same] + tb[same]), r[same]
-        e = np.exp(-t * x)
+        e = xp.exp(-t * x)
         p = 1.0 / x + 11.0 * t / 16.0 + 3.0 * t * t * x / 16.0 + t ** 3 * x * x / 48.0
         dp = -1.0 / x ** 2 + 3.0 * t * t / 16.0 + t ** 3 * x / 24.0
         s[same] = e * p
         ds[same] = e * (dp - t * p)
-    near = ~same & (np.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
+    near = ~same & (xp.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
     if near.any():
         s[near], ds[near] = _short_near(r[near], ta[near], tb[near])
     nd = ~same & ~near
     if nd.any():
         a, b, x = ta[nd], tb[nd], r[nd]
-        val = np.zeros_like(x)
-        der = np.zeros_like(x)
+        val = xp.zeros_like(x)
+        der = xp.zeros_like(x)
         for t1, t2 in ((a, b), (b, a)):
             d2 = t1 * t1 - t2 * t2
             k = t2 ** 4 * t1 / (2.0 * d2 * d2)
             l = (t2 ** 6 - 3.0 * t2 ** 4 * t1 * t1) / d2 ** 3
-            e = np.exp(-t1 * x)
+            e = xp.exp(-t1 * x)
             val += e * (k - l / x)
             der += e * (-t1 * (k - l / x) + l / x ** 2)
         s[nd] = val
@@ -105,9 +107,10 @@ def _short(r, ta, tb):
 
 def _gamma0(ta, tb):
     """gamma at R = 0 (on-site, possibly two different shells)."""
+    xp = ops.namespace(ta, tb)
     general = 0.5 * (ta * tb / (ta + tb) + (ta * tb) ** 2 / (ta + tb) ** 3)
-    same = np.abs(ta - tb) < SAME_TAU
-    return np.where(same, (ta + tb) / 6.4, general)   # = (U_a + U_b) / 2
+    same = xp.abs(ta - tb) < SAME_TAU
+    return xp.where(same, (ta + tb) / 6.4, general)   # = (U_a + U_b) / 2
 
 
 def short_cutoff(ta: float, tb: float) -> float:
@@ -180,10 +183,12 @@ class Coulomb:
             rec = 2.0 * np.pi * np.linalg.inv(self.cell).T
             nmax = [int(np.ceil(gcut / np.linalg.norm(rec[k]) * 1.0)) + 1 for k in range(3)]
             g = np.array(np.meshgrid(*[np.arange(-m, m + 1) for m in nmax], indexing="ij")).reshape(3, -1).T
-            g = g[np.any(g != 0, axis=1)] @ rec
+            gint = g[np.any(g != 0, axis=1)]
+            g = gint @ rec
             g2 = (g * g).sum(1)
             keep = g2 < gcut ** 2
             self.gvec = g[keep]
+            self.gint = gint[keep]          # integer coordinates (G = gint @ 2 pi inv(cell).T)
             g2 = g2[keep]
             self.gfac = 4.0 * np.pi / vol * np.exp(-g2 / (4 * self.alpha ** 2)) / g2
         else:

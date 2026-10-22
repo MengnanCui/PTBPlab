@@ -15,7 +15,7 @@
 | M3c | 计算策略推荐器 v1（CPU）：成本模型、内存估计、`ptbp plan`、`plan.json` | ✅ 完成（成本模型按轨道数、k 点数和截断内的原子对估计 pydftb、DFTB+ 单点的耗时和内存：耗时中位误差 12%/7%，排序秩相关 0.99，pydftb 内存中位误差 2%；Cu 数据集一个 BO 步的预计耗时与实测相差 2–4%；方案只调不改变数值的设置，运行目录与 M3b 逐字节相同；发现大晶胞的耗时和内存主要在库仑部分：最小的 Hubbard U 决定截断，Cu 的 4p 为 96 Bohr，64 个原子的晶胞 pydftb 要 2.2 GB，DFTB+ 0.3 GB；DFTB+ 的 OpenMP 线程在 500 个轨道以下反而更慢） | `design/M3c-recommender.html`，`reports/M3c-recommender.html` |
 | M3d | DFTB+ 配置顾问：HSD 读取器、规则目录、`python -m pydftb.advisor`、PTBP 钩子 | ✅ 完成（18 条规则，各有出处；11 次冻结的 DFTB+ 25.1 运行上结论全部符合预期；PTBP 的历史输入被查出 5 条：ParserVersion 1 带来的壳层分辨 SCC 和 0.01 Bohr 差分步长、写在 Filling 外被忽略的展宽（实际 T = 0）、8 MB 的栈、默认 Ewald 容差，前两项标为预期；PTBP 用 DFTB+ 时自动检查第一个运行和失败的运行，只报告，结果逐字节相同） | `design/M3d-advisor.html`，`reports/M3d-advisor.html` |
 | M4a | PyTorch 后端（前向）：k 点折叠、Cholesky、本征分解、密度矩阵、布居、能量的迹和力用到的实空间密度在 torch 设备上算；`backend="torch"`、`device`、`dtype`；NumPy 路径逐字节不变（golden 工具） | ✅ 完成（74 个单点和 11 个优化/MD 的 DFTB+ 参考在 torch 上全部通过，SCC 轮数与 DFTB+ 相同；与 NumPy 的最大差能量 3.6e-14 Ha、力 4.1e-14 Ha/Bohr、电荷 1.4e-13 e；float32 下能量差 ≤ 4.3e-6 Ha；发现 threadpoolctl 管不到 torch 的 MKL，fork 后子进程会卡死，已修正） | `design/M4a-torch-backend.html`，`reports/M4a-torch-backend.html` |
-| M4b | 自动求导：两种后端通用的核函数、`pydftb.autodiff`（可微参数、密度矩阵的差商反向、SCC 隐式微分、HF 替代能量），与有限差分对照 | 计划 | — |
+| M4b | 自动求导：两种后端通用的核函数、`pydftb.autodiff`（可微参数、密度矩阵的差商反向、SCC 隐式微分、HF 替代能量），与有限差分对照 | ✅ 完成（`evaluate(mode="hf" | "implicit")`：SK 表、onsite、U、Ud、自旋常数、排斥势系数和坐标、晶胞的导数，返回值即引擎的数；与引擎有限差分对照 346 项全部通过（导数 > 1e-4 的项：hf 最大 7.6e-7，implicit 最大 2.8e-6，中位数 2e-9）；hf 与 implicit 逐项 ≤ 8.7e-10，implicit 与展开的 SCC ≤ 4e-12；以力为损失用 PTBP 的 0.01 Bohr 差分核；发现 DFTB+ 的带隙中点费米能级与 MP 的 TS 使 F 不是电子数固定的 Mermin 自由能，新增 `Smearing(fermi_level="exact")`） | `design/M4b-autodiff.html`，`reports/M4b-autodiff.html` |
 | M4c | PTBP 损失对 r0_w、r0_d 的梯度（自动求导 × hotcent 有限差分），可选的梯度优化器，与 BO 对比 | 计划 | — |
 | M4d | 设备选择、GPU 自检脚本、PTBP 的 `--pydftb_backend torch --device` | 计划 | — |
 | M5 | 同一元素多套参数（离散类型 → 平滑切换），固态电池示范 | 计划（离散类型的基础已在 M0 完成） | — |
@@ -68,3 +68,5 @@
 | | SP2 纯化（稠密、混合精度、稀疏线性标度） | ✅ 原型 |
 | | PyTorch 后端（CPU 已验证；GPU 待自检脚本实测） | ✅ M4a |
 | | GPU 实测、分治、多机 | ⬜ M4d/M7 |
+| 自动求导 | 对 SK 表、onsite、U、Ud、自旋常数、排斥势系数及坐标、晶胞的导数（hf：变分的 dF/dθ；implicit：电荷、本征值、力等的全导数） | ✅ M4b |
+| | PTBP 损失对 r0 的梯度、梯度优化器 | ⬜ M4c |

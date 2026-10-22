@@ -57,6 +57,17 @@ def test_insulator_mid_gap_with_inexact_k_weights():
     assert np.allclose(np.array(occ)[:, :32], 2.0) and np.allclose(np.array(occ)[:, 32:], 0.0)
 
 
+def test_fermi_level_exact_keeps_the_electron_count():
+    """With an integer count DFTB+ puts mu mid-gap if the count there is within 1e-7: here
+    the level 0.06 Ha below takes 5.6e-8 electrons out.  fermi_level='exact' bisects to the
+    exact count (F is then the fixed-N Mermin free energy, see pydftb.autodiff)."""
+    ev = np.array([[-0.5, -0.06, -0.025, 0.025, 0.4]])
+    occ, mu, _ = fill(ev, np.ones(1), 6.0, Smearing("fermi", 1000.0))
+    assert mu == 0.0 and 1e-8 < 6.0 - occ[0].sum() < 1e-7
+    occ, mu, _ = fill(ev, np.ones(1), 6.0, Smearing("fermi", 1000.0, fermi_level="exact"))
+    assert mu != 0.0 and abs(6.0 - occ[0].sum()) < 1e-14
+
+
 def _cluster():
     a = Atoms("Cu4CO", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.1, 0], [1.25, 0.7, 2.0],
                                    [1.25, 0.7, 3.9], [1.25, 0.75, 5.05]])
