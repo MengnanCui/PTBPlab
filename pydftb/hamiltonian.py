@@ -181,6 +181,10 @@ def pair_values(pb: PairBlocks, sk: SKSet, vec, tables=None, fd_delta: float | N
                 ds.append(((sp_ - sm) / (2.0 * fd_delta)).reshape(-1))
             dhv.append(xp.stack(dh, axis=-1))
             dsv.append(xp.stack(ds, axis=-1))
+    if not hv:                       # no pair within the cut-off (e.g. an isolated atom)
+        empty = ops.zeros(0, like=vec)
+        return (empty, empty) if fd_delta is None else (empty, empty, ops.zeros((0, 3), like=vec),
+                                                        ops.zeros((0, 3), like=vec))
     h, s = xp.concatenate(hv), xp.concatenate(sv)
     if fd_delta is None:
         return h, s

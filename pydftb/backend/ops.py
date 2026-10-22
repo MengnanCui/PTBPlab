@@ -91,10 +91,13 @@ def segment_sum(values: np.ndarray, segment_ids: np.ndarray, num_segments: int) 
     """Sum ``values`` (n, ...) into ``num_segments`` bins along axis 0."""
     values = np.asarray(values)
     if not np.iscomplexobj(values):
+        # float64 as bincount gives it; with no values at all bincount returns int zeros
         if values.ndim == 1:
-            return np.bincount(segment_ids, values, minlength=num_segments)
+            return np.bincount(segment_ids, values, minlength=num_segments).astype(
+                np.float64, copy=False)
         if values.ndim == 2:   # bincount per column is much faster than add.at
             return np.stack([np.bincount(segment_ids, values[:, k], minlength=num_segments)
+                             .astype(np.float64, copy=False)
                              for k in range(values.shape[1])], axis=1)
     out = np.zeros((num_segments,) + values.shape[1:], dtype=values.dtype)
     np.add.at(out, segment_ids, values)

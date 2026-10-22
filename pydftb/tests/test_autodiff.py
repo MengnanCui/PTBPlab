@@ -209,6 +209,18 @@ def test_gradient_unavailable():
         evaluate(calc, species, pos, cell, pbc)
 
 
+@pytest.mark.parametrize("mode", api.MODES)
+def test_isolated_atom_in_a_periodic_box(mode):
+    """No pair within the cut-off: dF/d(onsite) are the shell occupations."""
+    calc, _ = _engine("h2o")
+    params = Params.from_skset(calc.sk, calc.repulsive, requires_grad=("onsite", "tables"))
+    res = evaluate(calc, ["O"], np.zeros((1, 3)), np.eye(3) * 40.0, np.ones(3, bool), params,
+                   mode=mode)
+    assert res.forces.abs().max() < 1e-20
+    (g,) = torch.autograd.grad(res.free_energy, [params.onsite["O"]])
+    assert np.abs(g.numpy() - [2.0, 4.0]).max() < 1e-8
+
+
 def test_params_round_trip_and_files_untouched():
     calc, (species, pos, cell, pbc) = _engine("ch3oh_dftb3")
     params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,

@@ -92,6 +92,18 @@ def test_periodic_kpoints_and_solvers_agree(sk):
     assert np.abs(ref.forces.sum(0)).max() < 1e-8
 
 
+def test_isolated_atom_in_a_periodic_box(sk):
+    """No pair within the cut-off (PTBP's isolated-atom energy E0): the periodic engine
+    gives the molecule's energy, zero forces and zero stress."""
+    mol = DFTB(sk, scc_tol=1e-10).calculate(["O"], np.zeros((1, 3)))
+    box = DFTB(sk, scc_tol=1e-10).calculate(["O"], np.zeros((1, 3)), np.eye(3) * 40.0,
+                                            stress=True)
+    assert box.converged
+    assert abs(box.energy - mol.energy) < 1e-10
+    assert np.abs(box.forces).max() < 1e-20
+    assert np.abs(box.stress).max() < 1e-12
+
+
 def test_sp2_matches_diagonalisation(sk):
     cell = np.eye(3) * 9.0
     sym = ["O", "H", "H"]
