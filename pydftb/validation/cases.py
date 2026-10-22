@@ -15,7 +15,8 @@ from ase import Atoms
 from ase.build import bulk, molecule
 
 from ..blockpot import ONSITE_PBE
-from ..constants import BOHR
+from ..constants import BOHR, KCAL_MOL
+from ..external import fold_into_cell
 from ..kpoints import monkhorst_pack, reduce_time_reversal
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "data")
@@ -119,6 +120,12 @@ class Case:
     plus_u: dict | None = None            # DFTB+U {"groups": {label: [(shells, U-J)]},
                                           # "functional": "fll" | "psic"} (M6b)
     onsite: dict | None = None            # onsite corrections {label: {"uu", "ud"}} (M6b)
+    efield: dict | None = None            # electric field {"strength" (V/A), "direction"} (M6c)
+    point_charges: dict | None = None     # {"positions" (A), "charges" (e), "blur" (A)}
+    site_potentials: dict | None = None   # {"gross"/"net": {atom (0-based): V (eV)}}
+    solvation: dict | None = None         # solvation spec (atomic units), see solvation_model
+    rescale_fields: bool = True           # DFTB+ RescaleSolvatedFields
+    charge: float = 0.0                   # net charge (e)
     torch: bool = True                    # also checked on the torch backend (test_reference)
     klines: list | None = None            # band run on DFTB+ Klines [(n, (k1, k2, k3)), ...]
     regions: list | None = None           # ProjectStates [{"label", "atoms" (0-based), ...}]
@@ -137,6 +144,12 @@ class Case:
     def block(self) -> bool:
         """Block potentials: DFTB+U or onsite corrections (M6b)."""
         return self.plus_u is not None or self.onsite is not None
+
+    @property
+    def environment(self) -> bool:
+        """Field, point charges, site potentials or implicit solvation (M6c)."""
+        return (self.efield is not None or self.point_charges is not None
+                or self.site_potentials is not None or self.solvation is not None)
 
     def kpoints(self):
         if self.kgrid is None:
@@ -215,6 +228,24 @@ def _li2_tail():
     return Atoms("Li2", positions=[[0, 0, 0], [0.3 * d, 0.2 * d, np.sqrt(0.87) * d]])
 
 
+def _water_box_folded():
+    """The water box with every atom folded into the cell: DFTB+ takes the field's stress
+    from the unfolded coordinates (M6c design, section 2)."""
+    a = _water_box()
+    a.positions = fold_into_cell(a.positions, a.cell.array)
+    return a
+
+
+def _cuo_chain_cubic():
+    """The CuO chain in a 7.6 A cube, centred in y and z: DFTB+'s field stress is right for
+    cubic cells only (M6c report)."""
+    a = _cuo_chain()
+    a.set_cell([7.6, 7.6, 7.6])
+    a.positions += [0.0, 3.8, 3.8]
+    a.positions = fold_into_cell(a.positions, a.cell.array)
+    return a
+
+
 def _o2():
     return Atoms("O2", positions=[[0, 0, 0], [0.05, 0.1, 1.21]])
 
@@ -280,6 +311,59 @@ U_O = {"groups": {"O": [("p", 0.1)]}}
 ONS = {lab: ONSITE_PBE[lab] for lab in ("H", "C", "O")} | {"Cu": {**ONSITE_PBE["Au"]}}
 TOL_BLOCK = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "orbital": 1e-6,
              "eigenvalues": 1e-7, "spins": 1e-6, "moments": 1e-8}
+
+# External potentials and implicit solvation (milestone M6c): a field of 0.5 V/A in a general
+# direction, three point charges about 3 A away (or two at 1.2 A with a 0.8 A Gaussian blur),
+# gross and net site potentials (eV).  Solvation: the GBSA(water) example of the DFTB+ manual
+# (fitted for GFN2-xTB; here only to test the code) and a simple GB model (atomic units)
+FIELD = {"strength": 0.5, "direction": [1.0, 0.3, -0.2]}
+PC3 = {"positions": [[3.0, 0.2, 0.1], [-2.5, 1.0, 0.5], [0.3, -2.8, 1.2]],
+       "charges": [0.8, -0.6, 0.4]}
+PC_CLOSE = {"positions": [[1.2, 0.2, 0.1], [-1.1, 0.6, 0.5]], "charges": [0.8, -0.6],
+            "blur": 0.8}
+SITES = {"gross": {0: 0.5}, "net": {1: -0.3, 2: 0.2}}
+GB_WATER = {"model": "gb", "solvent": "water", "free_energy_shift": 0.0, "born_scale": 1.5,
+            "born_offset": 0.0, "descreening": "unity"}
+GBSA_WATER = {
+    "model": "gb", "solvent": {"epsilon": 80.2, "molecular_mass": 18.0, "density": 1.0},
+    "free_energy_shift": 1.16556316 * KCAL_MOL, "born_scale": 1.55243817,
+    "born_offset": 2.462811043694508e-02,
+    "descreening": {"H": 0.71893869, "C": 0.74298311, "N": 0.90261230, "O": 0.75369019},
+    "sasa": {"probe_radius": 1.843075777670416,
+             "surface_tension": {"H": -0.33498306, "C": -0.74769065, "N": -2.31291292,
+                                 "O": 0.91797911}},
+    "hbond": {"H": -7.172800544988973e-02, "C": -2.548469535762511e-03,
+              "N": -1.976849501504001e-02, "O": -8.462476828587280e-03}}
+TOL_ENV = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "pc_forces": 1e-6, "dipole": 1e-6}
+
+
+def solvation_model(spec):
+    """The pydftb model (:mod:`pydftb.solvation`) of a case's solvation spec."""
+    from .. import solvation as sv
+    if spec is None:
+        return None
+
+    def sasa(d):
+        keys = ("probe_radius", "surface_tension", "radii", "radii_table", "smoothing",
+                "tolerance", "angular_grid", "offset")
+        return sv.SASA(**{k: d[k] for k in keys if k in d})
+
+    if spec["model"] == "sasa":
+        return sasa(spec)
+    opts = {k: spec[k] for k in ("free_energy_shift", "born_scale", "born_offset", "descreening",
+                                 "kernel", "alpb", "alpha", "state", "temperature", "hbond")
+            if k in spec}
+    if "solvent" in spec:
+        sol = spec["solvent"]
+        opts["solvent"] = sol if isinstance(sol, str) else sv.Solvent(**sol)
+    if "sasa" in spec:
+        opts["sasa"] = sasa(spec["sasa"])
+    if spec.get("cm5") is not None:
+        opts["cm5"] = sv.CM5(**spec["cm5"])
+    if "param_file" in spec:
+        return sv.GeneralizedBorn.from_param_file(os.path.join(DATA, spec["param_file"]), **opts)
+    return sv.GeneralizedBorn(**opts)
+
 
 CASES = [
     Case("h2o", _water, tol=TOL_DFTBP_FD, note="force tolerance 2e-6, see TOL_DFTBP_FD"),
@@ -564,5 +648,60 @@ CASES = [
          regions=[{"label": "cu", "atoms": [0, 2], "shell_resolved": True}],
          ewald_tolerance=1e-12, torch=False, tol={**TOL_BANDS, "orbital": 1e-6, "spins": 1e-6},
          note="band run with +U (the block vector read back), d projections"),
+    # --- fields, point charges, site potentials, implicit solvation (milestone M6c) ---
+    Case("h2o_field", _water, efield=FIELD, torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD},
+         note="force tolerance see TOL_DFTBP_FD"),
+    Case("h2o_pc", _water, point_charges=PC3, torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD}),
+    Case("h2o_pc_blur", _water, point_charges=PC_CLOSE, torch=False,
+         tol={**TOL_ENV, **TOL_DFTBP_FD}, note="charges at 1.2 A with a 0.8 A Gaussian blur"),
+    Case("h2o_site", _water, site_potentials=SITES, torch=False,
+         tol={**TOL_ENV, **TOL_DFTBP_FD}, note="gross (O) and net (H) site potentials"),
+    Case("ch3oh_dftb3_field_site", _meoh, dftb3=DFTB3_3OB, efield=FIELD,
+         site_potentials={"gross": {0: 0.3}, "net": {1: -0.2}}, torch=False, tol=TOL_ENV),
+    Case("o2_triplet_field", _o2, spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}},
+         efield=FIELD, torch=False, tol=TOL_ENV),
+    Case("oh_noncolinear_soc_field_pc", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, efield=FIELD, point_charges=PC3, torch=False,
+         tol={**TOL_PAULI, **TOL_ENV}),
+    Case("cu4co_plusu_field_net", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, efield=FIELD,
+         site_potentials={"net": {0: 0.3}}, torch=False, tol={**TOL_BLOCK, **TOL_ENV},
+         note="the block path with a net site potential on a Cu atom"),
+    Case("ch3oh_ons_pc", _meoh, onsite=ONS, point_charges=PC3, torch=False,
+         tol={**TOL_BLOCK, **TOL_ENV}),
+    Case("water_box_field", _water_box_folded, efield=FIELD, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_ENV, "stress": 1e-9},
+         note="saw-tooth field; DFTB+'s stress is symmetrised before the comparison"),
+    Case("cuo_chain_field_k411", _cuo_chain_cubic, kgrid=(4, 1, 1), filling=("fermi", 500.0),
+         efield={**FIELD, "strength": 0.1}, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_ENV, "stress": 1e-9},
+         note="k-points; a cubic cell (DFTB+'s field stress is wrong off the diagonal of others)"),
+    Case("water_box_pc", _water_box,
+         point_charges={"positions": (np.array(PC3["positions"]) + 2.0).tolist(),
+                        "charges": PC3["charges"], "blur": 0.3},
+         ewald_tolerance=1e-12, torch=False, tol=TOL_ENV,
+         note="Ewald sum over the point charges' images; no stress (as DFTB+)"),
+    Case("h2o_gbsa", _water, solvation=GBSA_WATER, torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD},
+         note="GBSA: Born term, SASA and hydrogen-bond correction"),
+    Case("ch3oh_gb", _meoh, solvation=GB_WATER, torch=False, tol=TOL_ENV),
+    Case("ch3oh_alpb_p16", _meoh, solvation={**GB_WATER, "alpb": True, "kernel": "p16"},
+         torch=False, tol=TOL_ENV),
+    Case("oh_minus_alpb", _oh, filling=("fermi", 300.0), charge=-1.0,
+         solvation={**GB_WATER, "alpb": True}, torch=False, tol=TOL_ENV,
+         note="the ALPB shape term of a charged molecule"),
+    Case("ch3oh_gb_cm5", _meoh, solvation={**GB_WATER, "cm5": {"double_count": True}},
+         torch=False, tol=TOL_ENV, note="CM5 as DFTB+ 25.1 counts it (every pair twice)"),
+    Case("ch3oh_sasa", _meoh, solvation={"model": "sasa", **GBSA_WATER["sasa"]}, torch=False,
+         tol=TOL_ENV),
+    Case("ch3oh_gbsa_paramfile", _meoh,
+         solvation={"model": "gb", "param_file": "solvation/param_gbsa_test.txt",
+                    "state": "mol1bar"}, torch=False, tol=TOL_ENV,
+         note="an xtb-format parameter file and the mol1bar reference state"),
+    Case("h2o_gb_field_pc", _water, solvation=GB_WATER, efield=FIELD, point_charges=PC3,
+         torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD}, note="the field scaled by 3 eps/(2 eps + 1)"),
+    Case("h2o_gb_field_norescale", _water, solvation=GB_WATER, efield=FIELD, rescale_fields=False,
+         torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD}),
+    Case("oh_noncolinear_soc_gb", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, solvation=GB_WATER, torch=False,
+         tol={**TOL_PAULI, **TOL_ENV}),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

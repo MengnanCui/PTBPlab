@@ -24,6 +24,12 @@ separate branches (``st.pauli``): 2N x 2N spinor matrices, four Pauli components
 Block potentials (DFTB+U, onsite corrections; milestone M6b) take the branches
 ``st.block``: H gets 1/2 (S V + V S) with V block diagonal, and the mixed vector holds what
 DFTB+ mixes then (orbital classes, block elements); see :mod:`pydftb.blockpot`.
+
+The environment (milestone M6c): external fields, point charges and site potentials
+(``st.ext``, :mod:`pydftb.external`) are fixed potentials on the atoms' charges, added to
+the charge potential (net site potentials to the diagonal of H); implicit solvation
+(``st.solv``, :mod:`pydftb.solvation`) adds a charge-dependent shift like the third-order
+term.  Neither changes the mixed vector.
 """
 from __future__ import annotations
 
@@ -32,12 +38,14 @@ import warnings
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+from ase.data import atomic_numbers as _NUMBERS
 
-from . import blockpot
+from . import blockpot, external
+from . import solvation as _solvation
 from .backend import ops
 from .backend.spec import make_backend
 from .coulomb import Coulomb
-from .dispersion import DispersionTerms, make_dispersion
+from .dispersion import DispersionTerms, element_of_label, make_dispersion
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
 from .mixer import make_mixer
 from .occupations import Smearing
@@ -54,8 +62,8 @@ class DFTBResult:
     """Results in atomic units (Hartree, Bohr).
 
     Energy names follow DFTB+'s ``detailed.out``:
-    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_LS + E_U + E_onsite + E_rep
-    + E_disp),
+    ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_LS + E_U + E_onsite + E_ext
+    + E_solv + E_rep + E_disp); E_SCC includes the external point charges, as DFTB+'s,
     ``free_energy`` = "Total Mermin free energy" (Total - TS),
     ``e_zero`` = "Extrapolated to 0" (Total - TS/2).
     """
@@ -95,6 +103,11 @@ class DFTBResult:
     orbital_moments: np.ndarray | None = None   # (n_shell, 3) <L> per shell (spin-orbit)
     e_plus_u: float = 0.0                # DFTB+U energy (DFTB+ "Energy DFTB+U", M6b)
     e_onsite: float = 0.0                # onsite-correction energy (DFTB+ "Energy onsite")
+    e_ext: float = 0.0                   # field and site potentials (DFTB+ "Energy ext. field",
+                                         # M6c)
+    e_solv: float = 0.0                  # implicit solvation (DFTB+ "Solvation energy")
+    point_charge_forces: np.ndarray | None = None   # (M, 3) forces on external point charges
+    dipole: np.ndarray | None = None     # sum_A (q0_A - q_A) r_A (e Bohr), molecules only
 
     @property
     def e_total(self) -> float:
@@ -112,6 +125,7 @@ class DFTBResult:
     def terms(self) -> dict:
         return {"H0": self.e_band, "SCC": self.e_scc, "3rd": self.e_3rd, "spin": self.e_spin,
                 "LS": self.e_ls, "+U": self.e_plus_u, "onsite": self.e_onsite,
+                "ext": self.e_ext, "solvation": self.e_solv,
                 "repulsive": self.e_rep, "dispersion": self.e_disp, "-TS": -self.ts}
 
 
@@ -141,6 +155,8 @@ class _Setup:
     dev: "_Device | None" = None     # torch backend: device copies (h0, smat above are on it)
     pauli: "_Pauli | None" = None    # two-component calculation (M6a)
     block: "blockpot.BlockTerms | None" = None   # DFTB+U / onsite corrections (M6b)
+    ext: "external.ExternalTerms | None" = None  # fields, point charges, site potentials (M6c)
+    solv: "object | None" = None                 # implicit solvation (M6c)
 
     @property
     def kw_dev(self):
@@ -294,7 +310,9 @@ class DFTB:
                  backend=None, device: str | None = None, dtype: str | None = None,
                  initial_spins=None, spin_orbit: dict | None = None,
                  spin_orbit_dual: bool = True, plus_u: dict | None = None,
-                 plus_u_functional: str = "fll", onsite_corrections: dict | None = None):
+                 plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
+                 electric_field=None, point_charges=None, site_potentials: dict | None = None,
+                 solvation=None, rescale_solvated_fields: bool = True):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -370,6 +388,25 @@ class DFTB:
         if self.onsite_corrections is not None:
             blockpot.parse_onsite(self.onsite_corrections, sk,
                                   [lab for lab in self.onsite_corrections if lab in sk.onsite])
+        # the environment (M6c)
+        self.electric_field = None if electric_field is None else external.parse_field(electric_field)
+        self.point_charges = (None if point_charges is None
+                              else external.PointCharges.make(point_charges))
+        self.site_potentials = None if site_potentials is None else dict(site_potentials)
+        if self.site_potentials is not None:      # the kinds now, the atoms at setup
+            unknown = set(self.site_potentials) - {"gross", "net"}
+            if unknown:
+                raise ValueError(f"site_potentials: unknown kinds {sorted(unknown)} "
+                                 "(use 'gross', 'net')")
+        self.solvation = _solvation.make_solvation(solvation)
+        self.rescale_solvated_fields = bool(rescale_solvated_fields)
+        _solvation.check_rescaling(self.solvation, self.electric_field,
+                                   self.rescale_solvated_fields)
+        if self.point_charges is not None and not scc:
+            raise ValueError("external point charges need SCC (as in DFTB+)")
+        if solvation is not None and not scc:
+            raise ValueError("implicit solvation needs SCC (DFTB+ runs without it, but its "
+                             "Born term then stays zero)")
         self.backend = make_backend(backend, device, dtype)
         if self.backend.is_torch and self.pauli:
             raise ValueError("non-collinear spin and spin-orbit coupling are implemented for "
@@ -377,6 +414,10 @@ class DFTB:
         if self.backend.is_torch and self.block_terms:
             raise ValueError("DFTB+U and onsite corrections are implemented for the NumPy "
                              "backend only (milestone M6b)")
+        if self.backend.is_torch and self.environment:
+            raise ValueError("external fields, point charges, site potentials and implicit "
+                             "solvation are implemented for the NumPy backend only "
+                             "(milestone M6c)")
         if self.backend.is_torch:
             if solver not in ("eigh", "batched"):
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
@@ -414,6 +455,12 @@ class DFTB:
         return self.plus_u is not None or self.onsite_corrections is not None
 
     @property
+    def environment(self) -> bool:
+        """External potentials or implicit solvation (M6c)."""
+        return (self.electric_field is not None or self.point_charges is not None
+                or self.site_potentials is not None or self.solvation is not None)
+
+    @property
     def kt(self) -> float:
         return self.smearing.kt
 
@@ -445,9 +492,12 @@ class DFTB:
         timings = {}
         periodic = cell is not None and (pbc is None or np.any(pbc))
         if stress is None:
-            stress = forces and periodic
+            stress = forces and periodic and self.point_charges is None
         if stress and not periodic:
             raise ValueError("stress needs a periodic system")
+        if stress and self.point_charges is not None:
+            raise ValueError("no stress with external point charges (DFTB+ does not compute "
+                             "it either)")
         need_derivs = forces or stress
         setup = self._setup(species, positions, cell, pbc, need_derivs, timings)
         state = self._scc(setup, q_init, need_derivs, timings)
@@ -457,6 +507,9 @@ class DFTB:
             grad, virial = self._gradient(setup, state, virial=stress)
             if forces:
                 res.forces = -grad
+                if setup.ext is not None and setup.ext.pc is not None:
+                    res.point_charge_forces = setup.ext.charge_forces(
+                        self._atom_dq(setup, state.q_out))
             if stress:
                 vol = abs(np.linalg.det(setup.cell))
                 res.stress = -virial / vol
@@ -544,6 +597,18 @@ class DFTB:
         block = None
         if self.block_terms:
             block = self._block_setup(basis, site_of_orb, spin is not None, pauli)
+        ext = None
+        if self.electric_field is not None or self.point_charges is not None \
+                or self.site_potentials is not None:
+            ext = self._external_setup(pos, cell if periodic else None,
+                                       pbc if periodic else None, coul, pb)
+        solv = None
+        if self.solvation is not None:
+            if periodic:
+                raise ValueError("implicit solvation is implemented for molecules only "
+                                 "(as in DFTB+)")
+            numbers = [_NUMBERS[element_of_label(lab)] for lab in species]
+            solv = self.solvation.setup(list(species), numbers, pos)
         disp = None
         if self.dispersion is not None and matrices:
             t1 = time.perf_counter()
@@ -553,7 +618,58 @@ class DFTB:
             timings["dispersion"] = time.perf_counter() - t1
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
-                      pauli=pauli, block=block)
+                      pauli=pauli, block=block, ext=ext, solv=solv)
+
+    def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
+        """Field, point charges and site potentials of this geometry (M6c); the field is
+        scaled for a solvent as DFTB+'s RescaleSolvatedFields does."""
+        gross = net = None
+        if self.site_potentials is not None:
+            gross, net = external.parse_site_potentials(self.site_potentials, len(pos))
+        field = self.electric_field
+        if field is not None and self.solvation is not None and self.rescale_solvated_fields:
+            field = field * self.solvation.field_scaling()
+        return external.ExternalTerms.build(pos, cell, pbc, field, self.point_charges, gross,
+                                            net, coul, pb)
+
+    def _atom_dq(self, st: _Setup, qvec) -> np.ndarray:
+        """Charge deviations per atom (electrons) of a population vector."""
+        dq, _ = self._charge_and_magnetisation(st, qvec)
+        return ops.segment_sum(dq, st.site_atom, len(st.species))
+
+    def _with_net(self, st: _Setup, h0):
+        """H0 with the net site potentials on its diagonal (M6c); h0 itself without them."""
+        if st.ext is None or st.ext.v_net is None:
+            return h0
+        v = st.ext.v_net[st.basis.orb_atom]
+        idx = np.arange(len(v))
+        h0 = h0.copy()
+        h0[:, idx, idx] += v
+        return h0
+
+    def _net_populations(self, st: _Setup, rho) -> np.ndarray:
+        """Onsite populations per atom, sum_{mu on A} sum_k w_k Re rho_k,mu,mu (all spins)."""
+        nk = len(st.kw)
+        if st.pauli is not None:
+            rho = so.components(rho)[0]
+        diag = np.zeros(st.basis.norb)
+        for s in range(0, len(rho), nk):
+            diag = diag + np.einsum("k,kii->i", st.kw, rho[s:s + nk]).real
+        return ops.segment_sum(diag, st.basis.orb_atom, len(st.species))
+
+    def _environment_energies(self, st: _Setup, sc: _SCCState, dq_atom):
+        """(E_ext, the point charges' part of E_SCC, E_solv) of the last output (M6c)."""
+        e_ext = e_pc = e_solv = 0.0
+        if st.ext is not None:
+            dn = None
+            if st.ext.v_net is not None:
+                q0_atom = ops.segment_sum(st.q0, st.site_atom, len(st.species))
+                dn = self._net_populations(st, sc.rho) - q0_atom
+            e_ext = st.ext.energy_ext(dq_atom, dn)
+            e_pc = st.ext.energy_pc(dq_atom)
+        if st.solv is not None:
+            e_solv = st.solv.energy(dq_atom)
+        return e_ext, e_pc, e_solv
 
     def _block_setup(self, basis: Basis, site_of_orb, collinear: bool,
                      pauli: "_Pauli | None") -> "blockpot.BlockTerms":
@@ -701,18 +817,27 @@ class DFTB:
         return q - st.q0, up - down
 
     def _potentials(self, st: _Setup, qvec):
-        """Charge potential (SCC + third order) and spin potential, per orbital."""
+        """Charge potential (SCC + third order, with the environment of M6c) and spin
+        potential, per orbital."""
         if not self.scc:
+            if st.ext is not None and st.ext.v_atom is not None:    # a field without SCC
+                return st.ext.v_atom[st.basis.orb_atom], None
             return np.zeros(st.basis.norb), None
         dq, m = self._charge_and_magnetisation(st, qvec)
         _, v_site = st.coulomb.energy_shift(dq)
         if st.third is not None:
             v_site = v_site + st.third.energy_shift(dq)[1]
+        v_orb = v_site[st.site_of_orb]
+        if st.ext is not None and st.ext.v_atom is not None:
+            v_orb = v_orb + st.ext.v_atom[st.basis.orb_atom]
+        if st.solv is not None:
+            dq_atom = ops.segment_sum(dq, st.site_atom, len(st.species))
+            v_orb = v_orb + st.solv.shift(dq_atom)[st.basis.orb_atom]
         if st.pauli is not None:        # (3, N): W m_a for a = x, y, z
             w = st.pauli.w
-            return v_site[st.site_of_orb], None if w is None else (w @ m.T).T[:, st.basis.orb_shell]
+            return v_orb, None if w is None else (w @ m.T).T[:, st.basis.orb_shell]
         vs_orb = None if m is None else (st.spin.w @ m)[st.basis.orb_shell]
-        return v_site[st.site_of_orb], vs_orb
+        return v_orb, vs_orb
 
     def _block_potentials(self, st: _Setup, qvec, onsite: bool = True):
         """Block potentials (V, Vi) of a block vector in the spin components (M6b); without
@@ -868,19 +993,20 @@ class DFTB:
         min_iter = 2 if st.pauli is not None and q_init is None else 1
         if st.block is not None and q_init is None and (st.block.has_u or st.block.rep != "q"):
             min_iter = 2
+        h0 = self._with_net(st, st.h0)          # net site potentials (M6c)
         for nit in range(1, (self.max_scc if self.scc else 1) + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
             if st.block is not None:
                 # DFTB+ leaves the onsite corrections out of the first iteration's H unless it
                 # read its charges (ReadInitialCharges): given charges count as read
                 pots = self._block_potentials(st, q_in, onsite=nit > 1 or q_init is not None)
-                h = self._block_hamiltonian(st, st.h0, st.smat, v_orb, vs_orb, pots,
+                h = self._block_hamiltonian(st, h0, st.smat, v_orb, vs_orb, pots,
                                             None if st.pauli is None else st.pauli.hso)
             elif st.pauli is not None:
-                h = self._spinor_hamiltonian(st.h0, st.smat, v_orb, vs_orb, st.pauli.hso)
+                h = self._spinor_hamiltonian(h0, st.smat, v_orb, vs_orb, st.pauli.hso)
             else:
                 v = b.asarray(v_orb)
-                h = st.h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
+                h = h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
                 if vs_orb is not None:
                     vs = b.asarray(vs_orb)
                     hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
@@ -935,6 +1061,13 @@ class DFTB:
         e_disp = st.disp.energy if st.disp is not None else 0.0
         energy = e_band + e_scc + e_3rd + e_spin + e_ls + e_u + e_ons + e_rep + e_disp
         b, natom = st.basis, len(st.species)
+        dq_atom = ops.segment_sum(dq, st.site_atom, natom)
+        env = {}
+        if st.ext is not None or st.solv is not None:          # M6c
+            e_ext, e_pc, e_solv = self._environment_energies(st, sc, dq_atom)
+            e_scc = e_scc + e_pc
+            energy = energy + e_ext + e_pc + e_solv
+            env = dict(e_ext=e_ext, e_solv=e_solv)
         q_atom = ops.segment_sum(sc.q_orb, b.orb_atom, natom)
         q_shell = ops.segment_sum(sc.q_orb, b.orb_shell, len(b.shell_l))
         magmoms = np.stack([ops.segment_sum(m[a], b.shell_atom, natom) for a in range(3)], axis=1)
@@ -947,7 +1080,14 @@ class DFTB:
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
                           kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
                           e_spin=e_spin, magmoms=magmoms, q_spin=q_spin,
-                          e_ls=e_ls, orbital_moments=lmom, e_plus_u=e_u, e_onsite=e_ons)
+                          e_ls=e_ls, orbital_moments=lmom, e_plus_u=e_u, e_onsite=e_ons,
+                          dipole=self._dipole(st, dq_atom), **env)
+
+    def _dipole(self, st: _Setup, dq_atom) -> np.ndarray | None:
+        """sum_A (q0_A - q_A) r_A for molecules, as DFTB+'s detailed.out (unscaled)."""
+        if st.cell is not None and np.any(st.pbc):
+            return None
+        return -(dq_atom @ st.pos)
 
     def _block_energies(self, st: _Setup, sc: _SCCState) -> tuple[float, float]:
         """(E_U, E_onsite) from the blocks of the last output vector (M6b; zero without)."""
@@ -1002,6 +1142,13 @@ class DFTB:
             e_u, e_ons = self._block_energies(st, sc)
             energy = energy + e_u + e_ons
             extra.update(e_plus_u=e_u, e_onsite=e_ons)
+        dq_atom = ops.segment_sum(dq, st.site_atom, len(st.species))
+        if st.ext is not None or st.solv is not None:               # M6c
+            e_ext, e_pc, e_solv = self._environment_energies(st, sc, dq_atom)
+            e_scc = e_scc + e_pc
+            energy = energy + e_ext + e_pc + e_solv
+            extra.update(e_ext=e_ext, e_solv=e_solv)
+        extra["dipole"] = self._dipole(st, dq_atom)
         return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, mu, q_atom,
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
@@ -1050,6 +1197,13 @@ class DFTB:
             grad = grad + g_3rd
         if st.disp is not None:
             grad = grad + st.disp.gradient
+        dq_atom = None
+        if st.ext is not None or st.solv is not None:                # M6c
+            dq_atom = ops.segment_sum(dq, st.site_atom, natom)
+            if st.ext is not None:
+                grad = grad + st.ext.gradient(dq_atom)
+            if st.solv is not None:
+                grad = grad + st.solv.gradient(dq_atom)
         if not virial:
             return grad, None
         w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
@@ -1059,6 +1213,8 @@ class DFTB:
             w = w + w_3rd
         if st.disp is not None:
             w = w + st.disp.virial
+        if st.ext is not None:
+            w = w + st.ext.virial(dq_atom)
         return grad, 0.5 * (w + w.T)
 
     def _block_force_coefficient(self, st: _Setup, sc: _SCCState) -> np.ndarray:

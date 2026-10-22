@@ -1,0 +1,297 @@
+{
+ "schema": 1,
+ "case": "oh_noncolinear_soc_field_pc",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "noncolinear": {
+   "initial_spins": [
+    [
+     0.48,
+     0.6,
+     0.64
+    ],
+    [
+     0.0,
+     0.0,
+     0.0
+    ]
+   ],
+   "spin_constants": {
+    "H": -0.072,
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ],
+    "Cu": [
+     [
+      -0.016,
+      -0.012,
+      -0.004
+     ],
+     [
+      -0.012,
+      -0.04,
+      -0.002
+     ],
+     [
+      -0.004,
+      -0.002,
+      -0.017
+     ]
+    ],
+    "Gd": [
+     [
+      -0.010552,
+      -0.008687,
+      -0.006723,
+      -0.000704
+     ],
+     [
+      -0.008687,
+      -0.013022,
+      -0.004158,
+      -0.00029
+     ],
+     [
+      -0.006723,
+      -0.004158,
+      -0.008679,
+      -0.001912
+     ],
+     [
+      -0.000704,
+      -0.00029,
+      -0.001912,
+      -0.013626
+     ]
+    ]
+   }
+  },
+  "spin_orbit": {
+   "xi": {
+    "O": [
+     0.0,
+     0.01
+    ]
+   }
+  },
+  "time_reversal": true,
+  "efield": {
+   "strength": 0.5,
+   "direction": [
+    1.0,
+    0.3,
+    -0.2
+   ]
+  },
+  "point_charges": {
+   "positions": [
+    [
+     3.0,
+     0.2,
+     0.1
+    ],
+    [
+     -2.5,
+     1.0,
+     0.5
+    ],
+    [
+     0.3,
+     -2.8,
+     1.2
+    ]
+   ],
+   "charges": [
+    0.8,
+    -0.6,
+    0.4
+   ]
+  },
+  "site_potentials": null,
+  "solvation": null,
+  "rescale_fields": true,
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.1,
+    0.05,
+    0.97
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_8xuff36l/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n  SpinPolarisation = NonColinear {\n    InitialSpins {\n      AllAtomSpins = {\n        0.48 0.6 0.64\n        0.0 0.0 0.0\n      }\n    }\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    H = -0.072\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n  SpinOrbit {\n    Dual = Yes\n    O [Hartree] = { 0.0 0.01 }\n    H [Hartree] = { 0.0 }\n  }\n  ElectricField = {\n    External = {\n      Strength [V/AA] = 0.5\n      Direction = 1.0 0.3 -0.2\n    }\n    PointCharges = {\n      CoordsAndCharges [Angstrom] = {\n        3.0 0.2 0.1 0.8\n        -2.5 1.0 0.5 -0.6\n        0.3 -2.8 1.2 0.4\n      }\n    }\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.5218386452,
+  "free_energy": -3.521906876,
+  "e_zero": -3.5218727606,
+  "e_rep": 0.0241323318,
+  "e_scc": 0.0121500073,
+  "e_band": -3.5367108095,
+  "e_spin": -0.0167030986,
+  "e_ls": -0.0051205169,
+  "e_ext": 0.0004134407,
+  "fermi": -0.332772490664034,
+  "forces": [
+   [
+    0.00230885528419309,
+    -0.0105909127096392,
+    -0.0857539207335337
+   ],
+   [
+    -0.00161295216793903,
+    0.0112244930440457,
+    0.0868904702432475
+   ]
+  ],
+  "charges_net": [
+   -0.302765210790959,
+   0.302765210790958
+  ],
+  "spins": [
+   [
+    0.110968874061913,
+    -0.00855337692194236
+   ],
+   [
+    0.0554844370151634,
+    -0.0042766884595592
+   ],
+   [
+    1.07639807857719,
+    -0.0829677561586302
+   ]
+  ],
+  "point_charge_forces": [
+   [
+    -0.000412900247382806,
+    -0.000133035717937663,
+    -0.00236742642510671
+   ],
+   [
+    -0.000216328975486481,
+    0.000293370249876699,
+    0.00231849105160048
+   ],
+   [
+    -6.66738933847847e-05,
+    -0.000793914866345477,
+    -0.00108761413620759
+   ]
+  ],
+  "dipole": [
+   0.05721433,
+   0.02860716,
+   0.55497899
+  ],
+  "angular_spin": [
+   [
+    -0.00036815,
+    -0.00018407,
+    -0.00357102
+   ],
+   [
+    -0.05518063,
+    -0.02759032,
+    -0.53525214
+   ],
+   [
+    0.00428165,
+    0.00214082,
+    0.04153198
+   ]
+  ],
+  "angular_orbital": [
+   [
+    -0.0,
+    -0.0,
+    -0.0
+   ],
+   [
+    -0.10121611,
+    -0.05060805,
+    -0.98179622
+   ],
+   [
+    -0.0,
+    -0.0,
+    -0.0
+   ]
+  ],
+  "n_scc": 20
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "moments": 1e-08,
+  "pc_forces": 1e-06,
+  "dipole": 1e-06
+ }
+}

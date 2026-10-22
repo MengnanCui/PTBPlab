@@ -24,12 +24,13 @@ import numpy as np
 
 from ..bands import broaden, eigenstates, klines
 from ..calculator import DFTB
-from ..constants import BOHR
+from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
+from ..external import PointCharges
 from ..params import ParamSet
 from ..skf import write_typed_copies
 from . import dftbplus
-from .cases import CASES, CASES_BY_NAME, MAXL, REF_DIR, SKF_SETS, Case
+from .cases import CASES, CASES_BY_NAME, DATA, MAXL, REF_DIR, SKF_SETS, Case, solvation_model
 
 SCHEMA = 1
 STATE_KEYS = ("eigenvalues", "occupations", "fermi", "regions", "dp_dos")   # band/PDOS cases
@@ -134,7 +135,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     dispersion=inp.get("dispersion"), k_threads=k_threads,
                     backend=backend, device=device, dtype=dtype,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
-                    **pauli_options(case, labels), **block_options(case, labels))
+                    **pauli_options(case, labels), **block_options(case, labels),
+                    **environment_options(case))
         calc = DFTB(sk, **{**opts, **options})
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
@@ -177,6 +179,53 @@ def block_hsd(case: Case, inp: dict) -> str:
             + dftbplus.onsite_block(case.onsite, list(dict.fromkeys(inp["labels"]))))
 
 
+def environment_options(case: Case) -> dict:
+    """:class:`pydftb.DFTB` options of a field / point-charge / site-potential / solvation
+    case (M6c), converted with DFTB+'s constants; also the net charge."""
+    out = {}
+    if case.charge:
+        out["charge"] = case.charge
+    if case.efield:
+        d = np.asarray(case.efield["direction"], float)
+        out["electric_field"] = case.efield["strength"] * VOLT_PER_ANGSTROM_AU * d / np.linalg.norm(d)
+    if case.point_charges:
+        pc = case.point_charges
+        out["point_charges"] = PointCharges(np.asarray(pc["positions"], float) / BOHR,
+                                            np.asarray(pc["charges"], float),
+                                            np.full(len(pc["charges"]), pc.get("blur", 0.0) / BOHR))
+    if case.site_potentials:
+        out["site_potentials"] = {kind: {int(a): v / HARTREE for a, v in sites.items()}
+                                  for kind, sites in case.site_potentials.items()}
+    if case.solvation:
+        out["solvation"] = solvation_model(case.solvation)
+        out["rescale_solvated_fields"] = case.rescale_fields
+    return out
+
+
+def environment_ase_options(case: Case) -> dict:
+    """:class:`pydftb.ase_calc.PyDFTB` options of an M6c case, in ASE's units (V/A, A, eV)."""
+    out = {}
+    if case.efield:
+        d = np.asarray(case.efield["direction"], float)
+        out["electric_field"] = case.efield["strength"] * d / np.linalg.norm(d)
+    if case.point_charges:
+        pc = case.point_charges
+        out["point_charges"] = (pc["positions"], pc["charges"], pc.get("blur", 0.0))
+    if case.site_potentials:
+        out["site_potentials"] = case.site_potentials
+    if case.solvation:
+        out["solvation"] = solvation_model(case.solvation)
+        out["rescale_solvated_fields"] = case.rescale_fields
+    return out
+
+
+def environment_hsd(case: Case) -> str:
+    """DFTB+ ``ElectricField``, ``AtomSitePotential`` and ``Solvation`` blocks (M6c)."""
+    return (dftbplus.electric_field_block(case.efield, case.point_charges)
+            + dftbplus.site_potential_block(case.site_potentials)
+            + dftbplus.solvation_block(case.solvation, case.rescale_fields, DATA))
+
+
 def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
     with tempfile.TemporaryDirectory(prefix="pydftb_ref_") as tmp:
         skdir = _plain_skf_dir(case, tmp)
@@ -191,14 +240,14 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                  + dftbplus.spinorbit_block(case.spin_orbit, {lab: inp["max_l"][lab] + 1
                                                               for lab in inp["max_l"]})
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
-                 + block_hsd(case, inp))
+                 + block_hsd(case, inp) + environment_hsd(case))
         if case.ewald_tolerance is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(case.ewald_tolerance)}\n"
         args = (inp["labels"], np.array(inp["positions_angstrom"]),
                 np.array(inp["cell_angstrom"]) if periodic else None)
         kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
-                  scc_tol=case.scc_tol, threads=threads)
+                  scc_tol=case.scc_tol, threads=threads, charge=case.charge)
         if not (case.klines or case.regions or case.dp_dos):
             return dftbplus.run(*args, **kw)
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
@@ -335,7 +384,11 @@ def regenerate(names=None, threads: int = 1):
                          "scc_tol": case.scc_tol, "ewald_tolerance": case.ewald_tolerance,
                          **({"noncolinear": case.noncolinear, "spin_orbit": case.spin_orbit,
                              "time_reversal": case.time_reversal} if case.pauli else {}),
-                         **({"plus_u": case.plus_u, "onsite": case.onsite} if case.block else {})},
+                         **({"plus_u": case.plus_u, "onsite": case.onsite} if case.block else {}),
+                         **({"efield": case.efield, "point_charges": case.point_charges,
+                             "site_potentials": case.site_potentials,
+                             "solvation": case.solvation, "rescale_fields": case.rescale_fields,
+                             "charge": case.charge} if case.environment else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -348,7 +401,10 @@ def regenerate(names=None, threads: int = 1):
                                                   "angular_spin", "angular_orbital")
                           or case.block and k in ("e_plus_u", "e_onsite", "e_spin", "e_ls",
                                                   "e_3rd", "spins", "angular_spin",
-                                                  "angular_orbital", "orbital_charges")},
+                                                  "angular_orbital", "orbital_charges")
+                          or case.environment and k in ("e_ext", "e_solv", "dipole",
+                                                        "point_charge_forces", "e_spin",
+                                                        "e_ls", "e_3rd", "spins")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -386,12 +442,15 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     wall = time.perf_counter() - t0
     ref = doc["reference"]
     sk_q0 = _neutral_populations(case, inp)
+    ref_stress = None if ref.get("stress") is None else np.array(ref["stress"])
+    if ref_stress is not None and case.efield:      # DFTB+'s field stress is not symmetrised
+        ref_stress = 0.5 * (ref_stress + ref_stress.T)
     dev = {
         "energy": abs(res.energy - ref["energy"]),
         "free_energy": abs(res.free_energy - ref["free_energy"]),
         "e_zero": abs(res.e_zero - ref["e_zero"]) if "e_zero" in ref else 0.0,
-        "stress": (float(np.abs(res.stress - np.array(ref["stress"])).max())
-                   if ref.get("stress") is not None else 0.0),
+        "stress": (float(np.abs(res.stress - ref_stress).max())
+                   if ref_stress is not None else 0.0),
         "forces": float(np.abs(res.forces - np.array(ref["forces"])).max()),
         "charges": float(np.abs((sk_q0 - res.charges) - np.array(ref["charges_net"])).max()),
         "e_disp": abs(res.e_disp - ref["e_disp"]) if "e_disp" in ref else 0.0,
@@ -404,13 +463,18 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         block = _compare_block(ref, res, inp)
         block["e_terms"] = max(block["e_terms"], dev.get("e_terms", 0.0))
         dev.update(block)
+    if case.environment:
+        env = _compare_environment(case, ref, res)
+        env["e_terms"] = max(env["e_terms"], dev.get("e_terms", 0.0))
+        dev.update(env)
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
                   dev.get("e_terms", 0.0)) <= tol["energy"]
           and dev["stress"] <= tol.get("stress", 1e-7)
           and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev)
-          and all(dev[k] <= tol[k] for k in ("spins", "moments", "orbital") if k in dev))
+          and all(dev[k] <= tol[k] for k in ("spins", "moments", "orbital", "pc_forces",
+                                              "dipole") if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -459,6 +523,25 @@ def _compare_block(ref: dict, res, inp: dict) -> dict:
     return dev
 
 
+def _compare_environment(case: Case, ref: dict, res) -> dict:
+    """Deviations of a field / point-charge / site-potential / solvation case (M6c): E_ext,
+    E_solv and E_SCC (with the point charges), the dipole moment (molecules; DFTB+ prints it
+    times 3 eps/(2 eps + 1) in a solvent with rescaled fields) and the forces on the point
+    charges."""
+    dev = {"e_terms": max([abs(getattr(res, k) - ref[k])
+                           for k in ("e_ext", "e_solv", "e_scc", "e_spin", "e_ls", "e_3rd")
+                           if k in ref] or [0.0])}
+    if res.dipole is not None and "dipole" in ref:
+        scale = 1.0
+        if case.solvation and case.rescale_fields and case.solvation["model"] != "sasa":
+            scale = solvation_model(case.solvation).field_scaling()
+        dev["dipole"] = float(np.abs(res.dipole * scale - np.array(ref["dipole"])).max())
+    if "point_charge_forces" in ref:
+        dev["pc_forces"] = float(np.abs(res.point_charge_forces
+                                        - np.array(ref["point_charge_forces"])).max())
+    return dev
+
+
 def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
     params_dir = SKF_SETS[case.skf_set]
     base = case.typed or {}
@@ -486,7 +569,8 @@ def check(names=None, solver: str = "eigh", **backend) -> bool:
             print(f"{case.name:26s} skipped: {why}")
             continue
         if backend.get("backend") == "torch" and not case.torch:
-            print(f"{case.name:26s} skipped: NumPy-only physics (two-component M6a, blocks M6b)")
+            print(f"{case.name:26s} skipped: NumPy-only physics (M6a two-component, M6b blocks, "
+                  "M6c environment)")
             continue
         r = compare(doc, solver, **backend)
         d = r["dev"]

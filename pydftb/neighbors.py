@@ -32,6 +32,31 @@ def pair_vectors(pos: np.ndarray, cell: np.ndarray | None, i: np.ndarray, j: np.
     return vec
 
 
+def cross_pairs(pos_a: np.ndarray, pos_b: np.ndarray, cell: np.ndarray, pbc, cutoff: float):
+    """Pairs between two sets of points in a periodic cell: (a, b, shift) with
+    |r_b + shift.cell - r_a| < cutoff.  Returns ``a, b, vec (n,3), dist (n,)`` with
+    vec = r_b + shift.cell - r_a; pairs at zero distance are left out."""
+    pbc = np.asarray(pbc, bool)
+    inv = np.linalg.inv(cell)
+    both = np.vstack([pos_a, pos_b]) @ inv
+    reach = cutoff * np.linalg.norm(inv, axis=0) + both.max(0) - both.min(0)
+    nimg = np.where(pbc, np.maximum(image_range(cell, pbc, cutoff), np.floor(reach).astype(int)), 0)
+    rng = [np.arange(-n, n + 1) for n in nimg]
+    shifts = np.array(np.meshgrid(*rng, indexing="ij")).reshape(3, -1).T
+    tvec = shifts @ cell
+    nb = len(pos_b)
+    img = (pos_b[None, :, :] + tvec[:, None, :]).reshape(-1, 3)
+    sdm = cKDTree(pos_a).sparse_distance_matrix(cKDTree(img), cutoff, output_type="coo_matrix")
+    a = sdm.row.astype(np.int64)
+    flat = sdm.col.astype(np.int64)
+    b, s = flat % nb, flat // nb
+    vec = pos_b[b] + tvec[s] - pos_a[a]
+    dist = np.sqrt((vec * vec).sum(1))
+    keep = dist > 1e-8
+    order = np.lexsort((s[keep], b[keep], a[keep]))
+    return a[keep][order], b[keep][order], vec[keep][order], dist[keep][order]
+
+
 def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     """All ordered pairs (i, j, shift) with |r_j + shift.cell - r_i| < cutoff.
 

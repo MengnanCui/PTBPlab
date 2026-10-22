@@ -17,8 +17,9 @@ from ase.calculators.calculator import (CalculationFailed, Calculator, all_chang
 
 from .bands import States, eigenstates
 from .calculator import DFTB
-from .constants import BOHR
+from .constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from .dispersion import make_dispersion
+from .external import PointCharges
 from .kpoints import monkhorst_pack, reduce_time_reversal
 from .parallel import as_kthreads
 from .params import ParamSet
@@ -72,15 +73,21 @@ class PyDFTB(Calculator):
     ``unpaired_electrons``, ``relax_total_spin``, ``spin_constants``, for two-component
     calculations ``spin="noncolinear"``, ``initial_spins``, ``spin_orbit``,
     ``spin_orbit_dual``, for DFTB+U and onsite corrections ``plus_u``,
-    ``plus_u_functional``, ``onsite_corrections``, and ``dispersion``) are passed to
-    :class:`pydftb.DFTB`.
+    ``plus_u_functional``, ``onsite_corrections``, implicit solvation ``solvation``,
+    ``rescale_solvated_fields``, and ``dispersion``) are passed to :class:`pydftb.DFTB`.
+    The environment of milestone M6c in ASE units: ``electric_field`` (E_x, E_y, E_z) in
+    V/Angstrom, ``point_charges`` (positions in Angstrom, charges in e[, Gaussian blur width
+    in Angstrom]), ``site_potentials`` {"gross"/"net": {atom: V}} in eV; the solvation
+    model's parameters stay in atomic units like the other model parameters.  For ASE's
+    QM/MM (``EIQMMM``) the calculator offers :meth:`embed`; ``dipole`` (e Angstrom) is
+    available for molecules.
     Dispersion parameters stay in atomic units (Bohr, Hartree) as in DFTB+; the elements
     come from ``atoms``.  With ``spin="noncolinear"`` and no ``initial_spins`` the atoms'
     initial magnetic moments are used ((N, 3) vectors, or (N,) along z); ``magmoms`` are
     then (N, 3) vectors and ``magmom`` the length of their sum.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
-                              "magmom", "magmoms"]
+                              "magmom", "magmoms", "dipole"]
 
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool | None = None,
                  smearing=None, temperature: float | None = None, scc: bool = True,
@@ -96,7 +103,8 @@ class PyDFTB(Calculator):
                  initial_spins=None, spin_orbit: dict | None = None,
                  spin_orbit_dual: bool = True, plus_u: dict | None = None,
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
-                 **kwargs):
+                 electric_field=None, point_charges=None, site_potentials: dict | None = None,
+                 solvation=None, rescale_solvated_fields: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -113,7 +121,12 @@ class PyDFTB(Calculator):
                                 initial_spins=initial_spins, spin_orbit=spin_orbit,
                                 spin_orbit_dual=spin_orbit_dual, plus_u=plus_u,
                                 plus_u_functional=plus_u_functional,
-                                onsite_corrections=onsite_corrections)
+                                onsite_corrections=onsite_corrections, solvation=solvation,
+                                rescale_solvated_fields=rescale_solvated_fields)
+        self.electric_field = electric_field          # V/Angstrom (M6c)
+        self.point_charges = point_charges            # Angstrom, e
+        self.site_potentials = site_potentials        # eV
+        self.pcpot = None
         self.dispersion = make_dispersion(dispersion)
         self.threads = threads
         self.k_threads = as_kthreads(k_threads)       # one pool for all calculations
@@ -163,8 +176,29 @@ class PyDFTB(Calculator):
             m = np.asarray(atoms.get_initial_magnetic_moments(), float)
             opts["initial_spins"] = m if m.ndim == 2 else np.outer(m, [0.0, 0.0, 1.0])
         calc = DFTB(sk, kpts=self._kpoints(atoms), charge=float(atoms.get_initial_charges().sum()),
-                    dispersion=disp, k_threads=self.k_threads, **opts)
+                    dispersion=disp, k_threads=self.k_threads, **opts, **self._environment())
         return calc, labels, sk
+
+    def _environment(self) -> dict:
+        """Field, point charges and site potentials in atomic units (M6c)."""
+        out = {}
+        if self.electric_field is not None:
+            out["electric_field"] = np.asarray(self.electric_field, float) * VOLT_PER_ANGSTROM_AU
+        if self.point_charges is not None:
+            pc = PointCharges.make(self.point_charges)
+            out["point_charges"] = PointCharges(pc.positions / BOHR, pc.charges, pc.blur / BOHR)
+        if self.site_potentials is not None:
+            out["site_potentials"] = {
+                kind: ({a: v / HARTREE for a, v in val.items()} if isinstance(val, dict)
+                       else np.asarray(val, float) / HARTREE)
+                for kind, val in self.site_potentials.items()}
+        return out
+
+    def embed(self, charges, blur: float = 0.0) -> "PointChargePotential":
+        """Point-charge embedding for ASE's QM/MM (``ase.calculators.qmmm.EIQMMM``): MM
+        charges (e) whose positions ASE sets (Angstrom); optional Gaussian blur (Angstrom)."""
+        self.pcpot = PointChargePotential(self, charges, blur)
+        return self.pcpot
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
@@ -240,6 +274,8 @@ class PyDFTB(Calculator):
         if r.stress is not None:
             # same conversion as ase.calculators.dftb.Dftb: -sigma_DFTB+, Voigt xx yy zz yz xz xy
             self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
+        if r.dipole is not None:
+            self.results["dipole"] = r.dipole * units.Bohr
         magmoms = np.zeros(len(labels)) if r.magmoms is None else r.magmoms
         self.results["magmoms"] = magmoms
         self.results["magmom"] = (float(magmoms.sum()) if magmoms.ndim == 1
@@ -330,3 +366,37 @@ class PyDFTB(Calculator):
             path = atoms.cell.bandpath(path, npoints=npoints)
         st = self.states(kpts=path, atoms=atoms)
         return st.band_structure(path, reference=self.get_fermi_level(), ev=units.Hartree)
+
+
+class PointChargePotential:
+    """The object :meth:`PyDFTB.embed` returns (ASE's point-charge embedding protocol):
+    ASE sets the MM charges' positions (Angstrom) before each QM calculation, which then
+    starts afresh; :meth:`get_forces` gives the forces on the charges (eV/Angstrom)."""
+
+    def __init__(self, calc: PyDFTB, charges, blur: float = 0.0):
+        self.calc = calc
+        self.charges = np.asarray(charges, float)
+        self.blur = blur
+        self.positions = None
+
+    def _update(self):
+        if self.positions is not None:
+            self.calc.point_charges = (self.positions, self.charges, self.blur)
+            self.calc.reset()
+
+    def set_positions(self, positions, com_pv=None):
+        self.positions = np.array(positions, float)
+        self._update()
+
+    def set_charges(self, charges):
+        self.charges = np.asarray(charges, float)
+        self._update()
+
+    def get_forces(self, calc=None, get_forces: bool = True) -> np.ndarray:
+        if not get_forces:
+            return np.zeros_like(self.positions)
+        r = self.calc.raw
+        if r is None or r.point_charge_forces is None:
+            self.calc.get_forces()
+            r = self.calc.raw
+        return r.point_charge_forces * units.Hartree / units.Bohr

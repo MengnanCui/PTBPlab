@@ -244,8 +244,8 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | DFTB+U（强关联 d/f 电子修正）、onsite 修正 | ✅ M6b 完成（FLL、pSIC，onsite 修正附 DFTB+ 手册的 PBE 常数；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过，SCC 轮数相同或差 1）[文献 S2、S3] | 中 |
 | 长程校正（改善带隙、电荷转移） | ⬜ | **高** |
 | 色散（范德华力）：D3/D4/MBD 等 | ✅ M2d 完成（UFF、Slater-Kirkwood、D3、D4；MBD 未做） | 低（直接调用现成库） |
-| 溶剂模型 | ⬜ M6c | 中 |
-| 外加电场、外部点电荷（QM/MM） | ⬜ M6c | 中–高 |
+| 溶剂模型 | ✅ M6c 完成（广义 Born 的 Still、P16 核与 ALPB，SASA，氢键修正，CM5，xtb 格式参数文件；只用于分子，COSMO 未做；只有 NumPy 引擎；10 个 DFTB+ 参考算例和一段 MD 全部通过）[文献 S4–S7] | 中 |
+| 外加电场、外部点电荷（QM/MM） | ✅ M6c 完成（周期体系为 DFTB+ 的锯齿势；点电荷可加高斯展宽，周期体系用 Ewald，给出点电荷受的力，可接 ASE 的 EIQMMM；原子格点势；只有 NumPy 引擎；12 个 DFTB+ 参考算例全部通过，SCC 轮数相同） | 中–高 |
 | 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照） | 低–中（前期可直接用 ASE 驱动，接口已有） |
 | 声子、极化率 | ⬜ | 中（有自动求导后更容易） |
 | 激发态（TD-DFTB） | ⬜ M6d（Casida） | 中–高 |
@@ -359,5 +359,9 @@ print(atoms.get_potential_energy(), atoms.get_forces())       # 单位：eV、eV
 - **S1** Köhler et al., *J. Phys. Chem. A* 111, 5622 (2007)：DFTB 中的共线与非共线自旋（M6a 的非共线自旋照此实现；自旋轨道耦合的 dual 模型见 D2 的 DFTB+ 论文）。
 - **S2** Petukhov et al., *Phys. Rev. B* 67, 153106 (2003)：LDA+U 的 FLL 形式；Hourahine et al., *J. Phys. Chem. A* 111, 5671 (2007)：DFTB 中的 pSIC（M6b 的 DFTB+U 两种泛函照 DFTB+ 的 `dftbplusu.F90` 实现）。
 - **S3** Domínguez, Niehaus, Frauenheim, *J. Phys. Chem. A* 119, 3535 (2015)：DFTB 的 onsite 修正（M6b），常数取自 García 的学位论文（DFTB+ 手册附录）。
+- **S4** Still et al., *J. Am. Chem. Soc.* 112, 6127 (1990)：广义 Born 的 Still 核；Onufriev, Bashford, Case, *Proteins* 55, 383 (2004)：GBOBC 的 Born 半径；Lange, Herbert, *J. Chem. Theory Comput.* 8, 1999 (2012)：P16 核（M6c 照 DFTB+ 的 `born.F90` 实现）。
+- **S5** Sigalov, Fenley, Onufriev, *J. Chem. Phys.* 124, 124902 (2006)：ALPB；Ehlert et al., *J. Chem. Theory Comput.* 17, 4250 (2021)：xtb 的 GBSA/ALPB 参数化（DFTB+ 的溶剂参数文件采用这个格式）。
+- **S6** Marenich et al., *J. Chem. Theory Comput.* 8, 527 (2012)：CM5 电荷（M6c 默认按原文，DFTB+ 25.1 的 GB 中算了两次，见 M6c 报告）。
+- **S7** Lebedev, Laikov, *Dokl. Math.* 59, 477 (1999)：球面积分网格（SASA 用）。
 - **P1** TBMaLT, *J. Chem. Phys.* 158, 034801 (2023)；**P2** dxtb, *J. Chem. Phys.* 161, 062501 (2024)：可自动求导的紧束缚程序。
 - 其他同类项目：LATTE/PROGRESS（LANL，SP2 + GPU）、CP2K（线性标度 DFTB）、hotbit（Python DFTB）、PYSEQM（GPU 半经验方法）。

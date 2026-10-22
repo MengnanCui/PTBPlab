@@ -11,6 +11,8 @@ KB_HARTREE = 3.16681534524639e-6  # Boltzmann constant, Hartree / K (DFTB+ Boltz
 KCAL_MOL = 0.0015946683859874898  # Hartree per kcal/mol (DFTB+'s value)
 AMU_AU = 1.0 / 0.00054857990945  # electron masses per atomic mass unit (DFTB+ amu__au)
 AU_FS = 0.02418884326505     # femtoseconds per atomic time unit (DFTB+ au__fs)
+VOLT_PER_ANGSTROM_AU = 1.60217653e-19 / 4.3597441775e-18 * BOHR   # 1 V/Angstrom in Hartree/(e Bohr)
+                                                       # (DFTB+ 1e10 V_m__au)
 
 MIN_TEMP = 1.0e-8            # Ha; T = 0 is treated as Fermi filling at this kT
 MIN_HUB_DIFF = 0.3125e-5     # Ha; Hubbard U values closer than this count as equal

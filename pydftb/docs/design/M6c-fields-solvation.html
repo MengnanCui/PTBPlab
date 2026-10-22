@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6c 外场与溶剂设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6c · 设计文档</p>
+    <h1>外电场、点电荷与隐式溶剂</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-22</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6c-fields-solvation.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6 的第三步：分子所处的“环境”。外电场、外部点电荷和原子格点势是固定的外加电势，隐式溶剂是随电荷变化的介电响应。它们都只作用在原子电荷上，进入哈密顿量的方式与 SCC 的库仑势相同，所以不改动混合向量，也不改动现有路径。只做 NumPy 引擎；torch 后端和自动求导遇到这些选项时明确报错。</p>
+    <ul>
+      <li><strong>做什么</strong>（全部对照 DFTB+ 25.1）：
+        <ul>
+          <li><strong>外电场</strong>（<code>ElectricField { External }</code>）：均匀静电场。分子直接用 r·E；周期体系与 DFTB+ 一样用锯齿势（原子坐标先折回晶胞）。给出能量、力和应力。</li>
+          <li><strong>外部点电荷</strong>（<code>ElectricField { PointCharges }</code>）：静电嵌入，例如 QM/MM 中的 MM 原子。可以加高斯展宽；周期体系用 Ewald 求和。另给出点电荷受的力，并实现 ASE 的 QM/MM 嵌入接口（<code>embed</code>）。</li>
+          <li><strong>原子格点势</strong>（<code>AtomSitePotential</code>）：给指定原子加一个常数电势，作用在 Mulliken 电荷上（Gross）或只作用在原子自身的“净”布居上（Net）。</li>
+          <li><strong>隐式溶剂</strong>（<code>Solvation</code>）：广义 Born 模型（GB，Still 或 P16 核）及其 ALPB 变体，溶剂可及表面积项（SASA），氢键修正，CM5 电荷修正；溶剂常数表、参考态换算、xtb 格式的 GBSA 参数文件。只用于分子，与 DFTB+ 相同。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的实测</strong>（第二节）：
+        <ul>
+          <li>外场和点电荷可以与自旋、非共线自旋、SOC、DFTB+U、onsite 修正、DFTB3、k 点同用。溶剂可以与外场、点电荷、两分量计算同用。</li>
+          <li><strong>与原计划不同</strong>：原计划说 DFTB+ 不允许外场与溶剂同用，25.1 其实允许，并且默认把外场放大 3ε/(2ε+1) 倍（<code>RescaleSolvatedFields</code>）。pydftb 照此实现。</li>
+          <li>有点电荷时 DFTB+ 不输出应力，也不报错。</li>
+          <li>周期体系加外场时，DFTB+ 的应力张量不对称，对称化以后才与应变差分一致（1e-6）。另外，它用的是未折回晶胞的坐标，有原子在晶胞外时对角元也不对。pydftb 给出与能量一致的对称应力。</li>
+        </ul>
+      </li>
+      <li><strong>用法</strong>：<code>DFTB(sk, electric_field=(0.01, 0, 0))</code>（原子单位）；<code>DFTB(sk, point_charges=(R, Q))</code>；<code>DFTB(sk, solvation=GeneralizedBorn(solvent="water", …))</code>；ASE 中 <code>PyDFTB(…, electric_field=(0.5, 0, 0))</code>（V/Å）。</li>
+      <li><strong>验证</strong>：22 个新的 DFTB+ 参考算例和 1 个溶剂中的分子动力学对照，比较能量各项（含 E<sub>ext</sub>、E<sub>solv</sub>）、力、应力、电荷、点电荷受的力、偶极矩和 SCC 轮数。旧算例逐位不变。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">4</span><span class="lbl">外加项：外电场、点电荷、格点势、隐式溶剂</span></li>
+      <li><span class="num">3ε/(2ε+1)</span><span class="lbl">溶剂中外场的放大倍数（DFTB+ 默认）</span></li>
+      <li><span class="num">22 + 1</span><span class="lbl">新的 DFTB+ 参考算例 + 分子动力学对照</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>下文 Δq<sub>A</sub> = q<sub>A</sub> − q<sup>0</sup><sub>A</sub> 是原子 A 多出的电子数（与 DFTB+、pydftb 现有约定相同），原子的净正电荷是 −Δq<sub>A</sub>。所有外加项都先给出每个原子的电势 V<sub>A</sub>，再像 SCC 的库仑势一样以 ½S<sub>μν</sub>(V<sub>A</sub> + V<sub>B</sub>) 进入 H（只作用在电荷分量上，自旋和两分量路径不变）。这样“交叠矩阵导数”那部分力自动正确，另外只需加上 V<sub>A</sub> 对坐标的显式导数。</p>
+
+      <h3>外电场（<code>extfields.F90</code>）</h3>
+      <ul>
+        <li><strong>势</strong>：V<sub>A</sub> = r<sub>A</sub>·E，E = 场强 × 单位方向。分子用原子坐标。周期体系用折回晶胞后的坐标（分数坐标取 [0, 1)），也就是锯齿势；DFTB+ 会提醒“周期方向上要有真空层”，若有原子对跨过锯齿的间断还会再警告。</li>
+        <li><strong>能量</strong>：E<sub>ext</sub> = Σ<sub>A</sub> Δq<sub>A</sub> (r<sub>A</sub>·E)，记在 “Energy ext. field”。物理上就是电子（负电荷）在场中的势能。</li>
+        <li><strong>力</strong>：除 S 导数项外，每个原子多一项 dE/dr<sub>A</sub> = Δq<sub>A</sub> E。<strong>应力</strong>：Σ<sub>A</sub> Δq<sub>A</sub> E<sub>i</sub> r<sub>A,j</sub> / V（见第二节关于 DFTB+ 应力的两点问题）。</li>
+        <li>含时外场（<code>Frequency</code>、<code>Phase</code>）只能用于 DFTB+ 自己的 MD 驱动，pydftb 不做。</li>
+      </ul>
+
+      <h3>外部点电荷（<code>extcharges.F90</code>、<code>coulomb.F90</code>）</h3>
+      <ul>
+        <li><strong>势</strong>：V<sub>A</sub> = −Σ<sub>j</sub> Q<sub>j</sub> φ(r<sub>A</sub> − R<sub>j</sub>)。分子中 φ(r) = 1/r，加高斯展宽 σ 时 φ(r) = erf(r/σ)/r（r ≥ 10σ 时直接用 1/r）。周期体系的 φ 是 Ewald 和：实空间 erfc(αr)/r（有展宽时改为 [erf(r/σ) − erf(αr)]/r），倒空间项，加上中和背景 −π/(Vα²)。负号来自电子数的约定：DFTB+ 内部把点电荷存为 −Q。</li>
+        <li><strong>能量</strong>：Σ<sub>A</sub> Δq<sub>A</sub> V<sub>A</sub>，与原子电荷之间的库仑能一起记在 “Energy SCC”。只有电荷转移部分与点电荷相互作用，中性原子的芯不参与。</li>
+        <li><strong>力</strong>：原子上多一项 Δq<sub>A</sub> ∂V<sub>A</sub>/∂r<sub>A</sub>；点电荷受的力是它的反作用，写在 results.tag 的 <code>forces_ext_charges</code> 和 detailed.out 的 “Forces on external charges”。</li>
+        <li><strong>应力</strong>：有点电荷时 DFTB+ 关掉应力（<code>initprogram.F90</code>：<code>tStress = tStress .and. .not. tExtChrg</code>），不报错。</li>
+      </ul>
+
+      <h3>原子格点势（<code>AtomSitePotential</code>）</h3>
+      <ul>
+        <li><strong>Gross</strong>：V<sub>A</sub> 为常数，按上面的方式进入 H；能量 Δq<sub>A</sub>V<sub>A</sub>。</li>
+        <li><strong>Net</strong>：只作用在原子自身的“净”布居 N<sub>A</sub> = Σ<sub>μ∈A</sub> ρ<sub>μμ</sub> 上（同一原子的轨道交叠为单位阵），即只把 V<sub>A</sub> 加到 A 的对角元上（<code>addOnsiteShift</code>）；能量 (N<sub>A</sub> − q<sup>0</sup><sub>A</sub>)V<sub>A</sub>。它与坐标无关，也不含 S，所以没有额外的力。</li>
+        <li>两者的能量都记在 “Energy ext. field”。</li>
+      </ul>
+
+      <h3>广义 Born 与 ALPB（<code>born.F90</code>）</h3>
+      <ul>
+        <li><strong>能量</strong>：E<sub>GB</sub> = ½ Σ<sub>AB</sub> q<sub>A</sub> B<sub>AB</sub> q<sub>B</sub>，B<sub>AB</sub> = k<sub>ε</sub> f(R<sub>AB</sub>, a<sub>A</sub>, a<sub>B</sub>)，对角元 k<sub>ε</sub>/a<sub>A</sub>；k<sub>ε</sub> = (1/ε − 1)/(1 + αβ)，ALPB 时 β = α<sub>ALPB</sub>/ε（α<sub>ALPB</sub> = 0.571412），否则 β = 0。电荷取 Δq（符号对二次项无关）。</li>
+        <li><strong>核</strong>：Still，f = [R² + a<sub>A</sub>a<sub>B</sub> exp(−R²/(4a<sub>A</sub>a<sub>B</sub>))]<sup>−1/2</sup>；P16，f = 1/[R + √(a<sub>A</sub>a<sub>B</sub>)(1 + ζR/(16√(a<sub>A</sub>a<sub>B</sub>)))<sup>−16</sup>]，ζ = 1.028。</li>
+        <li><strong>Born 半径</strong>（GB<sup>OBC</sup>）：先按成对近似求体积积分 Ψ<sub>A</sub>（xtb 的公式，按两个原子的范德华半径与“去屏蔽”半径 s<sub>B</sub>R<sub>B</sub> 是否重叠分四种情形），再 1/a<sub>A</sub> = [1/(R<sub>A</sub> − R<sub>off</sub>) − tanh(bΨ − cΨ² + dΨ³)/R<sub>A</sub>]，最后乘 BornScale。默认 OBC 系数 (1.00, 0.80, 4.85)。只考虑截断半径内（默认 35 Å）的原子对。</li>
+        <li><strong>ALPB 的形状项</strong>：B 的每个元素再加 k<sub>ε</sub>αβ/A<sub>det</sub>，A<sub>det</sub> 由以 R<sup>3</sup> 加权的转动惯量张量的行列式得到。只影响带电体系（能量 ∝ (ΣΔq)²）。</li>
+        <li><strong>氢键修正</strong>：每个原子的能量加 SASA<sub>A</sub> h<sub>A</sub> Δq<sub>A</sub>²，h<sub>A</sub> = HBondStrength/(探针半径 + R<sub>A</sub>)²。</li>
+        <li><strong>CM5</strong>：GB 用的电荷改为 Δq<sub>A</sub> − c<sub>A</sub>，c<sub>A</sub> = Σ<sub>B</sub> D<sub>AB</sub> exp[−α(R<sub>AB</sub> − R<sub>A</sub> − R<sub>B</sub>)]（D 来自 CM5 原文的元素参数）。只依赖几何，所以 SCC 势仍是 B 乘以电荷，力里多一项 c 的导数。</li>
+        <li><strong>势</strong>：V<sub>A</sub> = Σ<sub>B</sub> B<sub>AB</sub>q<sub>B</sub>（+ 2 SASA<sub>A</sub>h<sub>A</sub>Δq<sub>A</sub>）。与三阶项一样，SCC 每一轮用输入电荷更新，能量和力用最后的输出电荷。</li>
+        <li><strong>能量</strong>：E<sub>solv</sub> = E<sub>GB</sub> + E<sub>HB</sub> + E<sub>SASA</sub> + ΔG<sub>shift</sub>，记在 “Solvation energy”。ΔG<sub>shift</sub> 是常数（FreeEnergyShift 加参考态换算：gsolv 不加；mol1bar 加 kT ln(24.79 T/298.15)；reference 再加 kT ln(ρ<sub>溶剂</sub>/ρ<sub>参考</sub> · M<sub>参考</sub>/M<sub>溶剂</sub>)）。</li>
+        <li><strong>只用于分子</strong>：周期体系报错（“currently not available with the selected boundary conditions”）。</li>
+      </ul>
+
+      <h3>溶剂可及表面积（<code>sasa.F90</code>）</h3>
+      <ul>
+        <li>每个原子取半径 R<sub>A</sub> + 探针半径的球面，用 Lebedev 角向网格（默认 230 点）积分。每个网格点的“暴露度”是所有邻居的平滑阶跃函数之积（平滑宽度默认 0.3 Å，三次多项式），暴露度 ≤ 1e-6 的点直接舍去。</li>
+        <li>E<sub>SASA</sub> = Σ<sub>A</sub> γ<sub>A</sub> SASA<sub>A</sub>，其中 γ 按 DFTB+ 的约定乘 4π·10<sup>−5</sup>。与电荷无关，只有能量和力。</li>
+        <li>可以单独使用（<code>Solvation = SASA</code>），也是 GBSA 的一部分。</li>
+      </ul>
+
+      <h3>溶剂中的外场（<code>fieldscaling.F90</code>）</h3>
+      <ul>
+        <li>有溶剂且 <code>RescaleSolvatedFields = Yes</code>（默认）时，外场强度乘 3ε/(2ε+1)（ε 无穷大时为 3/2），即球形空腔内的场。只有 SASA 时没有静电效应，DFTB+ 警告后关掉缩放。</li>
+        <li>detailed.out 打印的偶极矩同样乘这个倍数。点电荷不缩放。</li>
+      </ul>
+
+      <h3>偶极矩</h3>
+      <p>D = Σ<sub>A</sub> (q<sup>0</sup><sub>A</sub> − q<sub>A</sub>) r<sub>A</sub>（原子单位 e·Bohr），DFTB+ 写在 detailed.out。带电体系的偶极矩依赖原点，周期体系没有明确意义，DFTB+ 都会警告。</p>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>用 pydftb 的参考数据集（PTBP 的 H/C/O/Cu）、单线程、SCC 容差 1e-10。外场取 0.5 V/Å，方向 (1, 0.3, −0.2)；水的格点势为 O Gross +0.5 eV，两个 H Net −0.3、+0.2 eV。溶剂参数取 DFTB+ 手册中的 GBSA(水) 示例（为 GFN2-xTB 拟合，这里只用来检验代码）或一组简单的 GB 参数（水，BornScale 1.5，去屏蔽为 1）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>设置</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>水</td><td>无</td><td>E = −3.9132723046 Ha，8 轮</td></tr>
+          <tr><td>水</td><td>外场</td><td>E<sub>ext</sub> = −4.753e-4 Ha，8 轮</td></tr>
+          <tr><td>水</td><td>3 个点电荷（约 3 Å 外）</td><td>E<sub>SCC</sub> 从 0.02335 变为 0.02033（含点电荷项）；results.tag 有点电荷受的力</td></tr>
+          <tr><td>水</td><td>同上加 0.7 Å 展宽</td><td>能量只变 1.4e-9 Ha（距离 ≫ σ）；近处（约 1.2 Å）加 0.8 Å 展宽时影响明显</td></tr>
+          <tr><td>水</td><td>格点势（Gross + Net）</td><td>E<sub>ext</sub> = 9.04e-3 Ha</td></tr>
+          <tr><td>水盒子（周期，Γ）</td><td>外场</td><td>警告锯齿势、原子对跨过间断；有应力</td></tr>
+          <tr><td>水盒子</td><td>点电荷</td><td>Ewald 求和；<strong>没有应力</strong>，也没有提示</td></tr>
+          <tr><td>CuO 链，k 点 4×2×2</td><td>外场</td><td>22 轮，有应力</td></tr>
+          <tr><td>O₂ 三重态（共线自旋）</td><td>外场</td><td>正常</td></tr>
+          <tr><td>OH，非共线 + SOC</td><td>外场；点电荷</td><td>正常（20 轮）</td></tr>
+          <tr><td>甲醇，DFTB3</td><td>外场 + 格点势</td><td>正常</td></tr>
+          <tr><td>甲醇，onsite 修正</td><td>点电荷</td><td>正常（18 轮）</td></tr>
+          <tr><td>水</td><td>GBSA（手册参数，含氢键）</td><td>E<sub>solv</sub> = −0.01069 Ha</td></tr>
+          <tr><td>水</td><td>简单 GB</td><td>E<sub>solv</sub> = −2.742e-3 Ha</td></tr>
+          <tr><td>水</td><td>简单 GB + 外场</td><td>E<sub>ext</sub> = −8.07e-4 Ha（外场放大 1.49 倍，加上溶剂中更大的极化）</td></tr>
+          <tr><td>水</td><td>简单 GB + 点电荷</td><td>正常</td></tr>
+          <tr><td>水盒子</td><td>GB</td><td>报错：周期体系不能用 GB</td></tr>
+          <tr><td>OH⁻（电荷 −1）</td><td>GB；ALPB</td><td>E<sub>solv</sub> = −0.131250；−0.131724 Ha（形状项只对带电体系起作用）</td></tr>
+          <tr><td>甲醇</td><td>ALPB + P16；CM5；参考态 mol1bar、reference；单独 SASA；GBSA；参数文件</td><td>都能运行；单独 SASA 时警告“没有静电效应，关掉外场缩放”</td></tr>
+          <tr><td>OH，非共线 + SOC</td><td>简单 GB</td><td>正常</td></tr>
+        </tbody>
+      </table></div>
+      <h3>外场下的应力</h3>
+      <p>水盒子（8 个水分子，6.2 Å 立方晶胞，300 K）加外场，与 ±1e-4 应变下自由能的中心差分比较（单位 Ha，表中是 −Vσ 与 dE/dε）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>情形</th><th>xx</th><th>xy</th><th>yz</th></tr></thead>
+        <tbody>
+          <tr><td>无外场</td><td>−2.470597 / −2.470606</td><td>+0.983678 / +0.983678</td><td>−0.743560 / −0.743560</td></tr>
+          <tr><td>外场，7 个原子在晶胞外</td><td>−2.417980 / −2.539194</td><td>+0.980515 / +0.952804</td><td>−0.733239 / −0.742841</td></tr>
+          <tr><td>外场，原子全部折回晶胞</td><td>−2.539186 / −2.539194</td><td>+0.972303 / +0.952804</td><td>−0.751711 / −0.742841</td></tr>
+          <tr><td>同上，DFTB+ 应力对称化</td><td>−2.539186 / −2.539194</td><td>+0.952804 / +0.952804</td><td>−0.742841 / −0.742841</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>DFTB+ 的外场应力项是 Σ Δq E<sub>i</sub> f<sub>j</sub> 乘晶格矢量（<code>getExtFieldStress</code>），没有对称化；对称应变只能“看到”它的对称部分。反对称部分对应外场对体系的力矩，不是应力。</li>
+        <li>它用的是未折回的坐标，而势用的是折回后的坐标。有原子在晶胞外时两者不一致，对角元也会错（上表第二行）。</li>
+        <li>pydftb：势和应力都用折回后的坐标，并对称化（现有代码的 virial 本来就对称化）。对照 DFTB+ 时用原子都在晶胞内的结构，与它对称化后的应力比较。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>选项（<code>DFTB</code>，原子单位）</th><th>含义</th><th>DFTB+</th></tr></thead>
+        <tbody>
+          <tr><td><code>electric_field</code></td><td>场矢量 (E<sub>x</sub>, E<sub>y</sub>, E<sub>z</sub>)，Ha/(e·Bohr)；1 au = 51.42 V/Å</td><td><code>ElectricField { External { Strength; Direction } }</code></td></tr>
+          <tr><td><code>point_charges</code></td><td>(位置 (M, 3) Bohr，电荷 (M,) e)，或 <code>PointCharges(positions, charges, blur)</code>；<code>blur</code> 为高斯展宽 σ（Bohr，标量或逐个）</td><td><code>PointCharges { CoordsAndCharges; GaussianBlurWidth }</code></td></tr>
+          <tr><td><code>site_potentials</code></td><td><code>{"gross": {原子序号: V}, "net": {原子序号: V}}</code>，序号从 0 开始，V 以 Hartree 计</td><td><code>AtomSitePotential { Gross {…} Net {…} }</code></td></tr>
+          <tr><td><code>solvation</code></td><td><code>GeneralizedBorn(…)</code> 或 <code>SASA(…)</code>（<code>pydftb.solvation</code>），参数照 DFTB+ 的关键字；<code>GeneralizedBorn.from_param_file(path, labels)</code> 读 xtb 格式的 GBSA 参数文件</td><td><code>Solvation = GeneralisedBorn {…} | SASA {…}</code></td></tr>
+          <tr><td><code>rescale_solvated_fields</code></td><td>溶剂中外场乘 3ε/(2ε+1)，默认 True</td><td><code>RescaleSolvatedFields</code></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong><code>GeneralizedBorn</code> 的参数</strong>：<code>solvent</code>（名称，或 <code>Solvent(epsilon, molecular_mass, density)</code>）、<code>free_energy_shift</code>、<code>temperature</code>、<code>state</code>（"gsolv"、"mol1bar"、"reference"）、<code>kernel</code>（"still"、"p16"）、<code>born_scale</code>、<code>born_offset</code>、<code>obc</code>、<code>radii</code>（默认 D3 范德华半径，可逐元素覆盖）、<code>descreening</code>、<code>cutoff</code>、<code>alpb</code>、<code>alpha</code>、<code>cm5</code>、<code>sasa</code>、<code>hbond</code>。默认值与 DFTB+ 相同；DFTB+ 要求必填的参数，pydftb 也要求。</li>
+        <li><strong>数据表</strong>：DFTB+ 的溶剂常数表（水、丙酮、乙腈等 14 种）、D3 / Bondi / COSMO 范德华半径、CM5 的元素参数和原子半径一并收录，都是文献常数。Lebedev 网格用 SciPy（≥ 1.15）的 <code>lebedev_rule</code>。</li>
+        <li><strong>与 DFTB+ 相同的限制</strong>：点电荷、格点势、溶剂需要 SCC（外场不需要）；溶剂只用于分子；有点电荷的周期体系不给应力（显式要求应力时报错，自动时不算）。</li>
+        <li><strong>pydftb 自己的限制</strong>：<code>backend="torch"</code>、<code>pydftb.autodiff</code> 报错；含时外场不做。</li>
+        <li><strong>结果</strong>（<code>DFTBResult</code>，新字段有默认值，追加在末尾）：<code>e_ext</code>（“Energy ext. field”）、<code>e_solv</code>（“Solvation energy”）、<code>point_charge_forces</code>（(M, 3) Ha/Bohr）、<code>dipole</code>（分子的偶极矩，e·Bohr，不乘溶剂倍数）。点电荷能量与 DFTB+ 一样含在 <code>e_scc</code> 里。<code>terms</code> 增加 “ext”、“solvation”。</li>
+        <li><strong>ASE</strong>：<code>PyDFTB</code> 中外加条件用 ASE 的单位：<code>electric_field</code> 以 V/Å 计，<code>point_charges</code> 的位置和 <code>blur</code> 以 Å 计，<code>site_potentials</code> 以 eV 计；溶剂参数与其他模型参数一样沿用 DFTB+ 的原子单位。<code>embed(charges)</code> 返回点电荷势对象（ASE QM/MM 的 <code>EIQMMM</code> 用它），其 <code>set_positions</code> 会清掉缓存的结果，<code>get_forces</code> 返回点电荷受的力（eV/Å）。新增性质 <code>dipole</code>（e·Å）。</li>
+        <li><strong>能带</strong>：<code>eigenstates</code> 把外加势和溶剂势一并加进 H，与 DFTB+ 能带计算（读入电荷）相同。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>位置</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>pydftb/external.py</code>（新）</td><td>选项解析；<code>ExternalTerms</code>：外场（折回坐标、锯齿警告、显式梯度、virial），点电荷（分子 1/r 与 erf 展宽；周期 Ewald：原子与点电荷合并做一次邻居搜索，倒空间沿用 <code>Coulomb</code> 的 G 矢量和 α），格点势；每个原子的固定势 V<sub>A</sub>、净势；能量、原子梯度、点电荷受的力</td></tr>
+            <tr><td><code>pydftb/solvation.py</code>（新）</td><td><code>Solvent</code>、<code>GeneralizedBorn</code>、<code>SASA</code>、<code>CM5</code> 参数类与数据表；参数文件读取；<code>SolvationTerms</code>：Born 半径及其导数、Born 矩阵（Still、P16、ALPB 形状项）、SASA 与导数、氢键、CM5；每轮的势、能量、梯度</td></tr>
+            <tr><td><code>calculator.py</code></td><td>选项检查；<code>_Setup.ext</code>、<code>_Setup.solv</code>（新字段，旧路径为 None）；<code>_potentials</code> 加固定势与溶剂势；H 的组装加净势（对角元）；能量、梯度、virial、偶极矩</td></tr>
+            <tr><td><code>bands.py</code></td><td><code>eigenstates</code> 加外加势与溶剂势</td></tr>
+            <tr><td><code>api.py</code>、<code>ase_calc.py</code></td><td>新选项、单位换算、<code>embed</code>、<code>dipole</code></td></tr>
+            <tr><td><code>autodiff/api.py</code>、<code>backend</code></td><td>遇到这些选项报错</td></tr>
+            <tr><td><code>validation/</code></td><td><code>Case</code> 新字段 <code>field</code>、<code>point_charges</code>、<code>site_potentials</code>、<code>solvation</code>、<code>charge</code>；DFTB+ 输入块；参考数据增加 E<sub>ext</sub>、E<sub>solv</sub>、点电荷受的力、偶极矩</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>进入 SCC 的方式</h3>
+        <ul>
+          <li><strong>固定势</strong>（外场、点电荷、Gross 格点势）：几何确定后算一次，存为每个原子的 v<sub>ext</sub>。<code>_potentials</code> 把 v<sub>ext</sub>[orb_atom] 加到电荷势上，所以 H、能带、力里的 S 导数项都自动包含它；共线自旋时它只进入电荷分量，两分量时只进入 H<sub>q</sub>。</li>
+          <li><strong>净势</strong>：加在 H 的对角元上（每个 k 点、每个自旋分量都一样），不经过 S。能量用对角布居 Σ<sub>k</sub> w<sub>k</sub> Re ρ<sub>μμ</sub>(k) 计算。</li>
+          <li><strong>溶剂势</strong>：与三阶项相同，由当前输入电荷 Δq（按原子求和）算出 B·q 加到电荷势上；SASA 与几何有关的量在 setup 中算好。</li>
+          <li><strong>能量的归属</strong>：点电荷能量并入 <code>e_scc</code>（DFTB+ 的口径）；外场与格点势为 <code>e_ext</code>；溶剂为 <code>e_solv</code>；总能量相应增加。所有新项都用 <code>if st.ext is not None</code> 一类的条件门控，不加零数组，旧路径逐位不变。</li>
+          <li>混合向量不变：外加项都只依赖原子电荷，不新增需要混合的量。</li>
+        </ul>
+
+        <h3>力、应力与点电荷受的力</h3>
+        <ul>
+          <li>原子力的显式部分：外场 Δq<sub>A</sub>E；点电荷 Δq<sub>A</sub>∂V<sub>A</sub>/∂r<sub>A</sub>（分子用解析式，周期用 Ewald 实空间与倒空间的导数）；溶剂为 Born 矩阵对坐标和 Born 半径的导数（链式经过 Ψ）、ALPB 形状项、SASA、氢键、CM5。</li>
+          <li>点电荷受的力：−∂E/∂R<sub>j</sub>，与原子上的显式项方向相反、数值对应。</li>
+          <li>virial：外场 Σ Δq<sub>A</sub> E<sub>i</sub> r<sub>A,j</sub>（折回坐标），由最后的对称化处理。点电荷的周期体系不给应力；溶剂只有分子，没有应力。</li>
+        </ul>
+
+        <h3>需要逐项照搬的细节</h3>
+        <ul>
+          <li>折回：分数坐标减去 floor，与 DFTB+ <code>foldCoordsToCell</code> 相同。锯齿警告的判据：存在 SK 邻居对，其晶格平移与场方向不正交。</li>
+          <li>点电荷展宽：r &lt; 10σ 才乘 erf(r/σ)（DFTB+ <code>erfArgLimit_</code>）。</li>
+          <li>Born 半径的四种重叠情形、Ψ 的截断（35 Å）、SASA 舍去暴露度 ≤ 1e-6 的点、平滑函数的三个系数，全部照 <code>born.F90</code>、<code>sasa.F90</code>。</li>
+          <li>CM5：DFTB+ 在 GB 中用对称邻居表调用 <code>getCorrection</code>，循环里没有防止重复计数的判断（Born 半径的循环有）。实现时数值核实：DFTB+ 确实把每对原子算了两次；pydftb 默认按 CM5 原文，<code>CM5(double_count=True)</code> 复现 DFTB+（报告第五节）。</li>
+          <li>参数文件：前 8 行为 ε、摩尔质量（amu）、密度（kg/L）、BornScale、探针半径（Å）、自由能平移（kcal/mol）、BornOffset（0.1 Å）、未用；随后 94 行为每个元素的表面张力、去屏蔽、氢键参数（氢键强度 = −h² kcal/mol）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>参考算例（22 个）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>检验什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2o_field</code></td><td>分子外场</td></tr>
+            <tr><td><code>h2o_pc</code>、<code>h2o_pc_blur</code></td><td>点电荷；近距离的高斯展宽</td></tr>
+            <tr><td><code>h2o_site</code></td><td>Gross 与 Net 格点势</td></tr>
+            <tr><td><code>ch3oh_dftb3_field_site</code></td><td>DFTB3 + 外场 + 格点势</td></tr>
+            <tr><td><code>o2_triplet_field</code></td><td>共线自旋 + 外场</td></tr>
+            <tr><td><code>oh_noncolinear_soc_field_pc</code></td><td>两分量 + SOC + 外场 + 点电荷</td></tr>
+            <tr><td><code>cu4co_plusu_field_net</code></td><td>块路径（+U）+ 外场 + 净格点势</td></tr>
+            <tr><td><code>ch3oh_ons_pc</code></td><td>onsite 修正 + 点电荷</td></tr>
+            <tr><td><code>water_box_field</code></td><td>周期 Γ 点外场，应力（原子折回晶胞）</td></tr>
+            <tr><td><code>cuo_chain_field_k411</code></td><td>k 点 + 外场，应力（实施时改为立方晶胞：DFTB+ 的外场应力在非立方晶胞中有误，见报告第五节）</td></tr>
+            <tr><td><code>water_box_pc</code></td><td>周期体系的点电荷（Ewald），点电荷受的力</td></tr>
+            <tr><td><code>h2o_gbsa</code></td><td>GBSA（手册参数，含氢键）</td></tr>
+            <tr><td><code>ch3oh_gb</code></td><td>简单 GB（Still 核，溶剂表）</td></tr>
+            <tr><td><code>ch3oh_alpb_p16</code></td><td>ALPB + P16 核</td></tr>
+            <tr><td><code>oh_minus_alpb</code></td><td>带电体系的 ALPB 形状项</td></tr>
+            <tr><td><code>ch3oh_gb_cm5</code></td><td>CM5 修正</td></tr>
+            <tr><td><code>ch3oh_sasa</code></td><td>单独的 SASA</td></tr>
+            <tr><td><code>ch3oh_gbsa_paramfile</code></td><td>参数文件、mol1bar 参考态</td></tr>
+            <tr><td><code>h2o_gb_field_pc</code></td><td>溶剂 + 外场（放大）+ 点电荷</td></tr>
+            <tr><td><code>oh_noncolinear_soc_gb</code></td><td>两分量 + 溶剂</td></tr>
+            <tr><td><code>h2o_gbsa_md</code>（MD）</td><td>溶剂中 40 步分子动力学，逐步比较位置和能量</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li><strong>比较的量</strong>：总能量、Mermin 自由能、各能量项（新增 E<sub>ext</sub>、E<sub>solv</sub>）、力、应力（有的话；外场与 DFTB+ 对称化后的应力比较）、Mulliken 电荷、点电荷受的力、偶极矩（分子；溶剂中与 DFTB+ 打印值除以放大倍数后比较）、SCC 轮数。</li>
+          <li><strong>一致性测试</strong>（<code>tests/test_external.py</code>、<code>test_solvation.py</code>）：力、点电荷受的力、应力与能量差分一致；Born 半径、SASA、CM5 的导数与差分一致；场强为零、点电荷为零、ε = 1 时与无外加项逐位相同；外场下的偶极矩等于 −dE/dE<sub>field</sub>（有限场差分）；ASE QM/MM（EIQMMM）跑通并与直接计算一致；选项错误的报错。</li>
+          <li><strong>门槛</strong>：golden 两个环境逐位相同（<code>--allow-new ext solv e_ext e_solv point_charge_forces dipole</code>，以实际新增字段为准）；<code>refgen --check</code>、<code>dynamics --check</code>（NumPy；torch 跳过新算例）；三个环境的 pydftb 测试；PTBP 测试；engine_parity。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：含时外场（只用于 DFTB+ 自己的 MD 驱动）；COSMO（区域分解求解，另作专题）；周期体系的溶剂（DFTB+ 也不支持）；静态极化率与响应核（<code>Perturbation</code>）；静电势网格输出；有点电荷时的应力（DFTB+ 不给）；torch 后端与自动求导。</li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>SASA 的阈值舍去和平滑函数使能量在个别构型上有微小的不连续；与 DFTB+ 逐点照搬，差分测试避开阈值附近。</li>
+            <li>周期点电荷的 Ewald 和依赖截断；pydftb 用自己的 α 与 1e-12 的容差，DFTB+ 默认容差 1e-9，参考算例两边都设 1e-12。</li>
+            <li>CM5 在 DFTB+ 中重复计数（第四节；已核实，见报告第五节）。</li>
+            <li>SciPy 早于 1.15 时没有 Lebedev 网格：只有用到 SASA 时才报错，并说明所需版本。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6b-dftbu-onsite.html">← M6b 完成报告</a><a href="../index.html">文档索引</a></nav>
+    <span>M6c</span>
+  </footer>
+</div>
+</body>
+</html>

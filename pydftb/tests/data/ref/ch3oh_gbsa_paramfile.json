@@ -1,0 +1,172 @@
+{
+ "schema": 1,
+ "case": "ch3oh_gbsa_paramfile",
+ "note": "an xtb-format parameter file and the mol1bar reference state",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "efield": null,
+  "point_charges": null,
+  "site_potentials": null,
+  "solvation": {
+   "model": "gb",
+   "param_file": "solvation/param_gbsa_test.txt",
+   "state": "mol1bar"
+  },
+  "rescale_fields": true,
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "C",
+   "O",
+   "H",
+   "H",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    -0.06796889237027354,
+    0.6615756586386835,
+    -0.10680980478342271
+   ],
+   [
+    0.03488254042024944,
+    -0.8482227792597431,
+    -0.042087368282810206
+   ],
+   [
+    -1.067850929142098,
+    0.9075205956696384,
+    -0.05289761094311695
+   ],
+   [
+    0.8330836192536576,
+    -1.0208852977726788,
+    0.11461040064074789
+   ],
+   [
+    0.43922196964992016,
+    1.0244797277443243,
+    0.9187249160290395
+   ],
+   [
+    0.4073370150096767,
+    1.0794194751739423,
+    -0.8330219390249854
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "C": 1,
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_0qimos81/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  Solvation = GeneralisedBorn {\n    ParamFile = \"/home/user/PTBPlab/pydftb/tests/data/solvation/param_gbsa_test.txt\"\n    State = mol1bar\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -5.9985201863,
+  "free_energy": -5.9985201863,
+  "e_zero": -5.9985201863,
+  "e_rep": 0.2106251911,
+  "e_scc": 0.0256002746,
+  "e_band": -6.235950026,
+  "e_solv": 0.001204374,
+  "fermi": -0.0944317428221164,
+  "forces": [
+   [
+    0.013643946943709,
+    -0.106943562412107,
+    0.158112607826228
+   ],
+   [
+    -0.362644487221159,
+    0.0290138141523603,
+    -0.0753362399463442
+   ],
+   [
+    -0.142063718443281,
+    0.0323466946606807,
+    0.00366663012416122
+   ],
+   [
+    0.358449914197596,
+    -0.067261828393513,
+    0.068911525390495
+   ],
+   [
+    0.0147656096182845,
+    0.0144847863886578,
+    0.0299552078322443
+   ],
+   [
+    0.11784873490485,
+    0.098360095603921,
+    -0.185309731226784
+   ]
+  ],
+  "charges_net": [
+   -0.0227849539990316,
+   -0.511502720416766,
+   0.0843487340522603,
+   0.352507306010361,
+   -0.00457711039758335,
+   0.102008744750757
+  ],
+  "dipole": [
+   0.63902531,
+   0.6786049,
+   -0.08248257
+  ],
+  "n_scc": 12
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06,
+  "pc_forces": 1e-06,
+  "dipole": 1e-06
+ }
+}

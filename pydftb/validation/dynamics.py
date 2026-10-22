@@ -97,6 +97,8 @@ DYN_CASES = [
     # read in): the SCC paths differ, the trajectory does not
     DynCase("h2o_ons_md", "h2o_ons", "md", tol=TOL_MD,
             note="onsite corrections; the block vector carried between steps"),
+    DynCase("h2o_gbsa_md", "h2o_gbsa", "md", tol=TOL_MD,
+            note="GBSA solvation (Born radii, surface areas, hydrogen-bond correction) (M6c)"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -151,7 +153,8 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 shell_resolved=base.shell_resolved, labels=inp["labels"], fd_delta=FD_DELTA,
                 dispersion=inp.get("dispersion"), reuse_charges=True,
                 **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}),
-                **refgen.block_options(base, inp["labels"]))
+                **refgen.block_options(base, inp["labels"]),
+                **refgen.environment_ase_options(base))
     opts.update(overrides)
     return PyDFTB(SKF_SETS[base.skf_set], **opts)
 
@@ -238,7 +241,7 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         extra = (dftbplus.dftb3_block(base.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(base.spin, set(inp["labels"]), base.shell_resolved)
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
-                 + refgen.block_hsd(base, inp))
+                 + refgen.block_hsd(base, inp) + refgen.environment_hsd(base))
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"
@@ -246,7 +249,7 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
                             np.array(inp["cell_angstrom"]) if periodic else None, skdir=skdir,
                             max_l=inp["max_l"], kpts=kpts, scc=base.scc, filling=base.filling,
                             shell_resolved=base.shell_resolved, repulsive=base.repulsive,
-                            extra_ham=extra, threads=threads, driver=driver)
+                            extra_ham=extra, threads=threads, driver=driver, charge=base.charge)
 
 
 # ----------------------------------------------------------------------------

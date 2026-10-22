@@ -194,6 +194,105 @@ def onsite_block(onsite, labels) -> str:
     return "\n".join(lines) + "\n"
 
 
+def electric_field_block(field, point_charges) -> str:
+    """HSD ``ElectricField`` (M6c): a field {"strength": V/Angstrom, "direction": (3,)} and
+    point charges {"positions": Angstrom, "charges": e, "blur": Angstrom}."""
+    if not field and not point_charges:
+        return ""
+    lines = ["  ElectricField = {"]
+    if field:
+        lines += ["    External = {", f"      Strength [V/AA] = {_f(field['strength'])}",
+                  f"      Direction = {' '.join(_f(x) for x in field['direction'])}", "    }"]
+    if point_charges:
+        lines += ["    PointCharges = {", "      CoordsAndCharges [Angstrom] = {"]
+        for pos, q in zip(point_charges["positions"], point_charges["charges"]):
+            lines.append("        " + " ".join(_f(x) for x in (*pos, q)))
+        lines.append("      }")
+        if point_charges.get("blur"):
+            lines.append(f"      GaussianBlurWidth [Angstrom] = {_f(point_charges['blur'])}")
+        lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def site_potential_block(sites) -> str:
+    """HSD ``AtomSitePotential`` (M6c): {"gross"/"net": {atom (0-based): V (eV)}}."""
+    if not sites:
+        return ""
+    lines = ["  AtomSitePotential = {"]
+    for kind, name in (("gross", "Gross"), ("net", "Net")):
+        site = sites.get(kind)
+        if site:           # one block per kind (DFTB+ ignores a second block of a kind)
+            lines += [f"    {name} = {{",
+                      f"      Atoms = {' '.join(str(int(a) + 1) for a in site)}",
+                      f"      Vext [eV] = {' '.join(_f(v) for v in site.values())}", "    }"]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def _values(d) -> str:
+    """HSD ``Values { X = ...; Y = ... }`` (one assignment per statement)."""
+    return "Values { " + "; ".join(f"{k} = {_f(v)}" for k, v in d.items()) + " }"
+
+
+def _sasa_lines(sasa, indent) -> list:
+    out = [f"{indent}ProbeRadius = {_f(sasa['probe_radius'])}",
+           f"{indent}SurfaceTension = {_values(sasa['surface_tension'])}"]
+    for key, hsd in (("smoothing", "Smoothing"), ("tolerance", "Tolerance"),
+                     ("offset", "Offset")):
+        if key in sasa:
+            out.append(f"{indent}{hsd} = {_f(sasa[key])}")
+    if "angular_grid" in sasa:
+        out.append(f"{indent}AngularGrid = {int(sasa['angular_grid'])}")
+    return out
+
+
+def solvation_block(spec, rescale: bool = True, data_dir: str = "") -> str:
+    """HSD ``Solvation`` (M6c) for a solvation spec of :mod:`pydftb.validation.cases`
+    (atomic units: Hartree, Bohr; temperatures in K)."""
+    if not spec:
+        return ""
+    if spec["model"] == "sasa":
+        lines = ["  Solvation = SASA {"] + _sasa_lines(spec, "    ")
+    else:
+        lines = ["  Solvation = GeneralisedBorn {"]
+        if "param_file" in spec:
+            lines.append(f'    ParamFile = "{os.path.join(data_dir, spec["param_file"])}"')
+        if "solvent" in spec:
+            sol = spec["solvent"]
+            if isinstance(sol, str):
+                lines.append(f'    Solvent = fromName {{ "{sol}" }}')
+            else:
+                lines += ["    Solvent = fromConstants {", f"      Epsilon = {_f(sol['epsilon'])}",
+                          f"      MolecularMass [amu] = {_f(sol['molecular_mass'])}",
+                          f"      Density [kg/l] = {_f(sol['density'])}", "    }"]
+        for key, hsd in (("free_energy_shift", "FreeEnergyShift"), ("born_scale", "BornScale"),
+                         ("born_offset", "BornOffset"), ("alpha", "Alpha")):
+            if key in spec:
+                lines.append(f"    {hsd} = {_f(spec[key])}")
+        if "descreening" in spec:
+            d = spec["descreening"]
+            lines.append("    Descreening = " + ("Unity {}" if d == "unity" else _values(d)))
+        if spec.get("kernel"):
+            lines.append(f"    Kernel = {spec['kernel']}")
+        if spec.get("alpb"):
+            lines.append("    ALPB = Yes")
+        if spec.get("state"):
+            lines.append(f"    State = {spec['state']}")
+        if "temperature" in spec:
+            lines.append(f"    Temperature [K] = {_f(spec['temperature'])}")
+        if spec.get("cm5") is not None:
+            lines.append("    CM5 {}")
+        if "sasa" in spec:
+            lines += ["    SASA {"] + _sasa_lines(spec["sasa"], "      ") + ["    }"]
+        if "hbond" in spec:
+            lines += ["    HBondCorr = Yes", f"    HBondStrength = {_values(spec['hbond'])}"]
+    if not rescale:
+        lines.append("    RescaleSolvatedFields = No")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
 def parse_angular_momenta(text) -> dict:
     """detailed.out's ``Electron``/``Orbital angular momentum (mu_B/hbar)`` tables (M6a):
     {"spin": (n_shell, 3), "orbital": (n_shell, 3)} as printed (8 decimals: -g/4 m and
@@ -525,7 +624,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                           ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
                           ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
                           ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
-                          ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite")]:
+                          ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite"),
+                          ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))
@@ -543,6 +643,11 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
             res["spins"] = tag["gross_atomic_spins"]       # (n_atom,) or (3, n_atom)
         if "orbital_charges" in tag:      # (n_spin, n_atom, max orbitals): electrons per
             res["orbital_charges"] = tag["orbital_charges"]   # orbital; collinear: up, down
+        if "forces_ext_charges" in tag:   # M6c
+            res["point_charge_forces"] = tag["forces_ext_charges"]
+        m = re.search(r"^Dipole moment:\s+(\S+)\s+(\S+)\s+(\S+)\s+au", det, re.M)
+        if m:
+            res["dipole"] = np.array([float(x) for x in m.groups()])
         res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")

@@ -103,6 +103,43 @@ so the onsite potential is in the first iteration, while DFTB+'s own drivers lea
 the first iteration of every geometry step.  Details:
 [`docs/reports/M6b-dftbu-onsite.html`](docs/reports/M6b-dftbu-onsite.html).
 
+### External fields, point charges and implicit solvation
+
+DFTB+'s `ElectricField` (`External`, `PointCharges`), `AtomSitePotential` and `Solvation`
+(`GeneralisedBorn`, `SASA`, `CM5`) blocks (NumPy engine only):
+
+```python
+from pydftb.solvation import GeneralizedBorn, SASA, CM5
+from pydftb.constants import BOHR, VOLT_PER_ANGSTROM_AU
+
+mf = pydftb.SCC(system, params,
+                electric_field=(0.5 * VOLT_PER_ANGSTROM_AU, 0, 0),         # Ha/(e Bohr)
+                point_charges=(r_bohr, q, 0.5),                            # positions, charges, blur
+                site_potentials={"gross": {0: 0.01}, "net": {3: -0.02}})   # Hartree
+mf.forces()
+mf.result.e_ext, mf.result.dipole, mf.result.point_charge_forces
+
+gbsa = GeneralizedBorn.from_param_file("param_gbsa_water.txt")   # xtb-format file (DFTB+ ParamFile)
+alpb = GeneralizedBorn("water", free_energy_shift=0.0, born_scale=1.5, born_offset=0.0,
+                       descreening="unity", kernel="p16", alpb=True, cm5=CM5(),
+                       sasa=SASA(probe_radius=1.4 / BOHR,
+                                 surface_tension={"H": -0.33, "C": -0.75, "O": 0.92}))
+pydftb.SCC(molecule, params, solvation=gbsa).kernel()                # result.e_solv
+```
+
+Energies go where DFTB+ puts them: the field and the site potentials in `e_ext`, the
+solvent in `e_solv`, the point charges' energy in `e_scc`.  Periodic cells get DFTB+'s
+saw-tooth field (with its warnings) and Ewald sums over the point charges' images; the
+forces on the point charges are `result.point_charge_forces`.  `PyDFTB` takes the field in
+V/Å, the charges in Å and e, the site potentials in eV, and `embed()` makes it a QM
+calculator for ASE's `EIQMMM`.  Point charges, site potentials and solvents need SCC;
+solvents are for molecules only; periodic cells with point charges have no stress, as in
+DFTB+.  With a solvent, an external field is scaled by 3ε/(2ε+1) unless
+`rescale_solvated_fields=False` (DFTB+'s `RescaleSolvatedFields`).  `CM5()` follows the CM5
+paper; DFTB+ 25.1 adds the CM5 correction twice in its GB model, which
+`CM5(double_count=True)` reproduces.  Details:
+[`docs/reports/M6c-fields-solvation.html`](docs/reports/M6c-fields-solvation.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

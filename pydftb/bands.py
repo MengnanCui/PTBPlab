@@ -201,6 +201,7 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
         else:
             h0 = fold_all(pb, pb.h, norb, kc, st.eps0)
             s = fold_all(pb, pb.s, norb, kc, ones)
+        h0 = engine._with_net(st, h0)                 # net site potentials (M6c)
         if pauli:                                                # two-component (M6a)
             p = st.pauli
             hso = None if p.lam is None else so.soc_hamiltonian(p.lam, s if p.dual else None)

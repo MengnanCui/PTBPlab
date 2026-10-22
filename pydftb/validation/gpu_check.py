@@ -110,7 +110,7 @@ def _cases(names):
     for case in CASES:
         if names and case.name not in names:
             continue
-        if not case.torch:                      # NumPy-only physics (M6a, M6b)
+        if not case.torch:                      # NumPy-only physics (M6a, M6b, M6c)
             continue
         if not os.path.exists(os.path.join(refgen.REF_DIR, f"{case.name}.json")):
             continue
