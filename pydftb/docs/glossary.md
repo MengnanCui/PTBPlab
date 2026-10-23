@@ -20,7 +20,7 @@
 | 初始电荷 / 初始自旋 | SCC 的起点。DFTB+ 的 `InitialCharges` 给每个原子一个净电荷，电子按壳层顺序逐层填满（aufbau），不是平均分；`InitialSpins` 给每个原子一个自旋，按壳层的布居比例分下去。只影响收敛的快慢，不影响解（除非体系有几个解，例如铁磁和反铁磁）。 |
 | 电荷重启文件（charges.bin / charges.dat） | DFTB+ 把最后一轮的输入布居写到这个文件，下一次计算用 `ReadInitialCharges` 从它开始。`.bin` 是 Fortran 的二进制流，`.dat` 是同样内容的文本。pydftb 读写两种格式，文本与 DFTB+ 写的逐字节相同（M6f-1）。 |
 | list-directed 输出 | Fortran 用 `write(unit, *)` 写数时的默认格式，每个编译器自己决定宽度和位数。DFTB+ 的 charges.dat 就是这样写的；gfortran 给实数 17 位有效数字，所以文本文件能无损地还原二进制的值。 |
-| Hubbard U | 原子多容纳一个电子要付出的能量代价，从 SKF 中读取。 |
+| Hubbard U | 原子多容纳一个电子要付出的能量代价，从 SKF 中读取。DFTB+ 的 `CustomisedHubbards`（pydftb 的 `hubbard`，M6f-2）可以在输入里换掉它。 |
 | γ（gamma）函数 | 描述两个原子上的多余电荷之间相互作用强度的函数。距离远时趋于 1/R，距离近时由 U 决定。 |
 | Ewald 求和 | 计算晶体中无穷远静电相互作用的标准方法。 |
 | Mulliken 电荷 / 布居 | 每个原子（或每个轨道）分到多少电子的一种算法。 |
@@ -30,6 +30,12 @@
 | 电子温度 / 展宽 | 给电子一个“温度”，让金属计算更容易收敛。有 Fermi、Methfessel-Paxton（MP）、Gaussian 等几种方式。 |
 | Total / Mermin / Extrapolated 能量 | DFTB+ 报告的三种总能：Total 是总能量；Mermin 自由能是 Total − TS（TS 为电子熵贡献）；“外推到 0 K”是 Total − TS/2。 |
 | 费米能级 | 电子填到的“水位线”。DFTB+ 在有带隙时把它放在带隙中间（k 点权重有舍入时 DFTB+ 偶尔放偏，pydftb 仍取中点，见 M2e 报告）。 |
+| 固定费米能级 / 电子库 | 不规定电子数，而是规定费米能级（DFTB+ `FixedFermiLevel`）：体系好像连着一个电极，电子可以进出，电子数由自洽决定。这时力对应的能量是“力相关能量” E<sub>FR</sub> = F − N·E<sub>f</sub>（共线自旋时上、下各算一项），不是 Mermin 自由能（M6f-2）。 |
+| 力相关能量（Force related energy） | 力是它的负梯度的那个能量。平常就是 Mermin 自由能 F；固定费米能级时是 F − Σ N<sub>s</sub>E<sub>f,s</sub>（巨势）。DFTB+ 写在 detailed.out 的 “Force related energy”，results.tag 的 `mermin_energy` 在固定费米能级时写的也是它；pydftb 为 `DFTBResult.e_force_related`（M6f-2）。 |
+| 按 k 点独立填充 | 周期体系中每个 k 点各自放入全部电子、各有自己的费米能级（DFTB+ `IndependentKFilling`），而不是所有 k 点共用一个费米能级；报告的费米能级是各 k 点的加权平均（M6f-2）。 |
+| 虚拟掺杂（自定义参考占据） | 改变某些原子的“中性参考”电子数 q<sub>0</sub>（DFTB+ `CustomisedOccupations`），例如让 O 的 p 壳层参考 4.2 个电子：体系多出 0.2 个电子，但仍算“电中性”，Mulliken 电荷相对于新的 q<sub>0</sub>（M6f-2）。 |
+| SK 表截断 | 把 Slater-Koster 表中某个距离以外的 H、S 积分去掉（DFTB+ `TruncateSKRange`），排斥势不动。用于测试截断的影响，DFTB+ 自己警告“通常是个坏主意”（M6f-2）。 |
+| 中和背景（带电晶胞） | 周期体系带净电荷时，Ewald 求和的总静电能无穷大，通常的做法是加一个均匀的反号电荷“背景”。背景的能量与晶胞体积有关，所以也贡献应力；DFTB+ 的应力在这里与它的能量不一致（M6f-2 发现）。 |
 | 能带 / 能带图 | 晶体中电子能级随 k 点连续变化形成的“带”。沿布里渊区中一条折线（k 路径）把能级画出来，就是能带图，可以看出带隙、金属性和简并。 |
 | k 路径 / 高对称点 | 能带图横轴上的折线，连接布里渊区里的特殊点（Γ、X、L 等）。DFTB+ 用 `Klines` 指定：每段给出终点和段内点数。ASE 的 `BandPath` 能自动给出各种晶格的标准路径。 |
 | 冻结电荷 | 先在均匀的 k 网格上做完 SCC，再把电荷固定，只在别的 k 点上建一次 H、对角化一次。画能带都这样做，因为路径上的点不适合求电荷。 |

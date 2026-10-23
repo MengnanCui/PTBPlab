@@ -29,6 +29,27 @@ from .params import ParamSet
 from .xlbomd import XLBOMD, Integrator
 
 
+def _fermi_au(value):
+    """``fixed_fermi_level`` from eV to Hartree (one value or (up, down))."""
+    if value is None:
+        return None
+    v = np.asarray(value, float) / HARTREE
+    return float(v) if v.ndim == 0 else tuple(float(x) for x in v)
+
+
+def _truncation_au(spec):
+    """``truncate_sk_range`` from Angstrom to Bohr: a distance, (r, hard) or
+    {"max_distance": r, "hard_cutoff": hard}."""
+    if spec is None:
+        return None
+    if isinstance(spec, dict):
+        return {**spec, "max_distance": float(spec["max_distance"]) / BOHR}
+    if np.isscalar(spec):
+        return float(spec) / BOHR
+    r, hard = spec
+    return float(r) / BOHR, bool(hard)
+
+
 @contextlib.contextmanager
 def _as_calculation_failed():
     """A linear-algebra failure of the engine as ASE's ``CalculationFailed``, the error
@@ -99,6 +120,13 @@ class PyDFTB(Calculator):
     ``initial_charges`` (e per atom) starts the SCC from those charges, ``read_charges`` (a
     DFTB+ ``charges.bin``/``charges.dat``) starts the first calculation from that file, and
     :meth:`write_charges` writes one.
+    Milestone M6f-2: ``fixed_fermi_level`` (eV; (up, down) for collinear spin) fills at a fixed
+    Fermi level (DFTB+ ``FixedFermiLevel``), and ``free_energy`` is then the force-consistent
+    F - sum_s N_s E_f,s (DFTB+'s "Force related energy"; ``energy`` stays the total energy, as
+    ASE + DFTB+ read it); ``independent_k_filling``, ``hubbard`` (Hartree, like the other model
+    parameters), ``reference_occupations`` (electrons; ``charges`` are then relative to them)
+    and ``truncate_sk_range`` (Angstrom, or {"max_distance", "hard_cutoff"}) as in
+    :class:`pydftb.DFTB`.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole"]
@@ -120,7 +148,9 @@ class PyDFTB(Calculator):
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
                  solvation=None, rescale_solvated_fields: bool = True, casida=None,
                  xlbomd=None, force_evaluation: str | None = None, initial_charges=None,
-                 read_charges=None, **kwargs):
+                 read_charges=None, fixed_fermi_level=None, independent_k_filling: bool = False,
+                 hubbard: dict | None = None, reference_occupations=None,
+                 truncate_sk_range=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -147,7 +177,11 @@ class PyDFTB(Calculator):
                                 onsite_corrections=onsite_corrections, solvation=solvation,
                                 rescale_solvated_fields=rescale_solvated_fields,
                                 casida=casida, force_evaluation=force_evaluation,
-                                initial_charges=initial_charges)
+                                initial_charges=initial_charges,
+                                fixed_fermi_level=_fermi_au(fixed_fermi_level),
+                                independent_k_filling=independent_k_filling, hubbard=hubbard,
+                                reference_occupations=reference_occupations,
+                                truncate_sk_range=_truncation_au(truncate_sk_range))
         self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
@@ -345,8 +379,10 @@ class PyDFTB(Calculator):
             self.results["free_energy"] = r.excited_free_energy * units.Hartree
         else:
             self.results["energy"] = r.energy * units.Hartree
-            self.results["free_energy"] = r.free_energy * units.Hartree
-        q0 = np.array([sk.occupation[lab].sum() for lab in labels])
+            # force-consistent: F - sum_s N_s E_f,s with a fixed Fermi level (M6f), else F
+            self.results["free_energy"] = r.e_force_related * units.Hartree
+        q0 = (r.q0_atom if r.q0_atom is not None          # custom reference occupations (M6f)
+              else np.array([sk.occupation[lab].sum() for lab in labels]))
         self.results["charges"] = q0 - r.charges
         if r.forces is not None:
             self.results["forces"] = r.forces * units.Hartree / units.Bohr

@@ -226,10 +226,13 @@ class BlockTerms:
 
     @classmethod
     def build(cls, basis: Basis, sk, rep: str, site_of_orb, plus_u: dict | None,
-              functional: str, onsite: dict | None, imaginary: bool) -> "BlockTerms":
+              functional: str, onsite: dict | None, imaginary: bool,
+              shell_occupation=None) -> "BlockTerms":
         """``site_of_orb``: the charge site (atom or shell) of every orbital of the existing
         mixing; with spin the classes are shells anyway.  ``plus_u``/``onsite``: parsed
-        options (:func:`parse_plus_u`, :func:`parse_onsite`)."""
+        options (:func:`parse_plus_u`, :func:`parse_onsite`).  ``shell_occupation``: the
+        reference population of every shell when it is not the SKF's (DFTB+
+        ``CustomisedOccupations``, M6f)."""
         natom = len(basis.species)
         norb = basis.norb
         n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
@@ -283,10 +286,17 @@ class BlockTerms:
                             for kk in range(*ranges[k][s1]):
                                 pairs += [(c, k, ll, kk) for ll in range(*ranges[k][s2]) if ll > kk]
         q0 = np.zeros(norb)
-        for a, lab in enumerate(basis.species):
-            for s, l in enumerate(basis.shells[a]):
-                o = first_orb[first_shell[a] + s]
-                q0[o:o + 2 * l + 1] = sk.occupation[lab][l] / (2 * l + 1)
+        if shell_occupation is not None:          # custom reference occupations (M6f)
+            occ = np.asarray(shell_occupation, float)
+            for a in range(natom):
+                for s, l in enumerate(basis.shells[a]):
+                    o = first_orb[first_shell[a] + s]
+                    q0[o:o + 2 * l + 1] = occ[first_shell[a] + s] / (2 * l + 1)
+        else:
+            for a, lab in enumerate(basis.species):
+                for s, l in enumerate(basis.shells[a]):
+                    o = first_orb[first_shell[a] + s]
+                    q0[o:o + 2 * l + 1] = sk.occupation[lab][l] / (2 * l + 1)
         slices = [slice(int(basis.offsets[a]), int(basis.offsets[a] + basis.norb_atom[a]))
                   for a in atoms]
         return cls(basis, rep, np.array(atoms, int), slices, u_groups,

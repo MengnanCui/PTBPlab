@@ -248,3 +248,33 @@ def fill(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
     if nfill > EPS2 and abs(nfill - n_el) > EPS2:
         f = f * nfill / n_el
     return [spin_factor * fk for fk in f], mu, spin_factor * ts
+
+
+def fill_at(evals, weights, mu: float, smearing=None, spin_factor: float = 2.0):
+    """Occupations (incl. spin factor), ``mu`` and T*S for a given Fermi level (DFTB+
+    ``FixedFermiLevel``, milestone M6f): ``electronFill`` at ``mu``, the electron count follows
+    from it.  Same arguments and returns as :func:`fill`, with ``mu`` for the electron count."""
+    sm = Smearing.from_spec(smearing)
+    ev = np.asarray(evals, float)
+    if ev.ndim == 1:
+        ev = ev[None]
+    f, ts, _ = _electron_fill(float(mu), ev, np.asarray(weights, float), sm, sm.kt)
+    return [spin_factor * fk for fk in f], float(mu), spin_factor * ts
+
+
+def fill_independent_k(evals, weights, nelec: float, smearing=None, spin_factor: float = 2.0):
+    """DFTB+ ``IndependentKFilling`` (M6f): every k-point holds ``nelec`` electrons on its own,
+    filled by :func:`fill` with weight 1 (its own Fermi level and mid-gap rule); the Fermi
+    level and T*S are the k-weighted sums, added in k order as DFTB+ does.  Same arguments and
+    returns as :func:`fill`."""
+    ev = np.asarray(evals, float)
+    if ev.ndim == 1:
+        ev = ev[None]
+    kw = np.asarray(weights, float)
+    occ, mu, ts = [], 0.0, 0.0
+    for k in range(len(ev)):
+        f, mu_k, ts_k = fill(ev[k][None], np.ones(1), nelec, smearing, spin_factor)
+        occ.append(f[0])
+        mu = mu + mu_k * kw[k]
+        ts = ts + ts_k * kw[k]
+    return occ, float(mu), float(ts)

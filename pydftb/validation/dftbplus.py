@@ -71,19 +71,62 @@ def write_gen(path, labels, pos_ang, cell_ang=None):
                 f.write(f"{_f(v[0])} {_f(v[1])} {_f(v[2])}\n")
 
 
-def filling_block(filling) -> str:
-    """("fermi", T_K) | ("mp", T_K, order) | ("gaussian", T_K) -> HSD."""
+def filling_block(filling, fermi: dict | None = None) -> str:
+    """("fermi", T_K) | ("mp", T_K, order) | ("gaussian", T_K) -> HSD; ``fermi`` (M6f):
+    {"fixed": E_f, one per spin channel (Hartree)} (FixedFermiLevel) or
+    {"independent_k": True} (IndependentKFilling)."""
     kind = filling[0].lower()
     temp = _f(filling[1])
+    extra = ""
+    if fermi and fermi.get("fixed") is not None:
+        vals = " ".join(_f(x) for x in np.atleast_1d(fermi["fixed"]))
+        extra += f"    FixedFermiLevel [Hartree] = {{ {vals} }}\n"
+    if fermi and fermi.get("independent_k"):
+        extra += "    IndependentKFilling = Yes\n"
     if kind == "fermi":
-        return f"Fermi {{\n    Temperature [K] = {temp}\n  }}"
+        return f"Fermi {{\n{extra}    Temperature [K] = {temp}\n  }}"
     if kind in ("mp", "methfesselpaxton"):
-        return (f"MethfesselPaxton {{\n    Order = {int(filling[2])}\n"
+        return (f"MethfesselPaxton {{\n{extra}    Order = {int(filling[2])}\n"
                 f"    Temperature [K] = {temp}\n  }}")
     if kind == "gaussian":
         # DFTB+ maps Gaussian to Methfessel-Paxton order 0 internally; "Order = 0" is rejected
-        return f"Gaussian {{\n    Temperature [K] = {temp}\n  }}"
+        return f"Gaussian {{\n{extra}    Temperature [K] = {temp}\n  }}"
     raise ValueError(f"unknown filling {filling!r}")
+
+
+def custom_hubbards_block(hubbard, labels) -> str:
+    """Hamiltonian lines ``CustomisedHubbards`` (M6f): {label: U or [U per shell]} (Hartree),
+    the labels in the structure only."""
+    if not hubbard:
+        return ""
+    lines = ["  CustomisedHubbards {"]
+    lines += [f"    {k} = {' '.join(_f(x) for x in np.atleast_1d(v))}"
+              for k, v in hubbard.items() if k in labels]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def custom_occupations_block(occupations) -> str:
+    """Hamiltonian lines ``CustomisedOccupations`` (M6f; DFTB+ ignores the block at the top
+    level): {atom (0-based): {shell letter: electrons}}, one ``ReferenceOccupation`` per atom."""
+    if not occupations:
+        return ""
+    lines = ["  CustomisedOccupations {"]
+    for atom, shells in occupations.items():
+        lines += ["    ReferenceOccupation {", f"      Atoms = {int(atom) + 1}"]
+        lines += [f"      {k} = {_f(v)}" for k, v in shells.items()]
+        lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def truncate_block(spec) -> str:
+    """Hamiltonian lines ``TruncateSKRange`` (M6f): {"max_distance" (Bohr), "hard_cutoff"}."""
+    if not spec:
+        return ""
+    return ("  TruncateSKRange {\n"
+            f"    SKMaxDistance [Bohr] = {_f(spec['max_distance'])}\n"
+            f"    HardCutOff = {'Yes' if spec.get('hard_cutoff', True) else 'No'}\n  }}\n")
 
 
 def dftb3_block(opts, labels=None) -> str:
@@ -543,10 +586,10 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
              read_charges=False, convergent_only=True, extra_analysis="", driver="",
-             extra_top="", forces=True, autotest=False, extra_options="") -> str:
+             extra_top="", forces=True, autotest=False, extra_options="", fermi=None) -> str:
     """The HSD input.  ``extra_top``: further top-level blocks (e.g. ``ExcitedState``);
     ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d);
-    ``extra_options``: lines of the Options block (M6f)."""
+    ``extra_options``: lines of the Options block (M6f); ``fermi``: see :func:`filling_block`."""
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
     kblock = ""
     if periodic and klines is not None:
@@ -581,7 +624,7 @@ Hamiltonian = DFTB {{
   MaxAngularMomentum {{
 {maxl}
   }}
-  Filling = {filling_block(filling)}
+  Filling = {filling_block(filling, fermi)}
 {kblock}{poly}{diff}{extra_ham}
 }}
 Analysis {{
@@ -775,7 +818,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
         convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
-        autotest=False, extra_options="") -> dict:
+        autotest=False, extra_options="", fermi=None) -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata; ``scc_errors``: the "SCC error" of every iteration
     as printed (M6f)."""
@@ -789,7 +832,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
                        klines, read_charges, convergent_only, extra_analysis, driver,
-                       extra_top, forces, autotest, extra_options)
+                       extra_top, forces, autotest, extra_options, fermi)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
@@ -836,6 +879,10 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
             res.update(parse_casida(workdir, det))
         res["mermin_tag"] = tag.get("mermin_energy")
         res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
+        if "forcerelated_energy" in tag:      # M6f: E_Mermin - sum_s N_s E_f,s (fixed E_f)
+            res["e_force_related"] = float(np.atleast_1d(tag["forcerelated_energy"])[0])
+        if "number_of_electrons" in tag:      # per spin channel with collinear spin
+            res["number_of_electrons"] = np.atleast_1d(tag["number_of_electrons"]).astype(float)
         ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)
         res["version"] = ver.group(1) if ver else "unknown"
         # one line each (\s would also match the newlines of Casida's Stratmann progress table)

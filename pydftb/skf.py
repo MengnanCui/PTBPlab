@@ -20,10 +20,11 @@ interpolating polynomial for every possible stencil is pre-computed once.
 """
 from __future__ import annotations
 
+import copy
 import gzip
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -548,3 +549,56 @@ class SKSet:
         if mode == "none":
             return None
         raise ValueError(f"unknown repulsive mode {mode!r}")
+
+    # ---- overrides of DFTB+'s Hamiltonian block (milestone M6f) ----------------------------
+    def with_hubbard(self, custom: dict) -> "SKSet":
+        """A copy with Hubbard U replaced (DFTB+ ``CustomisedHubbards``): ``custom`` maps a type
+        label to one value (atom-resolved SCC: used for all its shells) or one per shell
+        (shell-resolved); values <= 0 keep the SKF's.  Labels not in this set are ignored.  The
+        files are shared, this set is not changed."""
+        new = copy.copy(self)
+        new.hubbard = {a: u.copy() for a, u in self.hubbard.items()}
+        new._truncated = {}
+        for lab, val in custom.items():
+            if lab not in new.hubbard:
+                continue
+            u = new.hubbard[lab]
+            v = np.atleast_1d(np.asarray(val, float))
+            if not self.shell_resolved:
+                if v.size != 1:
+                    raise ValueError(f"hubbard[{lab!r}]: atom-resolved SCC takes one value per "
+                                     f"type, not {v.size} (as DFTB+)")
+                v = np.full(u.shape, v[0])
+            elif v.size != u.size:
+                raise ValueError(f"hubbard[{lab!r}] needs one value per shell ({u.size}) for "
+                                 f"shell-resolved SCC, not {v.size}")
+            new.hubbard[lab] = np.where(v > 0.0, v, u)
+        return new
+
+    def truncated(self, r_max: float, hard_cutoff: bool = True) -> "SKSet":
+        """A copy whose H and S tables end at ``r_max`` (Bohr), as DFTB+ ``TruncateSKRange``:
+        with ``hard_cutoff`` (DFTB+'s default) the 1 Bohr tail is taken off first, so the
+        integrals vanish at ``r_max``; every table keeps min(floor(r/dr), rows) rows and gets
+        its interpolation and tail from its new end; the repulsives are not cut.  Cached per
+        (r_max, hard_cutoff); this set and its (shared, cached) files are not changed."""
+        key = (float(r_max), bool(hard_cutoff))
+        cache = self.__dict__.setdefault("_truncated", {})
+        if key in cache:
+            return cache[key]
+        r = float(r_max) - (DIST_FUDGE if hard_cutoff else 0.0)
+        if r < np.finfo(float).eps:
+            raise ValueError("truncate_sk_range is shorter than the distance over which the SK "
+                             "data go to zero (DFTB+: 'Truncation is shorter than the minimum "
+                             "distance over which SK data goes to 0')")
+        new = copy.copy(self)
+        new._truncated = {}
+        new.files = {}
+        for pair, f in self.files.items():
+            n = min(int(np.floor(r / f.dr)), f.table.shape[0])
+            if n < N_INTER:
+                raise ValueError(f"truncate_sk_range leaves {n} grid points of {pair[0]}-"
+                                 f"{pair[1]}; the interpolation needs {N_INTER}")
+            new.files[pair] = (f if n == f.table.shape[0]
+                               else replace(f, table=f.table[:n], _coef=None))
+        cache[key] = new
+        return new

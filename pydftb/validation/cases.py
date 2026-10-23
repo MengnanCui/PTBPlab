@@ -144,6 +144,28 @@ class Case:
                                           # "displace" (A), "seed"}: run 1 at the case geometry
                                           # displaced by that much writes the file, run 2 (the
                                           # one compared) at the case geometry reads it
+    # milestone M6f-2: occupations and overrides of DFTB+'s Hamiltonian block
+    fermi: dict | None = None             # {"fixed": E_f or (up, down) (Ha)} (FixedFermiLevel)
+                                          # or {"independent_k": True} (IndependentKFilling)
+    hubbard: dict | None = None           # CustomisedHubbards {label: U or [U per shell]} (Ha)
+    occupations: dict | None = None       # CustomisedOccupations {atom (0-based): {shell: e}}
+    truncate_sk: dict | None = None       # TruncateSKRange {"max_distance" (Bohr), "hard_cutoff"}
+    stress_fd: bool = False               # reference stress from strain differences of DFTB+'s
+                                          # force-related energy (its analytic stress of a
+                                          # charged cell is not that derivative)
+
+    @property
+    def overrides(self) -> bool:
+        """M6f-2 settings: a fixed Fermi level, independent k-point filling, custom Hubbard U,
+        custom reference occupations, a truncated SK table."""
+        return (self.fermi is not None or self.hubbard is not None
+                or self.occupations is not None or self.truncate_sk is not None)
+
+    @property
+    def track_scc(self) -> bool:
+        """References keep the SCC error of every iteration and pydftb must take the same
+        number of iterations (M6f cases)."""
+        return self.scc_start or self.overrides
 
     @property
     def scc_start(self) -> bool:
@@ -272,6 +294,16 @@ def _cuo_chain_cubic():
 
 def _o2():
     return Atoms("O2", positions=[[0, 0, 0], [0.05, 0.1, 1.21]])
+
+
+def _cu4co_box():
+    """Cu4CO in a 10 x 10 x 12 A box: a charged cell with a fixed Fermi level whose SCC
+    converges like the molecule's (M6f-2)."""
+    a = _cu4co()
+    a.set_cell([10.0, 10.0, 12.0])
+    a.pbc = True
+    a.positions += [3.5, 3.5, 3.0]
+    return a
 
 
 def _oh():
@@ -404,6 +436,11 @@ TOL_SCC = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "n_sc
            "scc_errors": 1e-4, "charges_file": 1e-8}
 BROYDEN_WEIGHTS = {"kind": "broyden", "mixing": 0.3, "inverse_jacobi_weight": 0.02,
                    "minimal_weight": 2.0, "maximal_weight": 1e4, "weight_factor": 0.05}
+# occupations and overrides (milestone M6f-2): as TOL_SCC, with the force-related energy, the
+# electron count and the Fermi level(s) (results.tag); the stress of a charged cell against
+# stress_fd
+TOL_FILL = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "n_scc": 0,
+            "scc_errors": 1e-4, "e_fr": 1e-6, "n_electrons": 1e-6, "fermi_level": 1e-8}
 
 
 def solvation_model(spec):
@@ -949,5 +986,86 @@ CASES = [
          filling=("fermi", 500.0), spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
          read_charges={"text": False}, ewald_tolerance=1e-12, torch=False,
          tol={**TOL_SCC, "stress": 1e-9}, note="periodic with spin"),
+    # --- occupations and overrides of the Hamiltonian block (milestone M6f-2), NumPy only ---
+    # SCC tolerances such that DFTB+'s last two errors lie at least about 2x either side of
+    # the threshold (exact numbers of iterations; round-off decides below about 1e-10).
+    # Fixed Fermi levels: only systems whose SCC converges smoothly (M6f-2 design, section 2:
+    # a half-filled level pinned at E_f or a dense periodic cell does not)
+    Case("cu_fcc_k6_fixed_ef", _cu_fcc, kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         fermi={"fixed": -0.10}, ewald_tolerance=1e-12, stress_fd=True, torch=False,
+         tol={**TOL_FILL, "stress": 1e-9},
+         note="the cell loses electrons (N < 11); stress against stress_fd (DFTB+'s is 3e-7 off)"),
+    Case("cu4co_300K_fixed_ef", _cu4co, filling=("fermi", 300.0), fermi={"fixed": -0.140},
+         scc_tol=1e-9, torch=False, tol={**TOL_FILL, "scc_errors": 1e-3},
+         note="N = 54.03; SCC tolerance 1e-9: at 1e-10 the last iterations are round-off "
+              "(DFTB+ 1.1e-10, pydftb 8e-11); the error 2e-7 of iteration 35 agrees to 4e-4 "
+              "(8e-11 absolute) after a 38-iteration path"),
+    Case("cu4co_box_fixed_ef", _cu4co_box, kgrid=(1, 1, 1), filling=("fermi", 300.0),
+         fermi={"fixed": -0.140}, scc_tol=1e-9, ewald_tolerance=1e-12, stress_fd=True,
+         torch=False,
+         tol={**TOL_FILL, "stress": 1e-9}, note="a charged cell (N = 54.08): forces and stress"),
+    Case("o2_triplet_fixed_ef_1000K", _o2, filling=("fermi", 1000.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, fermi={"fixed": (-0.13, -0.24)},
+         scc_tol=1e-7, torch=False, tol=TOL_FILL,
+         note="two Fermi levels; the down one 0.0125 Ha below the empty pi*: N = (7, 5.01); "
+              "below 1e-9 both codes wander in round-off"),
+    Case("o2_noncolinear_soc_fixed_ef_1000K", _o2, filling=("fermi", 1000.0),
+         noncolinear={"initial_spins": [[0.0, 0.0, 1.0]] * 2, "spin_constants": {"O": -0.028}},
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, fermi={"fixed": -0.25}, torch=False,
+         tol={**TOL_PAULI, **TOL_FILL}, note="two-component: one Fermi level for the spinors"),
+    # every k-point filled on its own (IndependentKFilling; collinear spin crashes DFTB+ 25.1)
+    Case("cuo_chain_k422_indep_k", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         fermi={"independent_k": True}, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_FILL, "stress": 1e-9},
+         note="the Fermi level is the k-weighted mean of the k-points' own"),
+    Case("cu8_distorted_k355_mp2_2000K_indep_k", _cu8, kgrid=(3, 5, 5), filling=("mp", 2000.0, 2),
+         fermi={"independent_k": True}, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_FILL, "stress": 1e-8},
+         note="Methfessel-Paxton: forces 5e-7 and stress 3e-9 from DFTB+, as in "
+              "cu8_distorted_k355_mp2_2000K"),
+    Case("cuo_chain_noncolinear_k422_indep_k", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 500.0),
+         noncolinear={"initial_spins": [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0]] * 2,
+                      "spin_constants": W_SPIN},
+         fermi={"independent_k": True}, scc_tol=1e-9, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_PAULI, **TOL_FILL, "stress": 1e-9}),
+    Case("cuo_chain_soc_k422_indep_k", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 500.0), spin_orbit={"xi": XI_CUO}, fermi={"independent_k": True},
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_PAULI, **TOL_FILL, "stress": 1e-9}),
+    # custom Hubbard U (CustomisedHubbards; <= 0 keeps the SKF's): no two shells of an atom
+    # with the same U, which DFTB+ would mix as one class
+    Case("ch3oh_custom_hubbards", _meoh, hubbard={"O": 0.5, "H": -1.0}, torch=False,
+         tol=TOL_FILL, note="H's -1 keeps the SKF value"),
+    Case("cu4co_shell_custom_hubbards", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         hubbard={"Cu": [0.3, 0.0, 0.4], "C": [0.40, 0.0], "O": [0.0, 0.62]}, scc_tol=1e-9,
+         torch=False, tol=TOL_FILL, note="per shell; the zeros keep the SKF values"),
+    Case("ch3oh_dftb3_custom_hubbards", _meoh, dftb3=DFTB3_3OB, hubbard={"O": 0.5, "C": 0.35},
+         torch=False, tol=TOL_FILL, note="the third order (and the H-X damping) use the new U"),
+    Case("cuo_chain_k422_custom_hubbards", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         hubbard={"Cu": 0.3}, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_FILL, "stress": 1e-9}),
+    # custom reference occupations (CustomisedOccupations, "virtual doping")
+    Case("ch3oh_custom_occupations_300K", _meoh, filling=("fermi", 300.0),
+         occupations={1: {"p": 4.2}}, torch=False, tol=TOL_FILL,
+         note="O p = 4.2: 14.2 electrons, charges relative to the custom q0 (at T = 0 the "
+              "fractional HOMO leaves the SCC in round-off)"),
+    Case("ch3oh_custom_occupations_c", _meoh, occupations={0: {"s": 1.5, "p": 2.5}}, torch=False,
+         tol=TOL_FILL, note="C 2s1.5 2p2.5: the same electron count, another reference"),
+    Case("cu4co_plusu_custom_occ", _cu4co, filling=("fermi", 300.0), plus_u=U_CU,
+         occupations={0: {"d": 9.8}}, torch=False, tol={**TOL_BLOCK, **TOL_FILL},
+         note="the start of the block vector"),
+    Case("ch3oh_ons_custom_occ", _meoh, onsite=ONS, occupations={1: {"s": 1.8, "p": 4.2}},
+         scc_tol=1e-9, torch=False, tol={**TOL_BLOCK, **TOL_FILL},
+         note="onsite corrections act on q - q0"),
+    Case("cuo_chain_spin_k422_custom_occ", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, occupations={0: {"d": 9.9}},
+         scc_tol=5e-9, ewald_tolerance=1e-12, torch=False, tol={**TOL_FILL, "stress": 1e-9}),
+    # truncated SK tables (TruncateSKRange; the repulsives are not cut)
+    Case("water_dimer_truncated_sk", _water_dimer, truncate_sk={"max_distance": 6.0},
+         scc_tol=1e-9, torch=False, tol=TOL_FILL,
+         note="the intermolecular pairs lie in the new tail"),
+    Case("water_box_truncated_sk_soft", _water_box,
+         truncate_sk={"max_distance": 6.0, "hard_cutoff": False}, scc_tol=1e-9,
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_FILL, "stress": 1e-9}),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

@@ -155,6 +155,8 @@ class SCC:
     def mulliken(self) -> np.ndarray:
         """Net Mulliken charges per atom (e), positive = electron deficit."""
         r = self._need()
+        if r.q0_atom is not None:              # custom reference occupations (M6f)
+            return r.q0_atom - r.charges
         sk = self.params.skset(self.system.unique_labels)
         q0 = np.array([sk.occupation[lab].sum() for lab in self.system.labels])
         return q0 - r.charges

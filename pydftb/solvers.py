@@ -34,12 +34,18 @@ def _stack(parts):
 
 
 def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0, threads=None,
-             backend: Backend = NUMPY):
+             backend: Backend = NUMPY, occupations=None):
     """Densities rho = (C f) C^H and W = (C f eps) C^H.  The occupations and the Fermi level
     are always found on the host (DFTB+'s rules); with the torch backend ``evals`` and
-    ``evecs`` live on the device and the eigenvalues are returned as host arrays."""
+    ``evecs`` live on the device and the eigenvalues are returned as host arrays.
+    ``occupations``: a function (evals, kw, nelec, smearing, spin_factor) -> (occ, mu, ts) used
+    instead of :func:`pydftb.occupations.fill` (a fixed Fermi level or independent k-point
+    filling, M6f)."""
     ev_host = backend.to_host(evals)
-    occ, mu, ts = fill(ev_host, kw, nelec, smearing, spin_factor=spin_factor)   # all k at once
+    if occupations is not None:
+        occ, mu, ts = occupations(ev_host, kw, nelec, smearing, spin_factor)
+    else:
+        occ, mu, ts = fill(ev_host, kw, nelec, smearing, spin_factor=spin_factor)   # all k at once
     occ = np.array(occ)
     occ_d = backend.asarray(occ)
     xp = backend.xp

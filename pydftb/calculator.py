@@ -53,7 +53,7 @@ from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_
 from . import dftbplus_io
 from .dftbplus_io import ChargeData
 from .mixer import make_mixer, mixer_spec
-from .occupations import Smearing
+from .occupations import Smearing, fill_at, fill_independent_k
 from .neighbors import neighbor_list
 from .parallel import as_kthreads
 from .solvers import SOLVERS, _density
@@ -127,6 +127,11 @@ class DFTBResult:
                                          # vector; what XL-BOMD propagates, M6e)
     scc_errors: np.ndarray | None = None  # max |q_out - q_in| of every SCC iteration, DFTB+'s
                                          # "SCC error" column (M6f); None without SCC
+    # M6f-2: a fixed Fermi level (an electron reservoir) and custom reference occupations
+    n_ef: float | None = None            # sum_s N_s E_f,s of a fixed Fermi level (DFTB+ NEf)
+    q0_atom: np.ndarray | None = None    # reference populations per atom when they are custom
+                                         # (DFTB+ CustomisedOccupations); charges are q0_atom -
+                                         # charges then
 
     @property
     def e_total(self) -> float:
@@ -139,6 +144,25 @@ class DFTBResult:
     @property
     def e_zero(self) -> float:
         return self.energy - 0.5 * self.ts
+
+    @property
+    def e_force_related(self) -> float:
+        """DFTB+'s "Force related energy", whose gradient the forces are: the Mermin free
+        energy minus sum_s N_s E_f,s with a fixed Fermi level (M6f), else the free energy."""
+        return self.free_energy - (self.n_ef or 0.0)
+
+    @property
+    def n_electrons(self) -> float:
+        """Electrons in the output populations (DFTB+ ``number_of_electrons``, summed over the
+        spin channels); not the input count with a fixed Fermi level."""
+        return float(np.sum(self.charges))
+
+    @property
+    def n_electrons_spin(self) -> tuple | None:
+        """(N_up, N_down) of the output populations with collinear spin, else None."""
+        if self.fermi_spin is None or self.q_spin is None:
+            return None
+        return float(np.sum(self.q_spin[0])), float(np.sum(self.q_spin[1]))
 
     @property
     def terms(self) -> dict:
@@ -355,6 +379,25 @@ class DFTB:
                           f_max = 2, or 1 per spin channel) or as 1/2 (D H S^-1 + S^-1 H D).
                           The same matrix where H is the one diagonalised; XL-BOMD
                           (``calculate(..., xl=True)``) needs one of the last two, as in DFTB+.
+    fixed_fermi_level : float | (up, down)  a fixed Fermi level (Hartree; DFTB+
+                          ``FixedFermiLevel``, milestone M6f): every spin channel is filled at
+                          its level, the electron count follows (an electron reservoir); with
+                          collinear spin one value for both channels or (up, down).  The forces
+                          are -d/dR of ``DFTBResult.e_force_related`` = F - sum_s N_s E_f,s.
+    independent_k_filling : bool  every k-point holds the electron count on its own, with its own
+                          Fermi level (DFTB+ ``IndependentKFilling``); periodic systems without
+                          collinear spin (where DFTB+ 25.1 crashes).
+    hubbard : dict        type label -> Hubbard U (Hartree; DFTB+ ``CustomisedHubbards``): one
+                          value (atom-resolved SCC) or one per shell; values <= 0 keep the SKF's.
+                          Used everywhere U is (gamma, DFTB3, Casida); ``self.sk`` is a copy.
+    reference_occupations : dict  atom (0-based) -> {shell letter: electrons} or one number per
+                          shell: the neutral reference populations q0 of those atoms (DFTB+
+                          ``CustomisedOccupations``, "virtual doping"); the electron count is
+                          sum(q0) - charge, charges are relative to these q0.
+    truncate_sk_range : float | dict  cut the H and S tables at this distance (Bohr; DFTB+
+                          ``TruncateSKRange``), or {"max_distance": r, "hard_cutoff": bool}: with
+                          the hard cut-off (default) the tail ends at r; repulsives are not cut;
+                          ``self.sk`` is a copy.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -380,7 +423,10 @@ class DFTB:
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
                  solvation=None, rescale_solvated_fields: bool = True, casida=None,
-                 force_evaluation: str = "traditional", initial_charges=None):
+                 force_evaluation: str = "traditional", initial_charges=None,
+                 fixed_fermi_level=None, independent_k_filling: bool = False,
+                 hubbard: dict | None = None, reference_occupations=None,
+                 truncate_sk_range=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -448,6 +494,23 @@ class DFTB:
         self.noncolinear = noncolinear
         self.initial_spins = initial_spins
         self.initial_charges = initial_charges
+        # occupations and overrides of DFTB+'s Hamiltonian block (M6f-2)
+        self.fixed_fermi_level = self._parse_fixed_fermi_level(fixed_fermi_level)
+        self.independent_k_filling = bool(independent_k_filling)
+        self._check_filling(solver)
+        self.hubbard = None if hubbard is None else dict(hubbard)
+        if self.hubbard is not None and not scc:
+            raise ValueError("hubbard (custom Hubbard U) needs SCC")
+        self.reference_occupations = (None if reference_occupations is None
+                                      else dict(reference_occupations))
+        self.truncate_sk_range = (None if truncate_sk_range is None
+                                  else _truncation_spec(truncate_sk_range))
+        if self.hubbard is not None:
+            self.sk = sk = sk.with_hubbard(self.hubbard)
+        if self.truncate_sk_range is not None:
+            warnings.warn("Artificially truncating the SK table, this is normally a bad idea! "
+                          "(as DFTB+)", RuntimeWarning, stacklevel=2)
+            self.sk = sk = sk.truncated(*self.truncate_sk_range)
         self.spin_orbit = None if spin_orbit is None else dict(spin_orbit)
         self.spin_orbit_dual = bool(spin_orbit_dual)
         if self.spin_orbit is not None:      # the types of this SK set (the rest at setup)
@@ -482,6 +545,13 @@ class DFTB:
         self.casida = _casida.Casida.make(casida)
         if self.casida is not None:
             self._check_casida(sk, solver)
+            if self.fixed_fermi_level is not None:
+                raise ValueError("Casida excitations need a fixed electron count, not a fixed "
+                                 "Fermi level")
+            if self.reference_occupations is not None:
+                raise ValueError("Casida linear response does not work with custom reference "
+                                 "occupations (as DFTB+: 'Custom occupation not compatible with "
+                                 "linear response')")
         self.force_evaluation = str(force_evaluation).lower()
         if self.force_evaluation not in FORCE_EVALUATIONS:
             raise ValueError(f"force_evaluation must be one of {FORCE_EVALUATIONS}, "
@@ -537,6 +607,37 @@ class DFTB:
                              "a non-collinear calculation has one Fermi level and a free "
                              "total magnetisation (set initial_spins instead)")
 
+    def _parse_fixed_fermi_level(self, value) -> tuple | None:
+        """``fixed_fermi_level`` as one level per spin channel: (up, down) with collinear spin,
+        else (mu,) (M6f)."""
+        if value is None:
+            return None
+        v = np.atleast_1d(np.asarray(value, float)).ravel()
+        n = 2 if self.spin else 1
+        if v.size == 1:
+            v = np.repeat(v, n)
+        if v.size != n:
+            raise ValueError("fixed_fermi_level needs "
+                             + ("one value or (up, down)" if n == 2 else "one value")
+                             + f", not {v.size} values")
+        return tuple(float(x) for x in v)
+
+    def _check_filling(self, solver):
+        """The combinations of a fixed Fermi level and independent k-point filling (M6f)."""
+        if self.fixed_fermi_level is not None:
+            if self.relax_total_spin:
+                raise ValueError("a fixed Fermi level does not combine with relax_total_spin "
+                                 "(DFTB+ silently ignores RelaxTotalSpin then)")
+            if self.independent_k_filling:
+                raise ValueError("independent_k_filling does not combine with a fixed Fermi "
+                                 "level (DFTB+ does not read IndependentKFilling then)")
+        if (self.fixed_fermi_level is not None or self.independent_k_filling) and solver == "sp2":
+            raise ValueError("a fixed Fermi level or independent k-point filling needs the "
+                             "eigenvalues (not the SP2 solver)")
+        if self.independent_k_filling and self.spin:
+            raise ValueError("independent_k_filling does not support collinear spin (DFTB+ 25.1 "
+                             "crashes there: its array of k-point weights is too short)")
+
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
         why = None
@@ -588,7 +689,29 @@ class DFTB:
             out.append("initial_charges")
         if self.spin and self.initial_spins is not None:
             out.append("collinear initial_spins")
+        for name in ("fixed_fermi_level", "hubbard", "reference_occupations",
+                     "truncate_sk_range"):
+            if getattr(self, name, None) is not None:
+                out.append(name)
+        if getattr(self, "independent_k_filling", False):
+            out.append("independent_k_filling")
         return out
+
+    @property
+    def _custom_filling(self) -> bool:
+        """A fixed Fermi level or independent k-point filling (M6f)."""
+        return self.fixed_fermi_level is not None or self.independent_k_filling
+
+    def _channel_filling(self, channel: int):
+        """The occupation function of spin channel ``channel`` (0: up, or the only one) for
+        :func:`pydftb.solvers._density`: at the fixed Fermi level, or every k-point on its own
+        (M6f); None: DFTB+'s filling to the electron count."""
+        if self.fixed_fermi_level is not None:
+            mu = self.fixed_fermi_level[channel]
+            return lambda ev, kw, nelec, sm, sf: fill_at(ev, kw, mu, sm, sf)
+        if self.independent_k_filling:
+            return fill_independent_k
+        return None
 
     @property
     def _custom_start(self) -> bool:
@@ -645,6 +768,9 @@ class DFTB:
             stress = forces and periodic and self.point_charges is None
         if stress and not periodic:
             raise ValueError("stress needs a periodic system")
+        if self.independent_k_filling and not periodic:
+            raise ValueError("independent_k_filling needs a periodic system (DFTB+ reads it for "
+                             "periodic systems only)")
         if stress and self.point_charges is not None:
             raise ValueError("no stress with external point charges (DFTB+ does not compute "
                              "it either)")
@@ -668,6 +794,10 @@ class DFTB:
         res = self._energies(setup, state) if not xl else self._energies_xl(setup, state)
         if state.errors is not None:
             res.scc_errors = np.array(state.errors)
+        if self.fixed_fermi_level is not None:                          # M6f-2
+            res.n_ef = self._reservoir_term(setup, res)
+        if self.reference_occupations is not None:
+            res.q0_atom = ops.segment_sum(setup.q0, setup.site_atom, len(setup.species))
         rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()
@@ -714,7 +844,8 @@ class DFTB:
                       else blockpot.parse_onsite(self.onsite_corrections, self.sk, labels))
             imaginary = self.pauli and self.spin_orbit is not None and self.spin_orbit_dual
             block = blockpot.BlockTerms.build(basis, self.sk, rep, site_of_orb, plus_u,
-                                              self.plus_u_functional, onsite, imaginary)
+                                              self.plus_u_functional, onsite, imaginary,
+                                              self._block_shell_occupation(basis))
         return basis, np.asarray(site_of_orb), rep, block
 
     def charge_data(self, species, result: DFTBResult) -> ChargeData:
@@ -756,7 +887,8 @@ class DFTB:
         """The mixing vector (``q_init``) of a DFTB+ charge file (a :class:`ChargeData` or a
         path), as DFTB+ ``ReadInitialCharges`` takes it: populations summed over every class;
         DFTB+'s checks of the spin channels, checksums (1e-7), electron count and collinear
-        magnetisation (1e-3; not with ``skip_charge_test``, DFTB+ ``SkipChargeTest``)."""
+        magnetisation (1e-3; not with ``skip_charge_test``, DFTB+ ``SkipChargeTest``, or a
+        fixed Fermi level)."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         if not isinstance(data, ChargeData):
             data = dftbplus_io.read_charges(data, basis.norb_atom, text)
@@ -770,7 +902,7 @@ class DFTB:
         if data.checksum is not None and np.any(np.abs(data.checksum - data.sums()) > dftbplus_io.CHECKSUM_TOL):
             raise ValueError("the charge file's checksums do not match its populations "
                              "(DFTB+: 'internal checksum failure, probably a damaged file')")
-        if not skip_charge_test:
+        if not (skip_charge_test or self.fixed_fermi_level is not None):    # as DFTB+
             nelec = float(self._sites(basis)[3].sum()) - self.charge
             if abs(nelec - data.q[0].sum()) >= dftbplus_io.ELECTRON_TOL:
                 raise ValueError(f"the charge file has {data.q[0].sum():.6f} electrons instead of "
@@ -840,6 +972,9 @@ class DFTB:
             why = "does not combine with excited-state forces"
         if why:
             raise ValueError(f"XL-BOMD {why} (as in DFTB+)")
+        if self._custom_filling:
+            raise ValueError("XL-BOMD with a fixed Fermi level or independent k-point filling "
+                             "is not supported")
 
     def _energies_xl(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         """The XL-BOMD shadow energy (DFTB+ getEnergyPerAtomXlbomd): the energies of the
@@ -987,7 +1122,27 @@ class DFTB:
             site_atom = np.arange(len(basis.species))
             u = np.array([sk.hubbard[s][0] for s in basis.species])
             q0 = np.array([sk.occupation[s].sum() for s in basis.species])
+        if self.reference_occupations is not None:          # custom q0 (M6f)
+            shell = self._reference_shell_populations(basis)
+            q0 = (shell if sk.shell_resolved
+                  else ops.segment_sum(shell, basis.shell_atom, len(basis.species)))
         return site_of_orb, site_atom, u, q0
+
+    def _block_shell_occupation(self, basis: Basis):
+        """The custom shell references for :meth:`pydftb.blockpot.BlockTerms.build` (None: the
+        SKF's)."""
+        if self.reference_occupations is None:
+            return None
+        return self._reference_shell_populations(basis)
+
+    def _reference_shell_populations(self, basis: Basis) -> np.ndarray:
+        """The reference (neutral) population of every shell: the SKF occupations, with DFTB+'s
+        ``CustomisedOccupations`` applied (``reference_occupations``, M6f)."""
+        occ = np.array([self.sk.occupation[basis.species[a]][l]
+                        for a, l in zip(basis.shell_atom, basis.shell_l)])
+        if self.reference_occupations is None:
+            return occ
+        return _reference_occupation_table(self.reference_occupations, basis, occ)
 
     def _setup(self, species, positions, cell, pbc, forces, timings, matrices=True) -> _Setup:
         """``matrices=False`` skips the folded H0/S on the k-point set and the dispersion
@@ -1135,7 +1290,8 @@ class DFTB:
         rep = "pauli" if pauli is not None else "ud" if collinear else "q"
         imaginary = pauli is not None and pauli.lam is not None and pauli.dual
         return blockpot.BlockTerms.build(basis, self.sk, rep, site_of_orb, plus_u,
-                                         self.plus_u_functional, onsite, imaginary)
+                                         self.plus_u_functional, onsite, imaginary,
+                                         self._block_shell_occupation(basis))
 
     def _pauli_setup(self, basis: Basis, smat, kpts, kw, periodic) -> _Pauli:
         """Spin constants, initial spins, the spin-orbit Lambda^a and H_SO(k) (M6a)."""
@@ -1205,8 +1361,7 @@ class DFTB:
             # two-component: [q, m_x, m_y, m_z] per shell; an atom's initial spin vector is
             # shared out in proportion to its shell populations (DFTB+ initializeCharges)
             b = st.basis
-            q = np.array([self.sk.occupation[b.species[a]][l]
-                          for a, l in zip(b.shell_atom, b.shell_l)]) * scale
+            q = self._reference_shell_populations(b) * scale
             q_atom = ops.segment_sum(q, b.shell_atom, len(b.species))[b.shell_atom]
             share = np.divide(q, q_atom, out=np.zeros_like(q), where=q_atom != 0)
             m = st.pauli.spins[b.shell_atom].T * share
@@ -1214,8 +1369,7 @@ class DFTB:
         if st.spin is None:
             return st.q0 * scale
         b = st.basis
-        q = np.array([self.sk.occupation[b.species[a]][l]
-                      for a, l in zip(b.shell_atom, b.shell_l)]) * scale
+        q = self._reference_shell_populations(b) * scale
         m = q * (st.spin.n_up - st.spin.n_down) / st.nelec
         return np.concatenate([0.5 * (q + m), 0.5 * (q - m)])
 
@@ -1235,9 +1389,9 @@ class DFTB:
                 warnings.warn(f"the initial charges sum to {charges.sum():g}, not the total "
                               f"charge {self.charge:g}: the initial populations are rescaled "
                               "(as in DFTB+)", RuntimeWarning, stacklevel=4)
-            q = _aufbau_shell_populations(b, occ, charges)
+            q = _aufbau_shell_populations(b, occ, charges)   # the SKF's occupations (DFTB+)
         else:
-            q = occ
+            q = occ if self.reference_occupations is None else self._reference_shell_populations(b)
         q = q * (st.nelec / q.sum())
         q_atom = ops.segment_sum(q, b.shell_atom, natom)[b.shell_atom]
         share = np.divide(q, q_atom, out=np.zeros_like(q), where=q_atom != 0)
@@ -1268,8 +1422,7 @@ class DFTB:
             shell = self._custom_shell_populations(st)[0][None]
         elif blk.rep == "q":
             scale = st.nelec / st.q0.sum() if st.q0.sum() > 0 else 1.0
-            shell = scale * np.array([self.sk.occupation[b.species[a]][l]
-                                      for a, l in zip(b.shell_atom, b.shell_l)])[None]
+            shell = scale * self._reference_shell_populations(b)[None]
         else:      # [up, down] or [q, m_x, m_y, m_z] per shell, as without blocks
             shell = self._initial_populations(replace(st, block=None)).reshape(blk.n_chan, -1)
         q_orb = shell[:, b.orb_shell] / (2 * b.shell_l + 1)[b.orb_shell]
@@ -1400,6 +1553,8 @@ class DFTB:
         """Densities for H, stacked [up k-points, down k-points] with spin; one Fermi
         level per spin channel, or a shared one (DFTB+ RelaxTotalSpin).  Two-component:
         one Fermi level, at most one electron per spinor level."""
+        if self._custom_filling:             # fixed Fermi level, independent k-points (M6f)
+            return self._solve_filling(solver, st, h, need_w)
         if st.pauli is not None:
             e, c = solver.eig(h)
             rho, wdm, evals, mu, ts, occ = _density(e, c, st.kw, st.nelec, self.smearing, need_w,
@@ -1426,6 +1581,37 @@ class DFTB:
         evals = np.concatenate([p[2] for p in parts])
         occ = list(parts[0][5]) + list(parts[1][5])
         return rho, wdm, evals, (parts[0][3], parts[1][3]), parts[0][4] + parts[1][4], occ
+
+    def _solve_filling(self, solver, st: _Setup, h, need_w):
+        """:meth:`_solve` with a fixed Fermi level or independent k-point filling (M6f): the
+        eigenpairs, then every spin channel's occupations from :meth:`_channel_filling`."""
+        e, c = solver.eig(h)
+        threads = getattr(solver, "threads", None)
+        if st.spin is None:
+            rho, wdm, evals, mu, ts, occ = _density(
+                e, c, st.kw, st.nelec, self.smearing, need_w,
+                spin_factor=1.0 if st.pauli is not None else 2.0, threads=threads,
+                occupations=self._channel_filling(0))
+            return rho, wdm, evals, mu, ts, list(occ)
+        nk = len(st.kw)
+        parts = [_density(e[sl], c[sl], st.kw, n, self.smearing, need_w, spin_factor=1.0,
+                          threads=threads, occupations=self._channel_filling(i))
+                 for i, (sl, n) in enumerate(((slice(0, nk), st.spin.n_up),
+                                              (slice(nk, 2 * nk), st.spin.n_down)))]
+        rho = np.concatenate([p[0] for p in parts])
+        wdm = np.concatenate([p[1] for p in parts]) if need_w else None
+        evals = np.concatenate([p[2] for p in parts])
+        occ = list(parts[0][5]) + list(parts[1][5])
+        return rho, wdm, evals, (parts[0][3], parts[1][3]), parts[0][4] + parts[1][4], occ
+
+    def _reservoir_term(self, st: _Setup, res: DFTBResult) -> float:
+        """sum_s N_s E_f,s of a fixed Fermi level, N_s from the output populations (DFTB+ NEf:
+        up and down with collinear spin, else N E_f)."""
+        ef = self.fixed_fermi_level
+        if st.spin is not None:
+            n_up, n_down = res.n_electrons_spin
+            return n_up * ef[0] + n_down * ef[1]
+        return res.n_electrons * ef[0]
 
     def _populations(self, st: _Setup, rho):
         """Mulliken populations per orbital (up + down) and the vector to mix."""
@@ -1932,3 +2118,47 @@ def _aufbau_shell_populations(basis: Basis, occupation: np.ndarray, charges) -> 
             raise ValueError(f"not enough orbitals on {basis.species[a]!r} (atom {a}) to hold "
                              f"the initial charge {charges[a]:g} (as in DFTB+)")
     return q
+
+
+def _truncation_spec(spec) -> tuple[float, bool]:
+    """(r_max in Bohr, hard_cutoff) of ``truncate_sk_range``: a distance, (r, hard) or
+    {"max_distance": r, "hard_cutoff": hard} (DFTB+ ``TruncateSKRange``, M6f)."""
+    if isinstance(spec, dict):
+        unknown = set(spec) - {"max_distance", "hard_cutoff"}
+        if unknown:
+            raise ValueError(f"truncate_sk_range: unknown keys {sorted(unknown)} (use "
+                             "'max_distance', 'hard_cutoff')")
+        return float(spec["max_distance"]), bool(spec.get("hard_cutoff", True))
+    if np.isscalar(spec):
+        return float(spec), True
+    r, hard = spec
+    return float(r), bool(hard)
+
+
+def _reference_occupation_table(spec: dict, basis: Basis, default: np.ndarray) -> np.ndarray:
+    """Per-shell reference populations with DFTB+'s ``CustomisedOccupations`` (M6f): ``spec``
+    maps an atom (0-based) to {shell letter: electrons} or one number per shell; shells not
+    given keep ``default`` (the SKF's occupations)."""
+    occ = np.array(default, float)
+    natom = len(basis.species)
+    first = np.searchsorted(basis.shell_atom, np.arange(natom))
+    for atom, val in spec.items():
+        a = int(atom)
+        if not 0 <= a < natom:
+            raise ValueError(f"reference_occupations: no atom {atom} (atoms 0..{natom - 1})")
+        ls = [int(x) for x in basis.shells[a]]
+        names = ["spdf"[l] for l in ls]
+        if isinstance(val, dict):
+            for key, x in val.items():
+                name = str(key).lower()
+                if name not in names:
+                    raise ValueError(f"reference_occupations[{atom}]: no shell {key!r} on "
+                                     f"{basis.species[a]} (shells {' '.join(names)})")
+                occ[first[a] + names.index(name)] = float(x)
+        else:
+            v = np.asarray(val, float).ravel()
+            if v.size != len(ls):
+                raise ValueError(f"reference_occupations[{atom}] needs one number per shell of "
+                                 f"{basis.species[a]} ({' '.join(names)}), not {v.size}")
+            occ[first[a]:first[a] + len(ls)] = v
+    return occ

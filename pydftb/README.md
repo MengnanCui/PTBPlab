@@ -246,6 +246,28 @@ With collinear spin, `PyDFTB` starts from the atoms' initial magnetic moments wh
 not all zero.  NumPy engine only.  Details:
 [`docs/reports/M6f1-scc-start-mixers.html`](docs/reports/M6f1-scc-start-mixers.html).
 
+### Fixed Fermi levels and overrides of the Hamiltonian block
+
+DFTB+'s `FixedFermiLevel`, `IndependentKFilling`, `CustomisedHubbards`,
+`CustomisedOccupations` and `TruncateSKRange`:
+
+```python
+r = DFTB(sk, smearing=("fermi", 300), fixed_fermi_level=-0.14).calculate(labels, pos)
+r.e_force_related, r.n_electrons     # F - N E_f (what the forces are the gradient of), N
+DFTB(sk, spin=True, ..., fixed_fermi_level=(-0.13, -0.24))     # up, down
+DFTB(sk, kpts=..., independent_k_filling=True)                 # every k-point on its own
+DFTB(sk, hubbard={"O": 0.5})                    # one U per type, or per shell; <= 0 keeps the SKF's
+DFTB(sk, reference_occupations={1: {"p": 4.2}})  # atom -> shell electrons: q0 and N change
+DFTB(sk, truncate_sk_range=6.0)                  # Bohr; {"max_distance": 6.0, "hard_cutoff": False}
+```
+
+With a fixed Fermi level the electron count follows the SCC (a reservoir); `energy` and
+`free_energy` keep DFTB+'s meaning and the forces and stress are those of `e_force_related`
+(also for the charged periodic cells, where DFTB+'s stress is 1e-8 to 4e-7 off).  `PyDFTB`
+takes the Fermi level in eV and the truncation in Angstrom, and reports `e_force_related` as
+the force-consistent `free_energy`.  NumPy engine only.  Details:
+[`docs/reports/M6f2-occupations-overrides.html`](docs/reports/M6f2-occupations-overrides.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

@@ -248,6 +248,7 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | 外加电场、外部点电荷（QM/MM） | ✅ M6c 完成（周期体系为 DFTB+ 的锯齿势；点电荷可加高斯展宽，周期体系用 Ewald，给出点电荷受的力，可接 ASE 的 EIQMMM；原子格点势；只有 NumPy 引擎；12 个 DFTB+ 参考算例全部通过，SCC 轮数相同） | 中–高 |
 | 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照）；XL-BOMD ✅ M6e 完成（DFTB+ 的 `Xlbomd`、`XlbomdFast`：积分器、影子能量与它的力、`ForceEvaluation`；7 个 DFTB+ 轨迹算例与 DFTB+ 一致到它打印的位数，每步 SCC 轮数相同）[文献 X1、S12] | 低–中（前期可直接用 ASE 驱动，接口已有） |
 | SCC 的起点与重启（初始电荷、初始自旋、电荷文件） | ✅ M6f-1 完成（DFTB+ 的 `InitialCharges`、共线 `InitialSpins`、读写 charges.bin/.dat，文本逐字节相同；只有 NumPy 引擎；25 个 DFTB+ 参考算例与 1 条 MD 全部通过，SCC 轮数逐个相同） | 低 |
+| 固定费米能级、按 k 点填充、参数覆盖（自定义 U、参考占据、SK 截断） | ✅ M6f-2 完成（DFTB+ 的 `FixedFermiLevel`、`IndependentKFilling`、`CustomisedHubbards`、`CustomisedOccupations`、`TruncateSKRange`；力与应力是力相关能量 F − Σ N<sub>s</sub>E<sub>f,s</sub> 的梯度，带电晶胞的应力比 DFTB+ 的对；只有 NumPy 引擎；20 个 DFTB+ 参考算例全部通过，SCC 轮数逐个相同） | 低 |
 | 声子、极化率 | ⬜ M6g（DFTB+ 的耦合微扰极化率、响应核、Born 电荷，以及数值 Hessian） | 中（有自动求导后更容易） |
 | 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力 ✅ M6e 完成（Z 向量方法，单重态、三重态、自旋极化，含外场、点电荷、阻尼和能量窗口的完整导数；激发态的电荷与偶极，激发态的结构优化与 MD；11 个单点和 2 个驱动的 DFTB+ 参考算例全部通过）[文献 S8–S11] | 中–高 |
 | 输运（NEGF，算电流） | ⬜ | **很高**（建议直接调用 libNEGF） |

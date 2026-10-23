@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-2 占据与参数覆盖报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6f-2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-2 · 完成报告</p>
+    <h1>占据与参数覆盖</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-23</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6f2-occupations-overrides.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在支持 DFTB+ 的五个选项：固定费米能级（<code>FixedFermiLevel</code>）、每个 k 点单独填充（<code>IndependentKFilling</code>）、自定义 Hubbard U（<code>CustomisedHubbards</code>）、自定义参考占据（<code>CustomisedOccupations</code>，“虚拟掺杂”）、截断 SK 表（<code>TruncateSKRange</code>）。与 DFTB+ 对照时沿用 M6f-1 的严格标准：SCC 轮数逐个相同，每一轮的 SCC 误差也相同。只在 NumPy 引擎中；不用这些选项时逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：20 个新的参考算例全部通过：
+        <ul>
+          <li>SCC 轮数逐个相同（最长 38 轮）；逐轮误差的相对差多数 ≤ 1e-6；</li>
+          <li>能量差 ≤ 1.0e-10 Ha，电荷差 ≤ 7.5e-11 e；固定费米能级时力相关能量 E<sub>FR</sub> 差 ≤ 5.3e-13 Ha、电子数差 ≤ 1.0e-10；</li>
+          <li>带电晶胞的应力与 DFTB+ 能量的应变差分一致到 8.1e-13（Cu fcc）和 1.3e-14（盒子中的 Cu<sub>4</sub>CO）。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的问题</strong>：带电周期晶胞（固定费米能级，或普通的 <code>Charge ≠ 0</code>）的应力不是 DFTB+ 自己能量的应变导数，Cu fcc 差 3.9e-7，只在对角元上、各向同性，像是中和背景的体积项；pydftb 给出正确的应力。<code>IndependentKFilling</code> 遇到共线自旋时 DFTB+ 25.1 崩溃，pydftb 拒绝。</li>
+      <li><strong>固定费米能级的 SCC 很脆弱</strong>（第五节）：分子里钉在 E<sub>f</sub> 上的半满能级（OH 自由基）就算 E<sub>f</sub> 取它自己的自洽值也不收敛；致密的周期体系没有恢复力，CuO 链 E<sub>f</sub> 升高 0.01 Ha 就“跑掉”到所有能带全满。两个程序行为相同，参考算例只选收敛平滑的体系。</li>
+      <li><strong>接口</strong>：<code>DFTB(fixed_fermi_level=…, independent_k_filling=…, hubbard=…, reference_occupations=…, truncate_sk_range=…)</code>；结果加 <code>e_force_related</code>、<code>n_electrons</code>、<code>q0_atom</code>。<code>energy</code>、<code>free_energy</code> 的含义不变；<code>PyDFTB</code> 用 eV、Å，固定费米能级时把 E<sub>FR</sub> 作为 ASE 的 force-consistent 能量。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">20</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">0</span><span class="lbl">SCC 轮数与 DFTB+ 之差</span></li>
+      <li><span class="num">3.9e-7</span><span class="lbl">带电晶胞上 DFTB+ 应力的误差（Ha/Bohr<sup>3</sup>）；pydftb 8e-13</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#margins">六、SCC 收敛的余量</a></li>
+      <li><a href="#tests">七、测试与门槛</a></li>
+      <li><a href="#deviations">八、与设计的偏差</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>occupations.py</code></td><td><code>fill_at</code>（在给定的 μ 上用 DFTB+ 的 <code>electronFill</code>）与 <code>fill_independent_k</code>（每个 k 点以权重 1 调用 <code>fill</code>，μ 与 TS 按 k 顺序加权相加），返回值与 <code>fill</code> 相同。</td></tr>
+            <tr><td><code>solvers.py</code></td><td><code>_density(..., occupations=None)</code>：可选的占据函数；None 时照旧调用 <code>fill</code>。</td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li><code>DFTB(fixed_fermi_level=…, independent_k_filling=…, hubbard=…, reference_occupations=…, truncate_sk_range=…)</code> 与各种组合的检查；</li>
+                <li><code>_solve</code> 最前面的新分支 <code>_solve_filling</code>：开了固定费米能级或按 k 点填充时，所有路径都走 <code>solver.eig</code> + 各通道的 <code>_channel_filling</code>；</li>
+                <li><code>DFTBResult.n_ef</code>（固定费米能级时的 Σ N<sub>s</sub>E<sub>f,s</sub>，由输出布居算，否则 None）、<code>q0_atom</code>（自定义占据时的参考布居）；属性 <code>e_force_related</code>、<code>n_electrons</code>、<code>n_electrons_spin</code>；</li>
+                <li><code>_reference_shell_populations</code>：没有自定义时与原来的表达式相同，用于 <code>_sites</code>、各种起点、块势；<code>_reference_occupation_table</code>、<code>_truncation_spec</code>；</li>
+                <li><code>populations_from_file</code> 在固定费米能级时不查电子数与磁化（同 DFTB+）；<code>numpy_only_options</code> 列入五个新选项。</li>
+              </ul>
+              默认参数走原来的代码。</td></tr>
+            <tr><td><code>skf.py</code></td><td><code>SKSet.with_hubbard</code>（浅副本，只换 <code>hubbard</code> 字典）与 <code>SKSet.truncated</code>（浅副本，被截的文件换成 <code>dataclasses.replace(f, table=f.table[:n], _coef=None)</code> 的新对象，按 (R, hard) 缓存在原 SKSet 上，不改共享的 <code>SKFile</code>）。</td></tr>
+            <tr><td><code>blockpot.py</code>、<code>bands.py</code></td><td><code>BlockTerms.build(shell_occupation=…)</code>：onsite 修正的 q − q<sub>0</sub> 用自定义的 q<sub>0</sub>；<code>bands._fill</code> 用与 SCC 相同的填充（能带运行也在固定费米能级上填）。</td></tr>
+            <tr><td><code>ase_calc.py</code>、<code>api.py</code></td><td><code>PyDFTB</code> 的五个新选项（费米能级用 eV、截断距离用 Å）；<code>free_energy</code> 取 <code>e_force_related</code>；电荷相对 <code>q0_atom</code>；<code>api.SCC.mulliken</code> 同样。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>cases.py</code>：<code>Case.fermi</code>、<code>hubbard</code>、<code>occupations</code>、<code>truncate_sk</code>、<code>stress_fd</code>，<code>TOL_FILL</code>，几何 <code>_cu4co_box</code>，20 个算例；</li>
+                <li><code>dftbplus.py</code>：<code>filling_block(filling, fermi)</code>、<code>custom_hubbards_block</code>、<code>custom_occupations_block</code>、<code>truncate_block</code>；解析 results.tag 的 <code>forcerelated_energy</code>、<code>number_of_electrons</code>；</li>
+                <li><code>refgen.py</code>：<code>fill_options</code>、<code>fermi_hsd</code>；<code>stress_fd</code>（DFTB+ 能量的 4 点应变差分，24 次运行）；<code>_compare_fill</code>（E<sub>FR</sub>、电子数、费米能级，并记录 DFTB+ 自己的应力偏差）；<code>_neutral_populations</code> 用自定义的 q<sub>0</sub>；M6f 的算例都比较 SCC 轮数与逐轮误差。</li>
+              </ul>
+            </td></tr>
+            <tr><td>测试</td><td>20 个参考 JSON；<code>tests/test_occupations_overrides.py</code>（25 项）。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb import DFTB
+
+calc = DFTB(sk, smearing=("fermi", 300), fixed_fermi_level=-0.140)   # Hartree
+r = calc.calculate(labels, positions)
+r.energy, r.free_energy        # DFTB+ 的 Total energy、Total Mermin free energy
+r.e_force_related              # F − N E_f：力和应力是它的梯度（DFTB+ results.tag 的 mermin_energy）
+r.n_electrons                  # 体系现在有多少电子（N 随 SCC 变化）
+DFTB(sk, spin=True, ..., fixed_fermi_level=(-0.13, -0.24))           # 共线：上、下各一个
+
+DFTB(sk, kpts=..., independent_k_filling=True)          # 每个 k 点单独填充，r.fermi 为加权平均
+DFTB(sk, hubbard={"O": 0.5, "H": -1.0})                  # ≤ 0 保留 SKF 的值
+DFTB(sk_shell_resolved, hubbard={"Cu": [0.3, 0.0, 0.4]}) # 壳层分辨时每壳层一个
+DFTB(sk, reference_occupations={1: {"p": 4.2}})          # 原子 1（0 起）的 p 壳层参考 4.2 个电子
+r.q0_atom - r.charges                                    # 相对自定义参考的 Mulliken 电荷
+DFTB(sk, truncate_sk_range=6.0)                          # Bohr；或 {"max_distance": 6.0, "hard_cutoff": False}
+
+atoms.calc = PyDFTB(skdir, smearing=("fermi", 300), fixed_fermi_level=-3.81)   # eV
+atoms.get_potential_energy(force_consistent=True)       # E_FR，与力一致</code></pre>
+      <ul>
+        <li><strong>固定费米能级</strong>：体系与电子库交换电子。分子要有展宽，费米能级不能正好钉住一个半满的能级；周期体系里均匀加减电子不改变能级，SCC 可能“跑掉”（第五节）。不能与 <code>relax_total_spin</code>、<code>independent_k_filling</code>、Casida、XL-BOMD、SP2 求解器同用。</li>
+        <li><strong>按 k 点填充</strong>：周期体系，无自旋或两分量；共线自旋时报错（DFTB+ 25.1 在此崩溃）。只有 Γ 点时与普通填充逐位相同。</li>
+        <li><strong>自定义 U 与 SK 截断</strong>：作用在 SK 集合的副本上（<code>calc.sk</code>）；传入的 SKSet 不变，所以同一个 SKSet 可以给别的计算器继续用。截断时与 DFTB+ 一样发出警告。</li>
+        <li><strong>自定义占据</strong>：每个原子一个字典或每个壳层一个数；电子数是 Σq<sub>0</sub> − <code>charge</code>。分数电子数的分子要加展宽（第五节第 4 条）。不能与 Casida 同用（同 DFTB+）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>DFTB+ 25.1，参数为测试用的 <code>ptbp_hcocu</code>，周期体系 <code>EwaldTolerance = 1e-12</code>。SCC 容差按算例选，使 DFTB+ 最后两轮的误差离阈值至少约 2 倍（第六节）。“SCC 误差”是逐轮误差的最大相对差（只比较 DFTB+ 打印值大于 1e-7 的轮）；“E<sub>FR</sub>、N”是 results.tag 的 <code>forcerelated_energy</code> 与 <code>number_of_electrons</code> 之差。带 * 的应力是对 DFTB+ 能量的应变差分 <code>stress_fd</code> 比较的，括号里是 DFTB+ 自己的解析应力与它之差。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>|ΔE| Ha</th><th>|ΔF| Ha/Bohr</th><th>|Δq| e</th><th>|Δσ|</th><th>SCC 轮数</th><th>SCC 误差</th><th>|ΔE<sub>FR</sub>| / |ΔN|</th></tr></thead>
+        <tbody>
+<tr><td><code>cu_fcc_k6_fixed_ef</code></td><td>E<sub>f</sub> = −0.10，1000 K，k 6×6×6，晶胞带电 +0.023</td><td>2.6e-11</td><td>1.2e-21</td><td>3.5e-13</td><td>8.1e-13*（3.9e-07）</td><td>8/8</td><td>2.4e-08</td><td>8.2e-15 / 3.8e-13</td></tr>
+<tr><td><code>cu4co_300K_fixed_ef</code></td><td>E<sub>f</sub> = −0.140，N = 54.03，容差 1e-9</td><td>4.3e-11</td><td>1.6e-08</td><td>3.0e-11</td><td>—</td><td>38/38</td><td>3.4e-04</td><td>1.8e-15 / 1.0e-10</td></tr>
+<tr><td><code>cu4co_box_fixed_ef</code></td><td>同上放在盒子中（Γ），带电 −0.081，力与应力</td><td>3.8e-12</td><td>1.6e-08</td><td>2.6e-11</td><td>1.3e-14*（1.0e-08）</td><td>20/20</td><td>8.1e-07</td><td>5.3e-13 / 6.3e-12</td></tr>
+<tr><td><code>o2_triplet_fixed_ef_1000K</code></td><td>共线，(−0.13, −0.24)，N = (7, 5.009)</td><td>4.2e-11</td><td>1.4e-08</td><td>5.6e-15</td><td>—</td><td>9/9</td><td>3.4e-08</td><td>4.4e-15 / 8.9e-16</td></tr>
+<tr><td><code>o2_noncolinear_soc_fixed_ef_1000K</code></td><td>两分量 SOC，E<sub>f</sub> = −0.25</td><td>2.5e-11</td><td>1.4e-08</td><td>2.9e-15</td><td>—</td><td>15/15</td><td>3.5e-08</td><td>8.9e-16 / 4.4e-14</td></tr>
+<tr><td><code>cuo_chain_k422_indep_k</code></td><td>按 k 点填充，k 4×2×2</td><td>2.3e-11</td><td>8.9e-09</td><td>4.0e-11</td><td>2.0e-10</td><td>18/18</td><td>4.5e-08</td><td>6.8e-12 / 0.0e+00</td></tr>
+<tr><td><code>cu8_distorted_k355_mp2_2000K_indep_k</code></td><td>按 k 点填充，MP 2 阶</td><td>4.9e-11</td><td>4.6e-07</td><td>7.9e-13</td><td>2.5e-09</td><td>10/10</td><td>3.2e-08</td><td>2.5e-14 / 5.0e-09</td></tr>
+<tr><td><code>cuo_chain_noncolinear_k422_indep_k</code></td><td>按 k 点填充，非共线</td><td>4.3e-11</td><td>8.9e-09</td><td>4.4e-11</td><td>2.0e-10</td><td>23/23</td><td>6.4e-07</td><td>6.6e-12 / 7.1e-15</td></tr>
+<tr><td><code>cuo_chain_soc_k422_indep_k</code></td><td>按 k 点填充，SOC</td><td>5.0e-11</td><td>8.8e-09</td><td>4.2e-11</td><td>2.0e-10</td><td>18/18</td><td>2.5e-07</td><td>7.2e-12 / 0.0e+00</td></tr>
+<tr><td><code>ch3oh_custom_hubbards</code></td><td>O = 0.5，H = −1（保留）</td><td>4.7e-11</td><td>1.3e-08</td><td>1.4e-14</td><td>—</td><td>12/12</td><td>3.7e-08</td><td>2.7e-15 / 0.0e+00</td></tr>
+<tr><td><code>cu4co_shell_custom_hubbards</code></td><td>壳层分辨，Cu 0.3 0.0 0.4，C、O 也设</td><td>1.9e-11</td><td>1.7e-08</td><td>8.1e-13</td><td>—</td><td>18/18</td><td>3.5e-07</td><td>8.9e-15 / 1.4e-14</td></tr>
+<tr><td><code>ch3oh_dftb3_custom_hubbards</code></td><td>DFTB3：三阶也用新的 U</td><td>3.5e-11</td><td>1.2e-08</td><td>1.9e-14</td><td>—</td><td>12/12</td><td>4.1e-08</td><td>4.4e-15 / 7.1e-15</td></tr>
+<tr><td><code>cuo_chain_k422_custom_hubbards</code></td><td>周期体系，Cu = 0.3，应力</td><td>1.5e-11</td><td>9.1e-09</td><td>3.6e-11</td><td>2.1e-10</td><td>16/16</td><td>2.9e-08</td><td>6.2e-12 / 7.1e-15</td></tr>
+<tr><td><code>ch3oh_custom_occupations_300K</code></td><td>O 的 p = 4.2，N = 14.2，300 K</td><td>2.8e-11</td><td>1.4e-08</td><td>2.9e-15</td><td>—</td><td>12/12</td><td>3.8e-08</td><td>5.3e-15 / 0.0e+00</td></tr>
+<tr><td><code>ch3oh_custom_occupations_c</code></td><td>C 2s<sup>1.5</sup>2p<sup>2.5</sup>，N 不变</td><td>9.3e-12</td><td>1.4e-08</td><td>5.5e-15</td><td>—</td><td>12/12</td><td>2.6e-08</td><td>8.9e-16 / 3.6e-15</td></tr>
+<tr><td><code>cu4co_plusu_custom_occ</code></td><td>+U，Cu 的 d = 9.8</td><td>1.9e-11</td><td>1.7e-08</td><td>2.1e-13</td><td>—</td><td>18/18</td><td>1.5e-06</td><td>5.2e-14 / 0.0e+00</td></tr>
+<tr><td><code>ch3oh_ons_custom_occ</code></td><td>onsite 修正，O 2s<sup>1.8</sup>2p<sup>4.2</sup></td><td>1.2e-11</td><td>1.3e-08</td><td>1.5e-14</td><td>—</td><td>16/16</td><td>2.8e-07</td><td>1.8e-15 / 3.6e-15</td></tr>
+<tr><td><code>cuo_chain_spin_k422_custom_occ</code></td><td>周期加共线自旋，Cu 的 d = 9.9</td><td>4.1e-11</td><td>9.1e-09</td><td>4.5e-11</td><td>2.0e-10</td><td>23/23</td><td>2.0e-07</td><td>6.6e-12 / 1.8e-15</td></tr>
+<tr><td><code>water_dimer_truncated_sk</code></td><td>SK 截断 R = 6 Bohr（hard）</td><td>1.3e-12</td><td>1.0e-08</td><td>3.1e-12</td><td>—</td><td>11/11</td><td>1.7e-08</td><td>1.9e-12 / 1.8e-15</td></tr>
+<tr><td><code>water_box_truncated_sk_soft</code></td><td>R = 6 Bohr，HardCutOff = No，应力</td><td>1.0e-10</td><td>1.1e-08</td><td>7.5e-11</td><td>3.9e-11</td><td>18/18</td><td>9.9e-08</td><td>5.9e-11 / 2.8e-14</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>Cu<sub>8</sub> 的 MP 2 阶算例的力差 4.6e-7、应力差 2.5e-9，与原来的 <code>cu8_distorted_k355_mp2_2000K</code>（4.7e-7、2.6e-9）相同，来自 DFTB+ 的 MP 力（M1 以来已知），不是按 k 点填充带来的。</li>
+        <li>按 k 点填充时 DFTB+ 报告的费米能级是各 k 点费米能级的加权平均，pydftb 一致到 1e-11 Ha。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <ul>
+        <li><strong>填充函数</strong>：<code>fill_at</code> 在 <code>fill</code> 找到的费米能级上给出它的占据和 TS（Fermi、MP 2 阶、Gaussian），差 ≤ 1e-12；<code>fill_independent_k</code> 只有一个 k 点时与 <code>fill</code> 逐位相同，多个 k 点时每个 k 点各放 N 个电子。</li>
+        <li><strong>固定在自洽费米能级上</strong>：Cu<sub>4</sub>CO 固定在普通计算的费米能级上，电子数仍为 54（1e-8），能量、电荷、力与普通计算一致（1e-9、1e-8、1e-7），E<sub>FR</sub> = F − N E<sub>f</sub>。</li>
+        <li><strong>力和应力是 E<sub>FR</sub> 的梯度</strong>（4 点差分）：分子、共线自旋的两个费米能级、两分量 SOC 的力一致到 2e-8；Cu<sub>4</sub>CO 的 E<sub>Mermin</sub> 的差分与力差 1e-3 以上；带电晶胞（Cu fcc、盒子中的 Cu<sub>4</sub>CO）的应力一致到 1e-11；按 k 点填充的 CuO 链，力与应力是 Mermin 自由能的梯度。</li>
+        <li><strong>能带与电荷文件</strong>：固定费米能级的能带运行在给定的 E<sub>f</sub> 上填，占据与 SCC 的一致；电子数不同的电荷文件在固定费米能级时被接受，普通计算报错。</li>
+        <li><strong>自定义 U</strong>：<code>with_hubbard</code> 只换大于 0 的值、原 SKSet 不变；与手工改写 O-O.skf 的 U 后建的 SKSet 结果逐位相同；全部 ≤ 0 时与不设逐位相同。</li>
+        <li><strong>自定义占据</strong>：等于 SKF 的值时与不设逐位相同；O 的 p = 4.2 时电子数 14.2、相对 q<sub>0</sub> 的电荷和为零、偶极相对新的 q<sub>0</sub>；共线自旋与 onsite 修正的起点；ASE 的电荷；错误的原子、壳层、个数都报错。</li>
+        <li><strong>SK 截断</strong>：原 SKSet、文件对象、表和插值缓存都不变；同一截断返回同一个副本；行数 n = min(⌊R′/Δr⌋, 行数)，截断后的 cutoff ≤ R（hard）或 ≤ R + 1（soft）；比表长的截断逐位不变；太短、少于 8 个点时报错。</li>
+        <li><strong>拒绝</strong>：各种不支持的组合、torch 后端、<code>pydftb.autodiff.evaluate</code>。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <h3>1. 固定费米能级</h3>
+      <ul>
+        <li>results.tag 的 <code>mermin_energy</code> 在固定费米能级时写的是 E<sub>FR</sub> = E<sub>Mermin</sub> − Σ N<sub>s</sub>E<sub>f,s</sub>（另有 <code>forcerelated_energy</code>）；读 results.tag 当作 Mermin 能量的脚本会拿到错的数。</li>
+        <li>NEf 用输出布居：共线自旋时 N<sub>↑</sub>E<sub>f,↑</sub> + N<sub>↓</sub>E<sub>f,↓</sub>，由 (q, m) 换成上、下；力是 E<sub>FR</sub> 的梯度。</li>
+        <li>SCC 很脆弱（设计文档第二节的 13 组探针）：
+          <ul>
+            <li>OH 自由基自旋向下的 π 能级半满，钉在 E<sub>f</sub> 上，反馈增益 U/(4kT) 在 300 K 约 100，Broyden 收不住，E<sub>f</sub> 取它自己的自洽值也 500 轮不收敛；</li>
+            <li>CuO 链：周期体系中均匀电荷被中和背景抵消，多一个电子能级反而下降，E<sub>f</sub> + 0.01 Ha 时收敛到所有能带全满（N = 52，原子电荷 −7、−2），−0.01 Ha 时不收敛，取自洽值要 324 轮；</li>
+            <li>Cu fcc（单原子）收敛，但 E<sub>f</sub> 升高 0.02 Ha 后电子反而少了 0.02 个：能级升得比 E<sub>f</sub> 更多；</li>
+            <li>收敛平滑的：Cu<sub>4</sub>CO（300 K）、盒子中的 Cu<sub>4</sub>CO、1000 K 的 O<sub>2</sub>（E<sub>f</sub> 略低于空的 π*）。</li>
+          </ul>
+        </li>
+        <li>读电荷文件时不查电子数和磁化；<code>RelaxTotalSpin</code> 被默默忽略；<code>IndependentKFilling</code> 不读。</li>
+      </ul>
+      <h3>2. 带电晶胞的应力</h3>
+      <ul>
+        <li>DFTB+ 的解析应力与它自己能量的应变差分之差：Cu fcc（带电 +0.023）3.9e-7，盒子中的 Cu<sub>4</sub>CO（−0.081）1.0e-8，CuO 链 <code>Charge = −0.3</code>（普通填充）3.5e-6。只在对角元上、各向同性。能量与力 pydftb 与 DFTB+ 一致，pydftb 的应力与它自己能量的应变差分一致到 1e-11。</li>
+        <li>参考算例的 <code>stress_fd</code> 要用 4 点公式：两点公式（h = 1e-4）在 Cu fcc 上留下 1.1e-9 的 h<sup>2</sup> 误差，h 加倍时 4.4e-9，Richardson 外推后正好是 pydftb 的解析应力。</li>
+      </ul>
+      <h3>3. 按 k 点填充</h3>
+      <ul>
+        <li>共线自旋时 DFTB+ 25.1 崩溃（<code>kWeightTmp(:nSpinHams)</code> 越界，“munmap_chunk(): invalid pointer”）；pydftb 拒绝。</li>
+        <li>每个 k 点各走中隙规则：整数电子数、有带隙时每个 k 点的费米能级在它自己的带隙中间（电子数差在 1e-7 内就接受，所以 MP 展宽时每个 k 点的电子数可差 2e-9）。</li>
+      </ul>
+      <h3>4. 自定义参数</h3>
+      <ul>
+        <li><code>CustomisedOccupations</code> 必须写在 <code>Hamiltonian</code> 里；写在顶层 DFTB+ 报“未处理的节点”。原子从 1 数起，一个块里只能是同一类型。</li>
+        <li>分数电子数（CH<sub>3</sub>OH 的 O 的 p = 4.2，14.2 个电子）在 T ≈ 0 时最高占据轨道只有 0.1 个电子，费米能级的二分法只能把 N 定到约 1e-9，SCC 误差停在 1e-10–1e-9：DFTB+ 碰巧第 12 轮落到 7.8e-14，pydftb 前 11 轮与它一致、之后要 44 轮。加 300 K 展宽后两者都是 12 轮。</li>
+        <li><code>CustomisedHubbards</code> 让同一原子上两个壳层的 U 相等时，DFTB+ 把它们合成一个混合类，pydftb 分开混合（M6f-1 已记录）；壳层分辨的算例给 C、O 也设不同的值避开。</li>
+        <li><code>TruncateSKRange</code> 的 HardCutOff 先减去 1 Bohr 的尾巴：水二聚体（H–X 阻尼）在 R = 6 Bohr 时分子间的原子对落在新的尾巴里，能量变化 −2.5e-4 Ha；不减尾巴（HardCutOff = No）时只变 +8.8e-6 Ha。</li>
+      </ul>
+    </section>
+
+    <section id="margins">
+      <h2>六、SCC 收敛的余量</h2>
+      <p>逐轮比较要求两个程序在同一轮停下，所以最后两轮的误差不能离阈值太近：1e-10 附近的误差已是舍入量级（固定费米能级时尤其明显，Cu<sub>4</sub>CO 的第 38 轮 DFTB+ 1.1e-10、pydftb 8e-11）。下表是 DFTB+ 倒数第二轮误差与阈值之比、阈值与最后一轮误差之比，以及因此选的 SCC 容差。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>容差</th><th>轮数</th><th>倒数第二轮 / 容差</th><th>容差 / 最后一轮</th></tr></thead>
+        <tbody>
+<tr><td><code>cu_fcc_k6_fixed_ef</code></td><td>1e-10</td><td>8</td><td>18.3</td><td>3311.5</td></tr>
+<tr><td><code>cu4co_300K_fixed_ef</code></td><td>1e-09</td><td>38</td><td>9.5</td><td>9.0</td></tr>
+<tr><td><code>cu4co_box_fixed_ef</code></td><td>1e-09</td><td>20</td><td>11.1</td><td>8.0</td></tr>
+<tr><td><code>o2_triplet_fixed_ef_1000K</code></td><td>1e-07</td><td>9</td><td>11344.6</td><td>3.3</td></tr>
+<tr><td><code>o2_noncolinear_soc_fixed_ef_1000K</code></td><td>1e-10</td><td>15</td><td>14.8</td><td>10.4</td></tr>
+<tr><td><code>cuo_chain_k422_indep_k</code></td><td>1e-10</td><td>18</td><td>10.4</td><td>10.5</td></tr>
+<tr><td><code>cu8_distorted_k355_mp2_2000K_indep_k</code></td><td>1e-10</td><td>10</td><td>5.9</td><td>5.2</td></tr>
+<tr><td><code>cuo_chain_noncolinear_k422_indep_k</code></td><td>1e-09</td><td>23</td><td>2.2</td><td>2.7</td></tr>
+<tr><td><code>cuo_chain_soc_k422_indep_k</code></td><td>1e-10</td><td>18</td><td>91.1</td><td>16.3</td></tr>
+<tr><td><code>ch3oh_custom_hubbards</code></td><td>1e-10</td><td>12</td><td>47.4</td><td>1958.1</td></tr>
+<tr><td><code>cu4co_shell_custom_hubbards</code></td><td>1e-09</td><td>18</td><td>12.8</td><td>5.9</td></tr>
+<tr><td><code>ch3oh_dftb3_custom_hubbards</code></td><td>1e-10</td><td>12</td><td>203.8</td><td>50.2</td></tr>
+<tr><td><code>cuo_chain_k422_custom_hubbards</code></td><td>1e-10</td><td>16</td><td>347.7</td><td>20.8</td></tr>
+<tr><td><code>ch3oh_custom_occupations_300K</code></td><td>1e-10</td><td>12</td><td>55.7</td><td>1294.1</td></tr>
+<tr><td><code>ch3oh_custom_occupations_c</code></td><td>1e-10</td><td>12</td><td>97.9</td><td>69.6</td></tr>
+<tr><td><code>cu4co_plusu_custom_occ</code></td><td>1e-10</td><td>18</td><td>5.5</td><td>9.0</td></tr>
+<tr><td><code>ch3oh_ons_custom_occ</code></td><td>1e-09</td><td>16</td><td>3.7</td><td>2.3</td></tr>
+<tr><td><code>cuo_chain_spin_k422_custom_occ</code></td><td>5e-09</td><td>23</td><td>3.4</td><td>4.5</td></tr>
+<tr><td><code>water_dimer_truncated_sk</code></td><td>1e-09</td><td>11</td><td>2062.8</td><td>29.8</td></tr>
+<tr><td><code>water_box_truncated_sk_soft</code></td><td>1e-09</td><td>18</td><td>4.7</td><td>2.1</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>七、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6f-1 的记录提交 <code>d6db083</code> 逐字节比较（<code>--allow-new n_ef q0_atom</code>）</td><td>conda 环境 579 次计算、127,516 个量，最小环境 540 次、120,301 个量，逐位相同；新算例的 60 次计算（20 个单点 × 3 种求解设置）只在工作树中，不比较</td></tr>
+          <tr><td>参考</td><td><code>refgen --check</code>（NumPy、torch；29 个 Casida 算例另用 <code>--casida-solver exact</code>、<code>davidson</code>、<code>arpack</code>），<code>dynamics --check</code></td><td>NumPy：204 个单点全部通过（其中新增 20 个）；Casida 算例用三种求解器各检查一遍，全部通过；torch：74 个通过，NumPy 专有的 130 个（新增的 20 个都是）按设计跳过；23 个优化/MD 全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 847 个通过、130 个跳过（NumPy 专有参考算例的 torch 参数化）；最小环境 617 个通过、239 个跳过；最小环境 + torch 813 个通过、164 个跳过。比 M6f-1 多出的 45 个与新测试一致（20 个参考算例、<code>test_occupations_overrides.py</code> 25 项；最小环境没有 torch，5 项拒绝测试跳过）。第一遍时 <code>o2_triplet_fixed_ef_1000K</code> 的力差分测试失败：该算例的 SCC 容差后来放宽到 1e-7，测试改为最多 1e-9 后通过（只改测试）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>224 个通过，7 个已知的界面冒烟测试失败（与之前相同），1 个跳过</td></tr>
+          <tr><td>PTBP 结果</td><td><code>tools/engine_parity.py --compare-serial</code>，发表点</td><td>energygeometry 损失 0.9198547924（与 M6f-1 相同），1 核与自动核数逐位相同（PTBP 不用这些选项）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与设计的偏差</h2>
+      <ul>
+        <li><strong>算例</strong>：
+          <ul>
+            <li>固定费米能级：<code>cuo_chain_k422_fixed_ef</code> 不能用（DFTB+ 自己“跑掉”或不收敛），改为盒子中的 Cu<sub>4</sub>CO（<code>cu4co_box_fixed_ef</code>，力与应力）；共线自旋的分子用 1000 K 的 O<sub>2</sub>（OH 与 Cu<sub>4</sub>CO 三重态都不收敛）；另加两分量的 <code>o2_noncolinear_soc_fixed_ef_1000K</code>；</li>
+            <li>按 k 点填充：另加 SOC 的 <code>cuo_chain_soc_k422_indep_k</code>；</li>
+            <li>自定义 U：另加周期体系的 <code>cuo_chain_k422_custom_hubbards</code>；壳层分辨的算例给 C、O 也设了值（避开 U 相等的壳层）；</li>
+            <li>自定义占据：CH<sub>3</sub>OH 的 O p = 4.2 改用 300 K（第五节第 4 条），另加电子数不变的 <code>ch3oh_custom_occupations_c</code>；onsite 修正用 CH<sub>3</sub>OH（<code>ch3oh_ons_custom_occ</code>）。</li>
+          </ul>
+        </li>
+        <li><strong><code>stress_fd</code></strong>：设计中是两点差分（12 次运行），改为 4 点（24 次），原因见第五节第 2 条。</li>
+        <li><strong>新字段</strong>：设计中 <code>e_force_related</code>、<code>n_electrons</code> 是字段，实际做成属性，字段只有 <code>n_ef</code> 与 <code>q0_atom</code>（默认 None），golden 的 <code>--allow-new</code> 只放这两个。</li>
+        <li><strong>PyDFTB 的能量</strong>：设计中固定费米能级时 <code>energy</code> 和 <code>free_energy</code> 都取 E<sub>FR</sub>；实际 <code>energy</code> 仍是 Total energy（ASE + DFTB+ 读的就是它），只有 force-consistent 的 <code>free_energy</code> 取 E<sub>FR</sub>。</li>
+        <li><strong>SCC 容差</strong>：9 个算例放宽到 1e-9 – 1e-7，使收敛判断离阈值足够远（第六节）；Cu<sub>4</sub>CO 固定费米能级算例的逐轮误差容差放宽到 1e-3（38 轮后 2e-7 处的舍入）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li>M6f-3：修正项（H5、卤素修正、偶极修正）；先限时约 1 小时编译开发版 DFTB+（偶极修正与周期体系的卤素修正 25.1 没有）。</li>
+        <li>之后 M6f-4 分析输出、M6f-5 SelectedShells；再做 M6g、M6h。PTBP 的参数化不变：每个元素三个参数 r0_w、r0_d、σ_rep。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6f2-occupations-overrides.html">← M6f-2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M6f-2</span>
+  </footer>
+</div>
+</body>
+</html>

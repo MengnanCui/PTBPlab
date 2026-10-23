@@ -256,6 +256,14 @@ def _kpoint_set(kpts):
 def _fill(engine, st, evals, kw):
     """Occupations and Fermi level(s) at these k-points, as the SCC loop fills (``_solve``)."""
     sm = engine.smearing
+    if engine._custom_filling:      # a fixed Fermi level or independent k-points (M6f)
+        if st.spin is None:
+            sf = 1.0 if st.pauli is not None else 2.0
+            occ, mu, _ = engine._channel_filling(0)(evals[0], kw, st.nelec, sm, sf)
+            return np.array(occ)[None], np.array([mu])
+        parts = [engine._channel_filling(s)(evals[s], kw, n, sm, 1.0)
+                 for s, n in ((0, st.spin.n_up), (1, st.spin.n_down))]
+        return np.array([np.array(p[0]) for p in parts]), np.array([p[1] for p in parts])
     if st.pauli is not None:
         occ, mu, _ = fill(evals[0], kw, st.nelec, sm, spin_factor=1.0)
         return np.array(occ)[None], np.array([mu])
