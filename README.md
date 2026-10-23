@@ -347,6 +347,25 @@ the same `.x / .fun / .x_iters / .func_vals` shape as skopt, so all the
 post-processing paths (convergence plot, best-folder copy, results.tgz)
 just work.
 
+**Failed steps.** A step can fail: DFTB+ or pydftb stops (for example on an overlap matrix
+that is not positive definite at very large r0_w), hotcent writes no SKF, and so on. The
+optimiser still gets a loss for it:
+
+- `energygeometry`: a random integer 97-99, far above the real losses of this mode
+  (about 1-4).
+- `dataset` / `reaction`: the next float above the largest loss of a successful step so far
+  (1e6 before the first one). Real losses in these modes are much larger (Cu: about
+  210-7000), so 97-99 would make a failure look like the best point. With this value BO,
+  batched BO and PSO rank failed points after every real loss seen, and report one as the
+  optimum only if every step failed. With `--optimizer parallel_bo` the value is set once
+  its round's successes are in, so `par.out` can show a lower one.
+
+The loss marks failed evaluations (`Loss.failed`; a BO result has `failed`, one flag per
+evaluation), and the gradient optimisers and `tools/bo_vs_grad.py` go by that mark, not by
+the value. Resuming a dataset or reaction `checkpoint.pkl` written before this change turns
+its stored failures (exactly 97, 98 or 99) into the new value. Background:
+`pydftb/docs/reports/M4c-ptbp-gradient.html`, section 7.
+
 ### 4b. DFTB engine: DFTB+ or pydftb
 
 Every DFTB calculation in the optimisation loop can run either in DFTB+ (through ASE, the default) or in **pydftb**, the in-process Python engine in `pydftb/`. pydftb has been validated against DFTB+; see `pydftb/README.md`. With PyTorch installed, pydftb also gives the derivatives of energies, charges and forces with respect to the Slater-Koster tables and the other parameters (`pydftb.autodiff`, checked against finite differences); PTBP uses them for the gradient of its loss (section 4e). Beyond what PTBP needs, pydftb is being completed to cover DFTB+'s other features (so far non-collinear spin, spin-orbit coupling, DFTB+U and onsite corrections, external electric fields, point charges for QM/MM embedding, implicit solvation and Casida excited states; see `pydftb/docs/ROADMAP.md`).
@@ -439,10 +458,10 @@ ptbp optimize dft/dft.xyz --mode dataset --engine pydftb --optimizer bo_grad --n
   given the same time did not improve on its seed.  In the dataset mode the two tied (209.9
   vs 208.5).  Note that PTBP's default BO (`--n_calls 11`) evaluates the seed plus 10 random
   points (skopt's default `n_initial_points` is 10): the Gaussian process never picks one.
-- **Result**: as with BO, the lowest loss evaluated (failed steps, whose loss is 97-99,
-  excluded).  An evaluation without a gradient (a failed step, or an SCC that did not
-  converge in 1000 iterations, which happens for metals at T = 0) still counts for the
-  result, but the optimiser treats it as a rejected step.
+- **Result**: as with BO, the lowest loss evaluated, failed steps excluded (the loss marks
+  them, section 4).  The optimiser treats an evaluation without a gradient as a rejected
+  step: a failed step, or an SCC that did not converge in 1000 iterations (which happens
+  for metals at T = 0); the latter still counts for the result.
 - **Caveats**: hotcent's numerical noise makes the derivative uncertain by 1-3 %.  With
   hotcent 2.1 (perturbative confinement, every valence subshell confined), r0_d does not
   change the SKF files at all, so the loss depends on r0_d only through the penalty, whose

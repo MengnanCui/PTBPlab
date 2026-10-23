@@ -18,7 +18,7 @@ def _fun(f, g, fail=lambda x: False, calls=None):
         if calls is not None:
             calls.append(np.array(x))
         if fail(x):
-            return Evaluation(np.array(x), 98.0, None)      # a failed loss: no gradient
+            return Evaluation(np.array(x), 98.0, None, failed=True)    # no gradient
         return Evaluation(np.array(x), float(f(x)), np.asarray(g(x), float))
     return fun
 
@@ -67,7 +67,7 @@ def test_reproducible():
 
 
 def test_values_above_97_are_losses_not_failures():
-    """PTBP's failure values are 97-99, but real losses can be larger (dataset mode)."""
+    """Real losses can be larger than energygeometry's failure values 97-99 (dataset mode)."""
     f = lambda x: 400 + (x[0] - 3) ** 2 + (x[1] - 2) ** 2          # noqa: E731
     g = lambda x: [2 * (x[0] - 3), 2 * (x[1] - 2)]                 # noqa: E731
     best, _ = projected_bfgs(_fun(f, g), [1.0, 1.0], [0, 0], [5, 5], gtol=1e-8, xtol=1e-12)
@@ -76,18 +76,22 @@ def test_values_above_97_are_losses_not_failures():
 
 def test_the_result_is_the_lowest_real_loss():
     """As BO: the lowest loss evaluated, also one without a gradient (an SCC that did not
-    converge), never a failed step (97-99, below the real losses of the dataset mode)."""
+    converge), never a failed step (marked by the loss, whatever its value)."""
     ev = [Evaluation(np.array([1.0, 1.0]), 446.2, np.ones(2)),
-          Evaluation(np.array([2.0, 1.0]), 98.0, None),              # failed
+          Evaluation(np.array([2.0, 1.0]), 98.0, None, failed=True),
           Evaluation(np.array([3.0, 1.0]), 211.3, None),             # no gradient
           Evaluation(np.array([4.0, 1.0]), 216.9, np.ones(2))]
     assert GO.lowest(ev) is ev[2]
     assert GO.lowest(ev[1:2]) is None and GO.lowest(ev[1:2], ev[0]) is ev[0]
-    assert GO.failed(97) and not GO.failed(97.0000001)
+    # the mark decides, not the value
+    assert Evaluation(np.array([2.0, 1.0]), 98.0, None).valid
+    assert not Evaluation(np.array([2.0, 1.0]), 1.0, None, failed=True).valid
 
 
 class StubLoss:
     """Loss_EnergyGeometry of a smooth bowl, with the gradient set as GradRequest does."""
+
+    failed = False                  # as Loss marks a failed step: none here
 
     def __init__(self, tmp_path):
         self.grad_request = None
@@ -134,7 +138,7 @@ def test_optimize_bo_grad_keeps_the_better_point(tmp_path, monkeypatch):
 
 
 class DatasetStub(StubLoss):
-    """Losses near 400, as in the dataset mode: above PTBP's failure values."""
+    """Losses near 400, as in the dataset mode: above energygeometry's failure values."""
 
     @staticmethod
     def mu(x):
@@ -155,11 +159,35 @@ def test_bo_grad_starts_from_a_real_loss(tmp_path, monkeypatch):
     loss = DatasetStub(tmp_path)
     f_bo = DatasetStub.mu([3.3, 10.5])
     bo = SimpleNamespace(x=[4.0, 12.0], fun=98.0, x_iters=[[3.3, 10.5], [4.0, 12.0]],
-                         func_vals=[f_bo, 98.0])                    # BO's minimum: a failure
+                         func_vals=[f_bo, 98.0], failed=[False, True])  # BO's minimum failed
     loss.Bayesian_optimization = lambda r, saver, n: bo
     res = GO.optimize_bo_grad(loss, 2.4944, None, 2, maxiter=5)
     assert loss.calls[0] == [3.3, 10.5]
-    assert 400.0 < res.fun < f_bo and not GO.failed(res.fun)
+    assert 400.0 < res.fun < f_bo
+
+
+class FailingStub(DatasetStub):
+    """Fails beyond r0_w = 3.2 Bohr as Loss.EnergyGeometry does: marked, with the gradient
+    hook told, at a failure value above the real losses (the dataset mode's worst so far)."""
+
+    def Loss_EnergyGeometry(self, x):
+        self.failed = x[0] > 3.2
+        if not self.failed:
+            return super().Loss_EnergyGeometry(x)
+        self.calls.append(list(x))
+        if self.grad_request is not None:
+            self.grad_request.fail([x[0], x[1], 2.0], 7000.0, "RuntimeError: no SKF")
+        return 7000.0
+
+
+def test_the_evaluator_takes_failures_from_the_loss(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ev = GO.Evaluator(FailingStub(tmp_path))
+    bad, good = ev([3.5, 10.0]), ev([3.1, 10.0])
+    assert bad.failed and not bad.valid and not bad.ok and bad.f == 7000.0
+    assert not good.failed and good.valid and good.ok
+    assert GO.lowest(ev.history.evaluations) is good
+    assert "the loss failed: RuntimeError: no SKF" in (tmp_path / "grad.out").read_text()
 
 
 def test_requirements():

@@ -216,13 +216,13 @@ res = loss.grad_request.result                    # res.grad["r0_w"], res.case, 
       <ul>
         <li><strong>两者打平</strong>：梯度法 2559 s 降到 209.9（−53%）；同样时间的 BO（70 次，3038 s）在第 51 次求值（2523 s）降到 208.5，在此之前一直停在第 6 次（随机点）的 211.3。在同样的 2559 s 时 BO 好 0.7%。只做 11 次的 BO 是 211.3、220.5 和 446.2（一个随机点都没有比种子好）。</li>
         <li><strong>梯度法卡在 SCC 不收敛的区域</strong>：r0_w ≈ 4.07–4.21 Bohr 一带，总有一两个结构的 SCC 在 T = 0 下 1000 轮也不收敛，23 次求值里 17 次没有梯度，每次 80–120 s。梯度指向更小的 r0_w，那边的损失确实更低（209.9 就在那里），但没有梯度的点线搜索不接受，只能缩回，最后步长小于 xtol 而停下。</li>
-        <li><strong>BO 被失败值误导</strong>：失败的点 PTBP 记为 97–99，比 dataset 模式的所有真实损失都低。高斯过程接手后的 59 个点里 30 个落在失败区（r0_w ≈ 15–17.5 Bohr），只做 11 次的 BO 有两次把失败点当成了最优（第七节）。</li>
+        <li><strong>BO 被失败值误导</strong>：失败的点 PTBP 记为 97–99，比 dataset 模式的所有真实损失都低。高斯过程接手后的 59 个点里 30 个落在失败区（r0_w ≈ 15–17.5 Bohr），只做 11 次的 BO 有两次把失败点当成了最优（第七节）。<em>（已修正，见第七节第 10 条。）</em></li>
       </ul>
       <h3>结论</h3>
       <ul>
         <li><strong>energygeometry 模式梯度法明显更好</strong>：同样的时间，梯度法把损失降到 0.760，BO 最好是 0.855（3 个 random_state 中最好的一个），用同样时间的 BO 一个点都没有比种子好。</li>
         <li><strong>dataset 模式打平</strong>：两者各有各的问题，梯度法受 T = 0 下 SCC 不收敛拖累，BO 被失败值引向失败区。</li>
-        <li><strong>建议</strong>：energygeometry 模式用 <code>--optimizer gradient</code>，或 <code>bo_grad</code>（先 BO 探索全局，再用梯度精修）。dataset、reaction 模式先解决失败值的问题（留给用户决定）；SCC 收敛困难时可考虑加电子温度。BO 本身的调用次数要明显多于 11，高斯过程才起作用。</li>
+        <li><strong>建议</strong>：energygeometry 模式用 <code>--optimizer gradient</code>，或 <code>bo_grad</code>（先 BO 探索全局，再用梯度精修）。dataset、reaction 模式先解决失败值的问题（留给用户决定）<em>（已改，见第七节第 10 条）</em>；SCC 收敛困难时可考虑加电子温度。BO 本身的调用次数要明显多于 11，高斯过程才起作用。</li>
         <li>这只是一个元素、两个参数、一个数据集上的结果，每种设置只跑了一次，随机性不小（3 个 random_state 之间的差别就很大）。梯度法的优势会随参数个数增长（WHY.md §3），这里还看不出来。</li>
       </ul>
     </section>
@@ -239,7 +239,7 @@ res = loss.grad_request.result                    # res.grad["r0_w"], res.case, 
         <li><strong>孤立原子的两处崩溃</strong>（已单独修复）：周期盒子里没有任何原子对时，<code>segment_sum</code> 返回整数数组、<code>pair_values</code> 拼接空列表。PTBP dataset 模式的 E0 正是这种计算。</li>
         <li><strong>PTBP 默认的 BO 其实是随机搜索。</strong>skopt 的 <code>gp_minimize</code> 默认先取 10 个随机点（<code>n_initial_points=10</code>）。PTBP 给了一个种子点，默认又只调用 11 次，于是 11 次求值就是种子加 10 个随机点，高斯过程一次也没有用来选点。这也解释了第 2 条：发表点不是局部极小。要让高斯过程起作用，<code>--n_calls</code> 要明显大于 11（或减少初始随机点）。</li>
         <li><strong>重叠矩阵不正定。</strong>BO 的随机点里有 r0_w = 15.4–17.5 Bohr 的；r0_w = 17.127 时 Cu 的波函数延伸到 17.8 Bohr，energygeometry 数据集的 66 个结构中有 17 个（k 网格 14³–15³ 的 1–2 原子晶胞）在某个 k 点上重叠矩阵数值上不正定，Cholesky 分解失败。DFTB+ 在同一结构上同样报错退出（“Failure in LAPACK routine zpotrf, unable to complete Cholesky factorization of B”，退出码 1，经 ASE 是 <code>CalculationFailed</code>），PTBP 把这一步记为失败值。pydftb 之前抛出 NumPy 的 <code>LinAlgError</code>（<code>ValueError</code> 的子类），PTBP 的 except 不捕获，整个优化中断：基准第一次运行时 BO 的 random_state 7 在第 3 次求值就这样崩溃了。现在 pydftb 报 <code>CalculationFailed</code>（原异常作为 cause），这一点的损失是失败值 99，与 DFTB+ 一致（<code>dftbplus_map.md</code> 第 36 条）。</li>
-        <li><strong>dataset 模式的失败值比真实损失还低。</strong>失败时 PTBP 返回 97–99 的随机整数。energygeometry 模式的真实损失在 1–4 之间，失败值远大于它们；dataset 模式里 Cu 的真实损失在 210 到 7000 之间，失败值反而最低。基准中 dataset 模式 BO 的 random_state 7 和 2024 各失败 2 次，skopt 把 97 当成最小值：照 PTBP 的做法，这两次报告的“最优参数”就是失败点（r0_w = 17.127 Bohr，或 r0_d = 20.86 Bohr）。与梯度法同样时间的那次 BO，高斯过程选的 59 个点里有 30 个落在失败区。改法（例如按模式给失败值，或取已有损失的最大值）会改变这两种模式下默认 BO 的行为，留给用户决定。梯度优化器的结果和本报告的统计都已排除失败值。</li>
+        <li><strong>dataset 模式的失败值比真实损失还低。</strong>失败时 PTBP 返回 97–99 的随机整数。energygeometry 模式的真实损失在 1–4 之间，失败值远大于它们；dataset 模式里 Cu 的真实损失在 210 到 7000 之间，失败值反而最低。基准中 dataset 模式 BO 的 random_state 7 和 2024 各失败 2 次，skopt 把 97 当成最小值：照 PTBP 的做法，这两次报告的“最优参数”就是失败点（r0_w = 17.127 Bohr，或 r0_d = 20.86 Bohr）。与梯度法同样时间的那次 BO，高斯过程选的 59 个点里有 30 个落在失败区。改法（例如按模式给失败值，或取已有损失的最大值）会改变这两种模式下默认 BO 的行为，留给用户决定。梯度优化器的结果和本报告的统计都已排除失败值。<em>（2026-10-23 补记：已按用户的决定修改。dataset、reaction 模式里失败的步，损失记为本次运行中已成功的最大损失之上紧挨着的那个浮点数（还没有成功的步时为 1e6），所以失败点总排在已有的真实损失之后，不会再被当成最优，高斯过程也不再把它当成好的区域；批量 BO（<code>parallel_bo</code>）在一轮结束、计入这一轮的成功之后才给失败点赋值。energygeometry 模式仍为 97–99，结果逐字节不变。失败的求值由损失显式标记（<code>Loss.failed</code>；BO 的结果带 <code>failed</code>，每次求值一个标记），梯度优化器和 <code>tools/bo_vs_grad.py</code> 按标记、不再按数值识别失败。续算改动之前的 dataset、reaction 检查点时，其中存的 97–99 换成新的失败值。<code>tests/test_failure_loss.py</code> 在一个会失败的替身损失上检查：dataset 模式的 BO 不再以失败点为最优，而照旧给 97–99 时最优点正是失败点。第六节的基准是修改之前测的。）</em></li>
         <li><strong>T = 0 下 SCC 不收敛，梯度缺失。</strong>PTBP 的 DFTB 输入是 T = 0（M3d 报告），金属 Cu 的 SCC 在某些参数下 1000 轮也不收敛；PTBP 设了 <code>ConvergentSCCOnly = No</code>，用最后一轮的结果照算损失。没有收敛的 SCC 不是不动点，隐式微分不成立，这些点就没有梯度。dataset 模式的基准中 23 次求值有 17 次如此（r0_w ≈ 4.07–5.5 Bohr），energygeometry 模式 16 次中 1 次；这样的求值也最慢（80–120 s，普通 BO 步约 17–30 s）。加电子温度（<code>--smearing</code>）能让 SCC 收敛，但会改变损失的定义。</li>
       </ol>
     </section>
@@ -303,7 +303,7 @@ pytest -q tests/test_loss_grad.py tests/test_gradient_opt.py tests/test_hotcent_
         <li>M4d：设备选项、GPU 自检脚本、PTBP 的 <code>--pydftb_backend/--device/--dtype</code>。</li>
         <li>梯度真正有优势要等参数变多：分壳层的 r0、幂次 p、多元素同时优化，或直接拟合 SK 表；DFTB 部分的代价不随参数个数增长。</li>
         <li>是否让 r0_d 起作用（hotcent 的微扰约束），由用户决定。</li>
-        <li>dataset、reaction 模式的失败值（97–99）要不要改，由用户决定（第七节）；改了会改变这两种模式下默认 BO 碰到失败点时的行为。</li>
+        <li>dataset、reaction 模式的失败值（97–99）要不要改，由用户决定（第七节）；改了会改变这两种模式下默认 BO 碰到失败点时的行为。<em>（已改，见第七节第 10 条。）</em></li>
         <li>pydftb 补上 DFTB+ 的原子距离检查（相距不到 0.01 Bohr 时报错），已列为待办。</li>
       </ul>
     </section>

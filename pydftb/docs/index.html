@@ -165,7 +165,7 @@ python -m pydftb.validation.gpu_check --device cpu --quick # GPU 自检脚本，
         <li>外场、点电荷与溶剂（M6c）：周期体系的外场是锯齿势，原子跨过晶胞边界时能量跳变（两个代码都警告）；有点电荷的周期体系不给应力（与 DFTB+ 相同）；隐式溶剂只用于分子，不支持 COSMO 和含时外场。pydftb 的 CM5 默认按原文，要与 DFTB+ 25.1 的数值一致需 <code>CM5(double_count=True)</code>；DFTB+ 在 CM5 加氢键修正时的力与能量不符（8.1e-3 Ha/Bohr），外场应力在非立方晶胞中的非对角元有误，pydftb 不复现这两处（M6c 报告第五节）。只有 NumPy 引擎。</li>
         <li>激发态（M6d）：简并能级中的态可以任意组合，单个态的振子强度、跃迁偶极、主要跃迁和权重不唯一，只有简并组的和确定（<code>Excitations.degenerate_groups()</code>）；<code>energy</code> 在指定态时仍是基态能量（与 DFTB+ 的输出相同），激发能在 <code>excitation_energy</code>；激发态的力、电荷要等 M6e。只有 NumPy 引擎。</li>
         <li>两个原子相距不到 0.01 Bohr 时 DFTB+ 报错退出（proximity），pydftb 不报错：完全重合的原子被当作互不作用。已列为待办（<code>dftbplus_map.md</code> 第 36 条）。</li>
-        <li>dataset、reaction 模式下，失败的步（PTBP 记为 97–99）比真实损失还低（Cu 约 210–7000），BO 会把失败点当成最优：M4c 基准中 3 次 BO 有 2 次如此。要不要改由用户决定（M4c 报告第七节）。</li>
+        <li><strong>已修正（2026-10-23）：</strong>dataset、reaction 模式下，失败的步过去记为 97–99，比真实损失还低（Cu 约 210–7000），BO 会把失败点当成最优（M4c 基准中 3 次 BO 有 2 次如此）。现在这两种模式的失败值是本次运行中已成功的最大损失之上紧挨着的浮点数（还没有成功的步时为 1e6），失败点总排在真实损失之后；energygeometry 模式仍为 97–99，结果不变。失败的求值由损失显式标记，续算旧的检查点时其中存的 97–99 换成新的失败值（M4c 报告第七节第 10 条）。</li>
         <li>用 PTBP 参数表中 Ga 的 r0、p，hotcent 2.1 算不出受限原子（“Eigensolver out of iterations”，4d 壳层几乎不束缚）。</li>
         <li><code>physrep.evaluate_pbc</code> 的超胞层数由最短的晶格矢量长度决定，晶胞很斜时会漏掉近邻（γ = 13° 的测试晶胞：22 对中只算 20 对）；Cu 数据集没有遗漏。为了结果不变，没有修。</li>
         <li><code>tools/physrep.py</code> 可能改编自 J. Margraf 的 physrep，上游许可未知；仓库整体为 MIT，需确认这个文件可以按 MIT 发布。</li>

@@ -328,7 +328,7 @@ python tools/engine_parity.py dft/dft.xyz --mode energygeometry --points 2.749,1
       <ul>
         <li><strong>请用户在 GPU 上运行自检</strong>（<code>--dtype both</code>），把 JSON 发回来。据此决定：PTBP 用 GPU 是否划算；要不要做跨结构的批量（M4e，或并入 M7）；需要的话再标定 GPU 的成本模型。</li>
         <li>M4 至此全部完成。之后按路线图进入 M5（多套参数）到 M8（AI 层）。</li>
-        <li>M4c 留给用户决定的两件事仍然有效：是否让 r0_d 影响 SKF（hotcent 的微扰约束），以及 dataset、reaction 模式的失败值（97–99）是否要改。</li>
+        <li>M4c 留给用户决定的两件事仍然有效：是否让 r0_d 影响 SKF（hotcent 的微扰约束），以及 dataset、reaction 模式的失败值（97–99）是否要改。<em>（后来都已解决：r0_d 见 M4e 报告，失败值见 M4c 报告第七节第 10 条。）</em></li>
       </ul>
     </section>
   </main>

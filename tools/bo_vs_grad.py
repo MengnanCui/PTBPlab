@@ -29,17 +29,20 @@ sys.path.insert(0, str(ROOT))
 
 
 def _timed(loss, cwd):
-    """Loss_EnergyGeometry that records (elapsed, x, mu) and returns to ``cwd``."""
-    trace, t0 = [], time.perf_counter()
+    """Loss_EnergyGeometry that records (elapsed, x, mu) and the indices of the failed
+    evaluations (marked by the loss), and returns to ``cwd``."""
+    trace, failed, t0 = [], [], time.perf_counter()
 
     def f(x):
         try:
             mu = float(loss.Loss_EnergyGeometry([float(x[0]), float(x[1])]))
         finally:
             os.chdir(cwd)
+        if loss.failed:
+            failed.append(len(trace))
         trace.append((time.perf_counter() - t0, [float(v) for v in x], mu))
         return mu
-    return f, trace
+    return f, trace, failed
 
 
 def run_bo(loss, cov_radius, n_calls, random_state, cwd):
@@ -47,48 +50,58 @@ def run_bo(loss, cov_radius, n_calls, random_state, cwd):
 
     from utils import gradient_opt as GO
     dims, _, _, _ = loss._bo_dimensions_and_cost(cov_radius)
-    f, trace = _timed(loss, cwd)
+    f, trace, failed = _timed(loss, cwd)
     gp_minimize(func=f, dimensions=dims, n_calls=n_calls, acq_func="EI",
                 x0=GO.seed(loss, cov_radius), random_state=random_state)
-    return trace
+    return trace, failed
 
 
 def run_gradient(loss, cov_radius, maxiter, cwd):
     from utils import gradient_opt as GO
     t0 = time.perf_counter()
     ev = GO.Evaluator(loss, log_path=str(Path(cwd) / "grad.out"))
-    trace = []
+    trace, failed = [], []
 
     def f(x):
         try:
             e = ev(x)
         finally:
             os.chdir(cwd)
+        if e.failed:
+            failed.append(len(trace))
         trace.append((time.perf_counter() - t0, [float(v) for v in x], float(e.f),
                       None if e.g is None else [float(v) for v in e.g]))
         return e
     lo, hi = GO.bounds(loss, cov_radius)
     best, hist = GO.projected_bfgs(f, GO.seed(loss, cov_radius), lo, hi, maxiter=maxiter,
                                    history=ev.history)
-    return trace, hist.message
+    return trace, hist.message, failed
 
 
-def best_so_far(trace):
-    """(elapsed, lowest loss so far) after each evaluation; failed steps (97-99, below the
-    real losses of the dataset mode) do not count."""
-    from utils.gradient_opt import failed
+def failures(run):
+    """Indices of a run's failed evaluations.  A JSON file written before the loss marked
+    them has none recorded: there they are the losses 97-99 (every mode's failure value
+    then)."""
+    if "failed" in run:
+        return set(run["failed"])
+    from utils.loss import LEGACY_FAILURE_LOSSES
+    return {i for i, row in enumerate(run["trace"]) if row[2] in LEGACY_FAILURE_LOSSES}
+
+
+def best_so_far(trace, failed):
+    """(elapsed, lowest loss so far) after each evaluation; failed steps (indices
+    ``failed``) do not count."""
     out, best = [], float("inf")
-    for row in trace:
-        if not failed(row[2]):
+    for i, row in enumerate(trace):
+        if i not in failed:
             best = min(best, row[2])
         out.append((row[0], best))
     return out
 
 
-def summary(trace):
+def summary(trace, failed):
     """(lowest real loss, its x, number of failed steps) of a run."""
-    from utils.gradient_opt import failed
-    ok = [r for r in trace if not failed(r[2])]
+    ok = [r for i, r in enumerate(trace) if i not in failed]
     b = min(ok, key=lambda r: r[2]) if ok else (None, None, float("nan"))
     return b[2], b[1], len(trace) - len(ok)
 
@@ -154,20 +167,20 @@ def main(argv=None):
     runs = out["runs"]
     if "gradient" in a.runs and "gradient" not in runs:
         loss, cov, wd = fresh("gradient")
-        trace, message = run_gradient(loss, cov, a.grad_maxiter, wd)
-        runs["gradient"] = {"trace": trace, "message": message}
+        trace, message, failed = run_gradient(loss, cov, a.grad_maxiter, wd)
+        runs["gradient"] = {"trace": trace, "message": message, "failed": failed}
         save()
         print(f"[gradient] {len(trace)} evaluations, {trace[-1][0]:.0f} s, "
-              f"best {summary(trace)[0]:.6g} ({message})", flush=True)
+              f"best {summary(trace, set(failed))[0]:.6g} ({message})", flush=True)
     for rs in (a.random_states if "bo" in a.runs else []):
         if f"bo_{rs}" in runs:
             continue
         loss, cov, wd = fresh(f"bo_{rs}")
-        trace = run_bo(loss, cov, a.n_calls, rs, wd)
-        runs[f"bo_{rs}"] = {"trace": trace}
+        trace, failed = run_bo(loss, cov, a.n_calls, rs, wd)
+        runs[f"bo_{rs}"] = {"trace": trace, "failed": failed}
         save()
         print(f"[bo rs={rs}] {len(trace)} evaluations, {trace[-1][0]:.0f} s, "
-              f"best {summary(trace)[0]:.6g}", flush=True)
+              f"best {summary(trace, set(failed))[0]:.6g}", flush=True)
     bo_runs = [runs[f"bo_{rs}"] for rs in a.random_states if f"bo_{rs}" in runs]
     if ("matched" in a.runs and "bo_matched" not in runs and runs.get("gradient", {}).get("trace")
             and bo_runs):
@@ -175,19 +188,19 @@ def main(argv=None):
         per_eval = sum(r["trace"][-1][0] / len(r["trace"]) for r in bo_runs) / len(bo_runs)
         n_match = max(2, int(round(t_grad / per_eval)))
         loss, cov, wd = fresh("bo_matched")
-        trace = run_bo(loss, cov, n_match, a.random_states[0], wd)
-        runs["bo_matched"] = {"trace": trace, "n_calls": n_match}
+        trace, failed = run_bo(loss, cov, n_match, a.random_states[0], wd)
+        runs["bo_matched"] = {"trace": trace, "failed": failed, "n_calls": n_match}
         save()
         print(f"[bo matched] {n_match} evaluations, {trace[-1][0]:.0f} s, "
-              f"best {summary(trace)[0]:.6g}", flush=True)
+              f"best {summary(trace, set(failed))[0]:.6g}", flush=True)
     set_plan(None)
     os.chdir(cwd)
     print(f"\n{'run':>14} {'evals':>6} {'failed':>6} {'wall s':>8} {'best mu':>14}  best x")
     for tag, run in out["runs"].items():
-        tr = run["trace"]
-        mu, x, nfail = summary(tr)
+        tr, fl = run["trace"], failures(run)
+        mu, x, nfail = summary(tr, fl)
         print(f"{tag:>14} {len(tr):6d} {nfail:6d} {tr[-1][0]:8.0f} {mu:14.8g}  {x}")
-        run["best_so_far"] = best_so_far(tr)
+        run["best_so_far"] = best_so_far(tr, fl)
     save()
     return 0
 

@@ -74,6 +74,16 @@ import utils.plot as plot
 #    Loss); 2: the radius of the element being parametrised, as for the published PTBP losses.
 LOSS_VERSION = 2
 
+# The loss of a failed step (EnergyGeometry's except branch: DFTB+ or pydftb stopped, hotcent
+# wrote no SKF, ...).  energygeometry: a random integer 97-99, far above its real losses
+# (about 1-4).  dataset and reaction: their real losses are larger (Cu: about 210-7000) and
+# 97-99 made BO take failed steps for the optimum (M4c report, section 7), so a failed step
+# gets the next float above the largest loss of a successful step so far, FAILURE_FALLBACK
+# before the first one.  Failures are marked (Loss.failed), not recognised by their value;
+# LEGACY_FAILURE_LOSSES, the failure values of every mode until then, read older checkpoints.
+LEGACY_FAILURE_LOSSES = (97.0, 98.0, 99.0)
+FAILURE_FALLBACK = 1.0e6
+
 
 # ---------------------------------------------------------------------------
 # Repeated work of the sigma_rep search (milestone M3b).  A BO step evaluates the
@@ -170,6 +180,11 @@ class Loss():
     For storing multiple loss functions and related functions
     """
 
+    # Whether the last EnergyGeometry evaluation failed, and the largest loss of a successful
+    # one (failure_loss); class defaults, also for objects made without __init__.
+    failed = False
+    worst_loss = None
+
     def __init__(self,
                  args_input: argparse.Namespace=None,
                  dft_input: list=[],
@@ -199,6 +214,21 @@ class Loss():
         if self.cov_radius is None:
             raise ValueError("Loss has no penalty radius: pass cov_radius or a dataset")
         return r0_penalty(r0_w, r0_d, self.cov_radius)
+
+    def failure_loss(self):
+        """The loss of a failed step (see FAILURE_FALLBACK): ranked after every successful
+        step so far in the dataset and reaction modes, 97-99 in the energygeometry mode."""
+        if self.args_input.optimization_option.lower() in ('dataset', 'reaction'):
+            if self.worst_loss is None:
+                return FAILURE_FALLBACK
+            return float(np.nextafter(self.worst_loss, np.inf))
+        return random.randint(97,99)
+
+    def note_loss(self, mu) -> None:
+        """A successful evaluation of the loss: its value counts for failure_loss."""
+        self.failed = False
+        if np.isfinite(mu) and (self.worst_loss is None or mu > self.worst_loss):
+            self.worst_loss = float(mu)
 
     def get_forces(self, atoms:list, prefix:str):
 
@@ -925,6 +955,7 @@ class Loss():
 
         kxc = 0.0
         r0_w, r0_d, p = conf_parameters
+        self.failed = True                  # until the step succeeds (note_loss)
 
         # SKF parameters changed → invalidate the per-iter E0_dftb cache so
         # the inner brute scan recomputes against the new band structure.
@@ -1063,6 +1094,7 @@ class Loss():
                 print(current_plan().step_line(self.step_timings))
             if grad is not None:
                 grad.after_step(self, conf_parameters, sigma_rep, mu)
+            self.note_loss(mu)
             return mu
             
 
@@ -1071,7 +1103,7 @@ class Loss():
             print("Error:", error)
             sigma_rep, kxc = [0.4321, 0.0]
             mu_E, mu_V, mu_logb, penalty = [10, 10, 10, 10]
-            mu = random.randint(97,99)
+            mu = self.failure_loss()
 
             with open(self.args_input.para_file, 'a') as para:
                 para.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.7f}, {mu:25.11f}\n')
@@ -1362,6 +1394,9 @@ class Loss():
           are atomic per-line on POSIX. The per-evaluation
           `results/opt_<r0_w>_<r0_d>/` directories are unique so no
           collision there.
+        - A fork knows the losses of the earlier rounds only. In the dataset and
+          reaction modes the GP gets a failed point's loss (failure_loss) once
+          the round's successes have counted, so par.out can show a lower one.
         """
         from skopt import Optimizer
         import multiprocessing as mp
@@ -1384,15 +1419,16 @@ class Loss():
                 set_plan(plan.for_particle(idx))     # this BO point's share of the cores
             try:
                 val = float(cost_fn(x_arg))
-                q.put((idx, val, None))
+                q.put((idx, val, self.failed, None))
             except Exception:
                 import traceback as _tb
-                q.put((idx, None, _tb.format_exc()))
+                q.put((idx, None, None, _tb.format_exc()))
 
         print(f"[parallel_BO] batch_width={n_particles} (forked workers), "
               f"rounds={rounds}, total evaluations={n_particles*rounds}")
-        x_iters_flat, func_vals_flat = [], []
+        x_iters_flat, func_vals_flat, failed_flat = [], [], []
         best_x, best_fun = None, float('inf')
+        remap = self.args_input.optimization_option.lower() in ('dataset', 'reaction')
         for r in range(rounds):
             xs = opt.ask(n_points=n_particles, strategy='cl_min')
             queue = ctx.Queue()
@@ -1401,21 +1437,29 @@ class Loss():
             for p in procs:
                 p.start()
             results = [None] * len(xs)
+            failed = [False] * len(xs)
             for _ in xs:
-                idx, val, err = queue.get()
+                idx, val, bad, err = queue.get()
                 if err is not None:
                     for p in procs:
                         if p.is_alive():
                             p.terminate()
                     raise RuntimeError(
                         f"parallel_bo worker {idx} crashed:\n{err}")
-                results[idx] = val
+                results[idx], failed[idx] = val, bad
             for p in procs:
                 p.join()
+            # this round's successes count for the next forks (and the failures below)
+            for y, bad in zip(results, failed):
+                if not bad:
+                    self.note_loss(y)
+            if remap:
+                results = [self.failure_loss() if bad else y for y, bad in zip(results, failed)]
             opt.tell(xs, results)
-            for x, y in zip(xs, results):
+            for x, y, bad in zip(xs, results, failed):
                 x_iters_flat.append(list(map(float, x)))
                 func_vals_flat.append(y)
+                failed_flat.append(bad)
                 if y < best_fun:
                     best_fun, best_x = y, list(map(float, x))
             print(f"[parallel_BO] round {r+1}/{rounds}: best so far "
@@ -1427,6 +1471,7 @@ class Loss():
             fun=best_fun,
             x_iters=x_iters_flat,
             func_vals=func_vals_flat,
+            failed=failed_flat,
             optimizer='parallel_bo',
         )
 
@@ -1448,23 +1493,56 @@ class Loss():
             f"`python tools/rescale_checkpoint.py {self.args_input.checkpoint} "
             f"--radius {self.cov_radius!r}` or delete it to start afresh.")
 
+    def _resumed_losses(self, y0, mode):
+        """(y0, failed) of a resumed checkpoint; worst_loss from its successful steps.
+
+        Checkpoints do not mark failures: the values 97-99 are taken for failures (the
+        failure value of every mode until the dataset and reaction modes got theirs).  In
+        those two modes they become failure_loss(), as if written by this version.  Their
+        later failures are not recognised again (they are never BO's minimum), and
+        FAILURE_FALLBACK does not count for worst_loss.
+        """
+        failed = [float(y) in LEGACY_FAILURE_LOSSES for y in y0]
+        real = [float(y) for y, bad in zip(y0, failed)
+                if not bad and np.isfinite(y) and y != FAILURE_FALLBACK]
+        self.worst_loss = max(real, default=None)
+        if mode in ('dataset', 'reaction') and any(failed):
+            value = self.failure_loss()
+            y0 = [value if bad else y for y, bad in zip(y0, failed)]
+            print(f"[checkpoint] {sum(failed)} failed evaluation(s) stored as 97-99 now count "
+                  f"as {value:.10g}, above every successful one")
+        return y0, failed
+
+    def _bo_objective(self, parameters) -> float:
+        """Loss_EnergyGeometry for gp_minimize, noting whether each evaluation failed (a
+        method like the objective it wraps, so checkpoints pickle it the same way)."""
+        mu = self.Loss_EnergyGeometry(parameters)
+        self._bo_failed.append(self.failed)
+        return mu
+
     def Bayesian_optimization(self,
                               cov_radius,
                               checkpoint_saver,
                               n_calls):
         """
         Initialize the Bayesian optimization
+
+        In the r0 modes the result also has ``failed``: whether each evaluation of
+        ``x_iters`` failed (its loss is the failure value, see failure_loss).
         """
 
         # if self.args_input.checkpoint.exists():
         mode = self.args_input.optimization_option.lower()
         meta_path = f"{self.args_input.checkpoint}.meta.json"
+        failed = []
         if os.path.exists(self.args_input.checkpoint):
             if mode in ('energygeometry', 'dataset', 'reaction'):
                 self._check_checkpoint_meta(meta_path)
             res = load(self.args_input.checkpoint)
             x0 = res.x_iters
             y0 = res.func_vals
+            if mode in ('energygeometry', 'dataset', 'reaction'):
+                y0, failed = self._resumed_losses(y0, mode)
             done = len(x0)
             # Note: when x0/y0 are passed, gp_minimize treats `n_calls` as the
             # number of *additional* fresh evaluations on top of the prior
@@ -1512,7 +1590,8 @@ class Loss():
             dr0_d   = Real(name='r0_d',  low=r0_d_lower,  high=r0_d_upper,   prior='uniform')
             dimensions = [dr0_w, dr0_d]
 
-            res = gp_minimize(func=self.Loss_EnergyGeometry,
+            self._bo_failed = failed
+            res = gp_minimize(func=self._bo_objective,
                             dimensions=dimensions,
                             n_calls=n_calls,
                             acq_func="EI",
@@ -1520,6 +1599,7 @@ class Loss():
                             y0=y0,
                             callback=[checkpoint_saver],
                             random_state=123)
+            res.failed = list(failed)
             
         elif self.args_input.optimization_option.lower() == 'bandstructure':
             r0_lower, r0_upper = 2.1, 7.0 * cov_radius

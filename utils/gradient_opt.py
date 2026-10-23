@@ -5,8 +5,8 @@ bounds, from BO's seed.  ``--optimizer bo_grad``: BO with ``--n_calls``, then at
 ``--grad_maxiter`` (default 5) gradient steps from its best point.  Every evaluation is
 the loss PTBP computes (written to par.out/log.out as for BO) plus its gradient
 (:mod:`utils.loss_grad`), recorded in ``grad.out``.  An evaluation without a gradient
-(a failed loss, whose value is 97-99, or no derivative there) counts as a rejected step.
-The result is the lowest loss evaluated, as for BO, failed losses excluded.
+(a failed step, which the loss marks as such, or no derivative there) counts as a
+rejected step.  The result is the lowest loss evaluated, as for BO, failed steps excluded.
 
 The results have the attributes cli/run.py uses (``x``, ``fun``, ``x_iters``,
 ``func_vals``), plus ``best_dir`` (the directory of the best evaluation) and ``grads``.
@@ -21,13 +21,6 @@ from types import SimpleNamespace
 import numpy as np
 
 GRAD_FILE = "grad.out"
-FAILED = (97.0, 98.0, 99.0)       # what Loss.EnergyGeometry returns for a failed step
-
-
-def failed(mu) -> bool:
-    """A failed loss: PTBP returns a random integer 97-99 (a real loss is not an exact
-    integer; in the dataset and reaction modes it can be larger)."""
-    return float(mu) in FAILED
 
 
 @dataclass
@@ -37,17 +30,17 @@ class Evaluation:
     g: np.ndarray | None          # None: no gradient (failure)
     result: object = None         # utils.loss_grad.GradResult
     directory: str = ""
+    failed: bool = False          # a failed step (Loss.failed): f is its failure value
 
     @property
     def ok(self) -> bool:
-        """A value with a gradient.  A failed loss (97-99) has none: the value alone
-        cannot tell, real losses can be larger."""
+        """A value with a gradient (a failed step has none)."""
         return self.g is not None and np.isfinite(self.f) and bool(np.all(np.isfinite(self.g)))
 
     @property
     def valid(self) -> bool:
         """A loss value, with or without a gradient (not a failed step)."""
-        return bool(np.isfinite(self.f)) and not failed(self.f)
+        return bool(np.isfinite(self.f)) and not self.failed
 
 
 @dataclass
@@ -102,7 +95,7 @@ class Evaluator:
         g = None
         if res is not None and res.grad is not None:
             g = np.array([res.grad["r0_w"], res.grad["r0_d"]], dtype=float)
-        ev = Evaluation(x, f, g, res, req.directory_name(*x))
+        ev = Evaluation(x, f, g, res, req.directory_name(*x), failed=bool(self.loss.failed))
         self.history.evaluations.append(ev)
         if res is not None:
             with open(self.log_path, "a") as fh:
@@ -239,9 +232,13 @@ def optimize_bo_grad(loss, cov_radius, checkpoint_saver, n_calls: int, maxiter: 
     from utils.dftb_stage import torch_one_thread
     res = loss.Bayesian_optimization(cov_radius, checkpoint_saver, n_calls)
     x_bo, f_bo = list(map(float, res.x)), float(res.fun)
-    ok = [(f, x) for x, f in zip(res.x_iters, res.func_vals) if not failed(f)]
-    if ok and failed(f_bo):          # dataset/reaction: a failed step (97-99) can be BO's
-        f_bo, x_bo = min(ok, key=lambda v: v[0])          # minimum; start from a real one
+    # BO's minimum is a failed step (marked by the loss) only when no step before it
+    # succeeded, or in the energygeometry mode when every real loss is above 97-99:
+    # then start from the best real one
+    failed = list(getattr(res, "failed", None) or [False] * len(res.func_vals))
+    ok = [(f, x) for x, f, bad in zip(res.x_iters, res.func_vals, failed) if not bad]
+    if ok and failed[int(np.argmin(res.func_vals))]:
+        f_bo, x_bo = min(ok, key=lambda v: v[0])
         x_bo, f_bo = list(map(float, x_bo)), float(f_bo)
     print(f"[bo_grad] BO best r0_w={x_bo[0]:.6f}, r0_d={x_bo[1]:.6f}, mu={f_bo:.10g}; "
           f"{maxiter} gradient step(s) from there")
