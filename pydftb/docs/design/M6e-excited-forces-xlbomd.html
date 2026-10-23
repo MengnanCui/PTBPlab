@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6e 激发态力与 XL-BOMD 设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6e</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6e · 设计文档</p>
+    <h1>激发态的力与 XL-BOMD</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-23</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6e-excited-forces-xlbomd.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6 的最后一步，包含两件互相独立的事。一是激发态的力：用 Z 向量方法求 E<sub>0</sub> + ω 对原子位置的导数，由此可以做激发态的结构优化和分子动力学，并得到激发态的 Mulliken 电荷与偶极。二是 XL-BOMD（扩展拉格朗日的 Born–Oppenheimer 分子动力学）：辅助电荷随原子一起积分，每步只做很少几轮 SCC。只做 NumPy 引擎。</p>
+    <ul>
+      <li><strong>DFTB+ 的实测</strong>（第二节）：
+        <ul>
+          <li>单重态、三重态、自旋极化、色散：DFTB+ 的激发态力与它自己的 E<sub>0</sub> + ω 的差分一致到 2.5e-7 – 5e-7 Ha/Bohr。这是 DFTB+ 用数值差分求 SK 导数带来的误差。</li>
+          <li><strong>DFTB+ 的激发态力在五种组合下不正确</strong>，与差分相差：
+            <ul>
+              <li>外电场：1.1e-3 Ha/Bohr；</li>
+              <li>点电荷：5.4e-3；</li>
+              <li>能量窗口：3.9e-3；</li>
+              <li>H–X 阻尼：1.3e-4；</li>
+              <li>按壳层取值的自旋常数：8.8e-6。</li>
+            </ul>
+            源码中的原因见第一节。</li>
+          <li>DFTB+ 自己的驱动（MD、结构优化）在激发态中使用 E<sub>0</sub> + ω：md.out 的势能就是 E<sub>0</sub> + ω。</li>
+          <li>XL-BOMD（水二聚体）：
+            <ul>
+              <li><code>Xlbomd</code> 的轨迹与 BO 相同，SCC 总轮数从 582 降到 457；</li>
+              <li><code>XlbomdFast</code> 每步只做 1 轮 SCC，Scale = 0.5 时稳定，Scale = 1 时发散；</li>
+              <li><code>MinSccIterations</code> 只对第一步起作用（之后的步收敛判据不看它），而第一步本来就是普通的 BO 步，所以它实际上不起作用。</li>
+            </ul>
+          </li>
+          <li>DFTB+ 默认的差分步长是 ε<sup>1/4</sup> = 2<sup>−13</sup> = 1.2207e-4 Bohr（<code>dftb_pin.hsd</code> 中的 <code>Delta</code>），不是此前验证工具里写的 1.22e-4。两点跨过 SK 网格点时，这点差别使力相差可达 2.4e-8 Ha/Bohr（第二节）。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的做法</strong>：
+        <ul>
+          <li>激发态的力按 E<sub>0</sub> + ω 的完整导数实现，上面五种组合里 DFTB+ 漏掉的项都计入：
+            <ul>
+              <li>外加势；</li>
+              <li>阻尼后的 γ′；</li>
+              <li>窗口以外的轨道弛豫；</li>
+              <li>按壳层取值的自旋常数：响应核只用 HOAO 的 W，导数无法精确，这种情况报错。</li>
+            </ul>
+          </li>
+          <li>XL-BOMD 照搬 DFTB+ 的积分器、影子能量、力和 SCC 规则。</li>
+        </ul>
+      </li>
+      <li><strong>验证</strong>：
+        <ul>
+          <li>主要检查：pydftb 的激发态力与它自己的 E<sub>0</sub> + ω 的差分，目标 1e-8 Ha/Bohr。pydftb 的 SK 导数是精确的，所以能做到这个精度。</li>
+          <li>在 DFTB+ 正确的组合上，与 DFTB+ 的力直接对照，用 DFTB+ 的差分步长复现它的数值导数。</li>
+          <li>其余组合：参考结果存 DFTB+ 的 E<sub>0</sub> + ω 的差分。</li>
+          <li>XL-BOMD：与 DFTB+ 逐步对照轨迹、影子能量和每步的 SCC 轮数。</li>
+        </ul>
+      </li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">5</span><span class="lbl">DFTB+ 激发态力不正确的组合</span></li>
+      <li><span class="num">1e-8</span><span class="lbl">目标：pydftb 的力与自身能量差分之差（Ha/Bohr）</span></li>
+      <li><span class="num">1 轮</span><span class="lbl">XlbomdFast 每步的 SCC 轮数</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>记号与 M6d 相同：i、j 是占据轨道，a、b 是空轨道，p、q 是任意轨道，ω<sub>ia</sub> = ε<sub>a</sub> − ε<sub>i</sub>，q<sup>pq</sup><sub>A</sub> 是 Mulliken 跃迁电荷，Ω 是激发能。实现在 DFTB+ 的 <code>timedep/linrespgrad.F90</code>（Heringer、Niehaus、Frauenheim，J. Comput. Chem. 28, 2589 (2007)），XL-BOMD 在 <code>md/extlagrangian.F90</code>、<code>md/xlbomd.F90</code>（Niklasson 等；Aradi 等，JCTC 11, 3357 (2015)）。</p>
+
+      <h3>激发态的力：Z 向量方法</h3>
+      <ul>
+        <li><strong>出发点</strong>：激发能可以写成 X+Y、X−Y 的二次型：
+          <ul>
+            <li>Ω = Σ<sub>pq</sub> T<sub>pq</sub> F<sub>pq</sub> + 2 (X+Y)<sup>T</sup> K (X+Y)，F 是基态 Kohn–Sham 矩阵（MO 表象）；</li>
+            <li>T 是未弛豫的差密度：T<sub>ab</sub> = ½ Σ<sub>i</sub> [(X+Y)<sub>ia</sub>(X+Y)<sub>ib</sub> + (X−Y)<sub>ia</sub>(X−Y)<sub>ib</sub>]；T<sub>ij</sub> 为对应的负值形式。</li>
+          </ul>
+          这个式子对 X±Y 是驻定的，但基态轨道随几何改变（轨道弛豫）。Z 向量方法用一个线性方程代替对每个原子坐标求轨道响应：
+          <ul>
+            <li>(A+B)<sub>singlet</sub> Z = R，R 是 Ω 对轨道转动的导数；</li>
+            <li>(A+B) 是基态的轨道 Hessian，所以三重态也用单重态的 A+B；</li>
+            <li>DFTB+ 用对角预条件的共轭梯度求解，收敛到 |r|² ≤ ε<sub>double</sub>²。</li>
+          </ul>
+        </li>
+        <li><strong>R 的组成</strong>（闭壳层单重态；三重态把 γ 换成 W，自旋极化时前因子减半并加上 W 项）：
+          <ul>
+            <li>K 项：−4 Σ<sub>b</sub> (X+Y)<sub>ib</sub> V[γ ξ]<sub>ab</sub> + 4 Σ<sub>j</sub> V[γ ξ]<sub>ij</sub> (X+Y)<sub>ja</sub>，其中 ξ<sub>A</sub> = Σ<sub>ia</sub> (X+Y)<sub>ia</sub> q<sup>ia</sup><sub>A</sub>；</li>
+            <li>弛豫项：−4 V[γ q(T)]<sub>ia</sub>，基态哈密顿量对差密度 T 的响应，三重态也用 γ。</li>
+          </ul>
+          这里 V[g]<sub>pq</sub> = Σ<sub>A</sub> q<sup>pq</sup><sub>A</sub> g<sub>A</sub> 是原子势 g 在 MO 表象中的矩阵元，q(T) 是 T 的 Mulliken 电荷。</li>
+        <li><strong>能量加权矩阵 W</strong>（占据—占据、空—空、占据—空三块）：
+          <ul>
+            <li>由 X±Y、ε 和 Ω 组成；</li>
+            <li>加上 4 V[γ q(T)]、4 V[γ q(Z)] 的占据—占据块，以及 Z<sub>ia</sub> ε<sub>i</sub>。</li>
+          </ul>
+        </li>
+        <li><strong>弛豫密度</strong> P = T + ½(Z + Z<sup>T</sup>)，变换到 AO 表象 C P C<sup>T</sup>。它的 Mulliken 布居就是激发态电荷的改变 Δq<sup>ex</sup>（DFTB+ <code>getExcMulliken</code>）。
+          <ul>
+            <li><code>XCH.DAT</code>：每个原子的净电荷 −Δq − Δq<sup>ex</sup>；</li>
+            <li><code>XREST.DAT</code>：偶极 −Σ<sub>A</sub> R<sub>A</sub>(Δq<sub>A</sub> + Δq<sup>ex</sup><sub>A</sub>)，单位 Debye；</li>
+            <li>两者都由 <code>WriteMulliken = Yes</code> 打开。</li>
+          </ul>
+        </li>
+        <li><strong>梯度</strong>（<code>addGradients</code>，每个原子对一次）：
+          <ul>
+            <li>2 dH<sup>0</sup>·P；</li>
+            <li>dS·P (V<sub>A</sub> + V<sub>B</sub>)；</li>
+            <li>−dS·W；</li>
+            <li>(V<sup>ex</sup><sub>A</sub> + V<sup>ex</sup><sub>B</sub>) dS·D<sub>0</sub>，其中 V<sup>ex</sup> = γ Δq<sup>ex</sup>，D<sub>0</sub> 是基态密度；</li>
+            <li>2(γξ<sub>A</sub> + γξ<sub>B</sub>) dS·(X+Y)<sub>AO</sub>；</li>
+            <li>γ′ 项：(Δq<sub>A</sub>Δq<sup>ex</sup><sub>B</sub> + Δq<sup>ex</sup><sub>A</sub>Δq<sub>B</sub> + 4 ξ<sub>A</sub>ξ<sub>B</sub>) dγ<sub>AB</sub>/dR；</li>
+            <li>自旋极化时另有两项：基态自旋势作用在 P 的磁化部分上，以及 W Δm<sup>ex</sup> 作用在基态自旋密度上。</li>
+          </ul>
+          总的力是 −∇(E<sub>0</sub> + Ω)，基态部分照旧。</li>
+        <li><strong>DFTB+ 的五处问题</strong>（源码）：
+          <ul>
+            <li><strong>外电场</strong>：dS·P 项的位移 V 来自 <code>sccCalc%getShiftPerAtom</code>，其中只有 SCC 势和外部点电荷的势，没有外电场；Δq<sup>ex</sup>·∇V<sub>ext</sub> 一项也没有。</li>
+            <li><strong>点电荷</strong>：位移里有点电荷的势，但同样没有 Δq<sup>ex</sup>·∇V<sub>pc</sub> 一项。</li>
+            <li><strong>H–X 阻尼</strong>：γ′ 项用 <code>expGammaPrime</code>，没有阻尼；而响应用的 γ 是有阻尼的。</li>
+            <li><strong>能量窗口</strong>：Z 向量只在窗口内的跃迁上求解（<code>rhs(nxov_rd)</code>）；窗口外的占据—空轨道弛豫被丢掉。</li>
+            <li><strong>按壳层的自旋常数</strong>（<code>ShellResolvedSpin = Yes</code>）：Z 向量的 A+B 用 HOAO 的 W，基态的轨道 Hessian 用整个 W 矩阵。</li>
+          </ul>
+        </li>
+        <li><strong>DFTB+ 的限制</strong>：
+          <ul>
+            <li>周期体系（“Forces in the excited state for periodic geometries are currently unavailable”）；</li>
+            <li>分数占据；</li>
+            <li>没有指定单个态（<code>StateOfInterest</code> = 0）；</li>
+            <li>振子窗口；</li>
+            <li>onsite 修正（“Excited state property evaluation currently incompatible with onsite corrections”）。</li>
+          </ul>
+        </li>
+        <li><strong>驱动</strong>：DFTB+ 在激发态中做 MD 或结构优化时，用的能量是 E<sub>Mermin</sub> + Ω（md.out 的 Potential Energy、优化器打印的 Total Energy）。detailed.out 的 “Total energy” 仍是基态的（M6d 已记录）。</li>
+      </ul>
+
+      <h3>XL-BOMD</h3>
+      <ul>
+        <li><strong>思路</strong>：辅助电荷 n 像坐标一样随时间积分，用作每一步 SCC 的初值（XlbomdFast 时就是唯一一轮的输入）。积分公式：
+          <ul>
+            <li>n(t+δt) = 2n(t) − n(t−δt) + κ s [q<sub>out</sub>(t) − n(t)] + α Σ<sub>k=0..K</sub> c<sub>k</sub> n(t−kδt)；</li>
+            <li>最后一项是使数值噪声衰减的耗散项；</li>
+            <li>K = 5、6、7 各有一组 c、α、κ（K = 7 的 α = 1.6e-3 在源码中是单精度常数）。</li>
+          </ul>
+        </li>
+        <li><strong>阶段</strong>：
+          <ol>
+            <li>off：前 <code>PreSteps</code> 步，完整 SCC，下一步从 q<sub>out</sub> 出发；</li>
+            <li>fillingUp：K+1 步，完整 SCC，把 q<sub>out</sub> 存入环形缓冲；</li>
+            <li>interpolating：<code>TransientSteps</code> 步，完整 SCC，缓冲中的最新值与 q<sub>out</sub> 线性混合；</li>
+            <li>on：用 XL 的 SCC 设置。</li>
+          </ol>
+          前三个阶段的 SCC 用哈密顿量部分的容差和最大轮数。</li>
+        <li><strong>SCC 设置</strong>：
+          <ul>
+            <li><code>Xlbomd</code>：<code>MinSccIterations</code> = 1、<code>MaxSccIterations</code> = 200、<code>SccTolerance</code> = 1e-5；</li>
+            <li><code>XlbomdFast</code>：每步 1 轮 SCC、<code>TransientSteps</code> = 10，<code>Scale</code> ∈ (0, 1]。</li>
+          </ul>
+          两条通用规则：
+          <ul>
+            <li>DFTB+ 在最后一轮 SCC 之后不混合（达到最大轮数时也不混合），所以输出的 n 就是构造 H 的电荷；</li>
+            <li>第一步之后的收敛判据不看 <code>MinSccIterations</code>：<code>getNextInputCharges</code> 中写的是 <code>iSccIter ≥ minSccIter .or. iGeoStep &gt; 0</code>。</li>
+          </ul>
+        </li>
+        <li><strong>影子能量</strong>：
+          <ul>
+            <li>E = E<sub>band</sub>[D(n)] + ½(2q<sub>out</sub> − n)·γ·n + E<sub>3</sub>(n) + v<sub>3</sub>(n)·(q<sub>out</sub> − n) + E<sub>rep</sub> + E<sub>disp</sub>，电荷取相对中性原子的偏差；</li>
+            <li>D(n) 来自用 n 构造的 H，md.out 的势能就是它（EMermin）；</li>
+            <li>旧的 <code>ThirdOrder</code>（只有同一原子项）与 XL 同用时报错（“XLBOMD not working with third order yet”），<code>ThirdOrderFull</code> 可以。</li>
+          </ul>
+        </li>
+        <li><strong>力</strong>：在 n 固定时对影子能量求导。
+          <ul>
+            <li>能带部分：用 H[n] 的密度和 V[n]，DFTB+ 跳过了对角化之后用 q<sub>out</sub> 更新势的那一步。</li>
+            <li>SCC 部分：γ′ 的前因子为 q<sub>out,A</sub>n<sub>B</sub> + n<sub>A</sub>q<sub>out,B</sub> − n<sub>A</sub>n<sub>B</sub>。</li>
+            <li>三阶部分：同理，是线性化后的形式。</li>
+          </ul>
+        </li>
+        <li><strong><code>ForceEvaluation</code></strong>：三种取值。XL 只接受后两种，<code>DynamicsT0</code> 还要求电子温度为零。
+          <ul>
+            <li>Traditional：能量加权密度 Σ f ε c c<sup>T</sup>；</li>
+            <li>DynamicsT0：½ D H D；</li>
+            <li>Dynamics：½(D H S<sup>−1</sup> + S<sup>−1</sup> H D)。</li>
+          </ul>
+          H 就是被对角化的矩阵时，三者在数学上相同，只差舍入。</li>
+        <li><strong>限制</strong>：
+          <ul>
+            <li>不能用热浴、压浴、自旋、+U、onsite、外场、点电荷、溶剂；</li>
+            <li>只能用 Fermi 展宽；</li>
+            <li>只能用 DFTB 哈密顿量。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>DFTB+ 为本机的 25.1 开发版（commit a23bfb2），参数为测试用的 <code>ptbp_hcocu</code>。探针脚本在会话的临时目录（<code>m6e/probe_e*.py</code>、<code>probe_x1.py</code>、<code>m6d/probe6.py</code>）。激发态力的检查用 H<sub>2</sub>CO 的第 2 个单重态（ARPACK），对 DFTB+ 自己的 E<sub>0</sub> + ω 做中心差分（步长 1e-4 Bohr，五个坐标分量）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>试验</th><th>max |F<sub>DFTB+</sub> − 差分|（Ha/Bohr）</th></tr></thead>
+        <tbody>
+          <tr><td>单重态、三重态、自旋极化的 H<sub>2</sub>CO<sup>+</sup>（每个原子一个 W）</td><td>3.2e-7、5.0e-7、4.3e-7</td></tr>
+          <tr><td>Lennard-Jones 色散</td><td>2.5e-7</td></tr>
+          <tr><td>外电场 0.5 V/Å</td><td><strong>1.1e-3</strong></td></tr>
+          <tr><td>3 个点电荷</td><td><strong>5.4e-3</strong></td></tr>
+          <tr><td>能量窗口（2 eV 或 0.5 eV）</td><td><strong>3.9e-3</strong></td></tr>
+          <tr><td>H–X 阻尼（指数 4）</td><td><strong>1.3e-4</strong></td></tr>
+          <tr><td>H<sub>2</sub>CO<sup>+</sup>，按壳层的 W 矩阵（p–p 元素与上面的 W 相同）</td><td><strong>8.8e-6</strong></td></tr>
+          <tr><td>onsite 修正</td><td>报错（见第一节）</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>驱动与 XL-BOMD 的试验</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>H<sub>2</sub>CO 在 S<sub>1</sub> 中做 MD（20 步，0.5 fs，300 K）</td><td>md.out 第一步的势能 −5.2749443847 Ha，正好是单点的 EMermin + ω；每步 SCC 6–7 轮（沿用上一步的电荷）。</td></tr>
+          <tr><td>H<sub>2</sub>CO 在 S<sub>1</sub> 中做结构优化</td><td>27 步收敛；优化器打印 E<sub>0</sub> + ω（最后 −5.3736548 Ha），detailed.out 的 Total energy 是基态的 −5.4060775 Ha。</td></tr>
+          <tr><td>水二聚体 MD 60 步，BO（SCC 容差 1e-10）</td><td>SCC 共 582 轮。</td></tr>
+          <tr><td><code>Xlbomd</code>，K = 5，容差 1e-6</td><td>能量与 BO 相同，SCC 共 457 轮（后段每步 7 轮）。</td></tr>
+          <tr><td><code>Xlbomd</code>，<code>MinSccIterations</code> = 4，容差 1e-3</td><td>第 7 步起每步 3–4 轮：最少轮数在第一步之后不起作用。</td></tr>
+          <tr><td><code>XlbomdFast</code>，Scale = 1.0 / 0.5 / 0.25</td><td>1.0 发散（总能量漂移 −50 Ha）；0.5、0.25 稳定，过渡之后每步 1 轮。</td></tr>
+          <tr><td>K = 6 加 <code>PreSteps</code> = 3；K = 7、Scale 0.25；DFTB3（<code>ThirdOrderFull</code>）加 <code>XlbomdFast</code></td><td>都可以运行；旧的 <code>ThirdOrder</code> 报错。</td></tr>
+          <tr><td>CuO 链（k 点，500 K）</td><td><code>Xlbomd</code> + <code>Dynamics</code>：可以，30 步漂移 −9e-7 Ha；<code>DynamicsT0</code>：报错（要求 T = 0）；<code>XlbomdFast</code> Scale 0.5：发散。</td></tr>
+          <tr><td>XL 配 <code>ForceEvaluation = Traditional</code></td><td>报错 “Force evaluation method incompatible with XLBOMD”。</td></tr>
+        </tbody>
+      </table></div>
+      <p>实现过程中的其他发现：</p>
+      <ul>
+        <li><strong>差分步长</strong>：DFTB+ 的默认 <code>Delta</code> 是 ε<sup>1/4</sup> = 2<sup>−13</sup>。M2f 以来 <code>validation/dynamics.py</code> 用的是 1.22e-4，相对差 5.8e-4。两点都落在同一段插值多项式上时，力只差约 3e-12 Ha/Bohr；两点跨过 SK 网格点（0.02 Bohr 一个）时，两段多项式的差被 1/(2h) 放大，力相差可达 2.4e-8 Ha/Bohr。水二聚体 XL 轨迹的第 30 步正好如此（O–H 距离离网格点 2e-5 Bohr），使速度相差 1.6e-6 Å/ps。改用 2<sup>−13</sup> 后，各 XL 轨迹与 DFTB+ 一致到它打印的位数。</li>
+        <li><strong>能量的位数</strong>：detailed.out 只打印 10 位小数，对 DFTB+ 的能量做差分（步长 1e-4 Bohr）会带来约 1e-6 Ha/Bohr 的噪声；<code>autotest.tag</code> 的 <code>mermin_energy</code> 是全精度的 E<sub>0</sub> + ω，用它做差分，误差降到 5e-11。</li>
+        <li><strong>能量窗口下的 XCH.DAT</strong>：DFTB+ 的激发态电荷来自只在窗口内求解的 Z，与完整弛豫的电荷相差 4.7e-2 e；对照时用复现 DFTB+ 写法的 <code>_compat</code> 运行。</li>
+        <li><strong>点电荷受的力</strong>：DFTB+ 在激发态中打印的仍是基态的点电荷受力；pydftb 给出 −∇<sub>R<sub>pc</sub></sub>(E<sub>0</sub> + ω)。</li>
+        <li><strong>自旋极化时的 <code>DynamicsT0</code></strong>：DFTB+ 在每个自旋通道上也取 ½DHD，而通道的占据数是 0 或 1，能量加权密度只有一半，三重态 O<sub>2</sub> 的力差 0.19 Ha/Bohr；<code>Dynamics</code> 是对的。pydftb 用 DHD / f<sub>max</sub>。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>calc = DFTB(sk, casida=Casida(6, state_of_interest=2))   # excited_forces 默认为 True
+r = calc.calculate(labels, positions)        # r.forces = −∇(E0 + ω2)
+r.excited_energy, r.excited_free_energy      # E0 + ω（r.energy 仍是基态，同 DFTB+ 与 M6d）
+r.excited_charges                            # 激发态的 Mulliken 布居（电子数，同 r.charges）
+r.excited_dipole                             # 激发态偶极（e·Bohr）
+Casida(6, state_of_interest=2, excited_charges=True)   # 不算力时也求激发态电荷（WriteMulliken）
+
+# ASE：能量取 E0 + ω，与力一致，可直接做激发态的结构优化和 MD
+atoms.calc = PyDFTB(skdir, casida={"n_excitations": 6, "state_of_interest": 1})
+
+# XL-BOMD：每次计算是一个 MD 步，积分器的状态保存在计算器里
+from pydftb.xlbomd import XLBOMD
+atoms.calc = PyDFTB(skdir, xlbomd=XLBOMD(integration_steps=5, scc_tol=1e-6))
+VelocityVerlet(atoms, 0.5 * units.fs).run(100)
+PyDFTB(skdir, xlbomd=XLBOMD(fast=True, scale=0.5))       # 每步 1 轮 SCC</code></pre>
+      <ul>
+        <li><strong>激发态的力</strong>：
+          <ul>
+            <li>适用范围：分子，整数占据，一个态（<code>state_of_interest</code> &gt; 0 或最亮态）；</li>
+            <li>单重态、三重态、共线自旋极化；</li>
+            <li>可以与外电场、点电荷、格点势、色散、H–X 阻尼、能量窗口同用（pydftb 的导数是完整的）。</li>
+            <li>报错的情况：
+              <ul>
+                <li>与 DFTB+ 相同：周期体系、分数占据、振子窗口、onsite 修正；</li>
+                <li>pydftb 自己加的：自旋常数按壳层取不同值（自旋极化时）；</li>
+                <li>与 XL-BOMD 同用。</li>
+              </ul>
+            </li>
+            <li><code>excited_forces=False</code> 返回基态的力，与 M6d 相同。</li>
+          </ul>
+        </li>
+        <li><strong>能量的约定</strong>：
+          <ul>
+            <li><code>DFTBResult.energy</code> 与 <code>free_energy</code> 仍是基态的，与 DFTB+ 的 detailed.out 一致；</li>
+            <li>新字段 <code>excited_energy</code>、<code>excited_free_energy</code> 给出加上 ω 的值；</li>
+            <li>ASE 计算器在算激发态的力时，把 E<sub>0</sub> + ω 作为 energy 和 free_energy，与 DFTB+ 的驱动相同，优化器和 MD 看到的能量与力一致。</li>
+          </ul>
+        </li>
+        <li><strong>XL-BOMD</strong>：
+          <ul>
+            <li><code>XLBOMD</code> 的参数与 DFTB+ 的 <code>Xlbomd</code>/<code>XlbomdFast</code> 一一对应：<code>integration_steps</code>、<code>pre_steps</code>、<code>min_scc</code>、<code>max_scc</code>、<code>scc_tol</code>；<code>fast=True</code> 时另有 <code>transient_steps</code>、<code>scale</code>；</li>
+            <li>阶段 off、fillingUp、interpolating 的 SCC 用计算器自己的 <code>scc_tol</code>、<code>max_scc</code>；</li>
+            <li>能量是影子能量（与 DFTB+ 的 md.out 相同）；</li>
+            <li><code>force_evaluation</code> 默认在 T = 0 时取 <code>"dynamics_t0"</code>，否则取 <code>"dynamics"</code>；明确写 <code>"traditional"</code> 时报错，与 DFTB+ 相同；</li>
+            <li>限制与 DFTB+ 相同；</li>
+            <li>积分器假定每次计算就是下一个 MD 步（ASE 的 <code>VelocityVerlet</code>），<code>calc.reset()</code> 重新开始。</li>
+          </ul>
+        </li>
+        <li><strong>引擎层</strong>：<code>DFTB.calculate(…, scc_control=SCCControl(min_iter, max_iter, tol), xl=True)</code> 是 XL-BOMD 的底层入口，给出一步的 SCC（最后一轮之后不混合）和影子能量与力；<code>force_evaluation</code> 也可以单独用于普通计算（DFTB+ 的 <code>ForceEvaluation</code>）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>激发态的力</h3>
+        <ul>
+          <li><strong><code>casida.py</code></strong>（数值不变）：
+            <ul>
+              <li><code>Excitations</code> 增加 <code>xmy</code>（X−Y = F√(Ω/ω<sub>ia</sub>)）；</li>
+              <li><code>excitations()</code> 内部拆出求解部分，供梯度复用同一组本征向量。</li>
+            </ul>
+          </li>
+          <li><strong>新模块 <code>casida_grad.py</code></strong>：全部在稠密的 MO/AO 矩阵上做，不需要大的跃迁电荷数组。
+            <ul>
+              <li><code>mo_potential(g)</code> = ½ C<sup>T</sup>(G S + S G) C，即 V[g]；<code>mulliken(D)</code> 按原子求和 (D∘S)·1。</li>
+              <li>X±Y 放到 N×N 的占据—空块，T、W 的各块是矩阵乘积。</li>
+              <li><strong>Z 向量</strong>：(A+B) 的乘积为 ω∘Z + 4 V[γ q(Z)]<sub>ov</sub>（自旋极化时为 2 倍，再加 W 项）。
+                <ul>
+                  <li>在全部占据—空轨道对上求解，不受窗口限制；</li>
+                  <li>轨道对不超过 <code>EXACT_LIMIT</code> 时组装矩阵直接解，否则用对角预条件的 CG，收敛到机器精度。</li>
+                </ul>
+              </li>
+              <li>输出 <code>Relaxed(P_ao, W_ao, dqex, xi, xpy_ao, …)</code>，以及原子对元素上的 dS 系数。</li>
+            </ul>
+          </li>
+          <li><strong><code>calculator.py</code></strong>：
+            <ul>
+              <li>把 <code>_gradient</code> 中按原子对求和的三行抽成 <code>_add_pair_terms(st, grad, p_e, coef_s)</code>，运算顺序不变，旧路径逐位相同。</li>
+              <li>激发态部分：P 代替 ρ，W 代替能量加权密度，dS 系数中加入第一节的各项；位移用基态的完整势（<code>_potentials</code> 已包含外场、点电荷、格点势）。</li>
+              <li>γ′ 项用 <code>Coulomb.gradient(dq, other=dqex)</code>（新参数，求 ½ dq·γ·dqex 的导数，与 <code>gradient</code> 用同一个有阻尼的 γ）和 <code>gradient(ξ)</code>。</li>
+              <li>外加势加上 <code>ext.gradient(dqex)</code>。</li>
+            </ul>
+          </li>
+          <li><strong>测试专用</strong>：<code>_compat</code> 集合（"external"、"damping"、"window"）按 DFTB+ 的写法去掉相应的项，用来证明与 DFTB+ 的差别正好来自这几处。</li>
+          <li>torch 后端和自动求导遇到激发态的力或 XL-BOMD 时报错。</li>
+        </ul>
+        <h3>XL-BOMD</h3>
+        <ul>
+          <li><strong><code>SCCControl</code></strong>：最少轮数、最多轮数、容差；收敛或达到最多轮数时停在构造 H 的那组输入电荷上，不再混合；不收敛时不警告（XL 的正常情况）。</li>
+          <li><strong>XL 模式</strong>（<code>xl=True</code>）：
+            <ul>
+              <li>能量：SCC 项 q<sub>out</sub>·γ·n − ½ n·γ·n；三阶项 E<sub>3</sub>(n) + v<sub>3</sub>(n)·(q<sub>out</sub> − n)；其余项照旧。</li>
+              <li>力：位移用 V[n]；SCC 项为 2·<code>gradient(q_out, other=n)</code> − <code>gradient(n)</code>；三阶项用新的 <code>ThirdOrder.gradient_xl(n, q_out)</code>。</li>
+            </ul>
+          </li>
+          <li><strong><code>force_evaluation</code></strong>：<code>_dynamics_wdm</code> 按 DFTB+ 的公式求 ½DHD 或 ½(DHS<sup>−1</sup> + S<sup>−1</sup>HD)（实现时发现自旋通道上应为 DHD，见第二节）。</li>
+          <li><strong>新模块 <code>xlbomd.py</code></strong>：
+            <ul>
+              <li><code>ExtLagrangian</code>：照搬 DFTB+ 的环形缓冲、系数表、四个阶段、插值，运算顺序与 Fortran 相同；</li>
+              <li><code>XLBOMD</code>：选项和每个阶段的 SCC 设置；</li>
+              <li>DFTB+ 的规则：第一步之后最少轮数取 1。</li>
+            </ul>
+          </li>
+          <li><strong><code>ase_calc.py</code></strong>：<code>PyDFTB(xlbomd=…, force_evaluation=…)</code> 每次计算传入积分器给出的 n，再把 q<sub>out</sub> 交给积分器。</li>
+        </ul>
+        <h3>验证工具</h3>
+        <ul>
+          <li><code>dftbplus.py</code>：写 <code>WriteMulliken</code>、<code>ExcitedStateForces</code>；解析 <code>XCH.DAT</code>、<code>XREST.DAT</code>；<code>md_driver</code> 加 XL 块，HSD 加 <code>ForceEvaluation</code>。</li>
+          <li><code>refgen.py</code>：
+            <ul>
+              <li><code>casida_options</code> 不再写死 <code>excited_forces=False</code>；</li>
+              <li>参考结果可存 <code>forces_fd</code>：对 DFTB+ 的 E<sub>0</sub> + ω 做四点中心差分，全部 3N 个分量，步长 1e-4 Bohr。</li>
+            </ul>
+          </li>
+          <li><code>dynamics.py</code>：新的 <code>DynCase</code>（激发态 MD 与优化、各种 XL）；XL 的比较同时用 ASE 的 VelocityVerlet 和 <code>verlet_dftbplus_units</code>，并比较每步的 SCC 轮数。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>自洽测试（不需要 DFTB+）</h3>
+        <ul>
+          <li>激发态力与 pydftb 自己的 E<sub>0</sub> + ω 的中心差分，目标 ≤ 1e-8 Ha/Bohr。覆盖：
+            <ul>
+              <li>单重态、三重态、自旋极化、最亮态；</li>
+              <li>外场、点电荷、格点势、色散；</li>
+              <li>H–X 阻尼、能量窗口。</li>
+            </ul>
+          </li>
+          <li>Z 向量：稠密解与 CG 一致；P 的迹为零（激发不改变电子数）。</li>
+          <li>平移、转动不变：力之和为零，力矩为零。</li>
+          <li>XL-BOMD：
+            <ul>
+              <li>系数表、阶段转换与 DFTB+ 一致；</li>
+              <li>环形缓冲与写开的递推公式一致；</li>
+              <li>影子能量的力和应力与它自己的差分一致（n 固定）；自洽时影子能量等于能量，三种力的算法给出相同的力。</li>
+            </ul>
+          </li>
+        </ul>
+        <h3>DFTB+ 参考算例（<code>refgen</code>）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th><th>比较</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2co_exc_forces</code></td><td>单重态第 2 个态</td><td>力（DFTB+ 的差分步长）、E<sub>0</sub> + ω、激发态电荷、偶极</td></tr>
+            <tr><td><code>h2co_exc_forces_triplet</code></td><td>三重态</td><td>同上</td></tr>
+            <tr><td><code>h2co_cation_exc_forces</code></td><td>自旋极化</td><td>同上</td></tr>
+            <tr><td><code>h2co_exc_forces_bright</code></td><td>最亮态</td><td>同上</td></tr>
+            <tr><td><code>ch3oh_exc_forces</code></td><td>低对称性，较多的跃迁</td><td>同上</td></tr>
+            <tr><td><code>h2co_exc_forces_lj</code></td><td>色散</td><td>同上</td></tr>
+            <tr><td><code>h2co_exc_forces_field_pc</code></td><td>外场 + 点电荷</td><td><code>forces_fd</code>；<code>_compat</code> 复现 DFTB+ 的力</td></tr>
+            <tr><td><code>h2co_exc_forces_hdamp</code></td><td>H–X 阻尼</td><td>同上</td></tr>
+            <tr><td><code>h2co_exc_forces_ewindow</code></td><td>能量窗口</td><td>同上</td></tr>
+          </tbody>
+        </table></div>
+        <h3>动力学参考（<code>dynamics</code>）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2co_s1_opt</code></td><td>在 S<sub>1</sub> 中做结构优化（分子变成锥形）</td></tr>
+            <tr><td><code>h2co_s2_md</code></td><td>在 S<sub>2</sub> 中做 MD，20 步，300 K</td></tr>
+            <tr><td><code>water_dimer_xl5_md</code></td><td><code>Xlbomd</code>，K = 5，容差 1e-6，60 步</td></tr>
+            <tr><td><code>water_dimer_xl6_presteps_md</code></td><td>K = 6，<code>PreSteps</code> = 3</td></tr>
+            <tr><td><code>water_dimer_xl_minscc_md</code></td><td><code>MinSccIterations</code> = 4，容差 1e-3：最少轮数不起作用</td></tr>
+            <tr><td><code>water_dimer_xlfast_md</code></td><td><code>XlbomdFast</code>，K = 5，Scale 0.5，60 步</td></tr>
+            <tr><td><code>water_dimer_xlfast7_md</code></td><td>K = 7，Scale 0.25（单精度的 α），5 个过渡步</td></tr>
+            <tr><td><code>water_dimer_dftb3_xlfast_md</code></td><td>DFTB3（<code>ThirdOrderFull</code>）的线性化三阶项</td></tr>
+            <tr><td><code>cuo_chain_xl_md</code></td><td>k 点，500 K，<code>Dynamics</code></td></tr>
+          </tbody>
+        </table></div>
+        <h3>门槛</h3>
+        <p>与以往相同：</p>
+        <ul>
+          <li>golden 两个环境对 <code>d3c1059</code> 逐位相同（新字段用 <code>--allow-new</code>）；</li>
+          <li><code>refgen --check</code>（Casida 算例分别用三种求解器）、<code>dynamics --check</code>；</li>
+          <li>三个环境的 pydftb 测试；PTBP 测试；<code>engine_parity</code>。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>（按需再说）：
+          <ul>
+            <li>非绝热耦合向量（<code>StateCouplings</code>）和锥形交叉优化；</li>
+            <li>多个态同时求力（本机 DFTB+ 不支持，CHANGELOG 的未发布部分才有）；</li>
+            <li>周期体系、分数占据、onsite 修正的激发态力；</li>
+            <li>自旋、+U、外场下的 XL-BOMD；XL-BOMD 的热浴。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>Z 向量的符号和因子 2：以 pydftb 自己的精确差分为主要检查，DFTB+ 只在它正确的组合上直接对照。</li>
+            <li>激发态 MD 中的态交叉：参考算例选短轨迹、离交叉远的态。</li>
+            <li>XL 轨迹长时间后混沌地分开：只比较 ≤ 60 步，并逐步比较 SCC 轮数。</li>
+            <li>旧路径被改动：<code>scc_control=None</code>、<code>xl=False</code>、<code>force_evaluation="traditional"</code> 走原来的代码；golden 逐位比较。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6d-casida.html">← M6d 完成报告</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

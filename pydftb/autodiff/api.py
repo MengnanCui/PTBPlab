@@ -154,6 +154,9 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     if getattr(calc, "casida", None) is not None:
         raise NotImplementedError("pydftb.autodiff does not support Casida excitations: NumPy "
                                   "engine only (milestone M6d)")
+    if getattr(calc, "force_evaluation", "traditional") != "traditional":
+        raise NotImplementedError("pydftb.autodiff does not support the dynamics force "
+                                  "evaluations of XL-BOMD: NumPy engine only (milestone M6e)")
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)

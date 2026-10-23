@@ -49,12 +49,14 @@ class Casida:
     ``oscillator_window`` then adds higher, bright ones (degenerate groups whose summed
     single-particle oscillator strength exceeds it), as DFTB+'s ``EnergyWindow`` and
     ``OscillatorWindow``.  ``state_of_interest`` > 0 reports that state's excitation energy
-    (``DFTBResult.excitation_energy``), < 0 the brightest singlet's.  Excited-state forces are
-    milestone M6e; ``excited_forces=False`` returns the ground-state forces (DFTB+
-    ``ExcitedStateForces = No``).  ``solver``: "exact" (dense Omega), "davidson" (matrix-free
-    block Davidson with the diagonal w^2 as preconditioner: Omega is that diagonal plus a
-    coupling of rank n_atom, so few iterations), "arpack" (matrix-free, SciPy's ARPACK; slower,
-    an independent check) or "auto" (exact up to :data:`EXACT_LIMIT` transitions, else
+    (``DFTBResult.excitation_energy``), < 0 the brightest singlet's; forces are then those of
+    the excited state, -d(E_0 + Omega)/dR (milestone M6e, :mod:`pydftb.casida_grad`), unless
+    ``excited_forces=False`` asks for the ground-state ones (DFTB+ ``ExcitedStateForces =
+    No``).  ``excited_charges`` gives the excited state's Mulliken charges and dipole also
+    without forces (DFTB+ ``WriteMulliken``).  ``solver``: "exact" (dense Omega), "davidson"
+    (matrix-free block Davidson with the diagonal w^2 as preconditioner: Omega is that diagonal
+    plus a coupling of rank n_atom, so few iterations), "arpack" (matrix-free, SciPy's ARPACK;
+    slower, an independent check) or "auto" (exact up to :data:`EXACT_LIMIT` transitions, else
     Davidson).
     """
     n_excitations: int
@@ -64,6 +66,7 @@ class Casida:
     oscillator_window: float | None = None
     solver: str = "auto"
     excited_forces: bool = True
+    excited_charges: bool = False
 
     def __post_init__(self):
         if int(self.n_excitations) < 1:
@@ -122,7 +125,8 @@ class Excitations:
     ``energies`` are sqrt(Omega^2) (NaN where Omega^2 < 0, an unstable ground state);
     ``transitions`` are the dominant single-particle transitions (occupied, virtual, spin;
     0-based) with their ``weights`` (DFTB+: (X+Y)^2 / ||(X+Y)^2||_2) and energies
-    ``ks_energies``; ``xpy`` holds X + Y over the transitions ``pairs`` (after the windows).
+    ``ks_energies``; ``xpy`` and ``xmy`` hold X + Y and X - Y over the transitions ``pairs``
+    (after the windows).
     ``symmetries`` are "S" / "T" per state, None with spin polarisation, where
     ``spin_contamination`` is DFTB+'s D<S^2>.
     """
@@ -138,6 +142,7 @@ class Excitations:
     single_particle: SingleParticle
     spin_contamination: np.ndarray | None = None
     state: int = 0                  # state of interest (1-based, as DFTB+), 0 for none
+    xmy: np.ndarray | None = None   # X - Y = F sqrt(Omega / w)
 
     @property
     def energies(self) -> np.ndarray:
@@ -517,6 +522,7 @@ def _properties(cas: Casida, gs: GroundState, resp: Response, omega2, f, dip, sp
     with np.errstate(invalid="ignore", divide="ignore"):
         omega = np.sqrt(np.abs(omega2))
         xpy = f * np.sqrt(resp.w[:, None] / omega[None, :])
+        xmy = f * np.sqrt(omega[None, :] / resp.w[:, None])
     closed = not gs.spin_polarised
     if closed and sym == "T":
         tdip = np.zeros((len(omega2), 3))
@@ -539,7 +545,7 @@ def _properties(cas: Casida, gs: GroundState, resp: Response, omega2, f, dip, sp
                        transitions=resp.pairs[dominant], weights=weights_all[dominant,
                                                                              np.arange(len(omega2))],
                        ks_energies=resp.w[dominant], xpy=xpy, pairs=resp.pairs,
-                       single_particle=spx, spin_contamination=s2, state=state)
+                       single_particle=spx, spin_contamination=s2, state=state, xmy=xmy)
 
 
 def _spin_contamination(gs: GroundState, pairs, xpy) -> np.ndarray:

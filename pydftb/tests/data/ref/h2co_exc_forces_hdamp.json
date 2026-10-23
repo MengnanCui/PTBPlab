@@ -1,0 +1,456 @@
+{
+ "schema": 1,
+ "case": "h2co_exc_forces_hdamp",
+ "note": "H-X damping: DFTB+'s gamma' in the excited gradient is undamped",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": {
+   "h_damping": 4.0
+  },
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "casida": {
+   "n": 6,
+   "symmetry": "singlet",
+   "solver": "Stratmann",
+   "state": 2,
+   "excited_forces": true,
+   "forces_fd": true,
+   "compat": [
+    "damping"
+   ]
+  },
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "C",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.03577256946860637,
+    0.008730197010239788,
+    0.6854309493614402
+   ],
+   [
+    -0.03726985406728982,
+    -0.005547764050287981,
+    -0.5437091795853798
+   ],
+   [
+    -0.0016548296296491954,
+    0.9218499864635231,
+    -1.1250403633795185
+   ],
+   [
+    -0.009544360607190053,
+    -0.9606672950672537,
+    -1.1064715523900082
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "C": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/claude-0/-home-user-PTBPlab/27358f22-7635-569d-802d-bc273888c700/scratchpad/m6e/runs/pydftb_ref_7esy6ldy/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    C = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  HCorrection = Damping { Exponent = 4.0 }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  WriteAutotestTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\nExcitedState {\n  Casida {\n    NrOfExcitations = 6\n    Symmetry = singlet\n    StateOfInterest = 2\n    Diagonaliser = Stratmann {}\n    WriteTransitions = Yes\n    WriteSPTransitions = Yes\n    WriteTransitionDipole = Yes\n    WriteMulliken = Yes\n    ExcitedStateForces = Yes\n  }\n}\n",
+ "reference": {
+  "energy": -5.3710249966,
+  "free_energy": -5.3710249966,
+  "e_zero": -5.3710249966,
+  "e_rep": 0.120279168,
+  "e_scc": 0.016492636,
+  "e_band": -5.5077968006,
+  "fermi": -0.179114959244946,
+  "forces": [
+   [
+    0.0273068983073515,
+    0.00427702738672289,
+    0.37096641519558
+   ],
+   [
+    -0.042894885504315,
+    -0.0111300358726854,
+    -0.294181716527723
+   ],
+   [
+    0.00834590169552221,
+    0.0900424468466733,
+    -0.0419155441135046
+   ],
+   [
+    0.00724208550144135,
+    -0.0831894383607109,
+    -0.0348691545543526
+   ]
+  ],
+  "charges_net": [
+   -0.31091008386697,
+   0.162958139948447,
+   0.0768168531471133,
+   0.0711350907714103
+  ],
+  "exc_energies": [
+   0.0958237115829222,
+   0.19158589799427514,
+   0.22209150060703453,
+   0.2360210545920587,
+   0.32497025478802816,
+   0.38617851524607283
+  ],
+  "exc_symmetries": [
+   "S",
+   "S",
+   "S",
+   "S",
+   "S",
+   "S"
+  ],
+  "exc_rows": [
+   [
+    2.607,
+    0.00011901,
+    6,
+    7,
+    1.0,
+    2.606,
+    "S"
+   ],
+   [
+    5.213,
+    1.476e-05,
+    4,
+    7,
+    1.0,
+    5.221,
+    "S"
+   ],
+   [
+    6.043,
+    0.00042541,
+    3,
+    7,
+    1.0,
+    6.041,
+    "S"
+   ],
+   [
+    6.422,
+    0.05805543,
+    5,
+    7,
+    0.996,
+    4.629,
+    "S"
+   ],
+   [
+    8.843,
+    0.07592055,
+    6,
+    8,
+    0.999,
+    8.506,
+    "S"
+   ],
+   [
+    10.508,
+    4.298e-05,
+    2,
+    7,
+    1.0,
+    10.507,
+    "S"
+   ]
+  ],
+  "spx_rows": [
+   [
+    2.606,
+    0.0001277,
+    6,
+    7,
+    ""
+   ],
+   [
+    4.629,
+    0.147227,
+    5,
+    7,
+    ""
+   ],
+   [
+    5.221,
+    0.0023688,
+    4,
+    7,
+    ""
+   ],
+   [
+    6.041,
+    0.000579,
+    3,
+    7,
+    ""
+   ],
+   [
+    8.506,
+    0.09896,
+    6,
+    8,
+    ""
+   ],
+   [
+    10.507,
+    0.0001071,
+    2,
+    7,
+    ""
+   ],
+   [
+    10.529,
+    0.0020478,
+    5,
+    8,
+    ""
+   ],
+   [
+    11.121,
+    0.1569727,
+    4,
+    8,
+    ""
+   ],
+   [
+    11.28,
+    0.1714306,
+    6,
+    9,
+    ""
+   ],
+   [
+    11.941,
+    0.2929865,
+    3,
+    8,
+    ""
+   ],
+   [
+    13.303,
+    4.36e-05,
+    5,
+    9,
+    ""
+   ],
+   [
+    13.895,
+    0.0788296,
+    4,
+    9,
+    ""
+   ],
+   [
+    14.635,
+    0.0071532,
+    6,
+    10,
+    ""
+   ],
+   [
+    14.714,
+    0.0342239,
+    3,
+    9,
+    ""
+   ],
+   [
+    16.407,
+    0.0609622,
+    2,
+    8,
+    ""
+   ],
+   [
+    16.658,
+    0.0024674,
+    5,
+    10,
+    ""
+   ],
+   [
+    17.25,
+    0.3687098,
+    4,
+    10,
+    ""
+   ],
+   [
+    18.069,
+    0.0198675,
+    3,
+    10,
+    ""
+   ],
+   [
+    18.578,
+    8.1e-06,
+    1,
+    7,
+    ""
+   ],
+   [
+    19.18,
+    0.2688397,
+    2,
+    9,
+    ""
+   ],
+   [
+    22.535,
+    0.1000463,
+    2,
+    10,
+    ""
+   ],
+   [
+    24.478,
+    0.0127537,
+    1,
+    8,
+    ""
+   ],
+   [
+    27.252,
+    0.0122793,
+    1,
+    9,
+    ""
+   ],
+   [
+    30.607,
+    0.4670519,
+    1,
+    10,
+    ""
+   ]
+  ],
+  "excitation_energy": 0.191585898,
+  "n_scc": 11,
+  "exc_tags": {
+   "omega2": [
+    0.00918218370148489,
+    0.0367051563109103,
+    0.0493246346417549,
+    0.0557059382111456,
+    0.105605666496196,
+    0.149133845644581
+   ],
+   "oscillator": [
+    0.000119006398273039,
+    1.47590977560632e-05,
+    0.000425406472228276,
+    0.0580554318084122,
+    0.0759205488444213,
+    4.29784546434715e-05
+   ],
+   "transdip": [
+    0.0431612775403248,
+    0.0107496361512015,
+    0.0536020879265363,
+    0.607423634514356,
+    0.591975173644476,
+    0.0129204301681717
+   ]
+  },
+  "excited_charges_net": [
+   -0.26279478,
+   0.02043171,
+   0.12363128,
+   0.11873178
+  ],
+  "excited_dipole_debye": [
+   -0.05523752,
+   -0.01200728,
+   -2.21764013
+  ],
+  "forces_fd": [
+   [
+    0.02730390414503366,
+    0.004273985273843076,
+    0.3708362538416369
+   ],
+   [
+    -0.042893724607750976,
+    -0.011126487326299875,
+    -0.2942024189681961
+   ],
+   [
+    0.008346656836799582,
+    0.09002520815852103,
+    -0.041839681123404894
+   ],
+   [
+    0.007243163527477965,
+    -0.08317270597579805,
+    -0.034794153780381976
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-09,
+  "charges": 1e-06,
+  "exc": 1e-08,
+  "exc_osc": 1e-07,
+  "exc_tdip": 1e-07,
+  "exc_table": 0,
+  "spx": 0,
+  "exc_state": 1e-09,
+  "exc_charges": 1e-07,
+  "exc_dipole": 1e-07,
+  "forces_dftbp": 1e-06
+ },
+ "forces_fd": "-d(E_Mermin + Excitation Energy)/dR of DFTB+ (autotest.tag mermin_energy), 4-point central differences, h = 0.0001 Bohr"
+}

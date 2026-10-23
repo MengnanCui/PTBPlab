@@ -218,3 +218,26 @@ class ThirdOrder:
         if virial:
             w = 0.5 * np.einsum("p,pa,pb->ab", dedr / d, vec, vec)
         return ops.scatter_add(grad, i, -(dedr / d)[:, None] * vec), w
+
+    def gradient_xl(self, dn, dq, virial: bool = False):
+        """d/dR of the XL-BOMD shadow energy E3(n) + v3(n).(q - n) at fixed charges n (input)
+        and q (output) per site (milestone M6e; DFTB+ addGradientDcXlbomd): every product
+        q_a q_b Q_A of :meth:`gradient` linearised at n."""
+        grad = np.zeros((self.natom, 3))
+        if self.nl is None:
+            return grad, (np.zeros((3, 3)) if virial else None)
+        i, _, _, vec, d = self.nl
+        dd = dq - dn
+        n_atom = ops.segment_sum(dn, self.site_atom, self.natom)
+        d_atom = ops.segment_sum(dd, self.site_atom, self.natom)
+        a_at, b_at = self.site_atom[self.sp_a], self.site_atom[self.sp_b]
+        na, nb, xa, xb = dn[self.sp_a], dn[self.sp_b], dq[self.sp_a], dq[self.sp_b]
+        da, db = dd[self.sp_a], dd[self.sp_b]
+        g = ((n_atom[a_at] * nb * xa + n_atom[a_at] * na * db + na * nb * d_atom[a_at]) * self.gr_ab
+             + (n_atom[b_at] * na * xb + n_atom[b_at] * nb * da + na * nb * d_atom[b_at])
+             * self.gr_ba) / 3.0
+        dedr = ops.segment_sum(g, self.sp_pair, len(i))
+        w = None
+        if virial:
+            w = 0.5 * np.einsum("p,pa,pb->ab", dedr / d, vec, vec)
+        return ops.scatter_add(grad, i, -(dedr / d)[:, None] * vec), w

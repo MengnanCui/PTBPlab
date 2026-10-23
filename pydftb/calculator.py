@@ -42,9 +42,11 @@ from ase.data import atomic_numbers as _NUMBERS
 
 from . import blockpot, external
 from . import casida as _casida
+from . import casida_grad as _cgrad
 from . import solvation as _solvation
 from .backend import ops
 from .backend.spec import make_backend
+from .constants import MIN_TEMP
 from .coulomb import Coulomb
 from .dispersion import DispersionTerms, element_of_label, make_dispersion
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
@@ -113,6 +115,14 @@ class DFTBResult:
                                          # [triplets, singlets] for symmetry "both"
     excitation_energy: float | None = None   # the state of interest's (DFTB+ "Excitation
                                          # Energy"); energy and free_energy stay the ground state's
+    # the state of interest (M6e): E_0 + Omega, and with its relaxed density (excited forces or
+    # Casida(excited_charges=True)) the Mulliken populations and dipole (DFTB+ XCH.DAT, XREST.DAT)
+    excited_energy: float | None = None
+    excited_free_energy: float | None = None
+    excited_charges: np.ndarray | None = None    # electron populations per atom, as charges
+    excited_dipole: np.ndarray | None = None     # e Bohr
+    q_out: np.ndarray | None = None      # output populations of the last iteration (the mixed
+                                         # vector; what XL-BOMD propagates, M6e)
 
     @property
     def e_total(self) -> float:
@@ -132,6 +142,20 @@ class DFTBResult:
                 "LS": self.e_ls, "+U": self.e_plus_u, "onsite": self.e_onsite,
                 "ext": self.e_ext, "solvation": self.e_solv,
                 "repulsive": self.e_rep, "dispersion": self.e_disp, "-TS": -self.ts}
+
+
+@dataclass(frozen=True)
+class SCCControl:
+    """The SCC iterations of one XL-BOMD step (milestone M6e), by DFTB+'s rules: converged
+    when max |q_out - q_in| < ``tol`` after at least ``min_iter`` iterations; at most
+    ``max_iter`` iterations, and no mixing after the last one, so the input populations of
+    the result built its Hamiltonian; stopping unconverged is no warning."""
+    min_iter: int = 1
+    max_iter: int = 200
+    tol: float = 1e-5
+
+
+FORCE_EVALUATIONS = ("traditional", "dynamics_t0", "dynamics")
 
 
 @dataclass
@@ -248,8 +272,8 @@ class DFTB:
                           ``ConvergentSCCOnly = No``) if the SCC does not converge.
     fd_delta : float      None (default): exact H0/S derivatives.  A step (Bohr)
                           reproduces DFTB+'s finite-difference derivatives
-                          (current DFTB+ default 1.22e-4; ParserVersion < 5,
-                          e.g. via ASE: 1e-2).
+                          (current DFTB+ default epsilon**(1/4) = 2**-13 = 1.2207e-4;
+                          ParserVersion < 5, e.g. via ASE: 1e-2).
     third_order : str     None (DFTB2), "full" (DFTB3, DFTB+ ``ThirdOrderFull``) or
                           "onsite" (DFTB+ ``ThirdOrder``: R = 0 terms only).
     hubbard_derivs : dict type label -> Hubbard derivative Ud (Hartree/e), or a
@@ -302,12 +326,23 @@ class DFTB:
                           :class:`pydftb.casida.Casida`; results in ``DFTBResult.excitations``.
                           Molecules or the Gamma point, atom-resolved SCC, not with DFTB3,
                           two-component spin, DFTB+U or implicit solvation (as in DFTB+);
-                          triplets and spin polarisation need ``spin_constants``.
+                          triplets and spin polarisation need ``spin_constants``.  With a state
+                          of interest the forces are that excited state's (M6e).
+    force_evaluation : str  "traditional" (default), "dynamics_t0" or "dynamics" (DFTB+
+                          ``ForceEvaluation``, M6e): the energy-weighted density from the
+                          eigenvalues, as D H D / f_max (electronic temperature zero only;
+                          f_max = 2, or 1 per spin channel) or as 1/2 (D H S^-1 + S^-1 H D).
+                          The same matrix where H is the one diagonalised; XL-BOMD
+                          (``calculate(..., xl=True)``) needs one of the last two, as in DFTB+.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
     solver either).
     """
+
+    # test use only: leave out what DFTB+'s excited-state gradient leaves out ("external",
+    # "damping", "window"), to show that its differences from pydftb's are those terms (M6e)
+    _excited_compat = frozenset()
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float = 0.2,
@@ -323,7 +358,8 @@ class DFTB:
                  spin_orbit_dual: bool = True, plus_u: dict | None = None,
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
-                 solvation=None, rescale_solvated_fields: bool = True, casida=None):
+                 solvation=None, rescale_solvated_fields: bool = True, casida=None,
+                 force_evaluation: str = "traditional"):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -421,7 +457,19 @@ class DFTB:
         self.casida = _casida.Casida.make(casida)
         if self.casida is not None:
             self._check_casida(sk, solver)
+        self.force_evaluation = str(force_evaluation).lower()
+        if self.force_evaluation not in FORCE_EVALUATIONS:
+            raise ValueError(f"force_evaluation must be one of {FORCE_EVALUATIONS}, "
+                             f"not {force_evaluation!r}")
+        if self.force_evaluation != "traditional" and not scc:
+            raise ValueError("this force_evaluation needs SCC (as in DFTB+)")
+        if self.force_evaluation == "dynamics_t0" and self.smearing.kt > MIN_TEMP:
+            raise ValueError("force_evaluation='dynamics_t0' requires the electronic "
+                             "temperature to be zero (as in DFTB+); use 'dynamics'")
         self.backend = make_backend(backend, device, dtype)
+        if self.backend.is_torch and self.force_evaluation != "traditional":
+            raise ValueError("force_evaluation other than 'traditional' is implemented for the "
+                             "NumPy backend only (milestone M6e)")
         if self.backend.is_torch and self.pauli:
             raise ValueError("non-collinear spin and spin-orbit coupling are implemented for "
                              "the NumPy backend only (milestone M6a)")
@@ -506,31 +554,46 @@ class DFTB:
 
     # ------------------------------------------------------------------
     def calculate(self, species, positions, cell=None, pbc=None, forces=True,
-                  q_init=None, stress: bool | None = None) -> DFTBResult:
+                  q_init=None, stress: bool | None = None, scc_control: SCCControl | None = None,
+                  xl: bool = False) -> DFTBResult:
         """Run a calculation. Positions/cell in Bohr.
 
         ``stress`` (default: with forces for periodic systems) adds the stress
         tensor sigma = -(1/V) dE/d(strain), the sign convention of DFTB+.
+        ``scc_control`` and ``xl``: one step of XL-BOMD (milestone M6e, see
+        :mod:`pydftb.xlbomd`): the SCC by DFTB+'s rules from ``q_init`` (the auxiliary
+        populations n), then the shadow energy E_band[D(n)] + 1/2 (2 q_out - n).gamma.n
+        (+ the linearised third order) and its forces at fixed n.
         """
         if self.backend.is_torch:                # CUDA: deterministic algorithms (M4d)
             from .backend.devices import deterministic
             with deterministic(self.backend):
-                return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
+                return self._calculate(species, positions, cell, pbc, forces, q_init, stress,
+                                       scc_control, xl)
         if self.k_threads.n == 1:
-            return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
+            return self._calculate(species, positions, cell, pbc, forces, q_init, stress,
+                                   scc_control, xl)
         from threadpoolctl import threadpool_limits
         with threadpool_limits(1, user_api="blas"):    # the k threads take the cores
-            return self._calculate(species, positions, cell, pbc, forces, q_init, stress)
+            return self._calculate(species, positions, cell, pbc, forces, q_init, stress,
+                                   scc_control, xl)
 
-    def _calculate(self, species, positions, cell, pbc, forces, q_init, stress) -> DFTBResult:
-        return self._run(species, positions, cell, pbc, forces, q_init, stress)[0]
+    def _calculate(self, species, positions, cell, pbc, forces, q_init, stress,
+                   scc_control=None, xl=False) -> DFTBResult:
+        return self._run(species, positions, cell, pbc, forces, q_init, stress,
+                         scc_control, xl)[0]
 
-    def _run(self, species, positions, cell, pbc, forces, q_init, stress):
+    def _run(self, species, positions, cell, pbc, forces, q_init, stress, scc_control=None,
+             xl=False):
         """The calculation of :meth:`calculate`, also returning its setup and SCC state
         (``pydftb.autodiff`` builds on them)."""
         t0 = time.perf_counter()
         timings = {}
         periodic = cell is not None and (pbc is None or np.any(pbc))
+        if xl:
+            self._check_xl()
+            if scc_control is None:
+                scc_control = SCCControl(1, self.max_scc, self.scc_tol)
         if stress is None:
             stress = forces and periodic and self.point_charges is None
         if stress and not periodic:
@@ -539,25 +602,40 @@ class DFTB:
             raise ValueError("no stress with external point charges (DFTB+ does not compute "
                              "it either)")
         need_derivs = forces or stress
-        if (forces and self.casida is not None and self.casida.state_of_interest != 0
-                and self.casida.excited_forces):
-            raise NotImplementedError("excited-state forces are milestone M6e; use "
-                                      "Casida(excited_forces=False) for the ground-state forces")
+        excited_forces = (forces and self.casida is not None and self.casida.excited_forces
+                          and self.casida.state_of_interest != 0)
+        relax = excited_forces or (self.casida is not None and self.casida.excited_charges
+                                   and self.casida.state_of_interest != 0)
+        if relax:
+            self._check_excited(periodic)
         setup = self._setup(species, positions, cell, pbc, need_derivs, timings)
-        state = self._scc(setup, q_init, need_derivs, timings)
-        res = self._energies(setup, state)
+        if scc_control is None:
+            state = self._scc(setup, q_init, need_derivs, timings)
+        else:
+            state = self._scc(setup, q_init, need_derivs, timings, scc_control)
+        res = self._energies(setup, state) if not xl else self._energies_xl(setup, state)
+        rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()
-            self._excitations(setup, state, res)
+            gs = self._excitations(setup, state, res)
+            if relax:
+                rel = self._relaxed_state(setup, state, res, gs)
             timings["casida"] = time.perf_counter() - t1
         if need_derivs:
             t1 = time.perf_counter()
-            grad, virial = self._gradient(setup, state, virial=stress)
+            if xl:
+                grad, virial = self._gradient(setup, state, virial=stress, xl=True)
+            else:
+                grad, virial = self._gradient(setup, state, virial=stress)
+            if excited_forces:
+                grad = grad + self._excited_gradient(setup, state, rel, gs)
             if forces:
                 res.forces = -grad
                 if setup.ext is not None and setup.ext.pc is not None:
-                    res.point_charge_forces = setup.ext.charge_forces(
-                        self._atom_dq(setup, state.q_out))
+                    dq_atom = self._atom_dq(setup, state.q_out)
+                    if excited_forces and "external" not in self._excited_compat:
+                        dq_atom = dq_atom + rel.dqex_total      # -d(E0 + Omega)/dR_charge
+                    res.point_charge_forces = setup.ext.charge_forces(dq_atom)
             if stress:
                 vol = abs(np.linalg.det(setup.cell))
                 res.stress = -virial / vol
@@ -569,14 +647,141 @@ class DFTB:
     # ---- linear response (M6d) ----------------------------------------------------------
     def _excitations(self, st: _Setup, sc: _SCCState, res: DFTBResult):
         """Casida excitations of the converged ground state (DFTB+ runs them after the SCC,
-        with the eigenvectors of the last iteration)."""
+        with the eigenvectors of the last iteration); returns the ground-state data."""
         if not st.gamma_only:
             raise ValueError("Casida excitations need a molecule or the Gamma point only "
                              "(as in DFTB+)")
-        x = _casida.excitations(self.casida, self._casida_ground_state(st, sc))
+        gs = self._casida_ground_state(st, sc)
+        x = _casida.excitations(self.casida, gs)
         res.excitations = x
         if self.casida.state_of_interest != 0:
             res.excitation_energy = float(x.energies[x.state - 1])
+            res.excited_energy = res.energy + res.excitation_energy
+            res.excited_free_energy = res.free_energy + res.excitation_energy
+        return gs
+
+    # ---- XL-BOMD (M6e) -------------------------------------------------------------------
+    def _check_xl(self):
+        """DFTB+'s conditions for XL-BOMD (initprogram): SCC, Fermi filling, a dynamics force
+        evaluation; no spin, DFTB+U, onsite corrections, external fields or charges, solvation;
+        the legacy on-site third order fails in DFTB+'s energy (scc.F90)."""
+        why = None
+        if not self.scc:
+            why = "needs SCC"
+        elif self.spin or self.pauli:
+            why = "does not work with spin polarisation"
+        elif self.block_terms:
+            why = "does not work with DFTB+U or onsite corrections"
+        elif self.environment:
+            why = "does not work with external fields, point charges or solvation"
+        elif self.smearing.kind != "fermi":
+            why = "needs Fermi filling"
+        elif self.third_order == "onsite":
+            why = "does not work with the on-site third order (ThirdOrder; ThirdOrderFull does)"
+        elif self.force_evaluation == "traditional":
+            why = "needs force_evaluation='dynamics_t0' or 'dynamics'"
+        elif self.casida is not None and self.casida.state_of_interest != 0:
+            why = "does not combine with excited-state forces"
+        if why:
+            raise ValueError(f"XL-BOMD {why} (as in DFTB+)")
+
+    def _energies_xl(self, st: _Setup, sc: _SCCState) -> DFTBResult:
+        """The XL-BOMD shadow energy (DFTB+ getEnergyPerAtomXlbomd): the energies of the
+        last output with E_SCC = 1/2 (2 q_out - n).gamma.n and E_3rd = E3(n) + v3(n).(q_out - n)
+        for the input populations n (charge deviations)."""
+        res = self._energies(st, sc)
+        dq, _ = self._charge_and_magnetisation(st, sc.q_out)
+        dn, _ = self._charge_and_magnetisation(st, sc.q_in)
+        e_scc = float(dq @ (st.coulomb.gamma @ dn) - 0.5 * dn @ (st.coulomb.gamma @ dn))
+        e_3rd = 0.0
+        if st.third is not None:
+            e3, v3 = st.third.energy_shift(dn)
+            e_3rd = float(e3 + v3 @ (dq - dn))
+        shift = (e_scc - res.e_scc) + (e_3rd - res.e_3rd)
+        return replace(res, energy=res.energy + shift, free_energy=res.free_energy + shift,
+                       e_scc=e_scc, e_3rd=e_3rd)
+
+    def _dynamics_wdm(self, st: _Setup, h, rho):
+        """DFTB+'s ForceEvaluation: the energy-weighted density as D H D / f_max (DynamicsT0:
+        occupations 0 or f_max) or 1/2 (D H S^-1 + S^-1 H D) (Dynamics), per k-point and spin
+        channel.  f_max is 2, or 1 per spin channel; DFTB+ takes 1/2 D H D there too, so its
+        DynamicsT0 forces are wrong with spin polarisation (Dynamics is right)."""
+        nk = len(st.kw)
+        f_max = 2.0 if st.spin is None and st.pauli is None else 1.0
+        s = st.smat_precise if st.pauli is None else st.pauli.s2       # spinors: S x 1
+        out = np.empty_like(rho)
+        for i in range(len(rho)):
+            d, hh = rho[i], h[i]
+            if self.force_evaluation == "dynamics_t0":
+                out[i] = (d @ hh @ d) / f_max
+            else:
+                y = np.linalg.solve(s[i % nk], hh @ d)      # S^-1 H D
+                out[i] = 0.5 * (y + y.conj().T)
+        return out
+
+    # ---- excited-state forces and charges (M6e) ------------------------------------------
+    def _check_excited(self, periodic: bool):
+        """DFTB+'s conditions for excited-state properties (initprogram, linrespgrad), and
+        pydftb's: spin constants that are not one value per atom (the response uses each atom's
+        HOAO value, so the gradient could not be that of E_0 + Omega)."""
+        why = None
+        if periodic:
+            why = "are not available for periodic systems"
+        elif self.casida.oscillator_window is not None:
+            why = "do not work with an oscillator window"
+        elif self.onsite_corrections is not None:
+            why = "do not work with onsite corrections"
+        if why:
+            raise ValueError(f"excited-state forces and charges {why} (as in DFTB+)")
+        if self.spin:
+            for lab, v in self.spin_constants.items():
+                v = np.asarray(v, float)
+                if v.size > 1 and np.any(v != v.ravel()[0]):
+                    raise ValueError(
+                        f"excited-state forces and charges need one spin constant per type "
+                        f"({lab!r} has a shell matrix): the response uses each atom's HOAO "
+                        "value, so with different values per shell the gradient would not be "
+                        "that of E_0 + Omega (DFTB+ computes it, 8.8e-6 Ha/Bohr off)")
+
+    def _relaxed_state(self, st: _Setup, sc: _SCCState, res: DFTBResult, gs):
+        """The relaxed difference density of the state of interest; fills the excited
+        state's charges and dipole of ``res``."""
+        x = res.excitations
+        rel = _cgrad.relax(gs, x, x.state, window_only="window" in self._excited_compat)
+        dqex = rel.dqex_total
+        res.excited_charges = res.charges + dqex
+        if st.cell is None or not np.any(st.pbc):
+            dq_atom = self._atom_dq(st, sc.q_out)
+            res.excited_dipole = -((dq_atom + dqex) @ st.pos)
+        return rel
+
+    def _excited_gradient(self, st: _Setup, sc: _SCCState, rel, gs) -> np.ndarray:
+        """dOmega/dR of the state of interest (n_atom, 3): the pair terms of
+        :func:`pydftb.casida_grad.pair_terms`, the gamma derivatives (dq gamma' dq^ex and the
+        kernel's xi gamma' xi) and the external potentials on dq^ex."""
+        compat = self._excited_compat
+        v_orb, vs_orb = self._potentials(st, sc.q_out)
+        v_orb = np.asarray(v_orb)
+        if "external" in compat and st.ext is not None:
+            # DFTB+: the shift of addGradients holds the SCC and point-charge potentials only
+            for v in (st.ext.v_field, st.ext.v_gross):
+                if v is not None:
+                    v_orb = v_orb - v[st.basis.orb_atom]
+        pb = st.pairs
+        p_e, coef = _cgrad.pair_terms(rel, gs, pb.rows, pb.cols, v_orb, vs_orb)
+        grad, _ = self._add_pair_terms(st, np.zeros_like(st.pos), p_e, coef)
+        coul = st.coulomb
+        if "damping" in compat and coul.damped.any():
+            coul = Coulomb(st.pos, coul.site_atom, coul.tau / 3.2)   # DFTB+: no damping in gamma'
+        dq = self._atom_dq(st, sc.q_out)
+        dqex = rel.dqex_total
+        grad = grad + 2.0 * coul.gradient(dq, other=dqex)[0]
+        c = _cgrad.kernel_gradient_factor(rel)
+        if c:
+            grad = grad + c * coul.gradient(rel.xi)[0]
+        if st.ext is not None and "external" not in compat:
+            grad = grad + st.ext.gradient(dqex)
+        return grad
 
     def _casida_ground_state(self, st: _Setup, sc: _SCCState) -> "_casida.GroundState":
         b, sk = st.basis, self.sk
@@ -1056,7 +1261,10 @@ class DFTB:
         b = self.backend
         return float((b.widen(st.kw_dev)[:, None, None] * b.widen(rho * m.mT)).sum().real)
 
-    def _scc(self, st: _Setup, q_init, forces, timings) -> _SCCState:
+    def _scc(self, st: _Setup, q_init, forces, timings, control: SCCControl | None = None) \
+            -> _SCCState:
+        """The SCC loop; ``control`` (XL-BOMD, M6e) sets the iterations and tolerance by
+        DFTB+'s rules: no mixing after the last iteration, no warning when unconverged."""
         b = self.backend
         if b.is_torch:
             from .backend.torch_solver import TorchSolver
@@ -1085,8 +1293,11 @@ class DFTB:
         min_iter = 2 if st.pauli is not None and q_init is None else 1
         if st.block is not None and q_init is None and (st.block.has_u or st.block.rep != "q"):
             min_iter = 2
+        max_iter, tol = (self.max_scc if self.scc else 1), self.scc_tol
+        if control is not None:
+            min_iter, max_iter, tol = control.min_iter, control.max_iter, control.tol
         h0 = self._with_net(st, st.h0)          # net site potentials (M6c)
-        for nit in range(1, (self.max_scc if self.scc else 1) + 1):
+        for nit in range(1, max_iter + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
             if st.block is not None:
                 # DFTB+ leaves the onsite corrections out of the first iteration's H unless it
@@ -1112,9 +1323,11 @@ class DFTB:
             diff = np.abs(q_out - q_in).max()
             if self.verbose:
                 print(f"SCC {nit:3d}  max dq = {diff:.3e}")
-            if diff < self.scc_tol and nit >= min_iter:
+            if diff < tol and nit >= min_iter:
                 converged = True
                 break
+            if control is not None and nit == max_iter:
+                break                   # DFTB+: no mixing after the last iteration
             if nit == 1 and first_out:
                 q_in = q_out            # DFTB+: the guessed spin is not mixed in (main.F90)
             else:
@@ -1123,10 +1336,12 @@ class DFTB:
             # W is only needed once, for the final density
             t1 = time.perf_counter()
             rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=True)
+            if self.force_evaluation != "traditional":                  # M6e
+                wdm = self._dynamics_wdm(st, h, rho)
             t_diag += time.perf_counter() - t1
         timings["diag"] = t_diag
         timings["scc_iter"] = nit
-        if self.scc and not converged and self.warn_unconverged:
+        if self.scc and not converged and self.warn_unconverged and control is None:
             warnings.warn(f"SCC not converged after {nit} iterations "
                           f"(max |dq| = {diff:.2e} > {self.scc_tol:.1e}); returning the last "
                           "iteration's results", RuntimeWarning, stacklevel=3)
@@ -1171,6 +1386,7 @@ class DFTB:
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
                           kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
+                          q_out=sc.q_out,
                           e_spin=e_spin, magmoms=magmoms, q_spin=q_spin,
                           e_ls=e_ls, orbital_moments=lmom, e_plus_u=e_u, e_onsite=e_ons,
                           dipole=self._dipole(st, dq_atom), **env)
@@ -1245,9 +1461,10 @@ class DFTB:
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in, **extra)
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
+                          q_out=sc.q_out, **extra)
 
-    def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False):
+    def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False, xl: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
 
         Every pair term contributes (dE/d r_pair) (x) r_pair to the virial.  As in DFTB+
@@ -1255,9 +1472,12 @@ class DFTB:
         populations of the last iteration and their potentials: with a loose SCC
         tolerance (PTBP: 1e-5) this keeps the forces equal to DFTB+'s to ~1e-11 Ha/Bohr,
         where the input populations differ by ~|q_out - q_in| (M2f report).
+        ``xl``: the XL-BOMD shadow energy's gradient at fixed input populations n (M6e): the
+        potentials of n, and gamma' and the third order with q_out n + n q_out - n n (DFTB+
+        addForceDcXlbomd, addGradientDcXlbomd).
         """
         pb = st.pairs
-        v_orb, vs_orb = self._potentials(st, sc.q_out)
+        v_orb, vs_orb = self._potentials(st, sc.q_in if xl else sc.q_out)
         grad, w_rep = self._repulsive_gradient(st)
         if st.pauli is not None:
             p_e, w_e, p_m, c_soc = self._pauli_pair_densities(st, sc)
@@ -1276,16 +1496,23 @@ class DFTB:
             coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
         if st.block is not None:                         # block potentials' dS part (M6b)
             coef_s = coef_s + self._block_force_coefficient(st, sc)
-        ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
-        gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
+        grad, gp = self._add_pair_terms(st, grad, p_e, coef_s)
         natom = len(st.pos)
-        grad = grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom)
         dq, _ = self._charge_and_magnetisation(st, sc.q_out)
-        if self.scc:
+        if xl:
+            dn, _ = self._charge_and_magnetisation(st, sc.q_in)
+            g1, w1 = st.coulomb.gradient(dq, virial=virial, other=dn)
+            g2, w2 = st.coulomb.gradient(dn, virial=virial)
+            g_scc, w_scc = 2.0 * g1 - g2, (2.0 * w1 - w2 if virial else None)
+            grad = grad + g_scc
+        elif self.scc:
             g_scc, w_scc = st.coulomb.gradient(dq, virial=virial)
             grad = grad + g_scc                                    # already per atom
         if st.third is not None:
-            g_3rd, w_3rd = st.third.gradient(dq, virial=virial)
+            if xl:
+                g_3rd, w_3rd = st.third.gradient_xl(dn, dq, virial=virial)
+            else:
+                g_3rd, w_3rd = st.third.gradient(dq, virial=virial)
             grad = grad + g_3rd
         if st.disp is not None:
             grad = grad + st.disp.gradient
@@ -1308,6 +1535,16 @@ class DFTB:
         if st.ext is not None:
             w = w + st.ext.virial(dq_atom)
         return grad, 0.5 * (w + w.T)
+
+    @staticmethod
+    def _add_pair_terms(st: _Setup, grad, p_e, coef_s):
+        """grad + d/dR sum_e (p_e H0_e + coef_s S_e) over the pair elements, and the per-pair
+        dE/dvec (for the virial)."""
+        pb = st.pairs
+        ge = p_e[:, None] * pb.dh + coef_s[:, None] * pb.ds   # dE/dvec per element
+        gp = ops.segment_sum(ge, pb.pair_of, len(pb.i))          # per pair
+        natom = len(st.pos)
+        return grad + ops.segment_sum(gp, pb.j, natom) - ops.segment_sum(gp, pb.i, natom), gp
 
     def _block_force_coefficient(self, st: _Setup, sc: _SCCState) -> np.ndarray:
         """Coefficient of dS at every pair element from the block potentials of the last

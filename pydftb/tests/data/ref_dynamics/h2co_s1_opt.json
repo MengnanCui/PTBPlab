@@ -1,0 +1,124 @@
+{
+ "schema": 1,
+ "case": "h2co_s1_opt",
+ "base": "h2co_exc_forces_s1",
+ "kind": "opt",
+ "note": "first excited singlet: the molecule pyramidalises",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "isotropic": false,
+  "ewald_tolerance": null,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "C",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.15262189154440267,
+    0.0071621963954031295,
+    0.773574864848184
+   ],
+   [
+    -0.4055407074189806,
+    -0.008404486159905624,
+    -0.6087813674935236
+   ],
+   [
+    0.1247224012314898,
+    1.0706194223500116,
+    -1.1412365394469282
+   ],
+   [
+    0.11549993980756566,
+    -1.1050120082292874,
+    -1.113347103901199
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "C": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 13
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/claude-0/-home-user-PTBPlab/27358f22-7635-569d-802d-bc273888c700/scratchpad/m6e/runs/pydftb_dyn_cjghn4r0/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    C = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  WriteAutotestTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\nExcitedState {\n  Casida {\n    NrOfExcitations = 4\n    Symmetry = singlet\n    StateOfInterest = 1\n    Diagonaliser = Arpack {}\n    WriteTransitions = Yes\n    WriteSPTransitions = Yes\n    WriteTransitionDipole = Yes\n    WriteMulliken = Yes\n    ExcitedStateForces = Yes\n  }\n}\n",
+ "reference": {
+  "n_scc": [
+   9,
+   5,
+   6,
+   6,
+   6,
+   6,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5
+  ],
+  "geometry_steps": 19,
+  "wall": 0.14302157600013743,
+  "free_energy": -5.37365480437508,
+  "positions": [
+   [
+    0.1527147052,
+    0.007088860933,
+    0.7731323354
+   ],
+   [
+    -0.4053739235,
+    -0.008328579543,
+    -0.6093106348
+   ],
+   [
+    0.1245748579,
+    1.071437667,
+    -1.140799937
+   ],
+   [
+    0.1153878856,
+    -1.105832824,
+    -1.11281191
+   ]
+  ],
+  "cell": null
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}

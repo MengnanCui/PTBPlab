@@ -24,7 +24,7 @@ import numpy as np
 
 from ..bands import broaden, eigenstates, klines
 from ..calculator import DFTB
-from ..casida import Casida
+from ..casida import AU_DEBYE, Casida
 from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
 from ..external import PointCharges
@@ -222,7 +222,8 @@ def environment_ase_options(case: Case) -> dict:
 
 
 def casida_options(case: Case, solver: str = "auto") -> dict:
-    """:class:`pydftb.DFTB` options of a Casida case (M6d): ground-state forces, and the spin
+    """:class:`pydftb.DFTB` options of a Casida case (M6d): the forces of the state of interest
+    when the spec asks for them ("excited_forces", M6e; else the ground state's), and the spin
     constants of spin-restricted triplets; ``solver`` is pydftb's (the case's "solver" is
     DFTB+'s)."""
     spec = case.casida
@@ -232,7 +233,8 @@ def casida_options(case: Case, solver: str = "auto") -> dict:
                             state_of_interest=spec.get("state", 0),
                             energy_window=spec.get("energy_window"),
                             oscillator_window=spec.get("oscillator_window"),
-                            solver=solver, excited_forces=False)}
+                            solver=solver, excited_forces=bool(spec.get("excited_forces")),
+                            excited_charges=bool(spec.get("excited_charges")))}
     if spec.get("spin_constants") and not case.spin:
         out["spin_constants"] = spec["spin_constants"]
     return out
@@ -443,6 +445,14 @@ def regenerate(names=None, threads: int = 1):
         if case.casida:
             doc["reference"]["exc_tags"] = {k: np.asarray(v).tolist()
                                             for k, v in ref["exc_tags"].items()}
+            for k in ("excited_charges_net", "excited_dipole_debye"):         # M6e
+                if k in ref:
+                    doc["reference"][k] = np.asarray(ref[k]).tolist()
+            if case.casida.get("forces_fd"):
+                doc["reference"]["forces_fd"] = excited_forces_fd(case, inp, threads).tolist()
+                doc["forces_fd"] = ("-d(E_Mermin + Excitation Energy)/dR of DFTB+ (autotest.tag "
+                                    f"mermin_energy), 4-point central differences, h = {FD_STEP} "
+                                    "Bohr")
         if case.klines or case.regions or case.dp_dos:
             doc["reference"].update(_band_reference(case, ref))
             doc["band_hsd"] = ref.get("band", {}).get("hsd")
@@ -453,6 +463,26 @@ def regenerate(names=None, threads: int = 1):
         with open(path, "w") as fh:
             json.dump(doc, fh, indent=1)
         print(f"wrote {path}  (E = {ref['energy']:.10f} Ha, nSCC = {ref['n_scc']})")
+
+
+FD_STEP = 1e-4          # Bohr: differences of DFTB+'s excited-state energy (M6e)
+
+
+def excited_forces_fd(case: Case, inp: dict, threads: int = 1, h: float = FD_STEP) -> np.ndarray:
+    """-d(E_Mermin + Omega)/dR of DFTB+ (Ha/Bohr) by 4-point central differences: where its
+    analytic excited-state forces are not this derivative (M6e)."""
+    pos0 = np.array(inp["positions_angstrom"])
+    out = np.zeros_like(pos0)
+    for a in range(len(pos0)):
+        for k in range(3):
+            e = {}
+            for s in (-2, -1, 1, 2):
+                p = pos0.copy()
+                p[a, k] += s * h * BOHR
+                r = run_dftbplus(case, dict(inp, positions_angstrom=p.tolist()), threads)
+                e[s] = r["excited_mermin_tag"]   # autotest.tag: all digits (detailed.out: 10)
+            out[a, k] = -(8.0 * (e[1] - e[-1]) - (e[2] - e[-2])) / (12.0 * h)
+    return out
 
 
 def load(name: str) -> dict:
@@ -505,6 +535,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         dev.update(env)
     if case.casida:
         dev.update(_compare_casida(ref, res))
+        dev.update(_compare_excited(case, inp, ref, res, sk_q0, solver=solver, fd_delta=fd_delta,
+                                    casida_solver=casida_solver, **backend))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -513,7 +545,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
           and all(dev[k] <= tol[k] for k in STATE_KEYS if k in dev)
           and all(dev[k] <= tol[k] for k in ("spins", "moments", "orbital", "pc_forces",
                                               "dipole", "exc", "exc_osc", "exc_tdip",
-                                              "exc_table", "spx", "exc_state") if k in dev))
+                                              "exc_table", "spx", "exc_state", "exc_charges",
+                                              "exc_dipole", "forces_dftbp") if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -672,6 +705,35 @@ def _compare_casida(ref: dict, res) -> dict:
     return dev
 
 
+def _compare_excited(case: Case, inp: dict, ref: dict, res, sk_q0, **run) -> dict:
+    """The state of interest against DFTB+ (M6e): its Mulliken net charges (XCH.DAT) and dipole
+    (XREST.DAT, Debye; compared in e Bohr).  Where DFTB+'s excited-state forces are not
+    -d(E0 + Omega)/dR (``forces_fd`` in the reference) the forces are compared with that
+    derivative of DFTB+'s energies instead, and pydftb leaving out what DFTB+ leaves out (the
+    case's ``compat``) with DFTB+'s forces (``forces_dftbp``, and its point-charge forces)."""
+    dev = {}
+    exc = res
+    if "forces_fd" in ref:
+        dev["forces"] = float(np.abs(res.forces - np.array(ref["forces_fd"])).max())
+        DFTB._excited_compat = frozenset(case.casida.get("compat", ()))
+        try:
+            exc = run_pydftb(case, inp, **run)
+        finally:
+            DFTB._excited_compat = frozenset()
+        dev["forces_dftbp"] = float(np.abs(exc.forces - np.array(ref["forces"])).max())
+        if "point_charge_forces" in ref:
+            dev["pc_forces"] = float(np.abs(exc.point_charge_forces
+                                            - np.array(ref["point_charge_forces"])).max())
+    # charges and dipole as DFTB+ computes them (with an energy window from its Z vector)
+    if "excited_charges_net" in ref:
+        dev["exc_charges"] = float(np.abs((sk_q0 - exc.excited_charges)
+                                          - np.array(ref["excited_charges_net"])).max())
+    if "excited_dipole_debye" in ref:
+        dev["exc_dipole"] = float(np.abs(exc.excited_dipole - np.array(ref["excited_dipole_debye"])
+                                         / AU_DEBYE).max())
+    return dev
+
+
 def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
     params_dir = SKF_SETS[case.skf_set]
     base = case.typed or {}
@@ -718,6 +780,11 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             print(f"{'':26s}   Casida: |dw| {d['exc']:.1e} Ha, |df| {d['exc_osc']:.1e}, "
                   f"|dmu| {d['exc_tdip']:.1e} e Bohr, table/SPX differences "
                   f"{int(d['exc_table'])}/{int(d['spx'])}{state}")
+        if "exc_charges" in d:                            # M6e: the state of interest
+            fd = ("forces vs DFTB+'s energy differences, as DFTB+ (compat) "
+                  f"{d['forces_dftbp']:.1e}; " if "forces_dftbp" in d else "")
+            print(f"{'':26s}   Excited: {fd}|dq_ex| {d['exc_charges']:.1e} e, "
+                  f"|dmu_ex| {d['exc_dipole']:.1e} e Bohr")
     return all_ok
 
 

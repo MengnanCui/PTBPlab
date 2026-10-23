@@ -168,10 +168,51 @@ no DFTB3, two-component spin, DFTB+U or solvent, Gamma point only; fields, point
 and dispersion are fine.  `solver="auto"` diagonalises Omega densely up to 500
 transitions and uses a block Davidson solver beyond (C60's 14,400 transitions in 0.46 s,
 DFTB+'s fastest solver 1.46 s); `"arpack"` is an independent check.  In degenerate
-manifolds only group sums are defined (`x.degenerate_groups()`).  Excited-state forces are
-milestone M6e (`excited_forces=False` returns the ground-state forces).  `PyDFTB(...,
+manifolds only group sums are defined (`x.degenerate_groups()`).  `PyDFTB(...,
 casida=...)` gives `calc.excitations`.  Details:
 [`docs/reports/M6d-casida.html`](docs/reports/M6d-casida.html).
+
+### Excited-state forces, charges and XL-BOMD
+
+With a state of interest the forces are those of the excited state, -d(E0 + Omega)/dR, by
+the Z-vector method (DFTB+'s `ExcitedStateForces`; NumPy engine only), and the relaxed
+density gives the excited state's Mulliken charges and dipole (DFTB+'s XCH.DAT, XREST.DAT):
+
+```python
+calc = DFTB(sk, casida=Casida(6, state_of_interest=2))   # excited_forces=True by default
+r = calc.calculate(labels, positions)
+r.forces                                     # -grad(E0 + Omega_2)
+r.excited_energy, r.excited_free_energy      # E0 + Omega (r.energy stays the ground state's)
+r.excited_charges, r.excited_dipole          # Casida(..., excited_charges=True) without forces
+atoms.calc = PyDFTB(skdir, casida={"n_excitations": 6, "state_of_interest": 1})
+BFGS(atoms).run(fmax=0.01)                   # ASE sees E0 + Omega: optimisation and MD in S1
+```
+
+Singlets, triplets and collinear spin polarisation; fields, point charges, site potentials,
+dispersion, H-X damping and energy windows are included exactly (pydftb's forces agree with
+differences of its own E0 + Omega to 1e-10 Ha/Bohr; DFTB+'s miss terms in five of these
+combinations, see the report).  Restrictions as in DFTB+: molecules, integer occupations,
+no oscillator window or onsite corrections; spin constants that differ between shells are
+refused.
+
+XL-BOMD (DFTB+'s `Xlbomd` / `XlbomdFast`): the SCC populations are integrated with the
+atoms and start every step's SCC, so a step needs a few SCC iterations (or one):
+
+```python
+from pydftb.xlbomd import XLBOMD
+atoms.calc = PyDFTB(skdir, xlbomd=XLBOMD(integration_steps=5, scc_tol=1e-6))
+VelocityVerlet(atoms, 0.5 * units.fs).run(1000)            # one calculation per MD step
+PyDFTB(skdir, xlbomd=XLBOMD(fast=True, scale=0.5))         # one SCC iteration per step
+```
+
+The energy is the shadow energy E_band[D(n)] + 1/2 (2 q_out - n).gamma.n and the forces its
+derivatives, as in DFTB+; `force_evaluation` is DFTB+'s `ForceEvaluation` ("dynamics_t0" at
+T = 0, "dynamics" otherwise, chosen automatically).  Against DFTB+'s own XL-BOMD (K = 5, 6,
+7, PreSteps, XlbomdFast, DFTB3, k-points at 500 K) the trajectories agree to the digits
+DFTB+ prints and every step takes the same number of SCC iterations.  The restrictions are
+DFTB+'s (SCC, Fermi filling, no spin, +U, onsite, fields, charges, solvent or excited-state
+forces).  Details:
+[`docs/reports/M6e-excited-forces-xlbomd.html`](docs/reports/M6e-excited-forces-xlbomd.html).
 
 ### Dispersion
 

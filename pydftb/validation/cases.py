@@ -371,6 +371,11 @@ def _h2co_box():
 W_HCO = {"H": -0.072, "C": -0.023, "O": -0.028}       # spin constants of the Casida cases
 TOL_CASIDA = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "exc": 1e-8, "exc_osc": 1e-7,
               "exc_tdip": 1e-7, "exc_table": 0, "spx": 0, "exc_state": 1e-9}
+# M6e: the state of interest's forces; XCH.DAT (8 decimals), XREST.DAT (8 decimals, Debye)
+EXC = {"n": 6, "symmetry": "singlet", "solver": "Arpack", "state": 2, "excited_forces": True}
+EXC_FD = {**EXC, "solver": "Stratmann", "forces_fd": True}
+TOL_EXC_FD = {"forces": 1e-9}          # against differences of DFTB+'s full-precision E0 + w
+TOL_EXC = {**TOL_CASIDA, "exc_charges": 1e-7, "exc_dipole": 1e-7, "forces_dftbp": 1e-6}
 
 
 def solvation_model(spec):
@@ -796,5 +801,43 @@ CASES = [
     Case("h2co_casida_state", _h2co,
          casida={"n": 6, "symmetry": "singlet", "solver": "Arpack", "state": 4}, torch=False,
          tol=TOL_CASIDA, note="StateOfInterest = 4 (ground-state forces, ExcitedStateForces = No)"),
+    # ---- M6e: excited-state forces (Z vector), charges and dipole (WriteMulliken) -----------
+    Case("h2co_exc_forces", _h2co, casida=EXC, torch=False, tol=TOL_EXC,
+         note="second singlet: forces -d(E0 + w)/dR, XCH.DAT, XREST.DAT"),
+    Case("h2co_exc_forces_triplet", _h2co,
+         casida={**EXC, "symmetry": "triplet", "spin_constants": W_HCO}, torch=False, tol=TOL_EXC,
+         note="triplet (W in the kernel; the Z vector uses the singlet A+B)"),
+    Case("h2co_cation_exc_forces", _h2co, charge=1.0,
+         spin={"unpaired_electrons": 1, "spin_constants": W_HCO},
+         casida={**EXC, "symmetry": None}, torch=False, tol=TOL_EXC,
+         note="spin polarised doublet"),
+    Case("h2co_exc_forces_bright", _h2co, casida={**EXC, "solver": "Stratmann", "state": -1},
+         torch=False, tol=TOL_EXC, note="the brightest singlet"),
+    Case("ch3oh_exc_forces", _meoh, casida={**EXC, "n": 8, "state": 3}, torch=False, tol=TOL_EXC,
+         note="lower symmetry, more transitions"),
+    Case("h2co_exc_forces_lj", _h2co, dispersion={"model": "lennardjones"}, casida=EXC,
+         torch=False, tol=TOL_EXC, note="dispersion (ground-state part only)"),
+    Case("h2co_exc_forces_s1", _h2co, casida={**EXC, "n": 4, "state": 1}, torch=False,
+         tol=TOL_EXC, note="first singlet (n -> pi*); the base of the S1 optimisation"),
+    Case("h2co_exc_charges", _h2co,
+         casida={**EXC, "state": 4, "excited_forces": False, "excited_charges": True},
+         torch=False, tol=TOL_EXC,
+         note="excited charges and dipole with ground-state forces (WriteMulliken only)"),
+    # DFTB+'s excited forces are wrong here: forces_fd = DFTB+'s own E0 + w differentiated
+    # (4-point, 1e-4 Bohr; Stratmann, whose energies are smoother than ARPACK's single-precision
+    # ones); compat = what DFTB+ leaves out, to reproduce its forces
+    Case("h2co_exc_forces_field_pc", _h2co, efield=FIELD, point_charges=PC3,
+         casida={**EXC_FD, "compat": ["external"]}, scc_tol=1e-12, torch=False,
+         tol={**TOL_EXC, **TOL_ENV, **TOL_EXC_FD},
+         note="field and point charges: DFTB+ misses dq_ex grad V_ext and the field in its shift"),
+    Case("h2co_exc_forces_hdamp", _h2co, dftb3={"h_damping": 4.0},
+         casida={**EXC_FD, "compat": ["damping"]}, scc_tol=1e-12, torch=False,
+         tol={**TOL_EXC, **TOL_EXC_FD},
+         note="H-X damping: DFTB+'s gamma' in the excited gradient is undamped"),
+    Case("h2co_exc_forces_ewindow", _h2co,
+         casida={**EXC_FD, "n": 4, "energy_window": 2.0 / HARTREE, "compat": ["window"]},
+         scc_tol=1e-12, torch=False, tol={**TOL_EXC, **TOL_EXC_FD},
+         note="energy window: DFTB+ solves the Z vector in the window only (its excited "
+              "charges too)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

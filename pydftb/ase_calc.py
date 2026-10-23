@@ -16,13 +16,16 @@ from ase.calculators.calculator import (CalculationFailed, Calculator, all_chang
                                         kptdensity2monkhorstpack)
 
 from .bands import States, eigenstates
-from .calculator import DFTB
-from .constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
+from .calculator import DFTB, SCCControl
+from .casida import Casida
+from .constants import BOHR, HARTREE, MIN_TEMP, VOLT_PER_ANGSTROM_AU
 from .dispersion import make_dispersion
 from .external import PointCharges
 from .kpoints import monkhorst_pack, reduce_time_reversal
+from .occupations import Smearing
 from .parallel import as_kthreads
 from .params import ParamSet
+from .xlbomd import XLBOMD, Integrator
 
 
 @contextlib.contextmanager
@@ -76,7 +79,10 @@ class PyDFTB(Calculator):
     ``plus_u_functional``, ``onsite_corrections``, implicit solvation ``solvation``,
     ``rescale_solvated_fields``, Casida excitations ``casida``, and ``dispersion``) are passed
     to :class:`pydftb.DFTB`.  The excitations of the last calculation are in
-    :attr:`excitations` (atomic units); ASE's energy and forces stay the ground state's.
+    :attr:`excitations` (atomic units).  With a Casida state of interest (and excited-state
+    forces, the default) energy and forces are the excited state's, E_0 + Omega and its
+    gradient, as for DFTB+'s own drivers, so ASE optimisers and MD run in that state (M6e);
+    charges and dipole stay the ground state's (the excited ones are in ``raw``).
     The environment of milestone M6c in ASE units: ``electric_field`` (E_x, E_y, E_z) in
     V/Angstrom, ``point_charges`` (positions in Angstrom, charges in e[, Gaussian blur width
     in Angstrom]), ``site_potentials`` {"gross"/"net": {atom: V}} in eV; the solvation
@@ -107,13 +113,20 @@ class PyDFTB(Calculator):
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
                  solvation=None, rescale_solvated_fields: bool = True, casida=None,
-                 **kwargs):
+                 xlbomd=None, force_evaluation: str | None = None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
         self.time_reversal = time_reversal
         if smearing is None:
             smearing = ("fermi", 0.0 if temperature is None else temperature)
+        self.xlbomd = XLBOMD.make(xlbomd)             # M6e
+        if force_evaluation is None:                  # DFTB+ needs a dynamics type for XL
+            force_evaluation = "traditional"
+            if self.xlbomd is not None:
+                hot = Smearing.from_spec(smearing).kt > MIN_TEMP
+                force_evaluation = "dynamics" if hot else "dynamics_t0"
+        self._xl = None                               # the XL-BOMD state (Integrator)
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,
@@ -126,7 +139,7 @@ class PyDFTB(Calculator):
                                 plus_u_functional=plus_u_functional,
                                 onsite_corrections=onsite_corrections, solvation=solvation,
                                 rescale_solvated_fields=rescale_solvated_fields,
-                                casida=casida)
+                                casida=casida, force_evaluation=force_evaluation)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
         self.site_potentials = site_potentials        # eV
@@ -210,6 +223,11 @@ class PyDFTB(Calculator):
         self.pcpot = PointChargePotential(self, charges, blur)
         return self.pcpot
 
+    def reset(self):
+        """Clear the last calculation; with XL-BOMD the integration starts again."""
+        super().reset()
+        self._xl = None
+
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
         a = self.atoms
@@ -221,10 +239,17 @@ class PyDFTB(Calculator):
         q_init = None
         if self.reuse_charges and self.raw is not None and self._raw_labels == list(labels):
             q_init = self.raw.q_in        # DFTB+ keeps qInput between geometry steps
+        xl = {}
+        if self.xlbomd is not None:       # one calculation = one MD step (M6e)
+            if self._xl is None or self._raw_labels != list(labels):
+                self._xl = Integrator(self.xlbomd)
+            mn, mx, tol = self._xl.scc_parameters(calc.max_scc, calc.scc_tol)
+            xl = dict(scc_control=SCCControl(mn, mx, tol), xl=True)
+            q_init, want_forces = self._xl.next, True
         run = lambda: calc.calculate(labels, a.positions / BOHR,       # noqa: E731
                                      a.cell.array / BOHR if periodic else None,
                                      a.pbc if periodic else None,
-                                     forces=want_forces, q_init=q_init)
+                                     forces=want_forces, q_init=q_init, **xl)
         with _as_calculation_failed():
             if self.threads is None:
                 r = run()
@@ -233,6 +258,8 @@ class PyDFTB(Calculator):
                 # torch's count first: it is read before threadpoolctl changes OpenMP's
                 with calc.backend.threads(self.threads), threadpool_limits(self.threads):
                     r = run()
+        if xl:
+            self._xl.advance(r.q_out)
         self._store(r, sk, labels)
 
     def evaluate(self, atoms, params=None, requires_grad=(), mode: str = "hf",
@@ -271,12 +298,23 @@ class PyDFTB(Calculator):
         self._store(res.raw, sk, labels)
         return res, params
 
+    @property
+    def excited(self) -> bool:
+        """Whether energy and forces are those of an excited state (M6e): a Casida state of
+        interest with excited-state forces (the default)."""
+        cas = Casida.make(self.engine_opts["casida"])
+        return cas is not None and cas.state_of_interest != 0 and cas.excited_forces
+
     def _store(self, r, sk, labels):
         """``self.results`` (ASE units) from a :class:`pydftb.DFTBResult`."""
         self.raw = r
         self._raw_labels = list(labels)
-        self.results["energy"] = r.energy * units.Hartree
-        self.results["free_energy"] = r.free_energy * units.Hartree
+        if self.excited:        # E_0 + Omega, consistent with the forces (as DFTB+'s drivers)
+            self.results["energy"] = r.excited_energy * units.Hartree
+            self.results["free_energy"] = r.excited_free_energy * units.Hartree
+        else:
+            self.results["energy"] = r.energy * units.Hartree
+            self.results["free_energy"] = r.free_energy * units.Hartree
         q0 = np.array([sk.occupation[lab].sum() for lab in labels])
         self.results["charges"] = q0 - r.charges
         if r.forces is not None:

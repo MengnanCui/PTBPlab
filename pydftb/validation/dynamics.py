@@ -2,9 +2,11 @@
 
 DFTB+ runs its ``GeometryOptimisation`` or ``VelocityVerlet`` driver; pydftb runs the same
 task through ASE (BFGS, with ``FrechetCellFilter`` for the cell; ``VelocityVerlet``) with
-``PyDFTB(fd_delta=1.22e-4, reuse_charges=True)``.  The finite-difference step gives
-DFTB+'s forces (it differentiates H0/S numerically); charge reuse gives DFTB+'s SCC starting
-points, so the MD steps take the same SCC paths.
+``PyDFTB(fd_delta=2**-13, reuse_charges=True)``.  The finite-difference step gives DFTB+'s
+forces (it differentiates H0/S numerically); charge reuse gives DFTB+'s SCC starting points,
+so the MD steps take the same SCC paths.  XL-BOMD (M6e) runs the same way, DFTB+'s
+``Xlbomd``/``XlbomdFast`` against ``PyDFTB(xlbomd=...)``, and compares the SCC iterations of
+every step as well.
 
     python -m pydftb.validation.dynamics --regenerate   # needs dftb+; writes JSON
     python -m pydftb.validation.dynamics --check        # pydftb vs the frozen JSON
@@ -40,7 +42,9 @@ from . import dftbplus, refgen
 from .cases import CASES_BY_NAME, DATA, SKF_SETS
 
 REF_DIR = os.path.join(DATA, "ref_dynamics")
-FD_DELTA = 1.22e-4                  # DFTB+'s default finite-difference step (Bohr)
+# DFTB+'s default finite-difference step, epsilon**(1/4) = 2**-13 = 1.2207e-4 Bohr (the rounded
+# 1.22e-4 of M2f-M6d gave up to 2.4e-8 Ha/Bohr where the two points straddle an SK grid node)
+FD_DELTA = float(np.finfo(float).eps) ** 0.25
 HA_BOHR = units.Hartree / units.Bohr  # eV/Angstrom per Ha/Bohr (ASE, as PyDFTB)
 
 
@@ -59,15 +63,26 @@ class DynCase:
     seed: int = 1
     steps: int = 40                 # MD steps
     time_step: float = 0.5          # fs
+    xlbomd: dict | None = None      # M6e: XL-BOMD (pydftb.xlbomd.XLBOMD options)
+    force_evaluation: str | None = None    # "dynamics_t0" | "dynamics" (DFTB+ ForceEvaluation)
     tol: dict = field(default_factory=dict)
     note: str = ""
 
 
+# DFTB+ ForceEvaluation names of pydftb's force_evaluation
+FORCE_EVALUATION_HSD = {"traditional": "Traditional", "dynamics_t0": "DynamicsT0",
+                        "dynamics": "Dynamics"}
 TOL_OPT = {"energy": 1e-9, "positions": 1e-4, "cell": 1e-5}
 # MD through ASE: its unit constants (CODATA 2014) differ from DFTB+'s by ~1e-7, which over 40
 # steps gives up to 4e-8 A and 1.1e-8 Ha.  *_exact: the same velocity Verlet in atomic units with
 # DFTB+'s constants (verlet_dftbplus_units), limited by the 8 decimals of DFTB+'s xyz output
 TOL_MD = {"positions": 1e-7, "energy": 2e-8, "positions_exact": 2e-8, "energy_exact": 2e-9}
+# XL-BOMD (M6e): also the velocities (A/ps; 8 decimals in DFTB+'s xyz) and the SCC iterations of
+# every step (largest difference; the closest convergence decision is 5e-4 from its tolerance).
+# The exact Verlet agrees to DFTB+'s printed digits (5e-9 A, 5e-11 Ha, 7e-9 A/ps over 60
+# steps); through ASE 60 steps give up to 1.1e-7 A, 2.6e-8 Ha and 7e-5 A/ps
+TOL_XL = {"positions": 3e-7, "energy": 6e-8, "velocities": 2e-4, "positions_exact": 1e-8,
+          "energy_exact": 2e-10, "velocities_exact": 2e-8, "n_scc": 0}
 
 DYN_CASES = [
     DynCase("h2o_opt", "h2o", "opt", tol=TOL_OPT),
@@ -99,6 +114,37 @@ DYN_CASES = [
             note="onsite corrections; the block vector carried between steps"),
     DynCase("h2o_gbsa_md", "h2o_gbsa", "md", tol=TOL_MD,
             note="GBSA solvation (Born radii, surface areas, hydrogen-bond correction) (M6c)"),
+    # M6e: DFTB+'s drivers in an excited state follow E0 + w and its forces
+    DynCase("h2co_s1_opt", "h2co_exc_forces_s1", "opt", tol=TOL_OPT,
+            note="first excited singlet: the molecule pyramidalises"),
+    DynCase("h2co_s2_md", "h2co_exc_forces", "md", temperature=300.0, steps=20, tol=TOL_MD,
+            note="second excited singlet, 20 steps"),
+    # M6e: XL-BOMD.  Xlbomd converges every step to its own tolerance from the integrated
+    # populations, XlbomdFast takes one SCC iteration per step (its energy is the shadow
+    # energy); before the integration runs (PreSteps, K + 1 filling steps) ordinary BO steps
+    DynCase("water_dimer_xl5_md", "water_dimer_hdamp", "md", steps=60,
+            xlbomd={"integration_steps": 5, "scc_tol": 1e-6}, force_evaluation="dynamics_t0",
+            tol=TOL_XL, note="Xlbomd, K = 5, SCC tolerance 1e-6"),
+    DynCase("water_dimer_xl6_presteps_md", "water_dimer_hdamp", "md",
+            xlbomd={"integration_steps": 6, "pre_steps": 3, "scc_tol": 1e-6},
+            force_evaluation="dynamics_t0", tol=TOL_XL, note="Xlbomd, K = 6 after 3 BO steps"),
+    DynCase("water_dimer_xl_minscc_md", "water_dimer_hdamp", "md",
+            xlbomd={"min_scc": 4, "scc_tol": 1e-3}, force_evaluation="dynamics_t0", tol=TOL_XL,
+            note="Xlbomd to 1e-3: MinSccIterations 4 has no effect (DFTB+ applies it on the first "
+                 "geometry step only, an ordinary BO step)"),
+    DynCase("water_dimer_xlfast_md", "water_dimer_hdamp", "md", steps=60,
+            xlbomd={"fast": True, "scale": 0.5}, force_evaluation="dynamics_t0", tol=TOL_XL,
+            note="XlbomdFast, K = 5, Scale 0.5 (1.0 diverges here, in DFTB+ as in pydftb)"),
+    DynCase("water_dimer_xlfast7_md", "water_dimer_hdamp", "md",
+            xlbomd={"integration_steps": 7, "fast": True, "transient_steps": 5, "scale": 0.25},
+            force_evaluation="dynamics_t0", tol=TOL_XL,
+            note="XlbomdFast, K = 7 (DFTB+'s single-precision alpha), 5 transient steps"),
+    DynCase("water_dimer_dftb3_xlfast_md", "water_dimer_dftb3_nodamp", "md",
+            xlbomd={"fast": True, "scale": 0.5}, force_evaluation="dynamics_t0", tol=TOL_XL,
+            note="DFTB3 (full third order): its shadow energy and forces"),
+    DynCase("cuo_chain_xl_md", "cuo_chain_k422", "md", ewald_tolerance=1e-12,
+            xlbomd={"scc_tol": 1e-6}, force_evaluation="dynamics", tol=TOL_XL,
+            note="k-points, Fermi 500 K: the Dynamics force type"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -154,9 +200,19 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 dispersion=inp.get("dispersion"), reuse_charges=True,
                 **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}),
                 **refgen.block_options(base, inp["labels"]),
-                **refgen.environment_ase_options(base))
+                **refgen.environment_ase_options(base),
+                **refgen.casida_options(base))              # M6e: an excited state's forces
+    if case.xlbomd is not None:                                 # M6e
+        opts.update(xlbomd=dict(case.xlbomd), force_evaluation=case.force_evaluation)
     opts.update(overrides)
     return PyDFTB(SKF_SETS[base.skf_set], **opts)
+
+
+def _potential(calc: PyDFTB) -> float:
+    """The potential energy the driver sees (Ha): the Mermin free energy, plus Omega in an
+    excited state (as DFTB+'s md.out and optimiser, M6e)."""
+    raw = calc.raw
+    return raw.excited_free_energy if calc.excited else raw.free_energy
 
 
 def _with_masses(atoms: Atoms, calc: PyDFTB, labels) -> Atoms:
@@ -179,13 +235,14 @@ def run_pydftb(case: DynCase, inp: dict, steps: int | None = None, **overrides) 
         opt.attach(lambda: n_scc.append(calc.raw.n_scc))
         opt.run(fmax=case.grad_elem * HA_BOHR, steps=5000)
         return {"positions": atoms.positions.copy(), "cell": atoms.cell.array.copy(),
-                "free_energy": calc.raw.free_energy, "steps": opt.nsteps,
+                "free_energy": _potential(calc), "steps": opt.nsteps,
                 "n_scc": n_scc, "wall": time.perf_counter() - t0}
     atoms.set_velocities(np.array(inp["velocities_aaps"]) / (1000.0 * units.fs))
-    frames = {"positions": [], "potential": [], "kinetic": []}
+    frames = {"positions": [], "velocities": [], "potential": [], "kinetic": []}
 
     def record():
         frames["positions"].append(atoms.positions.copy())
+        frames["velocities"].append(atoms.get_velocities() * 1000.0 * units.fs)
         frames["potential"].append(atoms.get_potential_energy(force_consistent=True) / units.Hartree)
         frames["kinetic"].append(atoms.get_kinetic_energy() / units.Hartree)
         n_scc.append(calc.raw.n_scc)
@@ -209,21 +266,28 @@ def verlet_dftbplus_units(case: DynCase, inp: dict, steps: int | None = None, **
     x = np.array(inp["positions_angstrom"]) / BOHR
     v = np.array(inp["velocities_aaps"]) / BOHR * AU_FS / 1000.0     # Bohr per atomic time unit
 
+    frames = {"positions": [], "velocities": [], "potential": [], "kinetic": [], "n_scc": []}
+
     def forces(x):
         atoms.positions = x * BOHR
         atoms.get_forces()
-        return calc.raw.forces, calc.raw.free_energy
+        frames["n_scc"].append(calc.raw.n_scc)
+        return calc.raw.forces, _potential(calc)
+
+    def record(x, v, e):
+        frames["positions"].append(x * BOHR)
+        frames["velocities"].append(v * BOHR / AU_FS * 1000.0)           # A/ps
+        frames["potential"].append(e)
+        frames["kinetic"].append(0.5 * float((m * v * v).sum()))
 
     f, e = forces(x)
-    frames = {"positions": [x * BOHR], "potential": [e], "kinetic": [0.5 * float((m * v * v).sum())]}
+    record(x, v, e)
     for _ in range(case.steps if steps is None else steps):
         v_half = v + 0.5 * f / m * dt
         x = x + v_half * dt
         f, e = forces(x)
         v = v_half + 0.5 * f / m * dt
-        frames["positions"].append(x * BOHR)
-        frames["potential"].append(e)
-        frames["kinetic"].append(0.5 * float((m * v * v).sum()))
+        record(x, v, e)
     return {k: np.array(val) for k, val in frames.items()}
 
 
@@ -235,7 +299,8 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         driver = dftbplus.opt_driver(case.optimiser, case.lattice, case.grad_elem,
                                      isotropic=case.isotropic)
     else:
-        driver = dftbplus.md_driver(inp["velocities_aaps"], case.time_step, case.steps)
+        driver = dftbplus.md_driver(inp["velocities_aaps"], case.time_step, case.steps,
+                                    xlbomd=case.xlbomd)
     with tempfile.TemporaryDirectory(prefix="pydftb_dyn_") as tmp:
         skdir = refgen._plain_skf_dir(base, tmp)
         extra = (dftbplus.dftb3_block(base.dftb3, set(inp["labels"]))
@@ -245,11 +310,20 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"
-        return dftbplus.run(inp["labels"], np.array(inp["positions_angstrom"]),
-                            np.array(inp["cell_angstrom"]) if periodic else None, skdir=skdir,
-                            max_l=inp["max_l"], kpts=kpts, scc=base.scc, filling=base.filling,
-                            shell_resolved=base.shell_resolved, repulsive=base.repulsive,
-                            extra_ham=extra, threads=threads, driver=driver, charge=base.charge)
+        if case.force_evaluation is not None:
+            extra += f"  ForceEvaluation = {FORCE_EVALUATION_HSD[case.force_evaluation]}\n"
+        if base.casida and base.casida.get("spin_constants") and not base.spin:
+            extra += dftbplus.spin_constants_block(base.casida["spin_constants"],
+                                                   set(inp["labels"]))
+        res = dftbplus.run(inp["labels"], np.array(inp["positions_angstrom"]),
+                           np.array(inp["cell_angstrom"]) if periodic else None, skdir=skdir,
+                           max_l=inp["max_l"], kpts=kpts, scc=base.scc, filling=base.filling,
+                           shell_resolved=base.shell_resolved, repulsive=base.repulsive,
+                           extra_ham=extra, threads=threads, driver=driver, charge=base.charge,
+                           extra_top=dftbplus.casida_block(base.casida), autotest=bool(base.casida))
+        if base.casida and "excited_mermin_tag" in res:
+            res["free_energy"] = res["excited_mermin_tag"]     # an excited state: E0 + w (M6e)
+        return res
 
 
 # ----------------------------------------------------------------------------
@@ -293,6 +367,12 @@ def compare(doc: dict, **overrides) -> dict:
             dev["positions" + suffix] = float(np.abs(r["positions"] - np.array(ref["positions"])).max())
             dev["energy" + suffix] = float(max(np.abs(r["potential"] - np.array(ref["potential"])).max(),
                                                np.abs(r["kinetic"] - np.array(ref["kinetic"])).max()))
+            if "velocities" in ref:                         # M6e references
+                dev["velocities" + suffix] = float(np.abs(r["velocities"]
+                                                          - np.array(ref["velocities"])).max())
+        if case.xlbomd is not None:     # the SCC iterations of every step (both runs)
+            dev["n_scc"] = max(int(np.abs(np.array(r["n_scc"]) - np.array(ref["n_scc"])).max())
+                               for r in (res, exact))
     tol = doc["tolerances"]
     ok = all(dev[k] <= tol[k] for k in tol if k in dev)
     return {"case": case.name, "dev": dev, "ok": ok, "result": res}
@@ -317,7 +397,11 @@ def regenerate(names=None, threads: int = 1):
         else:
             md = ref["md"]
             frames = ref["trajectory"]
+            if len(ref["scc_iterations"]) != len(frames):
+                raise RuntimeError(f"{case.name}: SCC iterations of {len(ref['scc_iterations'])} "
+                                   f"steps for {len(frames)} frames")
             reference.update(positions=[f["positions"].tolist() for f in frames],
+                             velocities=[f["velocities"].tolist() for f in frames],
                              potential=md["potential"].tolist(), kinetic=md["kinetic"].tolist(),
                              total=md["total"].tolist())
         lib = refgen.dispersion_library(inp)
@@ -327,7 +411,8 @@ def regenerate(names=None, threads: int = 1):
                "settings": {"lattice": case.lattice, "isotropic": case.isotropic,
                             "ewald_tolerance": case.ewald_tolerance, "grad_elem": case.grad_elem,
                             "optimiser": case.optimiser, "temperature": case.temperature,
-                            "seed": case.seed, "steps": case.steps, "time_step_fs": case.time_step},
+                            "seed": case.seed, "steps": case.steps, "time_step_fs": case.time_step,
+                            "xlbomd": case.xlbomd, "force_evaluation": case.force_evaluation},
                "libraries": {lib: library_versions()[lib]} if lib else {},
                "input": inp, "hsd": ref["hsd"], "reference": reference,
                "tolerances": case.tol}
@@ -345,29 +430,35 @@ def load(name: str) -> dict:
 def check(names=None, **overrides) -> bool:
     """``overrides``: PyDFTB options, e.g. ``backend="torch"`` (milestone M4)."""
     all_ok = True
-    print(f"{'case':18s} {'kind':4s} {'|dE| Ha':>9s} {'|dr| A':>9s} {'|da| A':>9s} "
-          f"{'steps py/ref':>12s} {'t_py':>7s} {'t_ref':>7s}  ok")
+    print(f"{'case':28s} {'kind':4s} {'|dE| Ha':>9s} {'|dr| A':>9s} {'|da| A':>9s} "
+          f"{'steps py/ref':>12s} {'SCC py/ref':>11s} {'t_py':>7s} {'t_ref':>7s}  ok")
     for case in DYN_CASES:
         if names and case.name not in names:
             continue
         path = os.path.join(REF_DIR, f"{case.name}.json")
         if not os.path.exists(path):
-            print(f"{case.name:18s} (no reference JSON)")
+            print(f"{case.name:28s} (no reference JSON)")
             all_ok = False
             continue
         doc = load(case.name)
         why = refgen.missing_requirement(doc)
         if why:
-            print(f"{case.name:18s} skipped: {why}")
+            print(f"{case.name:28s} skipped: {why}")
             continue
         r = compare(doc, **overrides)
         d, res, ref = r["dev"], r["result"], doc["reference"]
         all_ok &= r["ok"]
         steps = (f"{res['steps']}/{ref['geometry_steps']}" if case.kind == "opt"
                  else f"{len(res['potential']) - 1}/{ref['geometry_steps'] - 1}")
+        scc = f"{sum(res['n_scc'])}/{sum(ref['n_scc'])}"
         cell = f"{d['cell']:9.1e}" if "cell" in d else f"{'-':>9s}"
-        print(f"{case.name:18s} {case.kind:4s} {d['energy']:9.1e} {d['positions']:9.1e} {cell} "
-              f"{steps:>12s} {res['wall']:7.2f} {ref['wall']:7.2f}  {'yes' if r['ok'] else 'NO'}")
+        print(f"{case.name:28s} {case.kind:4s} {d['energy']:9.1e} {d['positions']:9.1e} {cell} "
+              f"{steps:>12s} {scc:>11s} {res['wall']:7.2f} {ref['wall']:7.2f}  "
+              f"{'yes' if r['ok'] else 'NO'}")
+        if case.xlbomd is not None:
+            print(f"{'':28s} XL: velocities {d['velocities']:.1e} A/ps (exact Verlet: "
+                  f"{d['velocities_exact']:.1e}), SCC iterations per step differ by at most "
+                  f"{d['n_scc']}")
     return all_ok
 
 

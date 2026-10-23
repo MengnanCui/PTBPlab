@@ -125,6 +125,7 @@ for name in names:
         data[f"ref/{name}/{solver}/{fd}"] = record(r["result"])
 
 from ase.optimize import BFGS
+dyn.FD_DELTA = 2.0 ** -13      # one step in both trees (M6e corrected the validation's)
 for case in dyn.DYN_CASES[::4] if quick else dyn.DYN_CASES:
     path = os.path.join(dyn.REF_DIR, f"{case.name}.json")
     if not os.path.exists(path):

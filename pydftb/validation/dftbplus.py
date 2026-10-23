@@ -434,17 +434,39 @@ def region_files(regions, shells) -> list:
     return out
 
 
-def md_driver(velocities_aaps, time_step_fs, steps, keep_stationary=False) -> str:
+def md_driver(velocities_aaps, time_step_fs, steps, keep_stationary=False,
+              xlbomd=None) -> str:
     """HSD ``Driver = VelocityVerlet`` (NVE) with the given velocities (Angstrom/ps).
 
     DFTB+ uses given velocities as they are; ``KeepStationary`` (DFTB+ default Yes)
     removes the centre-of-mass motion every step, which ASE's VelocityVerlet does not.
+    ``xlbomd``: the options of :class:`pydftb.xlbomd.XLBOMD` as a dict (M6e).
     """
     rows = "\n".join("    " + " ".join(_f(x) for x in v) for v in np.asarray(velocities_aaps))
     return (f"Driver = VelocityVerlet {{\n  TimeStep [fs] = {_f(time_step_fs)}\n"
             f"  Steps = {int(steps)}\n  MovedAtoms = 1:-1\n"
             f"  KeepStationary = {'Yes' if keep_stationary else 'No'}\n  MDRestartFrequency = 1\n"
-            f"  Thermostat = None {{}}\n  Velocities [AA/ps] = {{\n{rows}\n  }}\n}}\n")
+            f"  Thermostat = None {{}}\n{xlbomd_block(xlbomd)}"
+            f"  Velocities [AA/ps] = {{\n{rows}\n  }}\n}}\n")
+
+
+def xlbomd_block(spec) -> str:
+    """``Xlbomd`` / ``XlbomdFast`` of the VelocityVerlet driver (M6e) for the options of
+    :class:`pydftb.xlbomd.XLBOMD` (DFTB+ defaults where a key is missing)."""
+    if not spec:
+        return ""
+    lines = [f"    IntegrationSteps = {int(spec.get('integration_steps', 5))}",
+             f"    PreSteps = {int(spec.get('pre_steps', 0))}"]
+    if spec.get("fast"):
+        lines += [f"    TransientSteps = {int(spec.get('transient_steps', 10))}",
+                  f"    Scale = {_f(spec.get('scale', 1.0))}"]
+        name = "XlbomdFast"
+    else:
+        lines += [f"    MinSccIterations = {int(spec.get('min_scc', 1))}",
+                  f"    MaxSccIterations = {int(spec.get('max_scc', 200))}",
+                  f"    SccTolerance = {_f(spec.get('scc_tol', 1e-5))}"]
+        name = "Xlbomd"
+    return f"  {name} {{\n" + "\n".join(lines) + "\n  }\n"
 
 
 def opt_driver(optimiser="LBFGS {}", lattice=False, grad_elem=1e-7, max_steps=3000,
@@ -526,8 +548,10 @@ HARTREE_EV = 27.2113845        # DFTB+ Hartree__eV (TRA.DAT, EXC.DAT)
 def casida_block(spec, forces: bool = True) -> str:
     """Top-level HSD ``ExcitedState { Casida }`` (M6d) for a spec {"n": NrOfExcitations,
     "symmetry": "singlet" | "triplet" | "both" | None (spin polarised), "solver": "Arpack" |
-    "Stratmann", "state": StateOfInterest, "energy_window" (Hartree), "oscillator_window"}.
-    With forces and no state of interest DFTB+ needs ``ExcitedStateForces = No``."""
+    "Stratmann", "state": StateOfInterest, "energy_window" (Hartree), "oscillator_window",
+    "excited_forces", "excited_charges"}.  With forces and no state of interest DFTB+ needs
+    ``ExcitedStateForces = No``; excited forces or charges write the excited state's Mulliken
+    charges and dipole (``WriteMulliken``: XCH.DAT, XREST.DAT; M6e)."""
     if not spec:
         return ""
     lines = ["ExcitedState {", "  Casida {", f"    NrOfExcitations = {int(spec['n'])}"]
@@ -541,7 +565,9 @@ def casida_block(spec, forces: bool = True) -> str:
         lines.append(f"    OscillatorWindow = {_f(spec['oscillator_window'])}")
     lines += ["    WriteTransitions = Yes", "    WriteSPTransitions = Yes",
               "    WriteTransitionDipole = Yes"]
-    if forces:          # M6d: ground-state forces (excited-state forces are M6e)
+    if spec.get("excited_forces") or spec.get("excited_charges"):
+        lines.append("    WriteMulliken = Yes")
+    if forces:          # the state of interest's forces, or the ground state's
         lines.append(f"    ExcitedStateForces = {'Yes' if spec.get('excited_forces') else 'No'}")
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
@@ -561,6 +587,8 @@ def parse_casida(workdir, detailed: str) -> dict:
                            for k, n in (("omega2", "exc_energies_sqr"),
                                         ("oscillator", "exc_oscillator"),
                                         ("transdip", "exc_transdip")) if n in t}
+        if "mermin_energy" in t:        # with a state of interest: E_Mermin + Omega, full digits
+            out["excited_mermin_tag"] = float(t["mermin_energy"])
     path = os.path.join(workdir, "TRA.DAT")
     if os.path.exists(path):
         found = re.findall(r"^\s+Energy\s+\d+\s+(\S+)\s+eV\s*(\S?)", open(path).read(), re.M)
@@ -584,6 +612,16 @@ def parse_casida(workdir, detailed: str) -> dict:
     m = re.search(r"^Excitation Energy:\s+(\S+)\s+H", detailed, re.M)
     if m:
         out["excitation_energy"] = float(m.group(1))
+    path = os.path.join(workdir, "XCH.DAT")                # M6e: excited-state Mulliken
+    if os.path.exists(path):
+        rows = re.findall(r"^\s*(\d+)\s+(\S+)\s*$", open(path).read(), re.M)
+        out["excited_charges_net"] = np.array([float(q) for _, q in rows])
+    path = os.path.join(workdir, "XREST.DAT")
+    if os.path.exists(path):
+        m = re.search(r"dipole moment \[Debye\]\s*\n=+\s*\n\s*(\S+)\s+(\S+)\s+(\S+)",
+                      open(path).read())
+        if m:
+            out["excited_dipole_debye"] = np.array([float(x) for x in m.groups()])
     return out
 
 

@@ -262,7 +262,7 @@ class Coulomb:
         v = self.gamma @ dq
         return 0.5 * dq @ v, v
 
-    def gradient(self, dq, virial: bool = False):
+    def gradient(self, dq, virial: bool = False, other=None):
         """dE_SCC/dR per **atom** (n_atom, 3) with E = 1/2 dq.gamma.dq (dq per site).
 
         With ``virial=True`` (periodic systems) the same pass also gives the
@@ -271,36 +271,60 @@ class Coulomb:
         Reciprocal Ewald: 1/2 sum_G f|S|^2 [-delta + 2 G G (1/(4 alpha^2) + 1/G^2)].
         Background: + pi Q^2 / (2 V alpha^2) delta.  The Ewald alpha is held
         fixed (the energy does not depend on it).
+
+        ``other`` (per site): the derivative of the bilinear E = 1/2 dq.gamma.other instead
+        (excited-state gradients, the XL-BOMD shadow energy; milestone M6e): every product
+        x_a x_b becomes 1/2 (x_a y_b + y_a x_b).
         """
         if virial and not self.periodic:
             raise ValueError("the virial/stress needs a periodic system")
         i, j, _, vec, d = self.nl
         dq_atom = ops.segment_sum(dq, self.site_atom, self.natom)
+        if other is None:
+            def prod(x1, y1, x2, y2):
+                return x1 * y2
+            o, o_atom = dq, dq_atom
+        else:
+            def prod(x1, y1, x2, y2):
+                return 0.5 * (x1 * y2 + y1 * x2)
+            o = np.asarray(other, float)
+            o_atom = ops.segment_sum(o, self.site_atom, self.natom)
         # short range: aggregate site pairs into dE/d(distance) per atom pair
         _, ds = self._sp_short()
-        dedr = ops.segment_sum(-dq[self.sp_a] * dq[self.sp_b] * ds, self.sp_pair, len(i))
+        dedr = ops.segment_sum(-prod(dq[self.sp_a], o[self.sp_a], dq[self.sp_b], o[self.sp_b]) * ds,
+                               self.sp_pair, len(i))
         grad = np.zeros((self.natom, 3))
         w = None
         if self.periodic:
             a = self.alpha
             m = d < self.rcut_ewald
             dg = -erfc(a * d[m]) / d[m] ** 2 - 2 * a / np.sqrt(np.pi) * np.exp(-(a * d[m]) ** 2) / d[m]
-            dedr[m] += dq_atom[i[m]] * dq_atom[j[m]] * dg
+            dedr[m] += prod(dq_atom[i[m]], o_atom[i[m]], dq_atom[j[m]], o_atom[j[m]]) * dg
             phase = self.pos @ self.gvec.T
             cg, sg = np.cos(phase), np.sin(phase)
             sc = cg.T @ dq_atom
             ss = sg.T @ dq_atom
             # E_rec = 1/2 sum_G f |S(G)|^2 ;  dE/dr_A = q_A sum_G f G (-sin cS + cos sS)
             coef = dq_atom[:, None] * (-sg * sc[None, :] + cg * ss[None, :]) * self.gfac[None, :]
+            if other is not None:
+                sco, sso = cg.T @ o_atom, sg.T @ o_atom
+                coef = 0.5 * (dq_atom[:, None] * (-sg * sco[None, :] + cg * sso[None, :])
+                              * self.gfac[None, :]
+                              + o_atom[:, None] * (-sg * sc[None, :] + cg * ss[None, :])
+                              * self.gfac[None, :])
             grad += coef @ self.gvec
             if virial:
-                c = 0.5 * self.gfac * (sc * sc + ss * ss)            # 1/2 f |S(G)|^2
+                if other is None:
+                    c = 0.5 * self.gfac * (sc * sc + ss * ss)            # 1/2 f |S(G)|^2
+                else:
+                    c = 0.5 * self.gfac * (sc * sco + ss * sso)
                 g2 = (self.gvec * self.gvec).sum(1)
                 w = 0.5 * np.einsum("p,pa,pb->ab", dedr / d, vec, vec)
                 w -= c.sum() * np.eye(3)
                 w += 2.0 * np.einsum("g,ga,gb->ab", c * (1.0 / (4 * a * a) + 1.0 / g2), self.gvec, self.gvec)
                 q = dq_atom.sum()
-                w += np.pi * q * q / (2.0 * self.vol * a * a) * np.eye(3)
+                qo = q if other is None else o_atom.sum()
+                w += np.pi * q * qo / (2.0 * self.vol * a * a) * np.eye(3)
         else:
             diff = self.pos[None, :, :] - self.pos[:, None, :]
             dist = np.sqrt((diff * diff).sum(-1))
@@ -308,6 +332,7 @@ class Coulomb:
             fac = -1.0 / dist ** 3
             np.fill_diagonal(fac, 0.0)
             # dE/dr_A = -sum_B qA qB d(1/R)/dR * R_vec/R
-            grad -= ((dq_atom[:, None] * dq_atom[None, :] * fac)[:, :, None] * diff).sum(1)
+            qq = prod(dq_atom[:, None], o_atom[:, None], dq_atom[None, :], o_atom[None, :])
+            grad -= ((qq * fac)[:, :, None] * diff).sum(1)
         g = (dedr / d)[:, None] * vec
         return ops.scatter_add(grad, i, -g), w

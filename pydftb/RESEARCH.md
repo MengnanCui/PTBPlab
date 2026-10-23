@@ -242,13 +242,13 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | 自旋极化（磁性体系） | ✅ M2c 完成（共线） | 低–中 |
 | 非共线自旋、自旋轨道耦合（重元素） | ✅ M6a 完成（只有 NumPy 引擎；16 个 DFTB+ 参考算例全部通过，SCC 轮数相同）[文献 S1、D2] | 中 |
 | DFTB+U（强关联 d/f 电子修正）、onsite 修正 | ✅ M6b 完成（FLL、pSIC，onsite 修正附 DFTB+ 手册的 PBE 常数；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过，SCC 轮数相同或差 1）[文献 S2、S3] | 中 |
-| 长程校正（改善带隙、电荷转移） | ⬜ | **高** |
+| 长程校正（改善带隙、电荷转移） | ⬜ M6h（LC/CAM，含 TD-LC；先要解决带 RangeSep 的测试参数） | **高** |
 | 色散（范德华力）：D3/D4/MBD 等 | ✅ M2d 完成（UFF、Slater-Kirkwood、D3、D4；MBD 未做） | 低（直接调用现成库） |
 | 溶剂模型 | ✅ M6c 完成（广义 Born 的 Still、P16 核与 ALPB，SASA，氢键修正，CM5，xtb 格式参数文件；只用于分子，COSMO 未做；只有 NumPy 引擎；10 个 DFTB+ 参考算例和一段 MD 全部通过）[文献 S4–S7] | 中 |
 | 外加电场、外部点电荷（QM/MM） | ✅ M6c 完成（周期体系为 DFTB+ 的锯齿势；点电荷可加高斯展宽，周期体系用 Ewald，给出点电荷受的力，可接 ASE 的 EIQMMM；原子格点势；只有 NumPy 引擎；12 个 DFTB+ 参考算例全部通过，SCC 轮数相同） | 中–高 |
-| 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照） | 低–中（前期可直接用 ASE 驱动，接口已有） |
-| 声子、极化率 | ⬜ | 中（有自动求导后更容易） |
-| 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力与 XL-BOMD 在 M6e [文献 S8–S10] | 中–高 |
+| 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照）；XL-BOMD ✅ M6e 完成（DFTB+ 的 `Xlbomd`、`XlbomdFast`：积分器、影子能量与它的力、`ForceEvaluation`；7 个 DFTB+ 轨迹算例与 DFTB+ 一致到它打印的位数，每步 SCC 轮数相同）[文献 X1、S12] | 低–中（前期可直接用 ASE 驱动，接口已有） |
+| 声子、极化率 | ⬜ M6g（DFTB+ 的耦合微扰极化率、响应核、Born 电荷，以及数值 Hessian） | 中（有自动求导后更容易） |
+| 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力 ✅ M6e 完成（Z 向量方法，单重态、三重态、自旋极化，含外场、点电荷、阻尼和能量窗口的完整导数；激发态的电荷与偶极，激发态的结构优化与 MD；11 个单点和 2 个驱动的 DFTB+ 参考算例全部通过）[文献 S8–S11] | 中–高 |
 | 输运（NEGF，算电流） | ⬜ | **很高**（建议直接调用 libNEGF） |
 | xTB 方法 | ⬜ | 直接调用 `tblite` 或 `dxtb` |
 | GPU 版、多机稀疏版 | 原型 | 高 |
@@ -366,5 +366,7 @@ print(atoms.get_potential_energy(), atoms.get_forces())       # 单位：eV、eV
 - **S8** Niehaus et al., *Phys. Rev. B* 63, 085108 (2001)：DFTB 的线性响应（TD-DFTB），跃迁电荷与 γ、W 构成的 Casida 矩阵（M6d 照此实现，与 DFTB+ 的 `timedep/` 对照）；Casida, in *Recent Advances in Density Functional Methods, Part I*, ed. D. P. Chong (World Scientific, 1995), p. 155：Casida 方程。
 - **S9** Stratmann, Scuseria, Frisch, *J. Chem. Phys.* 109, 8218 (1998)：DFTB+ 的 Stratmann 求解器（在 A+B、A−B 的子空间中迭代）。
 - **S10** Davidson, *J. Comput. Phys.* 17, 87 (1975)：Davidson 方法（M6d 用分块形式、以对角元为预条件，解大体系的 Casida 方程）。
+- **S11** Heringer, Niehaus, Frauenheim, *J. Comput. Chem.* 28, 2589 (2007)：TD-DFTB 的解析激发态梯度（Z 向量方法，DFTB+ 的 `linrespgrad.F90`；M6e 照此实现，并补上外加势、阻尼的 γ′ 与能量窗口的正则轨道项）；Furche, Ahlrichs, *J. Chem. Phys.* 117, 7433 (2002)：TDDFT 激发态梯度的 Z 向量与拉格朗日写法。
+- **S12** Niklasson, *Phys. Rev. Lett.* 100, 123004 (2008)：扩展拉格朗日 Born–Oppenheimer 分子动力学；Niklasson et al., *J. Chem. Phys.* 130, 214109 (2009)：耗散项与 K = 5、6、7 的系数（DFTB+ 的 `extlagrangian.F90` 用的就是这组）。
 - **P1** TBMaLT, *J. Chem. Phys.* 158, 034801 (2023)；**P2** dxtb, *J. Chem. Phys.* 161, 062501 (2024)：可自动求导的紧束缚程序。
 - 其他同类项目：LATTE/PROGRESS（LANL，SP2 + GPU）、CP2K（线性标度 DFTB）、hotbit（Python DFTB）、PYSEQM（GPU 半经验方法）。

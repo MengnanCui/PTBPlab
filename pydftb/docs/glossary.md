@@ -186,3 +186,11 @@
 | fork 与 CUDA | fork 复制出的子进程不能再使用父进程已经初始化的 CUDA。所以 PTBP 用 GPU 时 DFTB 阶段在主进程里逐个结构计算，探测 GPU 放在单独启动的子进程里（M4d）。 |
 | Davidson 方法 | 求大矩阵最低几个本征值的迭代法：在一个逐步扩大的子空间里对角化，每步用残差除以 (θ − 对角元) 作为新方向（对角元作预条件）。Casida 矩阵是对角阵加一个低秩的耦合，Davidson 往往十来步就收敛，比 ARPACK 的 Lanczos 快得多（M6d）。 |
 | ARPACK、Stratmann | DFTB+ 解 Casida 方程的两种迭代求解器。ARPACK 是通用的隐式重启 Lanczos 库；Stratmann 是专为 TD-DFT 设计的子空间方法，同时处理 A+B 与 A−B。两者的收敛精度都是单精度量级（M6d）。 |
+| Z 向量方法 | 求激发能对原子坐标的导数时，基态轨道随坐标的变化（轨道弛豫）本要对每个坐标解一次响应方程；Z 向量方法把它们合成一个线性方程 (A+B)Z = R，只解一次，代价与原子数无关。A+B 是基态的轨道 Hessian（M6e）。 |
+| 弛豫密度 | 激发态与基态的密度差：未弛豫的差密度 T（由 X±Y 组成）加上轨道弛豫 ½(Z + Zᵀ)。它的 Mulliken 布居就是激发态电荷的改变，DFTB+ 写在 XCH.DAT，偶极写在 XREST.DAT（M6e）。 |
+| 预条件共轭梯度（PCG） | 解对称正定线性方程的迭代法，每步只需要矩阵与向量的乘积；用矩阵的对角元作预条件。pydftb 的 Z 向量在跃迁数超过 500 时用它，收敛到机器精度（M6e）。 |
+| 正则轨道乘子 | 有能量窗口时，只有窗口内的跃迁进入响应，激发能就不再对占据—占据、空—空的轨道转动驻定。补上这两块的乘子 z<sub>pq</sub> = −(G<sub>pq</sub> − G<sub>qp</sub>)/(ε<sub>p</sub> − ε<sub>q</sub>)，力才是能量的精确导数；DFTB+ 没有这一项（M6e）。 |
+| XL-BOMD | 扩展拉格朗日的 Born–Oppenheimer 分子动力学：把辅助电荷 n 当作一个动力学变量，用时间可逆的 Verlet 公式与原子一起积分，每步只用它做 SCC 的初值，所以每步只要很少几轮 SCC（`XlbomdFast` 只做 1 轮）。耗散项 α Σ c<sub>k</sub> n(t − kδt) 压住数值噪声（M6e）。 |
+| 影子能量 | XL-BOMD 守恒的不是真实的能量，而是一个“影子”：E<sub>band</sub>[D(n)] + ½(2q<sub>out</sub> − n)·γ·n，即把 SCC 能量在 n 处线性化。它在 n 自洽时等于普通能量；力是它在 n 固定时的导数，不需要 SCC 收敛（M6e）。 |
+| 环形缓冲 | 只存最近 K + 1 个向量的数组，新值覆盖最旧的值，下标对 K + 1 取模。XL-BOMD 用它存辅助电荷的历史（M6e）。 |
+| `ForceEvaluation` | DFTB+ 计算能量加权密度的三种方式：Traditional 用本征值 Σ f ε c cᵀ，DynamicsT0 用 ½DHD（占据数为 0 或 2 时才对；自旋通道的占据数是 0 或 1，应为 DHD），Dynamics 用 ½(DHS⁻¹ + S⁻¹HD)。H 就是被对角化的矩阵时三者相同；XL-BOMD 要求后两种（M6e）。 |

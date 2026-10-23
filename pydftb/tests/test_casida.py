@@ -4,11 +4,13 @@ The comparisons with DFTB+ are the frozen references *_casida* in test_reference
 the solvers against each other, the Casida matrix (symmetric, its matrix-free product, the
 normalisation of X + Y), the uncoupled limit, invariance under rotations and translations,
 the printed tables (DFTB+'s EXC.DAT and SPX.DAT), the ASE and SCC interfaces and the errors.
+Excited-state forces and charges (M6e) are tested in test_casida_forces.py.
 """
 import os
 
 import numpy as np
 import pytest
+from ase import units
 from ase.build import molecule
 
 import pydftb
@@ -141,12 +143,16 @@ def test_tables_as_dftbplus_prints_them(name, tmp_path):
 
 
 def test_states_of_interest_and_excited_forces():
-    with pytest.raises(NotImplementedError, match="milestone M6e"):
-        _engine("h2co_casida", casida=cs.Casida(6, state_of_interest=2))
+    ground = _engine("h2co_casida")[0]
+    exc = _engine("h2co_casida", casida=cs.Casida(6, state_of_interest=2))[0]   # M6e
+    assert exc.energy == ground.energy                          # the ground state's
+    assert exc.excited_energy == exc.energy + exc.excitation_energy
+    assert np.abs(exc.forces - ground.forces).max() > 1e-2      # the excited state's
     res, *_ = _engine("h2co_casida", casida=cs.Casida(6, state_of_interest=2,
                                                        excited_forces=False))
     assert res.excitation_energy == res.excitations.energies[1]
-    assert res.energy == _engine("h2co_casida")[0].energy      # the ground state's
+    assert res.energy == ground.energy
+    assert np.array_equal(res.forces, ground.forces) and res.excited_charges is None
     bright = _engine("h2co_casida", casida=cs.Casida(6, state_of_interest=-1,
                                                       excited_forces=False))[0]
     x = bright.excitations
@@ -164,9 +170,12 @@ def test_ase_and_scc_interfaces():
                      casida=cs.Casida(4))
     scc.kernel()
     assert np.abs(scc.result.excitations.omega2 - x.omega2).max() < 1e-12
-    a.calc = PyDFTB(SKF_HCOCU, casida={"n_excitations": 4, "state_of_interest": 1})
-    with pytest.raises(NotImplementedError, match="milestone M6e"):
-        a.get_forces()
+    e0 = a.get_potential_energy()
+    a.calc = PyDFTB(SKF_HCOCU, scc_tol=1e-10,
+                    casida={"n_excitations": 4, "state_of_interest": 1})
+    a.get_forces()                                   # the excited state's (M6e)
+    w = a.calc.raw.excitation_energy * units.Hartree
+    assert abs(a.get_potential_energy() - (e0 + w)) < 1e-8
 
 
 def test_option_errors():
