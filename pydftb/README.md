@@ -214,6 +214,38 @@ DFTB+'s (SCC, Fermi filling, no spin, +U, onsite, fields, charges, solvent or ex
 forces).  Details:
 [`docs/reports/M6e-excited-forces-xlbomd.html`](docs/reports/M6e-excited-forces-xlbomd.html).
 
+### SCC start, mixers and DFTB+ charge files
+
+DFTB+'s four mixers are exact ports, so the SCC takes the same iterations as in DFTB+; the
+error of every iteration (DFTB+'s "SCC error" column) is in `r.scc_errors`:
+
+```python
+DFTB(sk, mixer="anderson")                  # "broyden" (default), "simple", "anderson", "diis"
+DFTB(sk, mixer={"kind": "diis", "generations": 4, "use_from_start": False})
+DFTB(sk, mixer={"kind": "anderson", "dynamic_mixing": [(1e-2, 0.3)]}, mixing=0.1)
+```
+
+The options are DFTB+'s keywords in snake case (`inverse_jacobi_weight`, `init_mixing`,
+`diagonal_rescaling`, ...); `mixing` (DFTB+ `MixingParameter`) defaults to the mixer's DFTB+
+default (Broyden 0.2, as before).  **Note:** `mixer="anderson"` now means DFTB+'s Anderson
+mixer; before M6f it was an alias of pydftb's Pulay-type mixer, which stays `mixer="pulay"`.
+
+The start of the SCC as DFTB+'s `InitialCharges` and `InitialSpins`, and DFTB+'s charge
+restart files (`charges.dat` byte for byte as DFTB+ writes it):
+
+```python
+DFTB(sk, initial_charges={0: 0.3, 1: -0.3})          # electrons fill each atom's shells in order
+DFTB(sk, spin=True, unpaired_electrons=0, initial_spins=[1, 0, -1, 0])   # an antiferromagnetic start
+from pydftb import dftbplus_io
+r = calc.calculate(labels, pos, q_init=dftbplus_io.read_charges("charges.bin", norb_atom))
+dftbplus_io.write_charges("charges.dat", calc.charge_data(labels, r))
+atoms.calc = PyDFTB(skdir, read_charges="charges.bin")      # and atoms.calc.write_charges(path)
+```
+
+With collinear spin, `PyDFTB` starts from the atoms' initial magnetic moments when they are
+not all zero.  NumPy engine only.  Details:
+[`docs/reports/M6f1-scc-start-mixers.html`](docs/reports/M6f1-scc-start-mixers.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

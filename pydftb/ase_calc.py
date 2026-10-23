@@ -19,6 +19,7 @@ from .bands import States, eigenstates
 from .calculator import DFTB, SCCControl
 from .casida import Casida
 from .constants import BOHR, HARTREE, MIN_TEMP, VOLT_PER_ANGSTROM_AU
+from .dftbplus_io import write_charges
 from .dispersion import make_dispersion
 from .external import PointCharges
 from .kpoints import monkhorst_pack, reduce_time_reversal
@@ -92,7 +93,12 @@ class PyDFTB(Calculator):
     Dispersion parameters stay in atomic units (Bohr, Hartree) as in DFTB+; the elements
     come from ``atoms``.  With ``spin="noncolinear"`` and no ``initial_spins`` the atoms'
     initial magnetic moments are used ((N, 3) vectors, or (N,) along z); ``magmoms`` are
-    then (N, 3) vectors and ``magmom`` the length of their sum.
+    then (N, 3) vectors and ``magmom`` the length of their sum.  With collinear spin, non-zero
+    initial magnetic moments are the initial spins (DFTB+ ``InitialSpins``, M6f).
+    Milestone M6f: ``mixer``/``mixing`` take DFTB+'s mixers and their options,
+    ``initial_charges`` (e per atom) starts the SCC from those charges, ``read_charges`` (a
+    DFTB+ ``charges.bin``/``charges.dat``) starts the first calculation from that file, and
+    :meth:`write_charges` writes one.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole"]
@@ -100,7 +106,7 @@ class PyDFTB(Calculator):
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool | None = None,
                  smearing=None, temperature: float | None = None, scc: bool = True,
                  scc_tol: float = 1e-6, max_scc: int = 200, mixer: str = "broyden",
-                 mixing: float = 0.2, repulsive: str = "skf", solver: str = "batched",
+                 mixing: float | None = None, repulsive: str = "skf", solver: str = "batched",
                  shell_resolved: bool = False, threads: int | None = None, labels=None,
                  fd_delta: float | None = None, third_order: str | None = None,
                  hubbard_derivs: dict | None = None, h_damping: float | None = None,
@@ -113,7 +119,8 @@ class PyDFTB(Calculator):
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
                  solvation=None, rescale_solvated_fields: bool = True, casida=None,
-                 xlbomd=None, force_evaluation: str | None = None, **kwargs):
+                 xlbomd=None, force_evaluation: str | None = None, initial_charges=None,
+                 read_charges=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -139,7 +146,9 @@ class PyDFTB(Calculator):
                                 plus_u_functional=plus_u_functional,
                                 onsite_corrections=onsite_corrections, solvation=solvation,
                                 rescale_solvated_fields=rescale_solvated_fields,
-                                casida=casida, force_evaluation=force_evaluation)
+                                casida=casida, force_evaluation=force_evaluation,
+                                initial_charges=initial_charges)
+        self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
         self.site_potentials = site_potentials        # eV
@@ -165,6 +174,11 @@ class PyDFTB(Calculator):
         o = self.engine_opts
         return (isinstance(o["spin"], str) and o["spin"].lower() in ("noncolinear", "noncollinear")
                 or o["spin_orbit"] is not None)
+
+    @property
+    def _torch(self) -> bool:
+        b = self.engine_opts["backend"]
+        return getattr(b, "is_torch", False) or str(b).lower() == "torch"
 
     def _kpoints(self, atoms, spec=None):
         spec = self.kpts_spec if spec is None else spec
@@ -198,6 +212,12 @@ class PyDFTB(Calculator):
                 and opts["initial_spins"] is None):
             m = np.asarray(atoms.get_initial_magnetic_moments(), float)
             opts["initial_spins"] = m if m.ndim == 2 else np.outer(m, [0.0, 0.0, 1.0])
+        elif spin and opts["initial_spins"] is None and not self._torch:
+            # collinear: the moments, if any, start the SCC (M6f; NumPy only, so the torch
+            # backend ignores them as before)
+            m = np.asarray(atoms.get_initial_magnetic_moments(), float)
+            if m.ndim == 1 and np.any(m != 0.0):
+                opts["initial_spins"] = m
         calc = DFTB(sk, kpts=self._kpoints(atoms), charge=float(atoms.get_initial_charges().sum()),
                     dispersion=disp, k_threads=self.k_threads, **opts, **self._environment())
         return calc, labels, sk
@@ -239,6 +259,8 @@ class PyDFTB(Calculator):
         q_init = None
         if self.reuse_charges and self.raw is not None and self._raw_labels == list(labels):
             q_init = self.raw.q_in        # DFTB+ keeps qInput between geometry steps
+        elif self.read_charges is not None and self.raw is None:
+            q_init = calc.populations_from_file(labels, self.read_charges)    # M6f
         xl = {}
         if self.xlbomd is not None:       # one calculation = one MD step (M6e)
             if self._xl is None or self._raw_labels != list(labels):
@@ -261,6 +283,15 @@ class PyDFTB(Calculator):
         if xl:
             self._xl.advance(r.q_out)
         self._store(r, sk, labels)
+
+    def write_charges(self, path, text: bool | None = None):
+        """Write the last calculation's input populations as DFTB+'s ``charges.bin`` (or
+        ``charges.dat`` with ``text``, default by the extension), which DFTB+'s
+        ``ReadInitialCharges`` and ``read_charges`` here read (M6f)."""
+        if self.raw is None:
+            raise RuntimeError("no calculation to write the charges of")
+        calc, labels, _ = self._engine(self.atoms)
+        write_charges(path, calc.charge_data(labels, self.raw), text)
 
     def evaluate(self, atoms, params=None, requires_grad=(), mode: str = "hf",
                  forces: bool = False, stress: bool = False, q_init=None):

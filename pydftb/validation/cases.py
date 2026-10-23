@@ -137,6 +137,27 @@ class Case:
     scc_tol: float = 1e-10                # SCC tolerance of both codes
     tol: dict = field(default_factory=lambda: {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6})
     note: str = ""
+    # milestone M6f-1: the start of the SCC and its mixer (spin dicts may hold "initial_spins")
+    mixer: str | dict | None = None       # pydftb's mixer option (DFTB+ Mixer)
+    initial_charges: list | dict | None = None   # e per atom, or {atom (0-based): e}
+    read_charges: dict | None = None      # two runs (DFTB+ ReadInitialCharges): {"text": bool,
+                                          # "displace" (A), "seed"}: run 1 at the case geometry
+                                          # displaced by that much writes the file, run 2 (the
+                                          # one compared) at the case geometry reads it
+
+    @property
+    def scc_start(self) -> bool:
+        """M6f-1 settings: mixer, initial charges or spins, a charge file; references keep the
+        SCC error of every iteration."""
+        return (self.mixer is not None or self.initial_charges is not None
+                or self.read_charges is not None
+                or (self.spin or {}).get("initial_spins") is not None)
+
+    def run1_positions(self, atoms: Atoms) -> np.ndarray:
+        """Run 1's positions (A) of a ``read_charges`` case."""
+        rc = self.read_charges
+        rng = np.random.default_rng(rc.get("seed", 0))
+        return atoms.positions + rng.normal(scale=rc.get("displace", 0.03), size=atoms.positions.shape)
 
     @property
     def pauli(self) -> bool:
@@ -376,6 +397,13 @@ EXC = {"n": 6, "symmetry": "singlet", "solver": "Arpack", "state": 2, "excited_f
 EXC_FD = {**EXC, "solver": "Stratmann", "forces_fd": True}
 TOL_EXC_FD = {"forces": 1e-9}          # against differences of DFTB+'s full-precision E0 + w
 TOL_EXC = {**TOL_CASIDA, "exc_charges": 1e-7, "exc_dipole": 1e-7, "forces_dftbp": 1e-6}
+# SCC start and mixers (milestone M6f-1): the SCC iterations exactly, the SCC error of every
+# iteration relative to DFTB+'s 8 printed digits (where above 1e-7; round-off differences grow
+# to 3e-5 in the longest runs), a charge file's populations against pydftb's own run 1
+TOL_SCC = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "n_scc": 0,
+           "scc_errors": 1e-4, "charges_file": 1e-8}
+BROYDEN_WEIGHTS = {"kind": "broyden", "mixing": 0.3, "inverse_jacobi_weight": 0.02,
+                   "minimal_weight": 2.0, "maximal_weight": 1e4, "weight_factor": 0.05}
 
 
 def solvation_model(spec):
@@ -839,5 +867,87 @@ CASES = [
          scc_tol=1e-12, torch=False, tol={**TOL_EXC, **TOL_EXC_FD},
          note="energy window: DFTB+ solves the Z vector in the window only (its excited "
               "charges too)"),
+    # ---- M6f-1: SCC start and mixers (DFTB+ Mixer, InitialCharges, InitialSpins,
+    # ReadInitialCharges), NumPy only.  No long mixer histories on systems with few SCC
+    # sites: the history matrices of DIIS and Broyden become singular there (charge
+    # conservation) and both codes follow round-off (OH + U: 30 % after 8 iterations) ------
+    Case("h2o_mixer_simple", _water, mixer={"kind": "simple", "mixing": 0.3}, torch=False,
+         tol={**TOL_SCC, **TOL_DFTBP_FD}, note="simple mixing, beta = 0.3"),
+    Case("ch3oh_mixer_anderson", _meoh, mixer="anderson", torch=False, tol=TOL_SCC,
+         note="DFTB+'s Anderson mixer with its defaults"),
+    Case("cu4co_300K_mixer_anderson_dyn", _cu4co, filling=("fermi", 300.0),
+         mixer={"kind": "anderson", "generations": 6,
+                "dynamic_mixing": [(1e-2, 0.3), (1e-4, 0.6)]},
+         torch=False, tol=TOL_SCC, note="Generations 6, mixing parameter chosen by |F|"),
+    Case("water_box_mixer_diis", _water_box, mixer="diis", ewald_tolerance=1e-12, torch=False,
+         tol=TOL_SCC, note="DIIS defaults; with DFTB+'s Ewald tolerance 1e-9 the SCC errors "
+                           "differ by 1e-5"),
+    Case("o2_triplet_shell_mixer_diis_late", _o2, shell_resolved=True,
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
+         mixer={"kind": "diis", "use_from_start": False}, torch=False, tol=TOL_SCC,
+         note="collinear spin; DIIS once its history is full (UseFromStart = No)"),
+    Case("oh_noncolinear_mixer_anderson", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         mixer="anderson", torch=False, tol={**TOL_SCC, **TOL_PAULI},
+         note="the two-component (q, m) vector"),
+    Case("cu4co_plusu_mixer_diis", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, mixer="diis",
+         torch=False, tol={**TOL_SCC, **TOL_BLOCK}, note="the block vector of DFTB+U"),
+    Case("water_dimer_hdamp_mixer_anderson", _water_dimer, dftb3={"h_damping": 4.0},
+         mixer={"kind": "anderson", "generations": 6, "mixing": 0.3}, torch=False, tol=TOL_SCC,
+         note="the start of the MD case water_dimer_anderson_md (dynamics.py)"),
+    Case("cuo_chain_k422_broyden_weights", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         mixer=BROYDEN_WEIGHTS, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_SCC, "stress": 1e-9}, note="every Broyden option off its default"),
+    Case("h2co_initial_charges", _h2co, initial_charges=[0.4, -0.4, 0.1, -0.1], torch=False,
+         tol=TOL_SCC, note="AllAtomCharges: aufbau shell populations"),
+    Case("ch3oh_atom_charge_blocks", _meoh, initial_charges={0: 0.3, 1: -0.1, 2: -0.1},
+         torch=False, tol=TOL_SCC,
+         note="AtomCharge blocks summing to 0.1, not the total charge: DFTB+ warns and scales "
+              "the populations to the electron count"),
+    Case("cu4co_shell_initial_charges", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         initial_charges=[0.2, -0.2, 0.1, -0.1, 0.3, -0.3], torch=False, tol=TOL_SCC,
+         note="aufbau over the SKF shells s, p, d: Cu with 11.2 electrons starts as 4s2 4p6 3d3.2"),
+    Case("o2_triplet_initial_spins", _o2,
+         spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}, "initial_spins": {0: 1.5}},
+         torch=False, tol=TOL_SCC, note="AtomSpin on the first atom only"),
+    Case("o2_triplet_shell_initial_spins", _o2, shell_resolved=True,
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN, "initial_spins": [0.5, 1.5]},
+         torch=False, tol=TOL_SCC, note="spins shared over the shells by their populations"),
+    Case("cuo_chain_spin_k422_afm_start", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 0, "spin_constants": W_SPIN,
+               "initial_spins": [1.0, 0.0, -1.0, 0.0]},
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_SCC, "stress": 1e-9},
+         note="antiferromagnetic start without net spin: the Cu moments stay at +-0.14"),
+    Case("oh_radical_initial_charges_spins", _oh, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN, "initial_spins": [0.8, 0.2]},
+         initial_charges=[-0.3, 0.3], torch=False, tol=TOL_SCC),
+    # two runs: DFTB+ writes charges.bin (charges.dat) at displaced positions, then starts from it
+    Case("h2o_read_charges", _water, read_charges={"text": False}, torch=False,
+         tol={**TOL_SCC, **TOL_DFTBP_FD}),
+    Case("h2o_read_charges_text", _water, read_charges={"text": True}, torch=False,
+         tol={**TOL_SCC, **TOL_DFTBP_FD}, note="charges.dat (list-directed text)"),
+    Case("cu4co_shell_read_charges", _cu4co, filling=("fermi", 300.0), shell_resolved=True,
+         read_charges={"text": False}, torch=False, tol=TOL_SCC,
+         note="shell populations, each on the first orbital of its shell"),
+    Case("o2_triplet_read_charges", _o2,
+         spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}},
+         read_charges={"text": False}, torch=False, tol=TOL_SCC, note="(q, m) records"),
+    Case("oh_noncolinear_read_charges", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         read_charges={"text": False}, torch=False, tol={**TOL_SCC, **TOL_PAULI},
+         note="(q, mx, my, mz) records; run 2 has no InitialSpins (DFTB+ stops on them)"),
+    Case("cu4co_plusu_read_charges", _cu4co, filling=("fermi", 300.0), plus_u=U_CU,
+         read_charges={"text": False}, torch=False, tol={**TOL_SCC, **TOL_BLOCK},
+         note="orbital populations and the population blocks"),
+    Case("oh_noncolinear_soc_plusu_read_charges", _oh, filling=("fermi", 300.0),
+         noncolinear=NC_OH, spin_orbit={"xi": {"O": [0.0, 0.01]}}, plus_u=U_O,
+         read_charges={"text": False}, torch=False, tol={**TOL_SCC, **TOL_BLOCK},
+         note="imaginary blocks (dual spin-orbit coupling with +U)"),
+    Case("o2_triplet_plusu_read_charges_text", _o2,
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, plus_u=U_O,
+         read_charges={"text": True}, torch=False, tol={**TOL_SCC, **TOL_BLOCK},
+         note="(q, m) blocks in charges.dat"),
+    Case("cuo_chain_spin_k422_read_charges", _cuo_chain, kgrid=(4, 2, 2),
+         filling=("fermi", 500.0), spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
+         read_charges={"text": False}, ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_SCC, "stress": 1e-9}, note="periodic with spin"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

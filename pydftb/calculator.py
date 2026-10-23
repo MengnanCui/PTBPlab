@@ -50,7 +50,9 @@ from .constants import MIN_TEMP
 from .coulomb import Coulomb
 from .dispersion import DispersionTerms, element_of_label, make_dispersion
 from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_energies, shift_index
-from .mixer import make_mixer
+from . import dftbplus_io
+from .dftbplus_io import ChargeData
+from .mixer import make_mixer, mixer_spec
 from .occupations import Smearing
 from .neighbors import neighbor_list
 from .parallel import as_kthreads
@@ -123,6 +125,8 @@ class DFTBResult:
     excited_dipole: np.ndarray | None = None     # e Bohr
     q_out: np.ndarray | None = None      # output populations of the last iteration (the mixed
                                          # vector; what XL-BOMD propagates, M6e)
+    scc_errors: np.ndarray | None = None  # max |q_out - q_in| of every SCC iteration, DFTB+'s
+                                         # "SCC error" column (M6f); None without SCC
 
     @property
     def e_total(self) -> float:
@@ -248,6 +252,7 @@ class _SCCState:
     converged: bool
     error: float
     vs_orb: np.ndarray | None = None   # spin potential per orbital (+ for up, - for down)
+    errors: list | None = None         # max |q_out - q_in| of every SCC iteration (M6f)
 
 
 class DFTB:
@@ -264,7 +269,13 @@ class DFTB:
     smearing : spec       ("fermi", T) | ("gaussian", T) | ("mp", T, order) or
                           an :class:`~pydftb.occupations.Smearing`.  T < 1e-8 Ha
                           is raised to 1e-8 Ha like DFTB+.
-    mixer : str           "broyden" (DFTB+ default) or "pulay".
+    mixer : str | dict    DFTB+'s "broyden" (default), "simple", "anderson" or "diis" (exact
+                          ports, the same SCC iterations as DFTB+; milestone M6f), or "pulay"
+                          (pydftb's Pulay-type mixer, called "anderson" before M6f); a dict
+                          {"kind": ..., options} sets the options, named after DFTB+'s keywords
+                          (see :func:`pydftb.mixer.mixer_spec`).
+    mixing : float        the mixing parameter (DFTB+ ``MixingParameter``); None (default):
+                          DFTB+'s default for the mixer (0.2 Broyden, 0.05 Simple and Anderson).
     solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py).
     repulsive : str       "skf" (spline, else polynomial), "polynomial"
                           (DFTB+ ``PolynomialRepulsive = Yes``) or "none".
@@ -305,8 +316,18 @@ class DFTB:
     device : str          torch device ("cpu", "cuda", ...); torch backend only.
     dtype : str           "float64" (default) or "float32" (torch backend only: H, the
                           eigensolver and the densities in single precision).
-    initial_spins : (n_atom, 3)  initial magnetisation vector of every atom with
-                          ``spin="noncolinear"`` (DFTB+ ``InitialSpins``); default zero.
+    initial_spins : the initial spin of every atom (DFTB+ ``InitialSpins``): with collinear spin
+                          N_up - N_down per atom, (n_atom,) or {atom: spin} for some atoms (M6f;
+                          default: the total spin spread in proportion to the populations); with
+                          ``spin="noncolinear"`` the (n_atom, 3) magnetisation vectors (default
+                          zero).  Shared out over each atom's shells in proportion to their
+                          populations, as in DFTB+.
+    initial_charges : net charge of every atom at the start of the SCC (DFTB+ ``InitialCharges``,
+                          M6f), (n_atom,) or {atom: charge} (the others neutral): each atom's
+                          electrons fill its shells in order, at most 2(2l+1) each, then all
+                          populations are scaled to the electron count (DFTB+
+                          ``initQFromAtomChrg``); a sum other than ``charge`` warns.  Not used
+                          when ``q_init`` is given (as InitialCharges with ReadInitialCharges).
     spin_orbit : dict     type label -> spin-orbit constant xi (Hartree) of every shell, zero
                           for s shells (DFTB+ ``SpinOrbit``); types with only s shells may be
                           left out.  Two-component: with ``spin="noncolinear"`` or without
@@ -345,7 +366,7 @@ class DFTB:
     _excited_compat = frozenset()
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
-                 scc_tol: float = 1e-8, max_scc: int = 200, mixing: float = 0.2,
+                 scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
                  charge: float = 0.0, solver: str = "eigh", verbose: bool = False,
                  repulsive: str = "skf", smearing=None, mixer: str = "broyden",
                  warn_unconverged: bool = True, fd_delta: float | None = None,
@@ -359,7 +380,7 @@ class DFTB:
                  plus_u_functional: str = "fll", onsite_corrections: dict | None = None,
                  electric_field=None, point_charges=None, site_potentials: dict | None = None,
                  solvation=None, rescale_solvated_fields: bool = True, casida=None,
-                 force_evaluation: str = "traditional"):
+                 force_evaluation: str = "traditional", initial_charges=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -370,8 +391,10 @@ class DFTB:
             spin = False
             self._check_noncolinear(scc, spin_constants, solver, unpaired_electrons,
                                     relax_total_spin)
-        elif initial_spins is not None:
-            raise ValueError("initial_spins needs spin='noncolinear'")
+        elif initial_spins is not None and not spin:
+            raise ValueError("initial_spins needs spin polarisation (spin=True or 'noncolinear')")
+        if initial_charges is not None and not scc:
+            raise ValueError("initial_charges needs SCC")
         if spin_orbit is not None and spin:
             raise ValueError("spin-orbit coupling needs spin='noncolinear' or no spin "
                              "polarisation (as in DFTB+)")
@@ -406,6 +429,7 @@ class DFTB:
         self.max_scc = max_scc
         self.mixing = mixing
         self.mixer = mixer
+        mixer_spec(mixer, mixing)            # checked now (a new mixer for every SCC)
         self.charge = charge
         self.solver = solver
         self.verbose = verbose
@@ -423,6 +447,7 @@ class DFTB:
         self.k_threads = as_kthreads(k_threads)
         self.noncolinear = noncolinear
         self.initial_spins = initial_spins
+        self.initial_charges = initial_charges
         self.spin_orbit = None if spin_orbit is None else dict(spin_orbit)
         self.spin_orbit_dual = bool(spin_orbit_dual)
         if self.spin_orbit is not None:      # the types of this SK set (the rest at setup)
@@ -483,6 +508,9 @@ class DFTB:
         if self.backend.is_torch and self.casida is not None:
             raise ValueError("Casida excitations are implemented for the NumPy backend only "
                              "(milestone M6d)")
+        if self.backend.is_torch and self.numpy_only_options:
+            raise ValueError(f"{', '.join(self.numpy_only_options)}: implemented for the NumPy "
+                             "backend only (milestone M6f)")
         if self.backend.is_torch:
             if solver not in ("eigh", "batched"):
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
@@ -549,6 +577,25 @@ class DFTB:
                 or self.site_potentials is not None or self.solvation is not None)
 
     @property
+    def numpy_only_options(self) -> list[str]:
+        """The options of milestone M6f in use: NumPy engine only (not the torch backend or
+        :mod:`pydftb.autodiff`)."""
+        out = []
+        name, args = mixer_spec(self.mixer, self.mixing)
+        if name not in ("broyden", "pulay") or set(args) - {"alpha", "beta"}:
+            out.append(f"the {name} mixer with these options")
+        if self.initial_charges is not None:
+            out.append("initial_charges")
+        if self.spin and self.initial_spins is not None:
+            out.append("collinear initial_spins")
+        return out
+
+    @property
+    def _custom_start(self) -> bool:
+        """Whether the SCC starts from InitialCharges or collinear InitialSpins (M6f)."""
+        return self.initial_charges is not None or (self.spin and self.initial_spins is not None)
+
+    @property
     def kt(self) -> float:
         return self.smearing.kt
 
@@ -609,11 +656,18 @@ class DFTB:
         if relax:
             self._check_excited(periodic)
         setup = self._setup(species, positions, cell, pbc, need_derivs, timings)
+        if isinstance(q_init, ChargeData):               # a DFTB+ charge file (M6f)
+            if self.backend.is_torch:
+                raise ValueError("DFTB+ charge files are read with the NumPy backend only "
+                                 "(milestone M6f)")
+            q_init = self.populations_from_file(species, q_init)
         if scc_control is None:
             state = self._scc(setup, q_init, need_derivs, timings)
         else:
             state = self._scc(setup, q_init, need_derivs, timings, scc_control)
         res = self._energies(setup, state) if not xl else self._energies_xl(setup, state)
+        if state.errors is not None:
+            res.scc_errors = np.array(state.errors)
         rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()
@@ -643,6 +697,108 @@ class DFTB:
         timings["total"] = time.perf_counter() - t0
         res.timings = timings
         return res, setup, state
+
+    # ---- DFTB+ charge files (M6f) ----------------------------------------------------------
+    def _charge_layout(self, species):
+        """Basis, charge site of every orbital, channel representation ("q", "ud", "pauli")
+        and block terms (or None) of the mixing vector of these atoms."""
+        basis = Basis.build(species, self.sk)
+        site_of_orb = self._sites(basis)[0]
+        rep = "pauli" if self.pauli else "ud" if self.spin else "q"
+        block = None
+        if self.block_terms:
+            labels = list(dict.fromkeys(basis.species))
+            plus_u = (None if self.plus_u is None
+                      else blockpot.parse_plus_u(self.plus_u, self.sk, labels))
+            onsite = (None if self.onsite_corrections is None
+                      else blockpot.parse_onsite(self.onsite_corrections, self.sk, labels))
+            imaginary = self.pauli and self.spin_orbit is not None and self.spin_orbit_dual
+            block = blockpot.BlockTerms.build(basis, self.sk, rep, site_of_orb, plus_u,
+                                              self.plus_u_functional, onsite, imaginary)
+        return basis, np.asarray(site_of_orb), rep, block
+
+    def charge_data(self, species, result: DFTBResult) -> ChargeData:
+        """``result``'s input populations of the last SCC iteration (``q_in``, what DFTB+
+        writes) as a DFTB+ charge file (:func:`pydftb.dftbplus_io.write_charges`): every class
+        total on its first orbital, collinear spin as (q, m), blocks per atom."""
+        basis, site_of_orb, rep, block = self._charge_layout(species)
+        vec = np.asarray(result.q_in, float)
+        n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
+        blocks = iblocks = None
+        if block is not None:
+            q_orb, blk, skew = block.expand(vec)
+            blocks = self._atom_blocks(basis, block, blk)
+            iblocks = None if skew is None else self._atom_blocks(basis, block, skew)
+        else:
+            q_orb = np.zeros((n_chan, basis.norb))
+            if rep == "q":
+                first = np.unique(site_of_orb, return_index=True)[1]
+                q_orb[0, first] = vec
+            else:
+                first = np.unique(basis.orb_shell, return_index=True)[1]
+                q_orb[:, first] = vec.reshape(n_chan, -1)
+        if rep == "ud":                     # DFTB+ writes charge and magnetisation
+            q_orb = np.stack([q_orb[0] + q_orb[1], q_orb[0] - q_orb[1]])
+            blocks = None if blocks is None else [np.stack([b[0] + b[1], b[0] - b[1]])
+                                                  for b in blocks]
+        return ChargeData(q_orb, np.asarray(basis.norb_atom, int), blocks, iblocks)
+
+    @staticmethod
+    def _atom_blocks(basis: Basis, block, per_block) -> list:
+        """Blocks of every atom (zero for atoms without block terms)."""
+        out = [np.zeros((block.n_chan, int(n), int(n))) for n in basis.norb_atom]
+        for k, a in enumerate(block.atoms):
+            out[int(a)] = np.array(per_block[k])
+        return out
+
+    def populations_from_file(self, species, data, skip_charge_test: bool = False,
+                              text: bool | None = None) -> np.ndarray:
+        """The mixing vector (``q_init``) of a DFTB+ charge file (a :class:`ChargeData` or a
+        path), as DFTB+ ``ReadInitialCharges`` takes it: populations summed over every class;
+        DFTB+'s checks of the spin channels, checksums (1e-7), electron count and collinear
+        magnetisation (1e-3; not with ``skip_charge_test``, DFTB+ ``SkipChargeTest``)."""
+        basis, site_of_orb, rep, block = self._charge_layout(species)
+        if not isinstance(data, ChargeData):
+            data = dftbplus_io.read_charges(data, basis.norb_atom, text)
+        n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
+        if data.n_spin != n_chan:
+            raise ValueError(f"the charge file has {data.n_spin} spin channels, this calculation "
+                             f"{n_chan} (DFTB+: 'Incorrect number of spins in restart file')")
+        if data.q.shape[1] != basis.norb or not np.array_equal(
+                np.asarray(data.norb_atom)[:len(basis.norb_atom)], basis.norb_atom):
+            raise ValueError("the charge file's orbitals do not match the atoms")
+        if data.checksum is not None and np.any(np.abs(data.checksum - data.sums()) > dftbplus_io.CHECKSUM_TOL):
+            raise ValueError("the charge file's checksums do not match its populations "
+                             "(DFTB+: 'internal checksum failure, probably a damaged file')")
+        if not skip_charge_test:
+            nelec = float(self._sites(basis)[3].sum()) - self.charge
+            if abs(nelec - data.q[0].sum()) >= dftbplus_io.ELECTRON_TOL:
+                raise ValueError(f"the charge file has {data.q[0].sum():.6f} electrons instead of "
+                                 f"{nelec:.6f} (as DFTB+; skip_charge_test to accept it)")
+            if rep == "ud" and abs(data.q[1].sum() - self.unpaired_electrons) >= dftbplus_io.ELECTRON_TOL:
+                raise ValueError(f"the charge file has a magnetisation of {data.q[1].sum():.6f} "
+                                 f"instead of {self.unpaired_electrons:.6f} (as DFTB+)")
+        q = np.array(data.q, float)
+        blocks = None if data.blocks is None else [np.array(b, float) for b in data.blocks]
+        if rep == "ud":                     # (q, m) -> (up, down)
+            q = np.stack([0.5 * (q[0] + q[1]), 0.5 * (q[0] - q[1])])
+            if blocks is not None:
+                blocks = [np.stack([0.5 * (b[0] + b[1]), 0.5 * (b[0] - b[1])]) for b in blocks]
+        if block is not None:
+            blk = [np.zeros((n_chan, sl.stop - sl.start, sl.stop - sl.start))
+                   for sl in block.slices]
+            skew = [np.zeros_like(b) for b in blk] if block.imaginary else None
+            for k, a in enumerate(block.atoms):
+                if blocks is not None:
+                    blk[k] = blocks[int(a)]
+                if skew is not None and data.iblocks is not None:
+                    skew[k] = np.array(data.iblocks[int(a)], float)
+            return block.reduce(q, blk, skew)
+        if rep == "q":
+            return np.bincount(site_of_orb, weights=q[0], minlength=int(site_of_orb.max()) + 1)
+        nsh = len(basis.shell_l)
+        return np.concatenate([np.bincount(basis.orb_shell, weights=q[c], minlength=nsh)
+                               for c in range(n_chan)])
 
     # ---- linear response (M6d) ----------------------------------------------------------
     def _excitations(self, st: _Setup, sc: _SCCState, res: DFTBResult):
@@ -1042,6 +1198,8 @@ class DFTB:
         every shell also gets m = q * (N_up - N_down) / N (DFTB+ initializeCharges)."""
         if st.block is not None:
             return self._initial_block_vector(st)
+        if self._custom_start:                   # InitialCharges / InitialSpins (M6f)
+            return self._custom_initial_populations(st)
         scale = st.nelec / st.q0.sum() if st.q0.sum() > 0 else 1.0
         if st.pauli is not None:
             # two-component: [q, m_x, m_y, m_z] per shell; an atom's initial spin vector is
@@ -1061,12 +1219,54 @@ class DFTB:
         m = q * (st.spin.n_up - st.spin.n_down) / st.nelec
         return np.concatenate([0.5 * (q + m), 0.5 * (q - m)])
 
+    def _custom_shell_populations(self, st: _Setup):
+        """Shell populations q and magnetisations m of DFTB+'s start with InitialCharges or
+        InitialSpins (initializeCharges): the initial charges fill the shells (else the reference
+        occupations), all scaled to the electron count; an atom's spin (collinear) or spin vector
+        (two-component) is shared out in proportion to its shells' populations.  m is None
+        without spin, (n_shell,) collinear, (3, n_shell) two-component."""
+        b = st.basis
+        natom = len(st.species)
+        occ = np.array([self.sk.occupation[b.species[a]][l]
+                        for a, l in zip(b.shell_atom, b.shell_l)])
+        if self.initial_charges is not None:
+            charges = _per_atom(self.initial_charges, natom, "initial_charges")
+            if abs(charges.sum() - self.charge) > 1e-4:
+                warnings.warn(f"the initial charges sum to {charges.sum():g}, not the total "
+                              f"charge {self.charge:g}: the initial populations are rescaled "
+                              "(as in DFTB+)", RuntimeWarning, stacklevel=4)
+            q = _aufbau_shell_populations(b, occ, charges)
+        else:
+            q = occ
+        q = q * (st.nelec / q.sum())
+        q_atom = ops.segment_sum(q, b.shell_atom, natom)[b.shell_atom]
+        share = np.divide(q, q_atom, out=np.zeros_like(q), where=q_atom != 0)
+        if st.pauli is not None:
+            return q, st.pauli.spins[b.shell_atom].T * share
+        if st.spin is None:
+            return q, None
+        if self.initial_spins is not None:
+            return q, _per_atom(self.initial_spins, natom, "initial_spins")[b.shell_atom] * share
+        return q, q * (st.spin.n_up - st.spin.n_down) / st.nelec
+
+    def _custom_initial_populations(self, st: _Setup) -> np.ndarray:
+        """The mixed vector of :meth:`_custom_shell_populations` (M6f)."""
+        q, m = self._custom_shell_populations(st)
+        if st.pauli is not None:
+            return np.concatenate([q, m.ravel()])
+        if st.spin is None:
+            return q if self.sk.shell_resolved else ops.segment_sum(q, st.basis.shell_atom,
+                                                                    len(st.species))
+        return np.concatenate([0.5 * (q + m), 0.5 * (q - m)])
+
     def _initial_block_vector(self, st: _Setup) -> np.ndarray:
         """The start of a block-potential SCC (M6b): every shell's population (and spin,
         as without blocks) spread evenly over its orbitals; the blocks are diagonal, so their
         mixed elements are zero (DFTB+ initializeCharges)."""
         b, blk = st.basis, st.block
-        if blk.rep == "q":
+        if blk.rep == "q" and self._custom_start:
+            shell = self._custom_shell_populations(st)[0][None]
+        elif blk.rep == "q":
             scale = st.nelec / st.q0.sum() if st.q0.sum() > 0 else 1.0
             shell = scale * np.array([self.sk.occupation[b.species[a]][l]
                                       for a, l in zip(b.shell_atom, b.shell_l)])[None]
@@ -1297,6 +1497,7 @@ class DFTB:
         if control is not None:
             min_iter, max_iter, tol = control.min_iter, control.max_iter, control.tol
         h0 = self._with_net(st, st.h0)          # net site potentials (M6c)
+        errors = []
         for nit in range(1, max_iter + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
             if st.block is not None:
@@ -1321,6 +1522,7 @@ class DFTB:
             if not self.scc:
                 break
             diff = np.abs(q_out - q_in).max()
+            errors.append(float(diff))
             if self.verbose:
                 print(f"SCC {nit:3d}  max dq = {diff:.3e}")
             if diff < tol and nit >= min_iter:
@@ -1346,7 +1548,7 @@ class DFTB:
                           f"(max |dq| = {diff:.2e} > {self.scc_tol:.1e}); returning the last "
                           "iteration's results", RuntimeWarning, stacklevel=3)
         return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
-                         converged, diff, vs_orb)
+                         converged, diff, vs_orb, errors if self.scc else None)
 
     def _energies_pauli(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         """Energies and populations of a two-component calculation (from the last output,
@@ -1696,3 +1898,37 @@ class DFTB:
             grad = ops.scatter_add(grad, j, g)
             w += g.T @ vec
         return grad, w
+
+
+def _per_atom(values, natom: int, name: str) -> np.ndarray:
+    """One number per atom from an (n_atom,) sequence or {atom: value} (others zero)."""
+    if isinstance(values, dict):
+        out = np.zeros(natom)
+        for a, v in values.items():
+            if not 0 <= int(a) < natom:
+                raise ValueError(f"{name}: no atom {a} (0-based, {natom} atoms)")
+            out[int(a)] = float(v)
+        return out
+    out = np.asarray(values, float)
+    if out.shape != (natom,):
+        raise ValueError(f"{name} needs one value per atom ({natom}), not shape {out.shape}")
+    return out
+
+
+def _aufbau_shell_populations(basis: Basis, occupation: np.ndarray, charges) -> np.ndarray:
+    """DFTB+'s initQFromAtomChrg: atom A's N_A = sum of its reference shell occupations minus
+    its charge fill its shells in order, at most 2(2l+1) electrons each."""
+    q = np.zeros(len(basis.shell_l))
+    for a in range(len(basis.species)):
+        shells = np.flatnonzero(basis.shell_atom == a)
+        left = occupation[shells].sum() - charges[a]
+        for sh in shells:
+            fill = min(left, 2.0 * (2 * basis.shell_l[sh] + 1))
+            q[sh] = fill
+            left -= fill
+            if left <= 0.0:
+                break
+        if left > 1e-4:
+            raise ValueError(f"not enough orbitals on {basis.species[a]!r} (atom {a}) to hold "
+                             f"the initial charge {charges[a]:g} (as in DFTB+)")
+    return q

@@ -11,6 +11,7 @@ results, so the offline check is reproducible without DFTB+.
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -72,7 +73,10 @@ def _inputs(case: Case) -> dict:
     k = case.kpoints() if periodic else None
     base = case.typed or {}
     disp = case.dispersion(list(labels)) if callable(case.dispersion) else case.dispersion
-    return {
+    extra = {}
+    if case.read_charges is not None:       # M6f-1: run 1's geometry (the file is added later)
+        extra["run1_positions_angstrom"] = case.run1_positions(atoms).tolist()
+    return extra | {
         "labels": list(labels),
         "positions_angstrom": atoms.positions.tolist(),
         "cell_angstrom": atoms.cell.array.tolist() if periodic else None,
@@ -138,15 +142,41 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     backend=backend, device=device, dtype=dtype,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
                     **pauli_options(case, labels), **block_options(case, labels),
-                    **environment_options(case), **casida_options(case, casida_solver))
+                    **environment_options(case), **casida_options(case, casida_solver),
+                    **scc_start_options(case))
+        q_init = options.pop("q_init", None)
         calc = DFTB(sk, **{**opts, **options})
+        if q_init is None and case.read_charges is not None and "charges_file" in inp:
+            q_init = charge_file_data(inp, calc._charge_layout(labels)[0].norb_atom)
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
-                             np.ones(3, bool) if periodic else None)
+                             np.ones(3, bool) if periodic else None, q_init=q_init)
         return (res, calc) if engine else res
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def scc_start_options(case: Case) -> dict:
+    """:class:`pydftb.DFTB` options of an M6f-1 case: mixer and initial charges (initial
+    spins are in the spin dict)."""
+    out = {}
+    if case.mixer is not None:
+        out["mixer"] = case.mixer
+    if case.initial_charges is not None:
+        out["initial_charges"] = case.initial_charges
+    return out
+
+
+def charge_file_data(inp: dict, norb_atom):
+    """The DFTB+ charge file frozen in a ``read_charges`` case's input (M6f-1)."""
+    from ..dftbplus_io import read_charges
+    text = bool(inp.get("charges_text"))
+    with tempfile.TemporaryDirectory(prefix="pydftb_charges_") as tmp:
+        path = os.path.join(tmp, "charges.dat" if text else "charges.bin")
+        with open(path, "wb") as fh:
+            fh.write(base64.b64decode(inp["charges_file"]))
+        return read_charges(path, norb_atom, text=text)
 
 
 def pauli_options(case: Case, labels) -> dict:
@@ -261,7 +291,9 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                  + dftbplus.spinorbit_block(case.spin_orbit, {lab: inp["max_l"][lab] + 1
                                                               for lab in inp["max_l"]})
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
-                 + block_hsd(case, inp) + environment_hsd(case))
+                 + block_hsd(case, inp) + environment_hsd(case)
+                 + dftbplus.mixer_block(case.mixer)
+                 + dftbplus.initial_charges_block(case.initial_charges))
         if case.casida and case.casida.get("spin_constants") and not case.spin:
             extra += dftbplus.spin_constants_block(case.casida["spin_constants"],
                                                    set(inp["labels"]))
@@ -276,6 +308,10 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                   scc_tol=case.scc_tol, threads=threads, charge=case.charge,
                   **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
                       "autotest": True} if case.casida else {}))
+        if case.read_charges is not None:             # M6f-1: two runs
+            return dftbplus.run_restart(args[0], np.array(inp["run1_positions_angstrom"]),
+                                        args[1], args[2],
+                                        text=bool(case.read_charges.get("text")), **kw)
         if not (case.klines or case.regions or case.dp_dos):
             return dftbplus.run(*args, **kw)
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
@@ -398,6 +434,9 @@ def regenerate(names=None, threads: int = 1):
             continue
         inp = _inputs(case)
         ref = run_dftbplus(case, inp, threads)
+        if case.read_charges is not None:   # the file run 2 started from is part of its input
+            inp["charges_file"] = ref["charges_file"]
+            inp["charges_text"] = bool(case.read_charges.get("text"))
         doc = {
             "schema": SCHEMA,
             "case": case.name,
@@ -418,7 +457,10 @@ def regenerate(names=None, threads: int = 1):
                              "solvation": case.solvation, "rescale_fields": case.rescale_fields,
                              "charge": case.charge} if case.environment else {}),
                          **({"casida": case.casida, "charge": case.charge}
-                            if case.casida else {})},
+                            if case.casida else {}),
+                         **({"mixer": case.mixer, "initial_charges": case.initial_charges,
+                             "read_charges": case.read_charges, "charge": case.charge}
+                            if case.scc_start else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -437,7 +479,9 @@ def regenerate(names=None, threads: int = 1):
                                                         "e_ls", "e_3rd", "spins")
                           or case.casida and k in ("exc_energies", "exc_symmetries",
                                                    "exc_rows", "spx_rows", "excitation_energy",
-                                                   "e_spin", "spins")},
+                                                   "e_spin", "spins")
+                          or case.scc_start and k in ("scc_errors", "run1", "e_spin", "spins",
+                                                      "e_3rd", "e_plus_u", "e_onsite")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -537,6 +581,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         dev.update(_compare_casida(ref, res))
         dev.update(_compare_excited(case, inp, ref, res, sk_q0, solver=solver, fd_delta=fd_delta,
                                     casida_solver=casida_solver, **backend))
+    if case.scc_start:
+        dev.update(_compare_scc_start(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
+                                      **backend))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -546,10 +593,37 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
           and all(dev[k] <= tol[k] for k in ("spins", "moments", "orbital", "pc_forces",
                                               "dipole", "exc", "exc_osc", "exc_tdip",
                                               "exc_table", "spx", "exc_state", "exc_charges",
-                                              "exc_dipole", "forces_dftbp") if k in dev))
+                                              "exc_dipole", "forces_dftbp", "n_scc",
+                                              "scc_errors", "charges_file") if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
+
+
+SCC_ERROR_FLOOR = 1e-7       # M6f-1: printed SCC errors compared above this (8 digits printed)
+
+
+def _compare_scc_start(case: Case, inp: dict, ref: dict, res, **run) -> dict:
+    """Deviations of an M6f-1 case: the SCC iterations (exactly), the SCC error of every
+    iteration (relative, where DFTB+'s printed error exceeds ``SCC_ERROR_FLOOR``), collinear
+    moments, and for a charge file that its class populations are pydftb's own input
+    populations of run 1."""
+    dev = {"n_scc": abs(int(res.n_scc) - int(ref["n_scc"]))}
+    t, e = np.array(ref["scc_errors"]), np.asarray(res.scc_errors)
+    n = min(len(t), len(e))
+    keep = t[:n] > SCC_ERROR_FLOOR
+    dev["scc_errors"] = (float((np.abs(e[:n] - t[:n]) / t[:n])[keep].max()) if keep.any()
+                         else 0.0)
+    if "spins" in ref and not (case.pauli or case.block):     # collinear moments
+        dev["spins"] = float(np.abs(res.magmoms - np.ravel(ref["spins"])).max())
+    if case.read_charges is not None:
+        inp1 = {k: v for k, v in inp.items() if k != "charges_file"}
+        inp1["positions_angstrom"] = inp["run1_positions_angstrom"]
+        r1, calc = run_pydftb(case, inp1, engine=True, **run)
+        data = charge_file_data(inp, calc._charge_layout(inp["labels"])[0].norb_atom)
+        dev["charges_file"] = float(np.abs(calc.populations_from_file(inp["labels"], data)
+                                           - r1.q_in).max())
+    return dev
 
 
 G_FACTOR = 2.00231930436153  # DFTB+ gfac: detailed.out prints -g/4 m as the spin momentum
@@ -762,7 +836,7 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             continue
         if backend.get("backend") == "torch" and not case.torch:
             print(f"{case.name:26s} skipped: NumPy-only physics (M6a two-component, M6b blocks, "
-                  "M6c environment, M6d excitations)")
+                  "M6c environment, M6d excitations, M6f SCC start and mixers)")
             continue
         r = compare(doc, solver, casida_solver=casida_solver, **backend)
         d = r["dev"]
@@ -785,6 +859,10 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
                   f"{d['forces_dftbp']:.1e}; " if "forces_dftbp" in d else "")
             print(f"{'':26s}   Excited: {fd}|dq_ex| {d['exc_charges']:.1e} e, "
                   f"|dmu_ex| {d['exc_dipole']:.1e} e Bohr")
+        if "scc_errors" in d:                             # M6f-1: the SCC path
+            cf = (f", charge file vs run 1 {d['charges_file']:.1e} e" if "charges_file" in d
+                  else "")
+            print(f"{'':26s}   SCC: errors per iteration (relative) {d['scc_errors']:.1e}{cf}")
     return all_ok
 
 

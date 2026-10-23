@@ -15,7 +15,11 @@
 | Slater-Koster 变换（旋转） | SKF 里存的是“两个原子沿 z 轴排列”时的数值，计算时要按实际成键方向转过去。 |
 | 对角化 / 本征分解 | 从 H、S 中解出电子能级的标准数学操作，计算量随矩阵边长的三次方增长。 |
 | SCC（电荷自洽） | 电子分布和电荷互相影响，需要反复迭代直到不再变化，一般 10–20 轮。 |
-| 混合器（Pulay / Anderson / Broyden） | 让电荷自洽更快收敛的技巧：把前几轮的结果加权组合，猜出下一轮的输入。DFTB+ 默认用改进 Broyden。 |
+| 混合器（Simple / Anderson / DIIS / Broyden / Pulay） | 让电荷自洽更快收敛的技巧：把前几轮的结果加权组合，猜出下一轮的输入。Simple 只按固定比例走一步；Anderson、DIIS、Broyden 用前几轮的“输入—输出差”外推。DFTB+ 默认用改进 Broyden，四种都已逐轮照抄（M1、M6f-1）；Pulay 是 pydftb 原有的一种，M6f 前叫 "anderson"。 |
+| SCC 误差（SCC error） | 每轮 SCC 输出与输入布居之差的最大绝对值，DFTB+ 在每轮打印它，小于容差就算收敛。pydftb 的 `DFTBResult.scc_errors` 是同一个量，M6f-1 起逐轮与 DFTB+ 对照。 |
+| 初始电荷 / 初始自旋 | SCC 的起点。DFTB+ 的 `InitialCharges` 给每个原子一个净电荷，电子按壳层顺序逐层填满（aufbau），不是平均分；`InitialSpins` 给每个原子一个自旋，按壳层的布居比例分下去。只影响收敛的快慢，不影响解（除非体系有几个解，例如铁磁和反铁磁）。 |
+| 电荷重启文件（charges.bin / charges.dat） | DFTB+ 把最后一轮的输入布居写到这个文件，下一次计算用 `ReadInitialCharges` 从它开始。`.bin` 是 Fortran 的二进制流，`.dat` 是同样内容的文本。pydftb 读写两种格式，文本与 DFTB+ 写的逐字节相同（M6f-1）。 |
+| list-directed 输出 | Fortran 用 `write(unit, *)` 写数时的默认格式，每个编译器自己决定宽度和位数。DFTB+ 的 charges.dat 就是这样写的；gfortran 给实数 17 位有效数字，所以文本文件能无损地还原二进制的值。 |
 | Hubbard U | 原子多容纳一个电子要付出的能量代价，从 SKF 中读取。 |
 | γ（gamma）函数 | 描述两个原子上的多余电荷之间相互作用强度的函数。距离远时趋于 1/R，距离近时由 U 决定。 |
 | Ewald 求和 | 计算晶体中无穷远静电相互作用的标准方法。 |

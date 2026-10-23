@@ -157,6 +157,10 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     if getattr(calc, "force_evaluation", "traditional") != "traditional":
         raise NotImplementedError("pydftb.autodiff does not support the dynamics force "
                                   "evaluations of XL-BOMD: NumPy engine only (milestone M6e)")
+    if getattr(calc, "numpy_only_options", None):
+        raise NotImplementedError(f"pydftb.autodiff does not support "
+                                  f"{', '.join(calc.numpy_only_options)}: NumPy engine only "
+                                  "(milestone M6f)")
     if params is None:
         params = Params.from_skset(calc.sk, calc.repulsive, calc.hubbard_derivs,
                                    calc.spin_constants)

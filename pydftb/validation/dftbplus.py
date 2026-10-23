@@ -30,6 +30,7 @@ Notes on matching DFTB+ exactly:
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
@@ -120,11 +121,69 @@ def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     by_shell = shell_resolved_scc or any(v.size > 1 for v in consts.values())
     lines = ["  SpinPolarisation = Colinear {",
              f"    UnpairedElectrons = {_f(opts.get('unpaired_electrons', 0.0))}",
-             f"    RelaxTotalSpin = {'Yes' if opts.get('relax_total_spin') else 'No'}",
-             "  }", "  SpinConstants {"]
+             f"    RelaxTotalSpin = {'Yes' if opts.get('relax_total_spin') else 'No'}"]
+    if opts.get("initial_spins") is not None:          # M6f
+        lines.append(initial_spins_block(opts["initial_spins"]).rstrip("\n"))
+    lines += ["  }", "  SpinConstants {"]
     if not shell_resolved_scc:
         lines.append(f"    ShellResolvedSpin = {'Yes' if by_shell else 'No'}")
     lines += [f"    {k} = {' '.join(_f(x) for x in v.ravel())}" for k, v in consts.items()]
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def initial_spins_block(spins, indent: str = "    ") -> str:
+    """HSD ``InitialSpins`` of collinear spin (M6f): a list (``AllAtomSpins``) or {atom
+    (0-based): spin} (one ``AtomSpin`` each)."""
+    if isinstance(spins, dict):
+        body = "".join(f"{indent}  AtomSpin = {{\n{indent}    Atoms = {int(a) + 1}\n"
+                       f"{indent}    SpinPerAtom = {_f(v)}\n{indent}  }}\n"
+                       for a, v in spins.items())
+    else:
+        body = f"{indent}  AllAtomSpins = {{ {' '.join(_f(v) for v in spins)} }}\n"
+    return f"{indent}InitialSpins = {{\n{body}{indent}}}\n"
+
+
+def initial_charges_block(charges) -> str:
+    """HSD ``InitialCharges`` (M6f): a list (``AllAtomCharges``) or {atom (0-based): charge}
+    (one ``AtomCharge`` each)."""
+    if charges is None:
+        return ""
+    if isinstance(charges, dict):
+        body = "".join(f"    AtomCharge = {{\n      Atoms = {int(a) + 1}\n"
+                       f"      ChargePerAtom = {_f(v)}\n    }}\n" for a, v in charges.items())
+    else:
+        body = f"    AllAtomCharges = {{ {' '.join(_f(v) for v in charges)} }}\n"
+    return f"  InitialCharges = {{\n{body}  }}\n"
+
+
+_MIXER_NAMES = {"broyden": "Broyden", "simple": "Simple", "anderson": "Anderson", "diis": "DIIS"}
+_MIXER_KEYS = {"mixing": "MixingParameter", "inverse_jacobi_weight": "InverseJacobiWeight",
+               "minimal_weight": "MinimalWeight", "maximal_weight": "MaximalWeight",
+               "weight_factor": "WeightFactor", "generations": "Generations",
+               "init_mixing": "InitMixingParameter", "dynamic_mixing": "DynMixingParameters",
+               "diagonal_rescaling": "DiagonalRescaling", "use_from_start": "UseFromStart"}
+
+
+def mixer_block(spec) -> str:
+    """HSD ``Mixer`` for pydftb's ``mixer`` option (M6f): a name, or a dict with "kind",
+    "mixing" and options in pydftb's names (:func:`pydftb.mixer.mixer_spec`)."""
+    if spec is None:
+        return ""
+    opts = dict(spec) if isinstance(spec, dict) else {"kind": spec}
+    kind = str(opts.pop("kind", "broyden")).lower()
+    lines = [f"  Mixer = {_MIXER_NAMES[kind]} {{"]
+    for key, val in opts.items():
+        name = _MIXER_KEYS[key]
+        if key == "dynamic_mixing":
+            rows = "\n".join(f"      {_f(t)} {_f(a)}" for t, a in val)
+            lines.append(f"    {name} = {{\n{rows}\n    }}")
+        elif isinstance(val, bool):
+            lines.append(f"    {name} = {'Yes' if val else 'No'}")
+        elif isinstance(val, int):
+            lines.append(f"    {name} = {val}")
+        else:
+            lines.append(f"    {name} = {_f(val)}")
     lines.append("  }")
     return "\n".join(lines) + "\n"
 
@@ -484,9 +543,10 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
              read_charges=False, convergent_only=True, extra_analysis="", driver="",
-             extra_top="", forces=True, autotest=False) -> str:
+             extra_top="", forces=True, autotest=False, extra_options="") -> str:
     """The HSD input.  ``extra_top``: further top-level blocks (e.g. ``ExcitedState``);
-    ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d)."""
+    ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d);
+    ``extra_options``: lines of the Options block (M6f)."""
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
     kblock = ""
     if periodic and klines is not None:
@@ -531,7 +591,7 @@ Analysis {{
 Options {{
   WriteDetailedOut = Yes
   WriteResultsTag = Yes
-{"  WriteAutotestTag = Yes" + chr(10) if autotest else ""}  TimingVerbosity = {2 if timing else 0}
+{"  WriteAutotestTag = Yes" + chr(10) if autotest else ""}{extra_options}  TimingVerbosity = {2 if timing else 0}
 }}
 ParserOptions {{
   ParserVersion = {PARSER_VERSION}
@@ -715,9 +775,10 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
         convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
-        autotest=False) -> dict:
+        autotest=False, extra_options="") -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
-    (n_spin, n_k, n_level)), metadata."""
+    (n_spin, n_k, n_level)), metadata; ``scc_errors``: the "SCC error" of every iteration
+    as printed (M6f)."""
     if not available():
         raise FileNotFoundError("dftb+ binary not found; set $DFTBPLUS")
     own_dir = workdir is None
@@ -728,7 +789,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
                        klines, read_charges, convergent_only, extra_analysis, driver,
-                       extra_top, forces, autotest)
+                       extra_top, forces, autotest, extra_options)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
@@ -737,7 +798,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         wall = time.perf_counter() - t0
         if p.returncode != 0:
             raise RuntimeError(p.stdout[-3000:] + p.stderr[-3000:])
-        det = open(os.path.join(workdir, "detailed.out")).read()
+        with open(os.path.join(workdir, "detailed.out")) as fh:
+            det = fh.read()
         tag = parse_results_tag(os.path.join(workdir, "results.tag"))
         res = {"wall": wall, "hsd": hsd, "stdout": p.stdout, "dir": workdir}
         for key, name in [("energy", "Total energy"), ("free_energy", "Total Mermin free energy"),
@@ -780,6 +842,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         iters = re.findall(r"^[ \t]+(\d+)[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]*$",
                            p.stdout, re.M)
         res["n_scc"] = int(iters[-1]) if iters else (1 if not scc else None)
+        res["scc_errors"] = [float(x) for x in re.findall(
+            r"^[ \t]+\d+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+([-\d.E+]+)[ \t]*$", p.stdout, re.M)]
         if driver:
             res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", p.stdout))
             res["converged_geometry"] = "Geometry converged" in p.stdout
@@ -793,6 +857,35 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
     finally:
         if own_dir and not keep:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_restart(labels, pos1_ang, pos2_ang, cell_ang=None, text: bool = False,
+                extra_ham: str = "", **kw) -> dict:
+    """DFTB+ ``ReadInitialCharges`` (M6f): run 1 at ``pos1_ang`` writes charges.bin
+    (charges.dat with ``text``), run 2 at ``pos2_ang`` starts from it.  Returns run 2's
+    results with the bytes of run 1's file (``charges_file``, base64) and run 1's energy and
+    SCC iterations (``run1``).  DFTB+ does not read initial spins when it reads charges (and
+    stops at the unread block), so run 2's input has none."""
+    workdir = tempfile.mkdtemp(prefix="dftbp_restart_")
+    try:
+        dirs = [os.path.join(workdir, d) for d in ("run1", "run2")]
+        for d in dirs:
+            os.makedirs(d)
+        fname = "charges.dat" if text else "charges.bin"
+        r1 = run(labels, pos1_ang, cell_ang, workdir=dirs[0], extra_ham=extra_ham,
+                 extra_options="  WriteChargesAsText = Yes\n" if text else "", **kw)
+        with open(os.path.join(dirs[0], fname), "rb") as fh:
+            blob = fh.read()
+        with open(os.path.join(dirs[1], fname), "wb") as fh:
+            fh.write(blob)
+        ham2 = re.sub(r"^( *)InitialSpins (= )?\{\n(?:.*\n)*?\1\}\n", "", extra_ham, flags=re.M)
+        r2 = run(labels, pos2_ang, cell_ang, workdir=dirs[1], extra_ham=ham2, read_charges=True,
+                 extra_options="  ReadChargesAsText = Yes\n" if text else "", **kw)
+        r2["charges_file"] = base64.b64encode(blob).decode()
+        r2["run1"] = {"energy": r1["energy"], "n_scc": r1["n_scc"]}
+        return r2
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def dp_dos(args, infile, workdir) -> np.ndarray:

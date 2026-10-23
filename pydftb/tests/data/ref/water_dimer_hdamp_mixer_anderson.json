@@ -1,0 +1,183 @@
+{
+ "schema": 1,
+ "case": "water_dimer_hdamp_mixer_anderson",
+ "note": "the start of the MD case water_dimer_anderson_md (dynamics.py)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": {
+   "h_damping": 4.0
+  },
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "mixer": {
+   "kind": "anderson",
+   "generations": 6,
+   "mixing": 0.3
+  },
+  "initial_charges": null,
+  "read_charges": null,
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H",
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.06762102815201425,
+    -0.01863749482163331,
+    0.12057480654714338
+   ],
+   [
+    0.016300651319860315,
+    0.7316820788549705,
+    -0.47696437708376205
+   ],
+   [
+    -3.5615434317254514e-05,
+    -0.8334279722538168,
+    -0.43634067977346025
+   ],
+   [
+    0.32401994063678197,
+    0.07498284104132961,
+    3.012400069552171
+   ],
+   [
+    0.32021197496787007,
+    0.8527847433923341,
+    2.413243036853098
+   ],
+   [
+    0.24187034350036835,
+    -0.6410557875243245,
+    2.4279082362114814
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_5m0g8gnx/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  HCorrection = Damping { Exponent = 4.0 }\n  Mixer = Anderson {\n    Generations = 6\n    MixingParameter = 0.3\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -7.8353041206,
+  "free_energy": -7.8353041206,
+  "e_zero": -7.8353041206,
+  "e_rep": 0.1107478135,
+  "e_scc": 0.0440864629,
+  "e_band": -7.9901383969,
+  "fermi": -0.0221159724058423,
+  "forces": [
+   [
+    0.0105491423013916,
+    -0.0214313501603589,
+    0.105981574915932
+   ],
+   [
+    -0.00560202378958612,
+    0.0652350966980537,
+    -0.062935648476649
+   ],
+   [
+    -0.00466919114666225,
+    -0.0438351623763849,
+    -0.0400800566416677
+   ],
+   [
+    0.0129994525690399,
+    0.0511024823962545,
+    0.135839376027369
+   ],
+   [
+    -0.00100445058040472,
+    0.0479992581686684,
+    -0.0467772479626664
+   ],
+   [
+    -0.0122729293537784,
+    -0.0990703247262329,
+    -0.0920279978623173
+   ]
+  ],
+  "charges_net": [
+   -0.659515442745099,
+   0.336354732226825,
+   0.324528467300561,
+   -0.667499584750084,
+   0.319763099427245,
+   0.346368728540546
+  ],
+  "n_scc": 14,
+  "scc_errors": [
+   0.93498989,
+   0.92201261,
+   0.0263754,
+   0.01658492,
+   0.014345075,
+   0.0014016116,
+   0.001452301,
+   9.2376603e-05,
+   2.0115286e-05,
+   5.7701152e-07,
+   3.1639465e-07,
+   4.2255694e-08,
+   9.4870659e-09,
+   5.3885785e-12
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "charges_file": 1e-08
+ }
+}

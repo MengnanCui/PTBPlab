@@ -145,6 +145,13 @@ DYN_CASES = [
     DynCase("cuo_chain_xl_md", "cuo_chain_k422", "md", ewald_tolerance=1e-12,
             xlbomd={"scc_tol": 1e-6}, force_evaluation="dynamics", tol=TOL_XL,
             note="k-points, Fermi 500 K: the Dynamics force type"),
+    # M6f-1: DFTB+ resets its mixer at every geometry step, as pydftb (a new mixer per SCC).
+    # Anderson with Generations 6 and beta 0.3: the closest convergence decision of the 41
+    # steps is 14 % from the tolerance (with the defaults, 62 iterations per step, two steps
+    # end within 1.5 % of it and differ by one iteration)
+    DynCase("water_dimer_anderson_md", "water_dimer_hdamp_mixer_anderson", "md",
+            tol={**TOL_MD, "n_scc": 0},
+            note="Anderson mixer: the SCC iterations of every step from the reused charges"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -201,7 +208,8 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}),
                 **refgen.block_options(base, inp["labels"]),
                 **refgen.environment_ase_options(base),
-                **refgen.casida_options(base))              # M6e: an excited state's forces
+                **refgen.casida_options(base),              # M6e: an excited state's forces
+                **refgen.scc_start_options(base))           # M6f-1: mixer, initial charges
     if case.xlbomd is not None:                                 # M6e
         opts.update(xlbomd=dict(case.xlbomd), force_evaluation=case.force_evaluation)
     opts.update(overrides)
@@ -306,7 +314,9 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         extra = (dftbplus.dftb3_block(base.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(base.spin, set(inp["labels"]), base.shell_resolved)
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
-                 + refgen.block_hsd(base, inp) + refgen.environment_hsd(base))
+                 + refgen.block_hsd(base, inp) + refgen.environment_hsd(base)
+                 + dftbplus.mixer_block(base.mixer)
+                 + dftbplus.initial_charges_block(base.initial_charges))
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"
@@ -370,7 +380,8 @@ def compare(doc: dict, **overrides) -> dict:
             if "velocities" in ref:                         # M6e references
                 dev["velocities" + suffix] = float(np.abs(r["velocities"]
                                                           - np.array(ref["velocities"])).max())
-        if case.xlbomd is not None:     # the SCC iterations of every step (both runs)
+        if case.xlbomd is not None or CASES_BY_NAME[case.base].mixer is not None:
+            # the SCC iterations of every step (both runs; XL-BOMD M6e, mixers M6f-1)
             dev["n_scc"] = max(int(np.abs(np.array(r["n_scc"]) - np.array(ref["n_scc"])).max())
                                for r in (res, exact))
     tol = doc["tolerances"]

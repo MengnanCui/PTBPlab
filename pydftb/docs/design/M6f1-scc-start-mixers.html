@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-1 SCC 起点与混合器设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6f-1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-1 · 设计文档</p>
+    <h1>SCC 的起点与混合器</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-23</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6f1-scc-start-mixers.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6f“常用缺口与分析输出”的第一块：SCC 从哪里开始、每轮怎样混合。补上 DFTB+ 的 Simple、Anderson、DIIS 三种混合器和 Broyden 的全部选项，<code>InitialCharges</code>、共线自旋的 <code>InitialSpins</code>，以及 DFTB+ 的电荷重启文件 <code>charges.bin</code>/<code>charges.dat</code> 的读写（<code>ReadInitialCharges</code>）。目标不只是收敛到同一个解，而是每一轮的 SCC 误差都与 DFTB+ 相同。只做 NumPy 引擎；默认设置下逐位不变。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节，源码 <code>mixer/*.F90</code>、<code>dftb/sccinit.F90</code>）：
+        <ul>
+          <li>三种混合器各有自己的历史存储方式和第一轮的规则，要逐轮一致就必须照抄这些细节（Anderson 的倒序索引环、DIIS 的循环槽位、<code>DynMixingParameters</code> 从最后一项往前查）；</li>
+          <li><code>InitialCharges</code> 不是“把电荷平均放到轨道上”，而是按 SKF 的壳层顺序逐层填满（aufbau），Cu 多 0.2 个电子时起点是 4s<sup>2</sup> 4p<sup>6</sup> 3d<sup>3.2</sup>；</li>
+          <li>电荷文件的格式号是 8：头、每个轨道的布居（一类轨道的总量放在第一个轨道上）、多极记录 <code>0 0</code>、+U 时的布居块；文本版是 gfortran 的 list-directed 输出。</li>
+        </ul>
+      </li>
+      <li><strong>探针</strong>（第二节）：
+        <ul>
+          <li>9 种“混合器 × 体系”的组合，pydftb 的轮数与 DFTB+ 全部相同，逐轮的 SCC 误差一致到 4e-8 – 2.3e-5（相对，SCC 越长越大）；</li>
+          <li>7 个初始电荷、初始自旋的组合，轮数相同，第一轮误差一致到 DFTB+ 打印的 8 位；</li>
+          <li>DFTB+ 写的 12 个电荷文件（5 个文本、7 个二进制）pydftb 读入后再写出，逐字节相同；两边互相读对方的文件重启，轮数相同。</li>
+        </ul>
+      </li>
+      <li><strong>探针中发现的坑</strong>：
+        <ul>
+          <li>SCC 位点很少时（H<sub>2</sub>O 只有 3 个），DIIS 的矩阵从第 3 个向量起奇异（电荷守恒使各 F 之和为零），两边都在跟随舍入误差；参考算例避开这种情况；</li>
+          <li>周期体系要用 <code>EwaldTolerance = 1e-12</code>：DFTB+ 默认的 1e-9 使逐轮误差相差 1e-5，CuO 链 Anderson 的轮数差 1；</li>
+          <li>非共线自旋读电荷重启时，DFTB+ 不读 <code>InitialSpins</code>，并因“未读的输入节点”而停止。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的接口</strong>（第三节）：<code>DFTB(mixer=…, mixing=…, initial_charges=…, initial_spins=…)</code>，<code>calculate(q_init=ChargeData)</code>，<code>dftbplus_io.read_charges</code>/<code>write_charges</code>，<code>PyDFTB(read_charges=…)</code> 与 <code>write_charges()</code>。<strong>注意</strong>：<code>mixer="anderson"</code> 现在指 DFTB+ 的 Anderson；pydftb 原来叫 "anderson" 的 Pulay 型混合器改名为 <code>"pulay"</code>（仓库里没有代码用过 "anderson"）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">4</span><span class="lbl">DFTB+ 的混合器（Broyden、Simple、Anderson、DIIS），逐轮照抄</span></li>
+      <li><span class="num">0</span><span class="lbl">探针中 SCC 轮数与 DFTB+ 之差（16 个组合）</span></li>
+      <li><span class="num">12</span><span class="lbl">DFTB+ 电荷文件逐字节往返</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 25.1 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>记号：q 是一轮 SCC 的输入布居（混合的向量），q<sub>out</sub> 是它构造的哈密顿量给出的输出布居，F = q<sub>out</sub> − q。DFTB+ 打印的“SCC error”是 max|F|，小于 <code>SCCTolerance</code> 即收敛，最后一轮之后不再混合。</p>
+
+      <h3>混合的向量</h3>
+      <ul>
+        <li>DFTB+ 把轨道布居按“等价类”求和后混合（<code>reduceCharges</code>）：
+          <ul>
+            <li>一类是同一原子上 Hubbard U 相同的轨道（<code>uniqHubbU%getOrbitalEquiv</code>）：原子分辨的 SCC 是整个原子，壳层分辨时一般是一个壳层；</li>
+            <li>自旋时先把 (q, m) 换成 (上, 下) 再归类，所以混合的是上、下两个通道；非共线时是 q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub> 四个；</li>
+            <li>+U 或 onsite 修正时，后面接上布居块中的独立元素（M6b）。</li>
+          </ul>
+          pydftb 从 M2c、M6a、M6b 起混合的就是同样的向量。唯一的已知差别：壳层分辨时，同一原子上 U 恰好相等的两个壳层在 DFTB+ 中合成一类，pydftb 仍分开混合。这只影响 SCC 的路径，不影响解；参考算例避开这种情况。</li>
+        <li>每个几何步开始时混合器重置（<code>main.F90</code> 的 <code>chrgMixerReal%reset</code>），历史不跨步保留。</li>
+        <li>第一轮的特殊规则（M2c、M6b 已实现）：自旋或块混合、且没有读电荷时，第一轮的输出直接作为第二轮的输入，不经过混合器。</li>
+      </ul>
+
+      <h3>四种混合器</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>混合器</th><th>关键字与默认值</th><th>做法</th></tr></thead>
+        <tbody>
+          <tr><td>Broyden（默认）</td><td><code>MixingParameter</code> 0.2、<code>InverseJacobiWeight</code> 0.01、<code>MinimalWeight</code> 1、<code>MaximalWeight</code> 1e5、<code>WeightFactor</code> 0.01</td><td>修正的 Broyden（Johnson 1988），pydftb 从 M1 起照抄；本次只是把选项开放出来</td></tr>
+          <tr><td>Simple</td><td><code>MixingParameter</code> 0.05</td><td>q′ = q + βF</td></tr>
+          <tr><td>Anderson</td><td><code>MixingParameter</code> 0.05、<code>Generations</code> 4、<code>InitMixingParameter</code> 0.01、<code>DynMixingParameters</code>、<code>DiagonalRescaling</code> 0.01</td><td>见下</td></tr>
+          <tr><td>DIIS</td><td><code>InitMixingParameter</code> 0.2、<code>Generations</code> 6、<code>UseFromStart</code> Yes</td><td>见下</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>Anderson</strong>（<code>andersonmixer.F90</code>）：
+          <ul>
+            <li>保存 m = Generations − 1 组以前的 (q<sub>i</sub>, F<sub>i</sub>)。存储用一个倒序的索引环：<code>indx(1)</code> 指向最新的一组，每次存入时整个环右移一位，最后一个槽位转到最前面被覆盖；</li>
+            <li>计数 n 从 −1 开始：前 Generations 次调用用 <code>InitMixingParameter</code>，之后用 <code>MixingParameter</code>；</li>
+            <li><code>DynMixingParameters</code> 是若干行 (阈值, β)：从<strong>最后一行往前</strong>找第一个阈值大于 |F|（2-范数）的行，用它的 β。第一次调用不受影响，因为第一次总是 q + β<sub>init</sub>F；</li>
+            <li>之后解 A c = b：A<sub>ij</sub> = ⟨F − F<sub>j</sub> | F − F<sub>i</sub>⟩，b<sub>i</sub> = ⟨F | F − F<sub>i</sub>⟩；<code>DiagonalRescaling</code> = ω<sub>0</sub> &gt; 0 时 A<sub>ii</sub> 乘以 (1 + ω<sub>0</sub><sup>2</sup>)；</li>
+            <li>F̄ = Σ c<sub>i</sub>F<sub>i</sub> + (1 − Σc)F，q̄ = Σ c<sub>i</sub>q<sub>i</sub> + (1 − Σc)q，新输入 q′ = q̄ + βF̄。</li>
+          </ul>
+        </li>
+        <li><strong>DIIS</strong>（<code>diismixer.F90</code>）：
+          <ul>
+            <li>Generations 个循环槽位，<code>indx = mod(indx, m) + 1</code>，新的一组写到 indx；</li>
+            <li><code>UseFromStart</code>，或槽位已满时：解加边的方程 [⟨F<sub>i</sub>|F<sub>j</sub>⟩, −1; −1, 0][c; λ] = [0; −1]，q′ = Σ c<sub>i</sub>(q<sub>i</sub> + F<sub>i</sub>)；</li>
+            <li>槽位未满时再加 <code>InitMixingParameter</code>·F；<code>UseFromStart = No</code> 时，未满之前就是简单混合；</li>
+            <li>源码里还有 <code>AddIntrpGradient</code>，但输入解析从不设置它，恒为关。</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h3>InitialCharges 与 InitialSpins</h3>
+      <ul>
+        <li><strong>写法</strong>：<code>InitialCharges { AllAtomCharges = {…} }</code>，或若干 <code>AtomCharge { Atoms = …; ChargePerAtom = … }</code>（没写的原子为 0）；<code>InitialSpins</code> 在 <code>SpinPolarisation = Colinear {…}</code> 中，用 <code>AllAtomSpins</code> 或 <code>AtomSpin { Atoms; SpinPerAtom }</code>，每个原子一个数 N<sub>↑</sub> − N<sub>↓</sub>。</li>
+        <li><strong>电荷</strong>（<code>initQFromAtomChrg</code>）：
+          <ul>
+            <li>原子 A 的电子数 N<sub>A</sub> = Σ 参考占据 − q<sub>A</sub>，按 SKF 中壳层的顺序逐层填，每层最多 2(2l+1)，在 m 上平均分；</li>
+            <li>填完还剩超过 1e-4 时报错 “Not enough orbitals on species … to hold specified atomic charges”；</li>
+            <li>所有原子的电荷之和不等于 <code>Charge</code> 时警告（“Your initial charge distribution will be rescaled”）；</li>
+            <li>最后整体缩放到总电子数（没有 <code>InitialCharges</code> 时也做这一步）。</li>
+          </ul>
+        </li>
+        <li><strong>自旋</strong>（<code>initializeCharges</code>）：原子的自旋按壳层布居的比例分到各壳层，m<sub>壳层</sub> = q<sub>壳层</sub>·S<sub>A</sub> / Σ<sub>A 的壳层</sub> q。没有 <code>InitialSpins</code> 时，各壳层 m = q·(N<sub>↑</sub> − N<sub>↓</sub>)/N（M2c 已实现）。</li>
+        <li>读了电荷文件时，<code>InitialCharges</code> 和 <code>InitialSpins</code> 都不用。</li>
+      </ul>
+
+      <h3>电荷重启文件</h3>
+      <ul>
+        <li><strong>写出</strong>（<code>writeQToFile</code>）：收敛后，以及每 <code>RestartFrequency</code>（默认 20）轮，写最后一轮的输入布居。二进制是 Fortran 流式文件（没有记录标记，整数与逻辑量 4 字节，实数 8 字节）；<code>WriteChargesAsText = Yes</code> 时写 <code>charges.dat</code>。</li>
+        <li><strong>格式 8</strong>：
+          <ol>
+            <li>格式号 8；</li>
+            <li>五个逻辑量：布居块、虚部布居块、密度矩阵、k 点信息、多极（DFTB 中恒为真）；原子数；自旋通道数；每个通道的 checksum = sum(sum(qq, dim=1), dim=1)；</li>
+            <li>每个通道、每个原子一条记录，是各轨道的布居。共线自旋的两个通道是 (q, m)，非共线是 (q, m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>)。一类轨道的总量放在该类第一个轨道上，其余为 0（<code>OrbitalEquiv_expand</code> 的结果）；</li>
+            <li>多极记录：原子偶极数与四极数，文本中是 <code>(2I2)</code> 格式的 “ 0 0”；</li>
+            <li>+U 或 onsite 修正时，每个通道、每个原子的布居块，一行是块的一列；有虚部块时再写一遍。块的对角只存独立元素，读入时对角用 qq 重建。</li>
+          </ol>
+        </li>
+        <li><strong>读入</strong>（<code>initQFromFile</code>）：接受格式 4–8（4 没有原子数，4–5 没有多极记录，6 没有 k 点标志）；文件的原子多于体系时报错，少于时其余为 0；自旋通道数必须相同；checksum 与数组之差超过 1e-7 报错；电子数、共线自旋的磁化与体系相差 ≥ 1e-3 报错（<code>SkipChargeTest</code> 或固定费米能级时跳过）。</li>
+        <li><strong>文本格式</strong>：gfortran 的 list-directed 输出，每项前一个空格：整数占 11 列；逻辑量一个字母；实数为 1PG25.17E3，即 0.1 ≤ |x| &lt; 10<sup>17</sup> 和 0 用 F20.(16−e) 再接 5 个空格，其余用科学记数法、三位指数，右对齐 25 列。每条 write 语句换一行。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 25.1 的实测行为</h2>
+      <p>DFTB+ 为本机的 25.1（commit a23bfb2），参数为测试用的 <code>ptbp_hcocu</code>。混合器的 Fortran 源码已从 25.1 的发布版取得，与本地源码（041e723）相同。探针脚本在会话的临时目录（<code>m6f/probe_lib.py</code> 与 <code>p1</code>–<code>p3</code>）。比较时 pydftb 与 DFTB+ 用同样的 SCC 容差 1e-10，逐轮误差只在 DFTB+ 打印值大于 1e-7 处比较相对差（DFTB+ 只打印约 8 位）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>P1 混合器</th><th>SCC 轮数 pydftb / DFTB+</th><th>逐轮误差的最大相对差</th></tr></thead>
+        <tbody>
+          <tr><td>水盒子（24 原子），DIIS 默认值</td><td>25 / 25</td><td>8.2e-8（EwaldTolerance 1e-12；默认 1e-9 时 1.3e-5）</td></tr>
+          <tr><td>水盒子，Anderson 默认值</td><td>133 / 133</td><td>4.0e-6</td></tr>
+          <tr><td>水盒子，Simple β = 0.1</td><td>205 / 205</td><td>7.2e-7</td></tr>
+          <tr><td>Cu<sub>4</sub>CO 300 K，Anderson，Generations 6，DynMixingParameters {1e-2 0.3; 1e-4 0.6}</td><td>16 / 16</td><td>5.5e-7</td></tr>
+          <tr><td>CuO 链 k 点，Broyden 的权重全部非默认</td><td>13 / 13</td><td>2.6e-7（Ewald 1e-12；默认时 2.6e-5）</td></tr>
+          <tr><td>O<sub>2</sub> 三重态（壳层分辨），DIIS，UseFromStart = No</td><td>8 / 8</td><td>3.9e-8</td></tr>
+          <tr><td>OH 非共线，Anderson</td><td>26 / 26</td><td>1.2e-7</td></tr>
+          <tr><td>Cu<sub>4</sub>CO + U，DIIS（块向量）</td><td>25 / 25</td><td>5.8e-7</td></tr>
+          <tr><td>CuO 链自旋 k 点，Anderson</td><td>162 / 162</td><td>2.3e-5（Ewald 1e-12；默认时 162 / 161）</td></tr>
+          <tr><td>H<sub>2</sub>O（3 个 SCC 位点），DIIS</td><td>不同</td><td>从第 3 轮起 DIIS 矩阵的条件数 6e16：两边都在跟随舍入</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>P3 初始电荷与自旋</th><th>SCC 轮数</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>H<sub>2</sub>CO，AllAtomCharges {0.4 −0.4 0.1 −0.1}</td><td>13 / 13</td><td>第一轮误差两边都是 1.8057112</td></tr>
+          <tr><td>CH<sub>3</sub>OH，AtomCharge 块，和为 0.1</td><td>11 / 11</td><td>DFTB+ 警告 “Sum of initial charges does not match specified total charge”，pydftb 给出同样的警告</td></tr>
+          <tr><td>Cu<sub>4</sub>CO 壳层分辨，六个原子都有电荷</td><td>49 / 49</td><td>aufbau：第一轮误差 7.2056664（Cu 的 4p 被填满，起点很差）</td></tr>
+          <tr><td>O<sub>2</sub> 三重态，AtomSpin 只给原子 1（1.5）</td><td>12 / 12</td><td></td></tr>
+          <tr><td>O<sub>2</sub> 三重态壳层分辨，AllAtomSpins {0.5 1.5}</td><td>11 / 11</td><td></td></tr>
+          <tr><td>CuO 链自旋 k 点，AllAtomSpins {1 0 −1 0}，UnpairedElectrons 0</td><td>33 / 33</td><td>反铁磁解：磁矩 [0.140269, 0.000769, −0.140652, −0.000386]，两边相同</td></tr>
+          <tr><td>OH 自由基，电荷 {−0.3 0.3} 加自旋 {0.8 0.2}</td><td>10 / 10</td><td>磁矩 [1.082569, −0.082569]</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>P2 电荷文件</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>读入 DFTB+ 写的文件再写出</td><td>12 个文件（H<sub>2</sub>O、Cu<sub>4</sub>CO 壳层分辨、O<sub>2</sub>、OH 非共线、Cu<sub>4</sub>CO + U、H<sub>2</sub>O onsite、CuO 链自旋 + U、OH 非共线 SOC + U；文本与二进制）逐字节相同</td></tr>
+          <tr><td>文件中的布居与 pydftb 自己的输入布居</td><td>相差 ≤ 2.2e-11</td></tr>
+          <tr><td>在挪动后的几何上重启：pydftb 读 DFTB+ 的文件、DFTB+ 读 pydftb 的文件</td><td>10 个组合，轮数和第一轮误差都与 DFTB+ 读自己的文件时相同</td></tr>
+          <tr><td>非共线自旋 + <code>ReadInitialCharges</code></td><td>DFTB+ 不读 <code>InitialSpins</code>，报 “The following 1 node(s) have been ignored by the parser” 后停止；第二次运行的输入要去掉它</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>DFTB(sk, mixer="anderson")                        # "broyden"（默认）| "simple" | "anderson" | "diis" | "pulay"
+DFTB(sk, mixer={"kind": "anderson", "generations": 6, "init_mixing": 0.01,
+                "dynamic_mixing": [(1e-2, 0.3), (1e-4, 0.6)], "diagonal_rescaling": 0.01},
+     mixing=0.05)                                 # mixing = MixingParameter；None 取 DFTB+ 的默认值
+DFTB(sk, initial_charges=[0.2, -0.2, ...])         # 或 {原子: 电荷}，其余为 0
+DFTB(sk, spin=True, initial_spins={0: 1.5})        # 共线：每个原子 N↑ − N↓
+r = calc.calculate(labels, pos)
+r.scc_errors                                       # 每一轮的 max|q_out − q_in|（DFTB+ 的 SCC error）
+
+from pydftb import dftbplus_io
+data = dftbplus_io.read_charges("charges.bin", norb_atom)   # 格式 4–8；.dat 按文本读
+r = calc.calculate(labels, pos, q_init=data)       # 与 ReadInitialCharges 相同的检查
+dftbplus_io.write_charges("charges.dat", calc.charge_data(labels, r))
+calc.populations_from_file(labels, "charges.bin", skip_charge_test=False)
+
+atoms.calc = PyDFTB(skdir, read_charges="charges.bin")      # 第一次计算从文件开始
+atoms.calc.write_charges("charges.bin")                     # 写最后一次计算的输入布居</code></pre>
+      <ul>
+        <li><strong>混合器</strong>：
+          <ul>
+            <li>选项名是 DFTB+ 关键字的 snake_case：Broyden 的 <code>inverse_jacobi_weight</code>、<code>minimal_weight</code>、<code>maximal_weight</code>、<code>weight_factor</code>；Anderson 的 <code>generations</code>、<code>init_mixing</code>、<code>dynamic_mixing</code>、<code>diagonal_rescaling</code>；DIIS 的 <code>init_mixing</code>、<code>generations</code>、<code>use_from_start</code>；</li>
+            <li>写错的选项、给 DIIS 设 <code>mixing</code>（DIIS 没有这个参数）在构造 <code>DFTB</code> 时就报错；</li>
+            <li><code>mixing</code> 的默认值从 0.2 改为 None：None 取各混合器在 DFTB+ 中的默认值。Broyden 仍是 0.2，所以默认路径逐位不变；PTBP 不传 <code>mixing</code>；</li>
+            <li><code>"anderson"</code> 的含义改变：现在是 DFTB+ 的 Anderson；原来的 Pulay 型混合器改名 <code>"pulay"</code>（<code>PulayMixer</code>）。</li>
+          </ul>
+        </li>
+        <li><strong>起点</strong>：
+          <ul>
+            <li><code>initial_charges</code> 按 aufbau 填壳层，和不等于 <code>charge</code> 时 <code>RuntimeWarning</code>，然后缩放；</li>
+            <li><code>initial_spins</code> 现在也用于共线自旋（原来只用于非共线）；</li>
+            <li>两者可以同用，可以与壳层分辨、+U、onsite、非共线（只用电荷）同用；给了 <code>q_init</code> 时都不用，与 DFTB+ 相同。</li>
+          </ul>
+        </li>
+        <li><strong>电荷文件</strong>：
+          <ul>
+            <li><code>calculate(q_init=ChargeData)</code> 在建好体系后把文件换成混合向量，规则与给定 <code>q_init</code> 数组相同（第一轮的输出照常混合，与 DFTB+ 读电荷时相同）；</li>
+            <li><code>charge_data(labels, result)</code> 用 <code>result.q_in</code>，即构造最后一个哈密顿量的输入布居，也就是 DFTB+ 写的那组；</li>
+            <li>文本文件写得与 DFTB+（gfortran）逐字节相同。</li>
+          </ul>
+        </li>
+        <li><strong>ASE</strong>：共线自旋、没有给 <code>initial_spins</code>、atoms 的初始磁矩不全为零时，把磁矩作为 <code>initial_spins</code>（全为零时与以前相同）；torch 后端照旧忽略它们。</li>
+        <li><strong>限制</strong>：新的混合器（Broyden 只改 <code>mixing</code> 除外）、初始电荷、共线初始自旋、电荷文件只在 NumPy 引擎中；torch 后端和 <code>pydftb.autodiff</code> 遇到时报错。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong><code>mixer.py</code></strong>：
+            <ul>
+              <li><code>BroydenMixer</code> 不动；新的 <code>SimpleMixer</code>、<code>AndersonMixer</code>、<code>DIISMixer</code> 照抄 Fortran（索引环、槽位、gesv 的同样方程）；</li>
+              <li>原 <code>AndersonMixer</code> 改名 <code>PulayMixer</code>；</li>
+              <li><code>mixer_spec(kind, mixing, **options)</code> 返回 (名称, 构造参数)，检查选项；<code>make_mixer</code> 用它构造。<code>DFTB.__init__</code> 先调用一次 <code>mixer_spec</code>，每次 SCC 仍新建混合器（等同于 DFTB+ 每个几何步的重置）。</li>
+            </ul>
+          </li>
+          <li><strong><code>calculator.py</code></strong>：
+            <ul>
+              <li><code>_initial_populations</code> 前面加一个分支 <code>_custom_start</code>，旧代码不动；<code>_custom_shell_populations</code> 给出壳层的 q 与 m，块向量的起点（<code>_initial_block_vector</code>）也从它取壳层布居；</li>
+              <li>模块级函数 <code>_aufbau_shell_populations</code>（<code>initQFromAtomChrg</code>）、<code>_per_atom</code>（列表或字典）；</li>
+              <li><code>_scc</code> 记录每轮的 max|F|，<code>DFTBResult.scc_errors</code>；</li>
+              <li><code>_charge_layout</code>、<code>charge_data</code>、<code>populations_from_file</code>：按类把混合向量展开到第一个轨道（块向量用 <code>BlockTerms.expand</code>/<code>reduce</code>），共线自旋换成 (q, m)，照 DFTB+ 做检查；</li>
+              <li><code>numpy_only_options</code>：torch 后端在构造时报错，<code>autodiff.evaluate</code> 也检查它。</li>
+            </ul>
+          </li>
+          <li><strong>新文件 <code>dftbplus_io.py</code></strong>：<code>ChargeData</code>、<code>read_charges</code>（流式与 list-directed 两种读法，每条 read 语句从新的一行开始）、<code>write_charges</code>（先写临时文件再改名），gfortran 的 <code>ld_integer</code>/<code>ld_logical</code>/<code>ld_real</code>。checksum 按 DFTB+ 的求和顺序（先原子内、再原子间）。后面各块要写的 DFTB+ 文件也放这里。</li>
+          <li><strong><code>ase_calc.py</code></strong>：<code>PyDFTB(initial_charges=…, read_charges=…)</code>、<code>write_charges(path, text=None)</code>，共线自旋的初始磁矩。</li>
+          <li><strong>验证工具</strong>：
+            <ul>
+              <li><code>dftbplus.py</code>：<code>mixer_block</code>、<code>initial_charges_block</code>、<code>initial_spins_block</code>，<code>make_hsd(extra_options=…)</code>，解析标准输出中逐轮的 SCC error，<code>run_restart</code>（同一流程跑两次，第二次的输入去掉 <code>InitialSpins</code>）；</li>
+              <li><code>cases.py</code>：<code>Case.mixer</code>、<code>initial_charges</code>、<code>read_charges</code>（两步：第一次在随机挪动 0.03 Å 的几何上写文件，第二次在算例的几何上读）；</li>
+              <li><code>refgen.py</code>：参考结果存 <code>scc_errors</code> 与第一次运行的文件（base64）；比较 <code>n_scc</code>（必须相同）、逐轮误差、共线磁矩，以及“文件中的布居 = pydftb 自己第一次运行的输入布居”；</li>
+              <li><code>dynamics.py</code>：基础算例的混合器也用于 MD，比较每步的 SCC 轮数。</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例（<code>refgen</code>，容差 <code>TOL_SCC</code>：轮数 0、逐轮误差 1e-4 相对、文件 1e-8）</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>h2o_mixer_simple</code></td><td>Simple，β = 0.3</td></tr>
+            <tr><td><code>ch3oh_mixer_anderson</code></td><td>Anderson 默认值</td></tr>
+            <tr><td><code>cu4co_300K_mixer_anderson_dyn</code></td><td>Generations 6 与 DynMixingParameters</td></tr>
+            <tr><td><code>water_box_mixer_diis</code></td><td>DIIS 默认值，Ewald 1e-12</td></tr>
+            <tr><td><code>o2_triplet_shell_mixer_diis_late</code></td><td>共线自旋，UseFromStart = No</td></tr>
+            <tr><td><code>oh_noncolinear_mixer_anderson</code></td><td>非共线的向量</td></tr>
+            <tr><td><code>cu4co_plusu_mixer_diis</code></td><td>块向量</td></tr>
+            <tr><td><code>water_dimer_hdamp_mixer_anderson</code></td><td>MD 算例的起点</td></tr>
+            <tr><td><code>cuo_chain_k422_broyden_weights</code></td><td>Broyden 的权重全部非默认，含应力</td></tr>
+            <tr><td><code>h2co_initial_charges</code>、<code>ch3oh_atom_charge_blocks</code>、<code>cu4co_shell_initial_charges</code></td><td>AllAtomCharges；和不为零的 AtomCharge 块；aufbau 填 Cu 的 4p</td></tr>
+            <tr><td><code>o2_triplet_initial_spins</code>、<code>o2_triplet_shell_initial_spins</code>、<code>cuo_chain_spin_k422_afm_start</code>、<code>oh_radical_initial_charges_spins</code></td><td>AtomSpin；按壳层分配；反铁磁起点；电荷与自旋同用</td></tr>
+            <tr><td><code>{h2o, cu4co_shell, o2_triplet, oh_noncolinear, cu4co_plusu, oh_noncolinear_soc_plusu, cuo_chain_spin_k422}_read_charges</code>、<code>h2o_read_charges_text</code>、<code>o2_triplet_plusu_read_charges_text</code></td><td>两步重启：每种布局，二进制与文本</td></tr>
+          </tbody>
+        </table></div>
+        <p>动力学：<code>water_dimer_anderson_md</code>（40 步，比较每步的 SCC 轮数）。</p>
+        <h3>自洽测试（<code>test_mixers.py</code>、<code>test_initial.py</code>、<code>test_charges_file.py</code>）</h3>
+        <ul>
+          <li>Anderson、DIIS 与逐行照抄的 Fortran（二维存储、1 起的索引）一致到 1e-12；各种选项；</li>
+          <li>每个混合器都收敛到 Broyden 的解（1e-10）；<code>mixing=None</code> 与原来的 0.2 逐位相同；</li>
+          <li>aufbau 的数值、报错与警告；共线自旋按壳层分配；换起点不改变解；</li>
+          <li>DFTB+ 的文件逐字节往返；pydftb 写、读、重启（每种布局、二进制与文本）；DFTB+ 的各项检查；旧格式 4–7；gfortran 的输出格式；</li>
+          <li>torch 后端和自动求导的报错。</li>
+        </ul>
+        <h3>门槛</h3>
+        <p>与以往相同：golden 两个环境对 <code>2a84308</code> 逐位相同（<code>--allow-new scc_errors errors</code>）；<code>refgen --check</code>、<code>dynamics --check</code>；三个环境的 pydftb 测试；PTBP 测试；<code>engine_parity</code>。</p>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>DFTB+ 写在电荷文件里的密度矩阵（长程校正的重启数据，M6h 再看）与原子多极；</li>
+            <li>非共线自旋的初始自旋已在 M6a 实现，本次只补共线；</li>
+            <li>新功能的 torch 与自动求导版本。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>逐轮一致对舍入很敏感：只选离奇异、离收敛阈值都远的算例（DIIS 不用于 SCC 位点少的体系，周期体系用 Ewald 1e-12），并记录每个算例的最大相对差；</li>
+            <li><code>"anderson"</code> 的含义改变：仓库里没有代码用它，README 与坑表写明；</li>
+            <li><code>mixing</code> 默认值改为 None：Broyden 仍是 0.2，golden 逐位比较。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6e-excited-forces-xlbomd.html">← M6e 完成报告</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>
