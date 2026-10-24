@@ -100,7 +100,37 @@ if getattr(ptbp_args, 'optimizer', 'bo') in ('gradient', 'bo_grad'):
 from utils.parallel import detect_cpu as _detect_cpu, set_plan as _set_plan, simple_plan as _simple_plan
 
 
-def _parallel_plan(dft_input, bolt, opt_elem=()):
+def _type_model(dft_input):
+    """The types of this run and their parameter sets (milestone M5b, utils.typemodel): one
+    set per element by default, one for all with --shared_parameters, switched types from
+    --types, --multi_element fits only those elements.  Switched types need pydftb (DFTB+
+    through ASE writes element symbols only) and BO or PSO (pydftb.autodiff has no mixing)."""
+    from utils.typemodel import TypeModel, load_declarations, parse_starts
+    try:
+        model = TypeModel.from_dataset(
+            dft_input, shared=bool(getattr(ptbp_args, 'shared_parameters', None)),
+            declarations=load_declarations(getattr(ptbp_args, 'types', None)),
+            starts=parse_starts(getattr(ptbp_args, 'type_start', None)),
+            multi_element=ptbp_args.multi_element)
+    except ValueError as err:
+        raise SystemExit(f"types: {err}")
+    if model.switches:
+        from utils.engines import DFTBPLUS_SWITCHING_ERROR, set_type_switching
+        if (getattr(ptbp_args, 'engine', None) or 'dftbplus') != 'pydftb':
+            raise SystemExit(DFTBPLUS_SWITCHING_ERROR)
+        if getattr(ptbp_args, 'pydftb_backend', 'numpy') == 'torch':
+            raise SystemExit("type switching (M5b) runs on pydftb's NumPy engine: drop "
+                             "--pydftb_backend torch")
+        if getattr(ptbp_args, 'optimizer', 'bo') in ('gradient', 'bo_grad'):
+            raise SystemExit("--optimizer gradient/bo_grad: pydftb.autodiff has no type "
+                             "switching (the mixed blocks and the weights' terms); use --optimizer "
+                             "bo, parallel_bo or pso with switched types")
+        set_type_switching(model.switches)
+    print(model.describe())
+    return model
+
+
+def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None):
     """CPU budget and parallel plan of this run (milestone M3): chosen by the cost-model
     recommender (M3c), printed, saved as plan.json and set process-wide, so every BO
     step follows it."""
@@ -111,7 +141,8 @@ def _parallel_plan(dft_input, bolt, opt_elem=()):
         from utils.engines import settings as _engine_settings
         workload = workload_from_dataset(
             dft_input, bolt, kpts_density=ptbp_args.kpt_density, eos_points=ptbp_args.eos_points,
-            engine=engine, mode=ptbp_args.optimization_option.lower(), opt_elem=opt_elem)
+            engine=engine, mode=ptbp_args.optimization_option.lower(), opt_elem=opt_elem,
+            **({} if labels is None else {'labels': labels}))
         es, backend, accelerators = _engine_settings(), None, None
         if engine == 'pydftb' and es['pydftb_backend'] == 'torch':      # M4d
             import torch
@@ -160,7 +191,10 @@ path = Path.cwd()
 if ptbp_args.multi_element is None:
     opt_elem = []
 else:
-    opt_elem = ptbp_args.multi_element
+    # atomic numbers: the helpers compare opt_elem with Atoms.numbers and physrep's keys (the
+    # symbols of --multi_element used to be passed as they are); hotcent takes the symbols
+    opt_elem = [atomic_numbers[e] if isinstance(e, str) else int(e) for e in ptbp_args.multi_element]
+opt_symbols = [chemical_symbols[z] for z in opt_elem]
 
 checkpoint_saver = CheckpointSaver(f"{path}/checkpoint.pkl", compress=9, store_objective=False)  # lifesaver
 
@@ -206,15 +240,18 @@ if ptbp_args.optimization_option is not None:
         # Optimize the Confinement potential and Repulsion part together!
         if ptbp_args.parameters == ["r0_w", "r0_d", "sigma_rep"]:
             print("Optimizing the Confinement potential and Repulsion part together! ")
+            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
+            dft_input = ase.io.read(dft_infile, ':') if dft_infile.exists() else None
+            types = _type_model(dft_input) if dft_input is not None else None
+            typed = types is not None and not types.legacy        # M5b: parameters per type
             with open(ptbp_args.para_file, "w") as para:
-                para.write('#r0_w,r0_d,c_rep,kxc,cov_radius,mu\n')
+                para.write(types.par_header() if typed else '#r0_w,r0_d,c_rep,kxc,cov_radius,mu\n')
 
             with open(ptbp_args.log_file, 'w') as output:
-                    output.write('#r0_w,r0_d,c_rep,kxc,cov_radius,mu_E,mu_V,mu_B,penalty,mu\n')
+                    output.write(types.log_header(_opt) if typed else
+                                 '#r0_w,r0_d,c_rep,kxc,cov_radius,mu_E,mu_V,mu_B,penalty,mu\n')
 
-            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
             assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
-            dft_input = ase.io.read(dft_infile, ':')
             dft_center = dft_input[floor(ptbp_args.eos_points/2)::ptbp_args.eos_points]
             num_center_atoms = len(dft_center)
 
@@ -249,14 +286,20 @@ Atomic number: {atomic_numbers}
 Covalent radius: {cov_radius}
 Boltzmann factor: {bolt_f.tolist()}
             """)
-            _parallel_plan(dft_input, bolt_f11, opt_elem)
+            if typed:
+                # every pair of types gets its tables (fixed types included), so no opt_elem
+                _parallel_plan(dft_input, bolt_f11, (),
+                               labels=types.element_of if types.switches else None)
+            else:
+                _parallel_plan(dft_input, bolt_f11, opt_elem)
 
-            loss = Loss(args_input=ptbp_args, 
+            loss = Loss(args_input=ptbp_args,
                         dft_input=dft_input,
                         bolt_f11=bolt_f11,
-                        opt_elem=opt_elem, 
+                        opt_elem=[] if typed else opt_elem,
                         cov_radius=cov_radius,
-                        path=path)
+                        path=path,
+                        types=types)
 
             _result_pkl = path / 'result.pkl'
             if ptbp_args.postprocess_only:
@@ -296,7 +339,11 @@ Boltzmann factor: {bolt_f.tolist()}
                 print(f"[result.pkl] Snapshot of optimisation written to {_result_pkl}")
 
             print('Best parameter:\n', res.x,'\n', res.fun)
-            r0_w_best, r0_d_best = res.x
+            if typed:
+                for _lab, (_w, _d) in types.r0(res.x).items():
+                    print(f"  {_lab}: r0_w = {_w:.6f}, r0_d = {_d:.6f}")
+            else:
+                r0_w_best, r0_d_best = res.x
 
             os.chdir(path)
             # skopt's diagnostic plots only work with skopt OptimizeResult
@@ -334,7 +381,8 @@ Boltzmann factor: {bolt_f.tolist()}
                     plt.clf()
 
             # gradient optimisers name their directories with more digits (best_dir)
-            best_name = getattr(res, 'best_dir', None) or f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
+            best_name = getattr(res, 'best_dir', None) or (
+                types.directory_name(res.x) if typed else f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}")
             best_folder = path / ptbp_args.results_dir / best_name
             backup_dir  = path / best_name
 
@@ -345,17 +393,26 @@ Boltzmann factor: {bolt_f.tolist()}
         # Optimize the Repulsion part!
         elif ptbp_args.parameters == ["sigma_rep"]:
             print("Optimizing the Repulsion part! ")
-            r0_w_best, r0_d_best, p = ptbp_args.confinement_parameters
-
-            with open(ptbp_args.para_file, "w") as para:
-                para.write('#r0_w,r0_d,c_rep,kxc,cov_radius,mu\n')
-
-            with open(ptbp_args.log_file, 'w') as output:
-                    output.write('#r0_w,r0_d,c_rep,kxc,cov_radius,mu_E,mu_V,mu_B,penalty,mu\n')
-
-            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file 
+            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
             assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
             dft_input = ase.io.read(dft_infile, ':')
+            types = _type_model(dft_input)
+            typed = not types.legacy                 # M5b: r0_w r0_d of every parameter set
+            if typed:
+                x_fixed = list(ptbp_args.confinement_parameters or [])
+                if len(x_fixed) != types.n_params:
+                    raise SystemExit(f"--confinement_parameters: {types.n_params} values "
+                                     f"({types.describe_sets()}) for these types")
+            else:
+                r0_w_best, r0_d_best, p = ptbp_args.confinement_parameters
+
+            with open(ptbp_args.para_file, "w") as para:
+                para.write(types.par_header() if typed else '#r0_w,r0_d,c_rep,kxc,cov_radius,mu\n')
+
+            with open(ptbp_args.log_file, 'w') as output:
+                    output.write(types.log_header(_opt) if typed else
+                                 '#r0_w,r0_d,c_rep,kxc,cov_radius,mu_E,mu_V,mu_B,penalty,mu\n')
+
             dft_center = dft_input[floor(ptbp_args.eos_points/2)::ptbp_args.eos_points]
             num_center_atoms = len(dft_center)
 
@@ -382,16 +439,22 @@ Atomic number: {atomic_numbers}
 Covalent radius: {cov_radius}
 Boltzmann factor: {bolt_f.tolist()}
             """)
-            _parallel_plan(dft_input, bolt_f11, opt_elem)
+            if typed:
+                _parallel_plan(dft_input, bolt_f11, (),
+                               labels=types.element_of if types.switches else None)
+            else:
+                _parallel_plan(dft_input, bolt_f11, opt_elem)
 
-            loss = Loss(args_input=ptbp_args, 
+            loss = Loss(args_input=ptbp_args,
                         dft_input=dft_input,
                         bolt_f11=bolt_f11,
-                        opt_elem=opt_elem, 
+                        opt_elem=[] if typed else opt_elem,
                         cov_radius=cov_radius,
-                        path=path)
+                        path=path,
+                        types=types)
 
-            mu = loss.Loss_EnergyGeometry(r0_w_best, r0_d_best)
+            # Loss_EnergyGeometry takes one list (it was called with two arguments)
+            mu = loss.Loss_EnergyGeometry(x_fixed if typed else [r0_w_best, r0_d_best])
             print("mu: ", mu)
         
 
@@ -465,18 +528,20 @@ Boltzmann factor: {bolt_f.tolist()}
 if ptbp_args.skf_generator is not None:
     print("Generate the skf file with Existed Parameter sets!")
 
-    if ptbp_args.symbols is not None: 
+    from ase.data import atomic_numbers as _Z     # `atomic_numbers` is reassigned above
+    if ptbp_args.symbols is not None:
         if ptbp_args.multi_element is not None:
-            symbol_list = [s for s in ptbp_args.symbols if s not in opt_elem] + opt_elem
+            symbol_list = [s for s in ptbp_args.symbols if s not in opt_symbols] + opt_symbols
         else:
             symbol_list = [s for s in ptbp_args.symbols]
-            atomic_numbers_list = [atomic_numbers[s] for s in symbol_list]
+        atomic_numbers_list = [_Z[s] for s in symbol_list]
 
     elif ptbp_args.dft_file is not None:
-        dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file 
+        dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
         assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
         dft_input = ase.io.read(dft_infile, ':')
-        atomic_numbers_list, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = loss.get_elements_from_dataset(dft_input, opt_elem)
+        # (this used loss.get_elements_from_dataset, but there is no `loss` here)
+        atomic_numbers_list, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = data.get_elements_from_dataset(dft_input, opt_elem)
         symbol_list = atomic_symbols
 
 
@@ -542,10 +607,14 @@ if ptbp_args.skf_generator is not None:
             r0_dict = {symbol: [confinement_parameters[3*i], confinement_parameters[3*i+1]] for i, symbol in enumerate(symbol_list)}
             p_dict = {symbol: confinement_parameters[3*i+2] for i, symbol in enumerate(symbol_list)}
 
-            # Get c_rep for repulsion if exist
+            # Get c_rep for repulsion if exist (pairs sigma_rep, kxc per element; physrep
+            # reads kxc_list, which this branch used to leave undefined)
             if ptbp_args.repulsive_parameters is not None:
                 sigma_rep_list = ptbp_args.repulsive_parameters[0::2]
-                sigma_kxc_list = ptbp_args.repulsive_parameters[1::2]
+                kxc_list = ptbp_args.repulsive_parameters[1::2]
+            elif ptbp_args.skf_generator.lower() == "full":
+                raise SystemExit("--known_parameters personal with --skf_generator full needs "
+                                 "--repulsive_parameters (sigma_rep kxc per element)")
 
             superposition = 'density'
 
@@ -556,8 +625,8 @@ if ptbp_args.skf_generator is not None:
             raise ValueError(f"The known parameters {ptbp_args.known_parameters} are not defined!")
     
     hp = hotpy(r0_dict, p_dict, workdir=path, slator_p=path)
-    hp.full_hotcent(superposition, 
-                    opt_elem, 
+    hp.full_hotcent(superposition,
+                    opt_symbols,                          # hotcent takes symbols
                     ptbp_args.known_parameters.lower())   # run Hotcent
     
 

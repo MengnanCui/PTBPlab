@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5b PTBP 按类型拟合设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M5b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5b · 设计文档</p>
+    <h1>PTBP 按类型拟合：每个元素（类型）各一套参数</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd><code>5c25f3b</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M5b-ptbp-types.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M5 的第二块，PTBP 一侧。PTBP 给每个元素三个参数：r0<sub>w</sub>、r0<sub>d</sub>（hotcent 的波函数与密度约束半径）和 σ<sub>rep</sub>（physrep 排斥势的大小）。调研确认现在的 PTBP 对多元素数据集让所有元素共用一组 (r0<sub>w</sub>, r0<sub>d</sub>, σ<sub>rep</sub>)。按用户的决定，M5b 起参数按“类型”记账：类型默认就是元素，所以多元素数据集默认每个元素各三个参数；<code>--shared-parameters</code> 复现共用一组；单元素数据集不变。可选地把一个元素分成几个类型，用 M5a 的平滑切换（按配位数），每个类型三个参数，切换窗口是固定的超参数。</p>
+    <ul>
+      <li><strong>记账</strong>（第三节）：类型 = 标签 + 元素。优化器看到每个参数集的 (r0<sub>w</sub>, r0<sub>d</sub>)，共 2N 维（N 个参数集）；σ<sub>rep</sub> 每个参数集一个，在内层搜索。罚项是各参数集罚项的几何平均（最小值仍是 4，两个类型取相同半径时等于单类型的罚项）。<code>--multi_element</code> 改为“只拟合这些元素，其余元素用 PTBP 发表的参数”，同时修好它原来的几处错误。</li>
+      <li><strong>逐位不变</strong>：一个参数集、没有固定类型、没有切换（单元素，或 <code>--shared-parameters</code>）时走 M5b 之前的代码，所有文件逐字节相同（唯一的例外是有意的修正：非 Hill 顺序的多元素结构在 <code>dftb_full.xyz</code> 中的元素顺序，P5），检查点仍是版本 2。按类型的布局是损失版本 3，检查点记下类型。</li>
+      <li><strong>σ<sub>rep</sub> 的 N 维搜索</strong>（第三节）：先按原来的一维搜索找一个共用的 σ，再让每个参数集在 11 点格子上单独走一步（其他保持当前值），然后对全部 σ 联合 L-BFGS-B；格子在联合极小处还能改进时再来一轮（至多 3 轮）。11<sup>N</sup> 的格点不可行。</li>
+      <li><strong>hotcent、physrep、引擎</strong>（第四节）：同一元素的两个类型的表两个方向都算、去掉 on-site 行、按标签命名（P2：与 M5a 的 <code>cu_types</code> 逐字节相同）；physrep 按标签记账，有切换时排斥能由 <code>pydftb.typeswitch</code> 自己的函数按权重混合（含权重对力的贡献）；pydftb 引擎收到 <code>type_switching</code>，DFTB+ 遇到切换时报错。</li>
+      <li><strong>梯度</strong>（第五节）：按元素的参数有 2N 个方向，每个方向只重算该类型的表；σ 为向量时包络定理在联合最优处仍成立，M4c 的一维折点修正推广为乘子形式 dμ*/dx = ∂μ̃/∂x + λ·∂r<sub>K</sub>/∂x（J<sub>K</sub><sup>T</sup>λ = −∇<sub>σ</sub>μ̃），一维时就是 M4c 的公式。有切换时梯度优化器报错（<code>pydftb.autodiff</code> 没有混合块）。</li>
+      <li><strong>探针中的发现</strong>（第二节）：energygeometry 的 Boltzmann 权重让 Cu 数据集的二聚体、AA 石墨、金刚石（CN 1、3、4）全部不进入损失，所以“CN ≤ 4 / CN ≥ 10”的分法使低配位类型没有数据；示范改用 β-Sn（CN ≈ 10）与密堆积（CN 12、14）之分。<code>data.get_full_dftb</code> 按 Hill 顺序重建结构，N<sub>3</sub>Na 写出的元素与坐标错位（修正）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2N</span><span class="lbl">优化器的维数（N 个参数集，默认每个元素一个）</span></li>
+      <li><span class="num">0</span><span class="lbl">单元素与 <code>--shared-parameters</code> 允许改变的字节</span></li>
+      <li><span class="num">0.797</span><span class="lbl">Cu 两类型在发表的 r0 上只分开 σ<sub>rep</sub> 的损失（单类型 0.920）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、目标与用户的决定</a></li>
+      <li><a href="#probe">二、调研与探针</a></li>
+      <li><a href="#model">三、类型、参数集、罚项与 σ<sub>rep</sub> 的搜索</a></li>
+      <li><a href="#engines">四、hotcent、physrep 与 DFTB 引擎</a></li>
+      <li><a href="#grad">五、梯度优化器</a></li>
+      <li><a href="#cli">六、命令行、YAML 与界面</a></li>
+      <li><a href="#impl">七、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">八、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">九、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、目标与用户的决定</h2>
+      <ul>
+        <li><strong>用户的决定</strong>：参数化是每个元素三个参数（r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub>）。多元素数据集从 M5b 起默认每个元素各三个参数；<code>--shared-parameters</code> 复现现在的共用方式，逐字节相同；单元素（Cu）不变。</li>
+        <li><strong>类型</strong>：参数按类型记账。类型默认就是元素；可选地声明一个元素的几个类型（M5a 的平滑切换），每个类型三个参数，切换窗口的 centre、width 固定（不拟合）。PTBP 默认不用多类型。</li>
+        <li><strong>范围</strong>：energygeometry、dataset、reaction 三种模式；BO、并行 BO、PSO、梯度与 BO+梯度五种优化器（有切换时只有前三种）；pydftb 与 DFTB+ 两个引擎（有切换时只有 pydftb）。bandstructure 模式不变。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、调研与探针</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P0 现状</td><td>多元素数据集上的参数</td><td><code>Loss.set_parameters</code> 给所有元素同一组 [r0<sub>w</sub>, r0<sub>d</sub>]；<code>unparallel_repulsion</code> 把一个 σ 广播给所有元素（“broadcast that scalar to all elements”）；罚项只用最重元素的半径。<code>--multi_element</code> 只优化 <code>opt_elem[0]</code>，其余元素按 PTBP 表固定</td></tr>
+          <tr><td>P1 <code>--multi_element</code></td><td>代码路径</td><td>四处错误：<code>set_parameters</code> 读不存在的键 <code>r_wave</code>/<code>r_dens</code>（表中是 <code>r0_w</code>/<code>r0_d</code>）；<code>opt_elem</code> 是元素符号，却与 <code>Atoms.numbers</code>、physrep 的原子序数比较，<code>chemical_symbols[opt_elem[0]]</code> 出 TypeError，<code>write_specific_skf</code> 出 KeyError；<code>--parameters sigma_rep</code> 路径用两个参数调用只收一个列表的 <code>Loss_EnergyGeometry</code>；SKF 生成的 personal 路径给 <code>sigma_kxc_list</code> 赋值却用 <code>kxc_list</code>，dft_file 分支用了不存在的 <code>loss</code>。这条路径一直跑不通</td></tr>
+          <tr><td>P2 hotcent 与标签</td><td>PTBP 的 hotcent 驱动加上标签（Cu：2.749/12.036；Cu2：3.0/12.036），再用按标签的 physrep 写排斥能（σ 0.42、0.45）</td><td>四个文件与 <code>pydftb/tests/data/skf/cu_types/</code>（M5a 的 <code>make_cu_types_set.py</code> 生成）<strong>逐字节相同</strong>（physrep 在同标签文件末尾另加的 XML 说明块之前）。hotcent 21.5 s（4 进程，3 张表，交叉表两个方向），单类型 6 s</td></tr>
+          <tr><td>P3 两类型的损失</td><td>Cu，<code>Cu2</code>（低配位）/<code>Cu</code>（高配位），窗口 [10.5, 11.5]，两个类型都取发表的 r0，energygeometry</td><td>共用 σ 的一维搜索得 0.40323（μ = 0.91985872，单类型的 0.9198547924 多一步 L-BFGS-B）；每个类型单独走格子后 0.9087；联合 L-BFGS-B 后 σ = (0.4189, 0.3920)，<strong>μ = 0.79655</strong>。一步 46 s（hotcent 21 s、DFTB 8.8 s、σ 搜索 14.9 s）</td></tr>
+          <tr><td>P4 Cu 数据的权重与 CN</td><td>energygeometry 的 Boltzmann 权重（3000 K）与默认计数窗口下的 CN</td><td>二聚体 4.5e-5、AA 石墨 1.7e-3、金刚石 8.0e-3（都 &lt; 0.1，<strong>不进入损失</strong>），β-Sn 0.127、bcc 0.40、fcc 0.46。CN：二聚体 1、石墨 3、金刚石 4、β-Sn 从压缩的 12.15 经最低点 9.93 到膨胀的 8.14、bcc 14 → 12.92、fcc 12.06 → 12。所以“CN ≤ 4 / ≥ 10”的分法下低配位类型在 energygeometry 损失里没有数据，它的参数只受罚项约束，比较没有意义；示范用窗口 [10.5, 11.5]：β-Sn（CN ≈ 10）为低配位类型，fcc、bcc 为高配位，β-Sn 压缩的两点在窗口内或之上（真正的混合）</td></tr>
+          <tr><td>P5 Hill 顺序</td><td><code>data.get_full_dftb</code>、<code>merge_atoms</code> 用 <code>Atoms(get_chemical_formula(), positions)</code> 重建</td><td>reaction 示例的 N<sub>3</sub>Na 在文件里是 [Na, N, N, N]，Hill 式 “N3Na” 重建为 [N, N, N, Na]：<code>dftb_full.xyz</code> 中 Na 的坐标标成 N。能量用原结构算、力按下标相加，所以损失不受影响，写出的结构错。修正为原来的元素顺序（逐原子数组照原下标对应）</td></tr>
+          <tr><td>P6 BO 的起点</td><td>PTBP 表作种子</td><td>N 的 r0<sub>d</sub> = 2.538 低于 BO 下界 3.4：skopt 拒绝界外的 x0，所以每个类型的起点先截到边界内。skopt 要求 n_calls ≥ 10 + len(x0)：默认 11 次就是 1 个种子 + 10 个随机点</td></tr>
+          <tr><td>P7 σ 搜索</td><td><code>Repulsion_optimization</code></td><td><code>brute</code> 用默认的 <code>finish=fmin</code>（无界的单纯形抛光，可能走出 [0.1, 0.8]），再 L-BFGS-B（ftol 1e-3，最多 20 次）。energygeometry 中每次 σ 的求值都重写 SKF 的样条（<code>write_rep=True</code>）</td></tr>
+          <tr><td>P8 单位</td><td>pydftb 与 ASE 的 Bohr</td><td>pydftb 0.529177249（DFTB+ 的值），ASE 0.5291772105638411。PyDFTB 用前者换算坐标、用 ASE 的常数换算能量与力；切换的排斥能照此（权重与 DFTB 阶段逐位相同）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="model">
+      <h2>三、类型、参数集、罚项与 σ<sub>rep</sub> 的搜索</h2>
+      <h3>类型与参数集</h3>
+      <ul>
+        <li><strong>类型</strong>（<code>utils/typemodel.py</code> 的 <code>PType</code>）：标签（SKF 文件名用它，<code>Cu2-Cu.skf</code>）、元素、以及不拟合时的固定值。顺序：元素按原子序数；被切换元素的类型按切换的顺序（CN 从小到大）。</li>
+        <li><strong>参数集</strong>（<code>ParameterSet</code>）：一组 (r0<sub>w</sub>, r0<sub>d</sub>, σ<sub>rep</sub>) 和用它的类型。默认每个类型一个参数集；<code>--shared-parameters</code> 时所有拟合的类型共用一个；<code>--multi_element E…</code> 时只有这些元素的类型拟合，其余类型固定在 PTBP 表的值（r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub>）。</li>
+        <li><strong>旧布局</strong>（<code>TypeModel.legacy</code>）：只有一个参数集、没有固定类型、没有切换，就是 M5b 之前的布局（单元素或 <code>--shared-parameters</code>）；<code>Loss</code> 走原来的代码，<code>cli/run.py</code> 写原来的表头。</li>
+        <li><strong>优化器的向量</strong>：x = (r0<sub>w</sub>, r0<sub>d</sub>) 按参数集排列，维名 <code>r0_w_B, r0_d_B, r0_w_N, …</code>（一个参数集时仍是 <code>r0_w, r0_d</code>）。边界按参数集的共价半径（ASE 的值）：r0<sub>w</sub> ∈ [2.1, 7 r<sub>cov</sub>]，r0<sub>d</sub> ∈ [3.4, 9 r<sub>cov</sub>]，与原来的公式相同。起点：声明的起始值，否则 PTBP 表，否则 r<sub>cov</sub> × (3, 5)，再截到边界内（P6）。</li>
+        <li><strong>结果文件夹</strong>：<code>opt_&lt;r0_w&gt;_&lt;r0_d&gt;[_&lt;r0_w&gt;_&lt;r0_d&gt; …]</code>，按参数集顺序；一个参数集时与原来相同。</li>
+      </ul>
+      <h3>罚项</h3>
+      <ul>
+        <li>每个参数集 P<sub>k</sub> = ((r0<sub>w</sub>/2r − 1)² + 1)² · ((r0<sub>d</sub>/4r − 1)² + 2)²（原来的公式，r 为该参数集的共价半径），总罚项取<strong>几何平均</strong> P = (Π<sub>k</sub> P<sub>k</sub>)<sup>1/N</sup>。</li>
+        <li>理由：最小值仍是 4，损失与单元素同一量级；乘积形式与原来一致，ln P 可加，∂ln P/∂r0<sub>k</sub> 就是原来的导数除以 N；两个类型取相同的 r0 时 P 等于单类型的罚项，所以多类型模型在“类型参数相同”时的损失（σ 也相同时）就是单类型的损失。算术平均在偏离小时与几何平均一阶相同，乘积会让 N 个类型的最小值变成 4<sup>N</sup>。</li>
+        <li>共用参数集（旧布局，或 <code>--shared-parameters</code> 加 <code>--multi_element</code>）：原来的规则，一个半径（<code>--multi_element</code> 的第一个元素，否则最重的元素）。</li>
+      </ul>
+      <h3>σ<sub>rep</sub> 的搜索</h3>
+      <ul>
+        <li>外层只优化 r0；σ 每个参数集一个，在固定 r0 下搜索。损失在 σ 处的值由 <code>utils/loss_grad.mu(step, σ)</code> 计算（M4c 的纯函数，现在也收 σ 向量；不写文件），每次求值写一行日志（reaction 模式另写各化学式的明细）。</li>
+        <li><strong>一个 σ</strong>（例如 <code>--multi_element</code> 只给一个元素）：原来的做法，11 点格子 + fmin 抛光，再 L-BFGS-B（ftol 1e-3，最多 20 次）。</li>
+        <li><strong>N 个 σ</strong>：① 原来的一维搜索找一个所有参数集共用的 σ（截到 [0.1, 0.8]）；② 依次让每个参数集在 11 点格子上单独搜索（其他参数集保持当前值；比当前值好才接受）；③ 从这里对全部 σ 联合 L-BFGS-B（ftol 1e-3，最多 20N 次）；④ 从联合极小处再做一遍 ②，若有改进再做 ③，至多 3 轮。共约 11 + 抛光 + 1 + 22N + 20N 次求值（第二轮的格子没有改进时），而 11<sup>N</sup> 的格子不可行。第 ① 步保证结果不比共用 σ 差（在同样的 r0 下）。第 ④ 步是实现中加的：L-BFGS-B 停在折点上，而几乎不影响损失的 σ（平台，如 reaction 示例中 Na 的 σ）要等其他 σ 移动之后才在格子上显出更好的点（报告第八节）。</li>
+        <li>搜索结束后在 σ* 处写一次文件（SKF 的样条、<code>dftb_full.xyz</code>，energygeometry 的 EOS 文件），不再每次求值都写（P7 的写法只是重复覆盖）。例外：dataset/reaction 模式在搜索前先写一次样条，因为孤立原子的参考能量由 DFTB 引擎在这一步的 SKF 上计算，DFTB+ 拒绝没有样条排斥的文件（孤立原子没有排斥，写哪个 σ 都一样）。排斥能与旧路径一样只写给有结果的结构的元素。</li>
+        <li><strong>日志</strong>：par.out 每个类型 r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub> 三列，再加罚项与 μ；log.out 同样的类型列，再加 μ<sub>E</sub>、μ<sub>V</sub>（dataset/reaction 为 μ<sub>F</sub>）、μ<sub>B</sub>、罚项、μ。</li>
+      </ul>
+      <h3>检查点</h3>
+      <ul>
+        <li><code>LOSS_VERSION = 3</code>：按类型的布局，<code>checkpoint.pkl.meta.json</code> 记下布局、参数集（名字、类型、半径）、固定类型与切换；续跑时必须相同，否则拒绝（维数或含义不同的点会破坏 BO 的模型）。</li>
+        <li>旧布局仍写、仍检查版本 2（<code>SHARED_LOSS_VERSION</code>），已有的单元素检查点照常续跑；<code>tools/rescale_checkpoint.py</code> 转换出的也是版本 2。</li>
+      </ul>
+    </section>
+
+    <section id="engines">
+      <h2>四、hotcent、physrep 与 DFTB 引擎</h2>
+      <h3>hotcent（<code>utils/hotpy.py</code>、<code>utils/hotcent_parallel.py</code>）</h3>
+      <ul>
+        <li><code>hotpy.set_variables(..., elements={标签: 元素})</code>：每个标签的原子按它的元素（组态、价层、PTBP 表的 on-site 能、U、占据数）和它自己的约束计算；表按标签对计算，文件按标签命名。没有标签时调用与文件都不变。</li>
+        <li><strong>同一元素的两个标签</strong>（<code>Cu-Cu2</code>）：hotcent 2.1 当作一个原子（只算一个方向、只取第一个原子的波函数范围、按元素名写带 on-site 行的文件）。新的 <code>ShardedCross</code> 两个方向都算、取两个原子的范围（与 <code>make_cu_types_set.CrossTable</code> 相同，行照样分片并逐位重放），两个文件用 hotcent 的 <code>write_skf</code> 按异核格式写出（没有 on-site 行）。</li>
+        <li><strong>不同元素的标签对</strong>（<code>N2-B</code>）：hotcent 按元素名写到临时目录，再按标签改名。</li>
+        <li>参考实现（<code>PTBP_HOTCENT_REFERENCE</code> 或别的 hotcent 版本）按元素命名文件，遇到标签时报错。</li>
+        <li><code>generate_all(..., only=标签集)</code>：只算涉及这些标签的表（梯度的切向用，第五节）。</li>
+      </ul>
+      <h3>physrep（<code>tools/physrep.py</code>）</h3>
+      <ul>
+        <li><code>physrep(labels, ..., numbers={标签: 原子序数})</code>：键可以是标签，核电荷与共价半径按原子序数，文件 <code>Cu2-Cu.skf</code>；键是原子序数时运算逐位不变。按元素的参数（没有切换）就是原来的 physrep，每个元素自己的 σ（它本来就收每个元素一个 scale_cov）。</li>
+        <li><strong>切换</strong>：<code>switched_physrep</code> 包住按标签的 physrep。<code>evaluate_pbc</code> 用 <code>pydftb.typeswitch</code> 自己的 <code>setup</code>（CN 与权重）、<code>mixed_repulsive</code>（E<sub>rep</sub> = ½Σ<sub>有序对</sub>Σ<sub>tu</sub>w<sub>A,t</sub>w<sub>B,u</sub>V<sup>tu</sup>(r)，固定权重的梯度与 ∂E/∂w）和 <code>weight_gradient</code>（权重随几何变化的那部分力），只把 physrep 的样条包成 pydftb 的排斥能接口（截断与 0.01 Bohr 的下限同 <code>evaluate_pbc</code>）。权重只依赖几何，按结构缓存。<code>dftb_full.xyz</code> 另存每个原子的类型权重 <code>type_weight_&lt;标签&gt;</code>。</li>
+      </ul>
+      <h3>DFTB 引擎（<code>utils/engines.py</code>）</h3>
+      <ul>
+        <li><code>set_type_switching(switches)</code>：进程级设置（分叉的工作进程继承），不放进 <code>settings()</code>，所以不用切换时 <code>settings()</code>、<code>plan.json</code> 都不变。pydftb 的计算器收到 <code>type_switching</code>，原子仍用元素名（M5a 的约定）。</li>
+        <li>DFTB+ 经 ASE 只能写元素名、每个原子一种类型：有切换时 <code>make_calculator</code> 报错，<code>cli/run.py</code> 在开始前就以同样的说明退出。按元素的参数（没有切换）两个引擎照常可用。torch 后端也拒绝（M5a 的切换只在 NumPy 引擎中）。</li>
+      </ul>
+    </section>
+
+    <section id="grad">
+      <h2>五、梯度优化器</h2>
+      <ul>
+        <li><strong>方向</strong>：每个参数集两个方向（维名同上）。<code>hotcent_tangent.compute_types</code> 对一个方向只移动该参数集的半径、只重算涉及它的类型的表，其余文件复制自这一步本身，所以它们的差分恰为零（“每个类型只动自己的表”）。r0<sub>d</sub> 的探测按参数集与运行设置各做一次。</li>
+        <li><strong>包络定理</strong>：μ*(x) = min<sub>σ</sub> μ(x, σ)。在联合最优 σ* 处，光滑时 ∇<sub>σ</sub>μ = 0，在边界上的分量保持在边界，都有 dμ*/dx = ∂μ/∂x。</li>
+        <li><strong>折点的推广</strong>：μ 是 P Σ w<sub>j</sub>|r<sub>j</sub>| 的形式，σ* 常落在若干残差 K 的折点上（r<sub>K</sub>(x, σ*) = 0）。这时 σ* 是 μ̃ = P Σ<sub>j∉K</sub> w<sub>j</sub>|r<sub>j</sub>| 在 r<sub>K</sub> = 0 上的极小，在自由分量上 ∇<sub>σ</sub>μ̃ + J<sub>K</sub><sup>T</sup>λ = 0（J<sub>K</sub> = ∂r<sub>K</sub>/∂σ），由约束优化的包络定理 dμ*/dx = ∂μ̃/∂x + λ·∂r<sub>K</sub>/∂x。λ 用最小二乘求出，残差大时在 grad.out 中注明。一个 σ、一个折点时 λ = −(∂μ̃/∂σ)/(∂r<sub>k</sub>/∂σ)，正是 M4c 的修正（测试逐位比较）。力残差的折点：Σ<sub>k</sub>λ<sub>k</sub>Ḟ<sub>k</sub> 用一遍第二遍计算（权重为 λ）得到。</li>
+        <li><strong>σ* 的精确化</strong>：在 PTBP 的 σ̂（ftol 1e-3）附近，以 1e-3 的小单纯形做有界 Nelder–Mead（xatol 1e-11），再对检测到的折点残差做几步 Newton（自由分量上的最小二乘），使它们恰为零；然后按 σ* 分类（光滑、折点、边界）。</li>
+        <li><strong>切换</strong>：<code>pydftb.autodiff</code> 没有混合块与权重项，声明了多类型时 <code>--optimizer gradient/bo_grad</code> 报错，只能用 BO、并行 BO 或 PSO。</li>
+      </ul>
+    </section>
+
+    <section id="cli">
+      <h2>六、命令行、YAML 与界面</h2>
+<pre><code>ptbp optimize data.xyz                         # 多元素：默认每个元素一套参数
+ptbp optimize data.xyz --shared-parameters     # 所有元素一套参数（M5b 之前的做法，逐字节相同）
+ptbp optimize cu.xyz --engine pydftb --switch Cu Cu2,Cu 11.0 1.0 \
+     --type-start Cu2 2.749 12.036             # Cu 分成 Cu2（低配位）与 Cu（高配位）两个类型
+ptbp optimize cuo.xyz --multi-element Cu       # 只拟合 Cu，O 用 PTBP 发表的参数</code></pre>
+      <ul>
+        <li><code>--switch ELEMENT LABELS CENTRE WIDTH</code>（可重复）：标签按 CN 从小到大，CENTRE、WIDTH 每个窗口一个（逗号分隔）；计数窗口默认（1.1/1.3 倍共价半径之和），YAML 中可给 <code>cutoff</code>（Bohr）。</li>
+        <li>YAML：<code>shared_parameters: true</code>；<code>types: [{element: Cu, labels: [Cu2, Cu], centre: 11.0, width: 1.0, cutoff: ..., start: {Cu2: [2.749, 12.036]}}]</code>；<code>type_start: [[Cu2, 2.749, 12.036]]</code>。<code>ptbp_run.yaml</code> 写回合并后的声明；不用这些选项时它不多出任何键。</li>
+        <li>旧的平铺命令行：<code>--shared_parameters</code>、<code>--types JSON</code>、<code>--type_start LABEL R0_W R0_D</code>。</li>
+        <li>界面（TUI）第 6 步：参数“每个元素 / 共用”的单选，以及切换类型的输入框（<code>Cu:Cu2,Cu:11.0:1.0</code>）。</li>
+        <li><code>ptbp plan --switch …</code>：计划按类型标签数 hotcent 的表（Cu 两类型 3 张，单类型 1 张）；<code>--multi-element</code> 不再减少表数（固定类型的表每步也要算）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">七、实现</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/typemodel.py</code>（新）</td><td><code>PType</code>、<code>ParameterSet</code>、<code>TypeModel.from_dataset</code>（元素、切换声明、固定类型、起点）；<code>legacy</code>、<code>dimension_names</code>、<code>bounds</code>、<code>seed</code>、<code>r0</code>、<code>sigma</code>、<code>confinement</code>、<code>penalty</code>、<code>dlnp</code>、<code>directory_name</code>、表头与日志行、<code>meta</code>/<code>matches_meta</code>；声明的解析（<code>--switch</code>、JSON、TUI 的紧凑形式）。模块名不用 <code>types.py</code>（会遮住标准库，M5a 的 P8）</td></tr>
+            <tr><td><code>utils/loss.py</code></td><td><code>Loss(types=…)</code> 与 <code>typed</code>；<code>set_parameters</code> 收 2N 维向量（并修好 <code>multi_element</code> 分支的键与类型）；<code>Loss_EnergyGeometry</code> 分派到 <code>EnergyGeometryTypes</code>；<code>Repulsion_optimization_types</code>（N 维搜索）、<code>_log_typed</code>、<code>_write_typed_step</code>；BO 的维度、种子、元数据；<code>LOSS_VERSION</code> 3 与 <code>SHARED_LOSS_VERSION</code> 2。旧方法不动</td></tr>
+            <tr><td><code>utils/loss_grad.py</code></td><td><code>StepData</code> 收 <code>x</code>（按类型），<code>physrep</code>/<code>physrep_all</code> 按类型构造，<code>penalty</code> 用几何平均；<code>mu(step, σ, parts)</code>（parts 给出日志的各项，旧算术不变）；<code>TermsN</code>、<code>terms_typed</code>、<code>refine_sigma_typed</code>、<code>kink_multipliers</code>、<code>assemble_typed</code>；<code>GradRequest</code> 与 <code>GradResult</code> 的按类型分支</td></tr>
+            <tr><td><code>utils/hotcent_parallel.py</code>、<code>utils/hotpy.py</code></td><td>标签（第四节）；<code>ShardedCross</code>、<code>_replay_and_write_labels</code>、<code>generate_all(only=…)</code> 与 <code>_generate_tables</code></td></tr>
+            <tr><td><code>utils/hotcent_tangent.py</code></td><td><code>run_hotcent(only=…, base_dir=…)</code>；<code>compute_types</code></td></tr>
+            <tr><td><code>tools/physrep.py</code></td><td><code>numbers=</code>；<code>_name</code>；<code>switched_physrep</code>、<code>type_mixing</code>（缓存）、<code>_SplineRepulsive</code></td></tr>
+            <tr><td><code>utils/data.py</code></td><td><code>get_full_dftb</code>、<code>merge_atoms</code> 保留原来的元素顺序；切换时写类型权重</td></tr>
+            <tr><td><code>utils/engines.py</code></td><td><code>set_type_switching</code>、<code>type_switching</code>；pydftb 收切换，DFTB+ 报错</td></tr>
+            <tr><td><code>utils/gradient_opt.py</code></td><td><code>Evaluator</code> 按维名取梯度、按类型命名目录；<code>seed</code>；输出改为通用的向量格式</td></tr>
+            <tr><td><code>cli/</code></td><td><code>run.py</code>：<code>_type_model</code>（检查引擎、后端、优化器），表头，<code>Loss(types=…)</code>，<code>res.x</code> 的解包与最佳文件夹；<code>--parameters sigma_rep</code> 与 SKF 生成路径的修正；<code>opt_elem</code> 改为原子序数（hotcent 用符号）。<code>arg_parser.py</code>、<code>cmd_optimize.py</code>、<code>config.py</code>、TUI 的状态与第 6 步</td></tr>
+            <tr><td><code>utils/recommender.py</code>、<code>utils/plot.py</code></td><td>计划按标签数表（只在切换时）；图的标题可替换（按类型时写各类型的参数）</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">八、验证计划</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>G1</strong>：<code>ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines pydftb --compare-serial</code>，损失 0.9198547924，1 核与自动核数逐位相同，运行目录与 <code>3c7fe00</code> 的导出副本逐字节比较。</li>
+          <li><strong>共用参数</strong>：reaction 示例（22 个 B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 结构）11 次 BO：基础提交（默认）对新代码 <code>--shared-parameters</code>，同一路径下逐文件比较（含 results.tgz 的内容）；预期只有 <code>dftb_full.xyz</code>（Hill 修正）、<code>ptbp_run.yaml</code>（多出 <code>shared_parameters: true</code>）与 <code>summary.json</code> 的耗时不同，另以“基础提交 + 只有 Hill 修正”的副本核对 <code>dftb_full.xyz</code>。</li>
+          <li><strong>按元素</strong>：同一示例默认运行，结果写进报告。</li>
+          <li><strong>两类型示范</strong>：Cu 的 energygeometry，窗口 [10.5, 11.5]，两个类型与一个类型同样次数的 BO 比较，并给出发表点上只分开 σ 的损失。</li>
+          <li><strong>单元测试</strong>（<code>tests/test_types.py</code>）：类型模型（布局、边界、种子截断、几何平均罚项及其导数、元数据、日志列）；按标签的 physrep 与原子序数逐位相同；切换排斥能的力对能量的 4 点差分（权重在窗口内）与离散极限；<code>get_full_dftb</code> 的元素顺序；引擎；hotcent 的标签（H，交叉表异核格式、相同约束时与同核表相同、<code>only=</code> 与完整运行逐字节相同）；N 维 σ 搜索；合成损失上 σ 向量的内层极小与梯度（折点顶点、边界、光滑）对精确 μ* 的差分，以及一维时乘子即 M4c 修正；命令行、YAML、TUI；pydftb 引擎上的按元素与切换两种 <code>Loss</code>（纯函数 μ 与 Loss 逐位相同）；按类型的梯度钩子。</li>
+          <li>PTBP 测试全部（7 个已知的界面冒烟失败除外）；<code>pytest pydftb/tests</code>（pydftb 未改动）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>九、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：切换窗口的拟合（固定超参数）；数据集中逐原子的固定类型标签（类型只由切换决定）；DFTB+ 的多类型（ASE 不能写标签）；切换的梯度（需要先给 <code>pydftb.autodiff</code> 加混合块与权重项）；bandstructure 模式。</li>
+        <li><strong>损失的含义</strong>：energygeometry 的 μ<sub>E</sub> 只比较每个 EOS 组内的相对能量，Boltzmann 权重 &lt; 0.1 的组不进入损失（P4）。多类型的价值在于跨配位的可转移性，而这个损失只部分地检验它；是否为多类型改变权重或改用 dataset 模式，需要用户决定（报告列出）。</li>
+        <li><strong>代价</strong>：维数从 2 变成 2N，BO 需要更多次调用（skopt 默认先取 10 个随机点）；σ 的搜索每步约 12 + 42N 次求值（第二轮格子没有改进时；每次在内存中，约 0.1 s）；两类型的 hotcent 约为单类型的 3.5 倍。</li>
+        <li><strong>默认行为的改变</strong>：多元素数据集的默认结果改变（用户的决定）；<code>--multi_element</code> 的含义改为“只拟合这些元素，其余用 PTBP 表”（原来的路径跑不通）；<code>dftb_full.xyz</code> 的元素顺序修正。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M5a-type-switching.html">← M5a 完成报告</a><a href="../reports/M5b-ptbp-types.html">M5b 完成报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

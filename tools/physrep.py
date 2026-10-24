@@ -90,8 +90,12 @@ class physrep():
                  k_xc=[0.1,0.1,0.1],
                  filename='',
                  Ecut=1e-8,
-                 Cons_zeff=[1.,1.]):
-        
+                 Cons_zeff=[1.,1.],
+                 numbers=None):
+        """``elements``: atomic numbers; or type labels (M5b, e.g. ``['Cu2', 'Cu']``) with
+        ``numbers`` = {label: atomic number}: the potentials and the files ``Cu2-Cu.skf`` are
+        then per pair of labels (evaluate the energies with :class:`switched_physrep`)."""
+
         self.elements  = elements
         self.rmin      = rmin
         self.rmax      = rmax
@@ -102,12 +106,14 @@ class physrep():
         for i,Zi in enumerate(self.elements):
             self.scale_cov[Zi] = scale_cov[i]
             self.k_xc[Zi]      = k_xc[i]
-        
+        # nuclear charge of every key (the key itself for atomic numbers)
+        self.numbers   = {Zi: (Zi if numbers is None else numbers[Zi]) for Zi in self.elements}
+
         self.filename  = filename
         self.Ecut      = Ecut
-        
+
         self.r         = np.linspace(rmin,rmax,npoints)
-        self.atsize    = {Zi:(covalent_radii[Zi]/Bohr)*self.scale_cov[Zi] for Zi in self.elements}
+        self.atsize    = {Zi:(covalent_radii[self.numbers[Zi]]/Bohr)*self.scale_cov[Zi] for Zi in self.elements}
         
         self.Vreps     = {}
         self.rcuts     = {}
@@ -374,11 +380,12 @@ class physrep():
         return k*np.exp(((-a1*a2)/(a1+a2))*Rij**2)
 
     def calc_Vrep(self,Z1,Z2):
+        N1, N2      = self.numbers[Z1], self.numbers[Z2]                                          # nuclear charges (M5b: Z1, Z2 may be labels)
         k_mean      = (self.k_xc[Z1]+self.k_xc[Z2])/2.                                            # the place that k_xc used
         ga_ij       = self.calc_Gamma(self.atsize[Z1],self.atsize[Z2])                            # Gamma_ij
-        Hartree     = -Z1*Z2*np.array([self.calc_Hartree(ga_ij,Rij) for Rij in self.r])           # Hartree potential
-        Core        =  Z1*Z2*np.array([1./Rij for Rij in self.r])                                 # static interaction between Atomic Core
-        xc          = -k_mean*Z1*Z2*np.array([self.calc_Overlap(self.atsize[Z1],self.atsize[Z2],Rij) for Rij in self.r])
+        Hartree     = -N1*N2*np.array([self.calc_Hartree(ga_ij,Rij) for Rij in self.r])           # Hartree potential
+        Core        =  N1*N2*np.array([1./Rij for Rij in self.r])                                 # static interaction between Atomic Core
+        xc          = -k_mean*N1*N2*np.array([self.calc_Overlap(self.atsize[Z1],self.atsize[Z2],Rij) for Rij in self.r])
 
         # exchange and correlation interaction
 
@@ -552,8 +559,14 @@ class physrep():
         return pretty_xml_as_string
 
 
+    def _name(self, key):
+        """File-name part of a key: the element symbol of an atomic number, a label as it is."""
+        return key if isinstance(key, str) else chemical_symbols[key]
+
     def add_parameter_info(self, fname, known_parameters):
         sym_a = fname.split('-')[0]
+        if sym_a in self.numbers and isinstance(sym_a, str):     # a type label (M5b): its element
+            sym_a = chemical_symbols[self.numbers[sym_a]]
         print(f"Symbol:{sym_a}")
 
         xml_string = self.create_xml_document(sym_a, known_parameters)
@@ -570,7 +583,7 @@ class physrep():
                 key1 = str(Z1)+'_'+str(Z2)
                 spli = self.Vreps[key1]
                 # print('Write_skf:\n',key1,'\n', 'Total:\n', np.sum(spli.c),'\n', spli.c)
-                fname = self.filename + chemical_symbols[Z1] + '-' + chemical_symbols[Z2] + '.skf'
+                fname = self.filename + self._name(Z1) + '-' + self._name(Z2) + '.skf'
 # mncui
                 if not os.path.exists(fname):
                     raiseExceptions('-----*.skf file not existed-----')
@@ -699,5 +712,112 @@ class physrep():
 
                     if Z1 == Z2:
                         self.add_parameter_info(fname, known_parameters)
-        
-        
+
+
+# ---------------------------------------------------------------------------
+# Type switching (milestone M5b): physrep of type labels whose atoms switch smoothly between the
+# types of an element with their coordination number (pydftb's M5a).  The weights, the mixed
+# repulsive and the weights' part of the forces are pydftb.typeswitch's own functions:
+# E_rep = 1/2 sum over ordered pairs of sum_tu w_A,t w_B,u V^tu(r_AB), with physrep's splines V^tu.
+_MIXINGS: "OrderedDict[tuple, object]" = OrderedDict()
+
+
+class _SplineRepulsive:
+    """physrep's spline of one pair of labels as pydftb.typeswitch calls a repulsive:
+    ``rep(r) -> (V, dV/dr)`` (Hartree, Bohr), zero from the pair's cut-off on and below 0.01 Bohr
+    (as :meth:`physrep.evaluate_pbc`)."""
+
+    def __init__(self, spline, rcut):
+        self.spline, self.cutoff = spline, float(rcut)
+
+    def __call__(self, r):
+        r = np.asarray(r, dtype=float)
+        e, de = np.zeros_like(r), np.zeros_like(r)
+        m = (r < self.cutoff) & (r > 0.01)
+        if m.any():
+            e[m] = self.spline(r[m])
+            de[m] = self.spline(r[m], 1)
+        return e, de
+
+
+def type_mixing(switches, symbols, pos, cell, pbc):
+    """pydftb's TypeMixing of a geometry (positions and cell in Bohr), with the coordination
+    pairs of its gradient; one-hot weights when no atom is switched.  Cached: it depends on the
+    geometry only, and the sigma_rep search evaluates the same structures many times."""
+    from pydftb import typeswitch
+    key = (repr(switches), tuple(symbols), pos.tobytes(),
+           None if cell is None else np.asarray(cell).tobytes(),
+           None if pbc is None else np.asarray(pbc).tobytes())
+    hit = _MIXINGS.get(key)
+    if hit is not None:
+        _MIXINGS.move_to_end(key)
+        return hit
+    _, mix = typeswitch.setup(list(switches), list(symbols), pos, cell, pbc, derivatives=True)
+    if mix is None:                                    # no switched atom: plain labels
+        labels = sorted(set(symbols))
+        col = {lab: k for k, lab in enumerate(labels)}
+        w = np.zeros((len(symbols), len(labels)))
+        w[np.arange(len(symbols)), [col[s] for s in symbols]] = 1.0
+        mix = typeswitch.TypeMixing(labels, w, np.zeros_like(w), np.full(len(symbols), np.nan),
+                                    np.zeros(len(symbols), bool), {lab: [lab] for lab in labels})
+    _MIXINGS[key] = mix
+    while len(_MIXINGS) > 4096:
+        _MIXINGS.popitem(last=False)
+    return mix
+
+
+class switched_physrep:
+    """The repulsive of a physrep of type labels (``physrep(labels, numbers=...)``) for atoms that
+    switch between the types of their element (pydftb :class:`~pydftb.typeswitch.TypeSwitch`).
+
+    :meth:`evaluate_pbc` takes Atoms with element symbols, as :meth:`physrep.evaluate_pbc`, and
+    returns the mixed repulsive energy (eV) and forces (eV/A), the forces with the part from the
+    weights' dependence on the geometry.  Positions are converted with pydftb's Bohr, so that the
+    coordination numbers and weights are the ones of the pydftb engine (the DFTB stage); energies
+    and forces with ASE's constants, as pydftb's ASE calculator returns them.
+    """
+
+    def __init__(self, pr, switches):
+        self.pr = pr
+        self.switches = tuple(switches)
+        self.rcuts = pr.rcuts
+        self.Vreps = pr.Vreps
+
+    def repulsive(self, a, b, mode=None):
+        """pydftb's SK-set interface (``sk.repulsive``) for the labels a, b."""
+        key = f"{a}_{b}"
+        if key not in self.pr.Vreps:
+            return None
+        return _SplineRepulsive(self.pr.Vreps[key], self.pr.rcuts[key])
+
+    def mixing(self, mol):
+        from pydftb.constants import BOHR as PYDFTB_BOHR
+        periodic = bool(np.any(mol.pbc))
+        pos = mol.get_positions() / PYDFTB_BOHR
+        cell = mol.cell.array / PYDFTB_BOHR if periodic else None
+        pbc = np.asarray(mol.pbc, bool) if periodic else None
+        return type_mixing(self.switches, mol.get_chemical_symbols(), pos, cell, pbc), pos, cell, pbc
+
+    def evaluate_pbc(self, mol):
+        """Mixed repulsive energy (eV) and forces (eV/A) of a structure."""
+        from dataclasses import replace
+
+        from pydftb import typeswitch
+        mix, pos, cell, pbc = self.mixing(mol)
+        rep = typeswitch.mixed_repulsive(self, None, mix, pos, cell, pbc, grad=True)
+        grad = rep.gradient
+        if mix.active.any():
+            gw, _, _ = typeswitch.weight_gradient(replace(mix, rep=rep, blocks=None), None, None,
+                                                  None, virial=False)
+            grad = grad + gw
+        return rep.energy * Hartree, -grad * Hartree / Bohr
+
+    def weights(self, mol) -> dict:
+        """{label: (n_atom,) weights} of a structure (every label of the switches)."""
+        from pydftb import typeswitch
+        mix, _, _, _ = self.mixing(mol)
+        return typeswitch.result_weights(self.switches, mix if mix.switched.any() else None,
+                                         len(mol))
+
+    def write_skf(self, known_parameters):
+        self.pr.write_skf(known_parameters)

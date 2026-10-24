@@ -54,7 +54,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from skopt import dump, load
-    from utils.loss import LOSS_VERSION
+    # a version-1 checkpoint has one parameter set: it becomes the shared layout's version
+    from utils.loss import SHARED_LOSS_VERSION as LOSS_VERSION
 
     meta_path = Path(f"{a.checkpoint}.meta.json")
     if meta_path.exists():

@@ -53,12 +53,12 @@ poster_rcParams = {"font.size": 15,
                      }
 plt.rcParams.update(poster_rcParams)
 
-def plot_vs(symbol, parameters, dft, dft_AE_relative, dftb_AE_relative, bolt_f):
+def plot_vs(symbol, parameters, dft, dft_AE_relative, dftb_AE_relative, bolt_f, title=None):
     """
     Plot the energy figure between DFT and Optimized DFTB
 
     Parameters:
-
+        title: replaces the title made from ``parameters`` (parameters per type, M5b)
 
     """
     r0, r0_dens, c_rep, mu = parameters
@@ -83,7 +83,10 @@ def plot_vs(symbol, parameters, dft, dft_AE_relative, dftb_AE_relative, bolt_f):
 
     plt.ylabel('Rel. Energy (eV/atom)')
     plt.xlabel('$d_{\mathrm{min}}$ ($\mathrm{\AA}$)')
-    plt.title(f"$r_0$={r0:.2f},$r_0^{{\mathrm{{d}}}}$={r0_dens:.2f},$c_{{\mathrm{{rep}}}}$={c_rep:.2f}, $\mu$={mu:.2e}")
+    if title is not None:
+        plt.title(title, fontsize=7)
+    else:
+        plt.title(f"$r_0$={r0:.2f},$r_0^{{\mathrm{{d}}}}$={r0_dens:.2f},$c_{{\mathrm{{rep}}}}$={c_rep:.2f}, $\mu$={mu:.2e}")
 
     # plt.suptitle("{}".format(symbol))
     plt.legend()
@@ -93,7 +96,8 @@ def plot_vs(symbol, parameters, dft, dft_AE_relative, dftb_AE_relative, bolt_f):
     print("Save dmin.png!!") 
     plt.clf()
 
-def plot_tradition(symbol, parameter_list, mu, dft_AE_relative, dftb_AE_relative, bolt_f):
+def plot_tradition(symbol, parameter_list, mu, dft_AE_relative, dftb_AE_relative, bolt_f,
+                   title=None):
     """
     Plot the energy figure between DFT and Optimized DFTB
 
@@ -115,7 +119,10 @@ def plot_tradition(symbol, parameter_list, mu, dft_AE_relative, dftb_AE_relative
     X       = np.arange(80, 120.1, 4)
     config_list = ['dimer', 'graphite', 'diamond', 'beta-Sn', 'bcc', 'fcc']
     fig     = plt.figure(figsize=(6,6))
-    plt.suptitle('Para_dftb:$r_w$={:0.3f} $r_d$={:0.3f} $c_{{rep}}$={:0.3f} loss={:.3e}'.format(r_wave, r_dens, c_rep, mu), fontsize=large_font)
+    if title is not None:                     # parameters per type (M5b)
+        plt.suptitle(title, fontsize=small_font)
+    else:
+        plt.suptitle('Para_dftb:$r_w$={:0.3f} $r_d$={:0.3f} $c_{{rep}}$={:0.3f} loss={:.3e}'.format(r_wave, r_dens, c_rep, mu), fontsize=large_font)
     for p in range(0,n_moles):
         ax     = fig.add_subplot(math.ceil(n_moles/2), 2, p+1)
         Y_dftb = dftb_AE_relative[11*p : 11*(p+1)]

@@ -25,8 +25,21 @@ class OptimizeStep6Advanced(Screen):
             Static("parameters to optimise (space-separated):"),
             Input(value="r0_w r0_d sigma_rep", id="params"),
 
-            Static("multi_element (space-separated; leave empty for global):"),
+            Static("multi_element (space-separated; only these elements are fitted, the "
+                   "others keep PTBP's parameters; leave empty for all):"),
             Input(placeholder="Cu", id="multi"),
+
+            Static("parameters: one set (r0_w, r0_d, sigma_rep) per element, or one shared "
+                   "by all elements (as before M5b):"),
+            RadioSet(
+                RadioButton("per element", id="par-per-element"),
+                RadioButton("shared", id="par-shared"),
+                id="par-set",
+            ),
+
+            Static("switched types (pydftb only; ELEMENT:LABELS:CENTRE:WIDTH, labels by "
+                   "increasing coordination number, e.g. Cu:Cu2,Cu:11.0:1.0; empty: none):"),
+            Input(placeholder="Cu:Cu2,Cu:11.0:1.0", id="switch"),
 
             Static("superposition:"),
             RadioSet(
@@ -64,6 +77,8 @@ class OptimizeStep6Advanced(Screen):
         self.query_one('#eos-points', Input).value = str(s.eos_points)
         self.query_one('#params', Input).value = ' '.join(s.parameters)
         self.query_one('#multi', Input).value = ' '.join(s.multi_element)
+        self.query_one('#par-set', RadioSet)._selected = 1 if s.shared_parameters else 0
+        self.query_one('#switch', Input).value = s.switch_types
         rs = self.query_one('#sp-set', RadioSet)
         rs._selected = 0 if s.superposition == 'density' else 1
         es = self.query_one('#eng-set', RadioSet)
@@ -90,6 +105,15 @@ class OptimizeStep6Advanced(Screen):
             s.parameters = params_raw.split() if params_raw else ['r0_w', 'r0_d', 'sigma_rep']
             multi_raw = self.query_one('#multi', Input).value.strip()
             s.multi_element = multi_raw.split() if multi_raw else []
+            s.shared_parameters = self.query_one('#par-set', RadioSet).pressed_index == 1
+            s.switch_types = self.query_one('#switch', Input).value.strip()
+            if s.switch_types:
+                from utils.typemodel import parse_switch_text
+                try:
+                    parse_switch_text(s.switch_types)
+                except ValueError as err:
+                    self.notify(str(err), severity="error")
+                    return
             rs = self.query_one('#sp-set', RadioSet)
             s.superposition = 'density' if (rs.pressed_index <= 0) else 'potential'
             es = self.query_one('#eng-set', RadioSet)

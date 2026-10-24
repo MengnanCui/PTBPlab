@@ -19,7 +19,10 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     xc:             # str
     kpt_density:    # float
     parameters:     # list[str]
-    multi_element:  # list[str]
+    multi_element:  # list[str]: only these elements are fitted, the others keep PTBP's table
+    shared_parameters: # bool: one (r0_w, r0_d, sigma_rep) for all elements (before M5b)
+    types:          # list of {element, labels, centre, width[, cutoff, start]}: switched types (M5b)
+    type_start:     # list of [label, r0_w, r0_d]: starting points of types
     superposition:  # density / potential
     confinement:    # selfconsistent / perturbative (hotcent's confinement scheme)
     checkpoint:     # str
@@ -56,6 +59,9 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'kpt_density':   'kpt_density',
     'parameters':    'parameters',
     'multi_element': 'multi_element',
+    'shared_parameters': 'shared_parameters',
+    'types':         'types',
+    'type_start':    'type_start',
     'superposition': 'superposition',
     'confinement':   'confinement',
     'checkpoint':    'checkpoint',

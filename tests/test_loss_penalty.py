@@ -103,7 +103,9 @@ def test_dataset_loss_logs_and_applies_the_penalty(tmp_path, monkeypatch):
 
 
 def test_old_checkpoints_are_not_resumed(tmp_path):
-    from utils.loss import LOSS_VERSION, Loss
+    # one element: the layout of one parameter set, whose loss and meta file stay at version 2
+    # after M5b (LOSS_VERSION 3 is the per-type layout)
+    from utils.loss import SHARED_LOSS_VERSION as LOSS_VERSION, Loss
     ckpt = tmp_path / "checkpoint.pkl"
     ckpt.write_bytes(b"")
     loss = Loss(args_input=argparse.Namespace(checkpoint=str(ckpt)), dft_input=[_cell("Cu")])

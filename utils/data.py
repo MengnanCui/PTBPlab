@@ -135,7 +135,9 @@ def merge_atoms(atoms_a:Atoms, atoms_b:Atoms, prefixs=['band_', 'rep_']):
     prefix_a, prefix_b = prefixs
     atoms_total = []
     for num, atoms in enumerate(atoms_a):
-        atoms_new = ase.Atoms(atoms.get_chemical_formula(), atoms.get_positions())
+        # the atoms in their order: Atoms(get_chemical_formula(), ...) put them in Hill order,
+        # so the symbols no longer matched the positions and per-atom arrays (M5b)
+        atoms_new = ase.Atoms(atoms.get_chemical_symbols(), atoms.get_positions())
         atoms_new.set_cell(atoms.get_cell())
         atoms_new.set_pbc(atoms.get_pbc())
         
@@ -177,7 +179,10 @@ def get_full_dftb(dftb_bandstructure:list, dft:Atoms, pr:physrep, calc_forces:bo
     print("Calculate the repulsive energy!")
     for num, atoms in enumerate(dft):
         ref_e, ref_f = pr.evaluate_pbc(atoms)
-        atoms_new = ase.Atoms(atoms.get_chemical_formula(), 
+        # the atoms in their order (M5b): Atoms(get_chemical_formula(), positions) put the
+        # symbols in Hill order, so a structure such as [Na, N, N, N] was written with the
+        # symbols on the wrong positions (the energies and the forces, by index, were right)
+        atoms_new = ase.Atoms(atoms.get_chemical_symbols(),
                               atoms.get_positions())
         atoms_new.set_cell(atoms.get_cell())
         atoms_new.set_pbc(atoms.get_pbc())
@@ -190,6 +195,9 @@ def get_full_dftb(dftb_bandstructure:list, dft:Atoms, pr:physrep, calc_forces:bo
             atoms_new.set_array('forces', ref_f + dftb_bandstructure[num].get_array('forces'))
             atoms_new.set_array('band_forces', dftb_bandstructure[num].get_array('forces'))
             atoms_new.set_array('rep_forces', ref_f)
+        if hasattr(pr, 'weights'):           # type switching (M5b): every atom's type weights
+            for label, w in pr.weights(atoms).items():
+                atoms_new.set_array(f'type_weight_{label}', np.asarray(w, dtype=float))
 
         try:
             atoms_new.info['structure_name'] = atoms.info['structure_name']

@@ -110,8 +110,10 @@ class Workload:
 
 def workload_from_dataset(structures, bolt, *, kpts_density: float = 5.0, eos_points: int = 11,
                           engine: str = "dftbplus", mode: str = "energygeometry",
-                          opt_elem=(), species: dict | None = None) -> Workload:
-    """The workload of a BO step over ``structures`` (``bolt``: weight per structure)."""
+                          opt_elem=(), species: dict | None = None, labels=None) -> Workload:
+    """The workload of a BO step over ``structures`` (``bolt``: weight per structure).
+    ``labels``: {type label: element} when hotcent's tables are those of type labels rather
+    than of the elements (switched types, M5b); a type has its element's basis."""
     from utils.dftb_stage import kpoint_grid
     eos = max(1, int(eos_points))
     used = list(structures[:int(len(structures) / eos) * eos])
@@ -127,8 +129,13 @@ def workload_from_dataset(structures, bolt, *, kpts_density: float = 5.0, eos_po
         shapes.append(shape(atoms.get_chemical_symbols(), species,
                             cell=atoms.cell if periodic else None, pbc=atoms.pbc,
                             positions=atoms.positions, grid=grid))
-    return Workload(engine, mode, symbols, shapes, grids, hotcent_tables(symbols, opt_elem),
-                    len(structures), species)
+    if labels is None:
+        tables = hotcent_tables(symbols, opt_elem)
+    else:
+        for lab, el in dict(labels).items():
+            species.setdefault(lab, species[el])
+        tables = hotcent_tables(list(dict(labels)))
+    return Workload(engine, mode, symbols, shapes, grids, tables, len(structures), species)
 
 
 def bolt_for(structures, mode: str, eos_points: int, multi_element=None) -> list:

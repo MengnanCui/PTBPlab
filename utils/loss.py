@@ -71,8 +71,13 @@ import utils.plot as plot
 
 # Version of the loss definition stored next to skopt checkpoints (checkpoint.pkl.meta.json).
 # 1: the penalty always used a covalent radius of 0.5 Bohr (the radius was never passed to
-#    Loss); 2: the radius of the element being parametrised, as for the published PTBP losses.
-LOSS_VERSION = 2
+#    Loss); 2: the radius of the element being parametrised, as for the published PTBP losses;
+# 3 (M5b): parameters per type (utils.typemodel): (r0_w, r0_d) of every parameter set for the
+#    optimisers, a sigma_rep per set, the penalty the geometric mean of the sets' penalties; the
+#    meta file records the types.  One parameter set for every type (one element, or
+#    --shared-parameters) keeps the loss and the meta file of version 2, bit for bit.
+LOSS_VERSION = 3
+SHARED_LOSS_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +108,16 @@ def _read_step_file(path) -> list:
 _PHYSREP: "OrderedDict[tuple, physrep]" = OrderedDict()
 
 
-def _physrep(elements, scale_cov, k_xc) -> "physrep":
+def _physrep(elements, scale_cov, k_xc, numbers=None) -> "physrep":
     """physrep(elements, rmin=0.5, rmax=20, npoints=700, ...), built once per parameters
-    (a pure function of them; evaluated and written, never modified)."""
-    key = (repr(list(elements)), repr(list(scale_cov)), repr(list(k_xc)))
+    (a pure function of them; evaluated and written, never modified).  ``numbers``: the atomic
+    number of every key when the keys are type labels (M5b)."""
+    key = (repr(list(elements)), repr(list(scale_cov)), repr(list(k_xc)),
+           None if numbers is None else repr(sorted(numbers.items())))
     pr = _PHYSREP.get(key)
     if pr is None:
         pr = physrep(elements=elements, rmin=0.5, rmax=20.0, npoints=700,
-                     scale_cov=scale_cov, k_xc=k_xc)
+                     scale_cov=scale_cov, k_xc=k_xc, numbers=numbers)
         _PHYSREP[key] = pr
         while len(_PHYSREP) > 64:
             _PHYSREP.popitem(last=False)
@@ -178,6 +185,7 @@ class Loss():
                  superposition: str='density',
                  cov_radius: float | None=None,
                  path:Path='./',
+                 types=None,
                  ):
         self.args_input = args_input
         self.dft_input = dft_input
@@ -192,7 +200,16 @@ class Loss():
         # utils.loss_grad.GradRequest: the next evaluation also computes the gradient
         # (gradient optimisers, M4c); None: the loss exactly as before
         self.grad_request = None
-    
+        # utils.typemodel.TypeModel (M5b); None or a layout with one parameter set for every
+        # type (TypeModel.legacy): the loss of before M5b, bit for bit
+        self.types = types
+
+    @property
+    def typed(self) -> bool:
+        """Parameters per type (M5b): several parameter sets, fixed types or type switching."""
+        model = getattr(self, 'types', None)
+        return model is not None and not model.legacy
+
 
     def penalty(self, r0_w: float, r0_d: float) -> float:
         """Regularisation factor for these confinement radii (see :func:`r0_penalty`)."""
@@ -378,13 +395,22 @@ class Loss():
     def set_parameters(self, conf_parameters:list):
         """
         Set parameters as the input for Hotcent and Physrep
+
+        With parameters per type (M5b, ``self.typed``) ``conf_parameters`` is the vector of the
+        optimisers, (r0_w, r0_d) of every parameter set, and the result is
+        ({label: [r0_w, r0_d]}, {label: p}) for every type (utils.typemodel); otherwise
+        [r0_w, r0_d, p] for every element, as before.
         """
+        if self.typed:
+            return self.types.confinement(conf_parameters)
 
         kxc = 0.0
         r0, r0_dens, p = conf_parameters
 
-        atomic_numbers, atomic_numbers_exclusive, atomic_symbols, atomic_symbols_exclusive = self.get_elements_from_dataset(self.dft_input, self.opt_elem)
-        
+        # opt_elem may hold symbols (the CLI's --multi_element) or atomic numbers
+        opt_numbers = [atomic_numbers[e] if isinstance(e, str) else int(e) for e in self.opt_elem]
+        atomic_numbers_, atomic_numbers_exclusive, atomic_symbols, atomic_symbols_exclusive = self.get_elements_from_dataset(self.dft_input, opt_numbers)
+
         if self.args_input.multi_element is None:
             #! For Single element system
             confinement_r0 = {s: [r0, r0_dens] for s in atomic_symbols}
@@ -392,11 +418,12 @@ class Loss():
 
         else:
             #! For Binary system
-            # For multi-element system, we need to define the cons and sigs and c_rep for each element
-            confinement_r0 = {s: [get_PTBP()[s]['r_wave'], get_PTBP()[s]['r_dens']] for s in atomic_symbols_exclusive}
-            confinement_r0[chemical_symbols[self.opt_elem[0]]] = [r0, r0_dens]
+            # The other elements keep PTBP's published radii (the table's keys are r0_w, r0_d;
+            # this used to read 'r_wave', 'r_dens', which do not exist)
+            confinement_r0 = {s: [get_PTBP()[s]['r0_w'], get_PTBP()[s]['r0_d']] for s in atomic_symbols_exclusive}
+            confinement_r0[chemical_symbols[opt_numbers[0]]] = [r0, r0_dens]
             confinement_sigma = {s: p for s in atomic_symbols}
-        
+
         return confinement_r0, confinement_sigma
 
 
@@ -1176,6 +1203,8 @@ class Loss():
         superposition = self.args_input.superposition
         xc = self.args_input.xc
 
+        if self.typed:                       # parameters per type (M5b): (r0_w, r0_d) per set
+            return self.EnergyGeometryTypes(list(parameters), xc=xc, superposition=superposition)
 
         default_p = 2.0
         r0_w, r0_d = parameters
@@ -1216,6 +1245,236 @@ class Loss():
         return mu
 
 
+
+    # =========================================================
+    # Parameters per type (milestone M5b)
+    # =========================================================
+    def Repulsion_optimization_types(self, x, c0: float = 0.1, c1: float = 0.8):
+        """sigma_rep of every parameter set at the radii ``x``: (sigma vector, mu).
+
+        The loss at sigma is utils.loss_grad.mu on the step's files (in memory, nothing is
+        written; every evaluation adds a line to the log, and in reaction mode a block to
+        reaction_per_formula.csv).  One sigma (one fitted set): the search of before M5b, an
+        11-point grid polished by fmin, then L-BFGS-B (ftol 1e-3, at most 20 evaluations).
+        n sigma: the same 1-D search for one sigma common to all sets, then every set on its
+        own on the 11-point grid with the others at their current values (kept only if
+        better), then L-BFGS-B over all n together (ftol 1e-3, at most 20 n evaluations); the
+        grids and L-BFGS-B again while the grids improve the joint minimum (at most 3 rounds).
+        A grid of 11^n points would not be affordable.
+        """
+        from utils import loss_grad
+        model = self.types
+        step = loss_grad.StepData.from_files(self, x=x)
+        self._typed_step = step
+        n = model.n_sigma
+        srange = (c0, c1)
+        if self.args_input.optimization_option.lower() in ('dataset', 'reaction'):
+            # The isolated atoms' energies (Loss.get_atomic_energy, once per step) run the DFTB
+            # engine on this step's SKF files, and DFTB+ refuses files without a repulsive
+            # spline: give them one first.  An atom alone in its 20 A box has no repulsion, so
+            # any sigma does; the files get sigma*'s at the end (before M5b they were rewritten
+            # at every sigma tried).
+            step.physrep_all([0.5 * (c0 + c1)] * n).write_skf('ptbp')
+
+        def f(svec):
+            svec = [float(v) for v in np.atleast_1d(np.asarray(svec, dtype=float))]
+            parts = {}
+            mu = float(loss_grad.mu(step, svec, parts))
+            self._log_typed(x, svec, parts, mu)
+            return mu
+
+        def first(s):
+            return float(np.atleast_1d(s)[0])
+
+        if n == 1:
+            res_brute = brute(f, (srange,), Ns=11, full_output=True, disp=True, workers=1)
+            print(f"Search time 1: sigma_rep = {res_brute[0]}, mu = {res_brute[1]}")
+            res = minimize(f, [first(res_brute[0])], method='L-BFGS-B',
+                           bounds=Bounds(c0, c1, keep_feasible=True),
+                           options={'maxfun': 20, 'ftol': 1e-3})
+            print(f"Search time 2: sigma_rep = {res.x[0]}, mu = {res.fun}")
+            return [float(res.x[0])], float(res.fun)
+
+        # 1. one sigma for every set
+        res_brute = brute(lambda s: f([first(s)] * n), (srange,), Ns=11, full_output=True,
+                          disp=True, workers=1)
+        cur = [min(max(first(res_brute[0]), c0), c1)] * n
+        f_cur = f(cur)
+        print(f"Search time 1 (common sigma_rep): {cur[0]}, mu = {f_cur}")
+        # 2. every set on its own on the grid, the others at their current values; 3. all
+        # together.  Again from the joint minimum while a grid improves it (at most 3 rounds):
+        # L-BFGS-B stops at kinks, and a sigma that hardly matters (a plateau) can leave a
+        # better point on the grid once the other sigma have moved
+        for rnd in range(3):
+            moved = False
+            for k in range(n):
+                def fk(s, k=k):
+                    trial = list(cur)
+                    trial[k] = first(s)
+                    return f(trial)
+                res_k = brute(fk, (srange,), Ns=11, full_output=True, finish=None, disp=False,
+                              workers=1)
+                if float(res_k[1]) < f_cur:
+                    cur[k], f_cur = first(res_k[0]), float(res_k[1])
+                    moved = True
+            print(f"Search time 2.{rnd + 1} (each set on the grid): sigma_rep = {cur}, mu = {f_cur}")
+            if rnd > 0 and not moved:
+                break
+            res = minimize(f, cur, method='L-BFGS-B', bounds=Bounds([c0] * n, [c1] * n,
+                                                                      keep_feasible=True),
+                           options={'maxfun': 20 * n, 'ftol': 1e-3})
+            if float(res.fun) < f_cur:             # L-BFGS-B ends no higher than it starts
+                cur, f_cur = [float(v) for v in res.x], float(res.fun)
+            print(f"Search time 3.{rnd + 1} (L-BFGS-B, all sets): sigma_rep = {cur}, mu = {f_cur}")
+        return list(cur), f_cur
+
+    def _log_typed(self, x, svec, parts, mu) -> None:
+        """One line of the log (and the reaction-mode breakdown) for one sigma evaluation."""
+        model = self.types
+        mode = self.args_input.optimization_option.lower()
+        if mode == 'energygeometry':
+            cols = (parts['mu_E'], parts['mu_V'], parts['mu_logb'])
+        else:
+            cols = (parts['mu_E'], parts['mu_F'], 0.0)
+        with open(self.args_input.log_file, 'a') as output:
+            output.write(model.log_line(x, svec, *cols, parts['penalty'], mu))
+        if mode == 'reaction':
+            from collections import defaultdict as _dd
+            buckets = _dd(list)
+            for atoms, d in zip(self._typed_step.dft, parts['diffs']):
+                buckets[atoms.get_chemical_formula()].append(float(d))
+            with open('reaction_per_formula.csv', 'a') as fh:
+                fh.write(f"# {model.parameter_text(x, svec)} mu={mu:.6e}\n")
+                fh.write("formula,n_structures,mean_abs_dE_per_atom,max_abs_dE_per_atom\n")
+                for formula in sorted(buckets):
+                    vals = np.array(buckets[formula])
+                    fh.write(f"{formula},{len(vals)},{vals.mean():.6e},{vals.max():.6e}\n")
+
+    def _write_typed_step(self, x, svec) -> list:
+        """The step's files at sigma*: the repulsive in the SKF files, dftb_full.xyz, and in
+        energygeometry mode the EOS files (trajectories, dft/dftb.json, the csv files) as the
+        search of before M5b leaves them.  Returns dftb_full (the Atoms)."""
+        import io
+
+        from utils import loss_grad
+        step = self._typed_step
+        mode = self.args_input.optimization_option.lower()
+        if mode == 'energygeometry':
+            eos = step.eos
+            eos_files = {}
+            bolt_f = step.bolt_f
+            for num in range(int(len(step.dft) / eos)):
+                sl = slice(num * eos, (num + 1) * eos)
+                pr_g, _ = step.physrep(svec, num)
+                total = data.get_full_dftb(step.band[sl], step.dft[sl], pr_g, True)
+                # as the search of before M5b, through dftb_sub_<num>.xyz: mu_E in the info,
+                # the energy (which the EOS fit reads) and the forces in a calculator
+                _, _, delta = loss_grad._group_rel_energies(self, step.dft[sl], total,
+                                                            step.bolt11[sl])
+                for atoms in total:
+                    atoms.info['mu_E'] = delta
+                buf = io.StringIO()
+                ase.io.write(buf, total, format='extxyz')
+                buf.seek(0)
+                total = ase.io.read(buf, ':', format='extxyz')
+                eos_dftb = self.eos_atoms(total, eos, 'dftb', files=eos_files)
+                eos_dft = self.eos_atoms(step.dft[sl], eos, 'dft', files=eos_files)
+                [eos_dft[conf].update(eos_dftb[conf]) for conf in eos_dftb]
+                self.eos_cal(eos_dft, [bolt_f[num]])
+            self.write_eos_files(eos_files)
+        pr = step.physrep_all(svec)
+        pr.write_skf('ptbp')
+        dftb_full = data.get_full_dftb(step.band, step.dft, pr, True)
+        ase.io.write('dftb_full.xyz', dftb_full)
+        return dftb_full
+
+    def EnergyGeometryTypes(self, x, xc: str, superposition: str) -> float:
+        """Loss_EnergyGeometry with parameters per type (M5b): hotcent with every type's radii
+        (files named after the type labels), the DFTB stage (pydftb mixes switched types), the
+        sigma_rep search of every parameter set, the files of the step, par.out and log.out."""
+        model = self.types
+        x = [float(v) for v in x]
+        mode = self.args_input.optimization_option.lower()
+        kxc = 0.0
+        self._E0_dftb_cache = {}
+        grad = getattr(self, 'grad_request', None)
+        opt_directory = self.path / self.args_input.results_dir / model.directory_name(
+            x, 3 if grad is None else 6)
+        opt_directory.mkdir(exist_ok=True, parents=True)
+        os.chdir(opt_directory)
+
+        t_ini = perf_counter()
+        confinement_r0, confinement_p = self.set_parameters(x)
+        print(f"Confinement_r0:{confinement_r0}, Confinement_p:{confinement_p}")
+        self.hp.set_variables(confinement_r0, confinement_p, xc=xc,
+                              superposition=self.args_input.superposition,
+                              elements=model.element_of)
+        penalty = model.penalty(x)
+        try:
+            self.hp.full_hotcent(superposition=superposition, opt_elem=[])
+            t_hotcent = perf_counter()
+            if grad is not None:
+                grad.after_hotcent(self, x)                   # tangents (own timings)
+                t_ini += perf_counter() - t_hotcent
+                t_hotcent = perf_counter()
+
+            dft_incopy = copy.deepcopy(self.dft_input)
+            self.run_calculator_seperately(dft_incopy)
+            t_dftb = perf_counter()
+            if not Path("search_index.txt").read_text().strip():
+                # every group lost its SKF files (hotcent failed): the failure value
+                raise RuntimeError("no structure has DFTB results at these parameters")
+
+            svec, mu = self.Repulsion_optimization_types(x)
+            self.last_sigma = list(svec)                  # sigma_rep of every set (mu's point)
+            dftb_full = self._write_typed_step(x, svec)
+            t_physrep = perf_counter()
+
+            dft_final = self._typed_step.dft
+            if mode == 'energygeometry':
+                with open("search_index.txt", 'r') as search_index_file:
+                    search_index = search_index_file.read().strip().split(',')
+                bolt_f11_final = [self.bolt_f11[int(i)] for i in search_index]
+                dftb_rel, dft_rel, _ = self.get_energy_per_atom(dft_final, dftb_full, bolt_f11_final)
+                elements = sorted(set(model.element_of.values()))
+                if len(elements) == 1 and self.args_input.multi_element is None:
+                    bolt_f = self.bolt_f11[floor(self.args_input.eos_points/2)::self.args_input.eos_points]
+                    title = model.parameter_text(x, svec) + f" mu={mu:.3e}"
+                    first = model.sets[0].labels[0]
+                    r0, sig = model.r0(x)[first], model.sigma(svec)[first]
+                    plot.plot_vs(elements[0], [r0[0], r0[1], sig, mu], dft_incopy, dft_rel,
+                                 dftb_rel, bolt_f, title=title)
+                    plot.plot_tradition(elements[0], [r0[0], r0[1], sig, 2.0], mu, dft_rel,
+                                        dftb_rel, bolt_f, title=title)
+
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(model.par_line(x, svec, penalty, mu))
+
+            t_end = perf_counter()
+            self.step_timings = {'hotcent': t_hotcent - t_ini, 'dftb': t_dftb - t_hotcent,
+                                 'physrep': t_physrep - t_dftb, 'data': t_end - t_physrep,
+                                 'total': t_end - t_ini}
+            print(f"\nTime:\nHotcent: {t_hotcent - t_ini}\nDFTB: {t_dftb - t_hotcent}\n"
+                  f"Physrep: {t_physrep - t_dftb}\nDataProcessing: {t_end - t_physrep}\n"
+                  f"Total: {t_end - t_ini}")
+            if current_plan() is not None and current_plan().estimates:
+                print(current_plan().step_line(self.step_timings))
+            if grad is not None:
+                grad.after_step(self, x, svec, mu)
+            return mu
+
+        except(RuntimeError, AssertionError, UnboundLocalError, ase.io.formats.UnknownFileTypeError) as error:
+            print("Error:", error)
+            svec = [0.4321] * model.n_sigma
+            mu_E, mu_V, mu_logb = 10, 10, 10
+            mu = random.randint(97,99)
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(model.par_line(x, svec, penalty, mu))
+            with open(self.args_input.log_file, 'a') as output:
+                output.write(model.log_line(x, svec, mu_E, mu_V, mu_logb, penalty, mu))
+            if grad is not None:
+                grad.fail(x, mu, f"{type(error).__name__}: {error}")
+            return mu
 
     # =========================================================
     # Outer-loop optimisers
@@ -1264,6 +1523,12 @@ class Loss():
         wants raw lower/upper arrays).
         """
         opt_opt = self.args_input.optimization_option.lower()
+        if self.typed and opt_opt in ('energygeometry', 'dataset', 'reaction'):
+            # M5b: (r0_w, r0_d) of every parameter set, bounds from the set's covalent radius
+            lo, hi = self.types.bounds()
+            dims = [Real(name=n, low=a, high=b, prior='uniform')
+                    for n, a, b in zip(self.types.dimension_names(), lo, hi)]
+            return dims, lo, hi, self.Loss_EnergyGeometry
         if opt_opt in ('energygeometry', 'dataset', 'reaction'):
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius
             r0_d_lower, r0_d_upper = 3.4, 9.0 * cov_radius
@@ -1436,14 +1701,24 @@ class Loss():
         if os.path.exists(meta_path):
             with open(meta_path) as fh:
                 meta = json.load(fh)
-        if (meta is not None and meta.get("ptbp_loss_version") == LOSS_VERSION
+        if self.typed:                                       # M5b: the types must be the same
+            if self.types.matches_meta(meta):
+                return
+            raise RuntimeError(
+                f"{self.args_input.checkpoint} has "
+                + ("no record of its loss definition" if meta is None else f"loss record {meta}")
+                + f"; this run uses loss version {LOSS_VERSION} with the parameter sets "
+                f"{[s.name for s in self.types.sets]} ({self.types.layout}). Its points have "
+                f"another number or meaning of parameters: delete it (or use another --checkpoint) "
+                f"to start afresh.")
+        if (meta is not None and meta.get("ptbp_loss_version") == SHARED_LOSS_VERSION
                 and abs(meta.get("penalty_radius_bohr", -1.0) - self.cov_radius) < 1e-5):
             return
         found = ("no record of its loss definition (written before PTBP fixed the penalty "
                  "radius, which was always 0.5 Bohr)" if meta is None else f"loss record {meta}")
         raise RuntimeError(
             f"{self.args_input.checkpoint} has {found}; this run uses loss version "
-            f"{LOSS_VERSION} with a penalty radius of {self.cov_radius:.6f} Bohr. Mixing the two "
+            f"{SHARED_LOSS_VERSION} with a penalty radius of {self.cov_radius:.6f} Bohr. Mixing the two "
             f"scales would corrupt the Bayesian model. Convert the checkpoint with "
             f"`python tools/rescale_checkpoint.py {self.args_input.checkpoint} "
             f"--radius {self.cov_radius!r}` or delete it to start afresh.")
@@ -1473,6 +1748,13 @@ class Loss():
             print(f"[checkpoint] Resuming from {self.args_input.checkpoint}: "
                   f"{done} prior iteration(s) loaded; will run {n_calls} more "
                   f"(total stored: {done + n_calls}).")
+        elif self.typed and mode in ('energygeometry', 'dataset', 'reaction'):
+            # M5b: every parameter set starts at its declared start, PTBP's table, or
+            # r_cov x (3, 5), inside the box (utils.typemodel)
+            x0 = self.types.seed()
+            print(f"BO seed per parameter set: "
+                  + ", ".join(f"{n}={v:.4f}" for n, v in zip(self.types.dimension_names(), x0)))
+            y0 = None
         else:
             # Smart seed: for an elementary system whose element already has a
             # PTBP entry, start the BO at those published params instead of a
@@ -1500,10 +1782,25 @@ class Loss():
             n_calls = n_calls
 
         with open(meta_path, 'w') as fh:
-            json.dump({"ptbp_loss_version": LOSS_VERSION, "penalty_radius_bohr": self.cov_radius,
-                       "mode": mode}, fh)
+            if self.typed:
+                json.dump(self.types.meta(mode), fh)
+            else:
+                json.dump({"ptbp_loss_version": SHARED_LOSS_VERSION,
+                           "penalty_radius_bohr": self.cov_radius, "mode": mode}, fh)
 
-        if self.args_input.optimization_option.lower() in ('energygeometry', 'dataset', 'reaction'):
+        if self.typed and mode in ('energygeometry', 'dataset', 'reaction'):
+            dimensions, lo, hi, cost_fn = self._bo_dimensions_and_cost(cov_radius)
+            print("Bounds: " + ", ".join(f"{d.name}: {a} ~ {b:.6g}"
+                                         for d, a, b in zip(dimensions, lo, hi)))
+            res = gp_minimize(func=cost_fn,
+                              dimensions=dimensions,
+                              n_calls=n_calls,
+                              acq_func="EI",
+                              x0=x0,
+                              y0=y0,
+                              callback=[checkpoint_saver],
+                              random_state=123)
+        elif self.args_input.optimization_option.lower() in ('energygeometry', 'dataset', 'reaction'):
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius            # Wavefunction cutoff
             r0_d_lower, r0_d_upper = 3.4, 9.0 * cov_radius            # Density function cutoff
             print(f"Bounds: r0_w: {r0_w_lower} ~ {r0_w_upper}, r0_d: {r0_d_lower} ~ {r0_d_upper}")

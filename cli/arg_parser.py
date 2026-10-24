@@ -57,9 +57,31 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        '--multi_element', help='Give the element symbols that you want to optimize among the composition',
+        '--multi_element', help='Element symbols whose parameters are optimised; the other '
+                                'elements keep the parameters PTBP published (M5b)',
         nargs='+',
         type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--shared_parameters', help="One (r0_w, r0_d, sigma_rep) for all elements, as before "
+                                    "M5b; default: one set per element (type)",
+        action='store_true',
+        default=None,
+    )
+    parser.add_argument(
+        '--types', help="Several types of one element that switch with the coordination "
+                        "number (M5b), as JSON: a list of {\"element\": \"Cu\", \"labels\": "
+                        "[\"Cu2\", \"Cu\"], \"centre\": 11.0, \"width\": 1.0[, \"cutoff\": ..., "
+                        "\"start\": {label: [r0_w, r0_d]}]}, the labels in order of increasing "
+                        "coordination number; needs --engine pydftb",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--type_start', help="Starting point (r0_w r0_d, Bohr) of a type's parameters: "
+                             "LABEL R0_W R0_D (repeatable)",
+        nargs=3, action='append', metavar=('LABEL', 'R0_W', 'R0_D'),
         default=None,
     )
     parser.add_argument(
