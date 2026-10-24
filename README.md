@@ -505,6 +505,29 @@ ptbp optimize dft/dft.xyz --engine pydftb --pydftb-backend torch --device mps --
   advisable for the forces of metals at T = 0.  Details:
   `pydftb/docs/reports/M4d-devices.html`.
 
+### 4g. Parameters per element and per type (M5b)
+
+A dataset with several elements gets **one set of (r0_w, r0_d, σ_rep) per element** by
+default (the optimisers search 2N radii; σ_rep is searched per set inside every step).
+Before M5b PTBP gave all elements one shared set: `--shared-parameters` reproduces that
+byte for byte, and a single element (Cu) is unchanged. Results of multi-element datasets
+therefore differ from those of earlier versions.
+
+```bash
+ptbp optimize data.xyz                          # one set per element (default)
+ptbp optimize data.xyz --shared-parameters      # one set for all elements (before M5b)
+ptbp optimize cuo.xyz --multi-element Cu        # fit Cu only; O keeps PTBP's published parameters
+ptbp optimize cu.xyz --mode energygeometry --engine pydftb \
+     --switch Cu Cu2,Cu 11.0 1.0                # two Cu types switched by coordination number
+ptbp optimize data.xyz --type-start N 2.4 3.6   # start of one type's radii (Bohr)
+```
+
+- Several types of one element (`--switch`, or `types:` in the YAML config) use pydftb's
+  smooth type switching (M5a) and need `--engine pydftb` with the NumPy backend.
+- The penalty is the geometric mean of the parameter sets' penalties.
+- Gradient optimisers work with one set per element (2N directions), not with switched types.
+- Details: `pydftb/docs/reports/M5b-ptbp-types.html`.
+
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
 After every successful run PTBP snapshots the optimisation outcome to

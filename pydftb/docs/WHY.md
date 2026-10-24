@@ -43,7 +43,7 @@ DFTB+ 的 GPU 支持有限：MAGMA 只能单机，跨节点只有 ELPA-GPU。pyd
 - TBMaLT（JCP 158, 034801, 2023）可以随环境调整压缩半径，但不支持周期体系。
 - 常用的 3ob、matsci 参数集**根本没有 Li**；用 DFTB 研究固态电解质、正极/电解质界面的工作也是空白。
 
-pydftb 的目标是**平滑、带力、可做分子动力学、支持周期体系**的多套参数（M5、M8 阶段）。离散多类型的机制已在 M0 打好基础（`System` 的类型标签、`write_typed_copies`），并已与 DFTB+ 对照验证。**引擎一侧的平滑切换已经有了**（M5a，`DFTB(type_switching=…)`）：每个原子按配位数在它的类型之间取权重，H0、S 与排斥能按权重混合，力与应力含权重的导数，周期体系与 MD 都能用；权重恰为 0/1 时与 DFTB+ 的固定类型逐位对应（`reports/M5a-type-switching.html`）。按类型拟合参数（M5b）与电池算例（等有 Li 的 DFT 数据）还没做。
+pydftb 的目标是**平滑、带力、可做分子动力学、支持周期体系**的多套参数（M5、M8 阶段）。离散多类型的机制已在 M0 打好基础（`System` 的类型标签、`write_typed_copies`），并已与 DFTB+ 对照验证。**引擎一侧的平滑切换已经有了**（M5a，`DFTB(type_switching=…)`）：每个原子按配位数在它的类型之间取权重，H0、S 与排斥能按权重混合，力与应力含权重的导数，周期体系与 MD 都能用；权重恰为 0/1 时与 DFTB+ 的固定类型逐位对应（`reports/M5a-type-switching.html`）。PTBP 一侧的按类型拟合也已经有了（M5b）：多元素数据集默认每个元素一套 r0_w、r0_d、σ_rep，也可以声明同一元素的几个类型并用上述切换拟合（`reports/M5b-ptbp-types.html`）。电池算例等有 Li 的 DFT 数据再做。
 
 这条路上有一个隐藏的坑：两套参数的 Hubbard U 只要相差 3e-6 到 1e-3，DFTB+ 的 γ 公式就会在数值上失效，DFTB3 下实测总能量错 0.5 eV，而且没有任何警告。pydftb 已在 M2b 改用数值稳定的积分形式（`reports/M2b-dftb3.html`）。
 
