@@ -18,7 +18,7 @@
     <dl class="meta">
       <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
       <div><dt>日期</dt><dd>2026-10-24</dd></div>
-      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>提交</dt><dd><code>9af4d3b</code></dd></div>
       <div><dt>配套</dt><dd><a href="../design/M6g1-response.html">设计文档</a></dd></div>
     </dl>
   </header>
@@ -241,11 +241,11 @@ print(dftbplus_io.response_tables(r))      # DFTB+ detailed.out 的响应块</co
       <div class="table-wrap"><table>
         <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
         <tbody>
-          <tr><td>G0：golden</td><td>与 M6f-5 的记录提交 <code>145e50c</code> 逐字节比较；<code>--allow-new polarisability response_kernel perturbation</code></td><td>@@GOLDEN@@</td></tr>
-          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>@@REFS@@</td></tr>
-          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>@@PYTEST@@</td></tr>
-          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>@@PTBP@@</td></tr>
-          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>@@G1@@</td></tr>
+          <tr><td>G0：golden</td><td>与 M6f-5 的记录提交 <code>145e50c</code> 逐字节比较；<code>--allow-new polarisability response_kernel perturbation</code></td><td>conda 796 个计算、189582 个字段，最小环境 742 个计算、178122 个字段，都逐位相同（19 个新算例不在比较之列）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>275 个算例全部通过；torch 74 个通过，201 个按设计跳过（只有 NumPy 的物理，含 19 个新算例）；24 条动力学轨迹全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1069 个通过 / 201 个跳过；最小环境 826 / 323；torch 1028 / 242</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>227 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
         </tbody>
       </table></div>
     </section>
