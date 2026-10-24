@@ -1,0 +1,346 @@
+{
+ "schema": 1,
+ "case": "h2o_kernel",
+ "note": "SCC-screened response to a potential on each atom",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "analysis": {
+   "response_kernel": true
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_imn82vcn/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  ResponseKernel {\n  }\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.9132723046,
+  "free_energy": -3.9132723046,
+  "e_zero": -3.9132723046,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0233492751,
+  "e_band": -3.9756767337,
+  "fermi": -0.082690738619082,
+  "forces": [
+   [
+    0.000727079719342035,
+    0.0921371691958066,
+    0.0807334972959458
+   ],
+   [
+    -0.000266924691996059,
+    -0.00486983831965705,
+    -0.00655851359595761
+   ],
+   [
+    -0.000460155027345977,
+    -0.0872673308761495,
+    -0.0741749836999882
+   ]
+  ],
+  "charges_net": [
+   -0.51837700866284,
+   0.229111188937683,
+   0.289265819725154
+  ],
+  "analysis": {
+   "response": {
+    "tags": {
+     "dqdV": [
+      [
+       [
+        [
+         [
+          -0.182792701503625,
+          -1.31813275366674,
+          -1.13880647424319,
+          -0.021426415430918
+         ],
+         [
+          1.40996867106071,
+          0.0,
+          0.0,
+          0.0
+         ],
+         [
+          1.25118967378376,
+          0.0,
+          0.0,
+          0.0
+         ]
+        ]
+       ],
+       [
+        [
+         [
+          0.0422107517411881,
+          0.657470496081699,
+          0.684505542833769,
+          0.0257818804040517
+         ],
+         [
+          -1.71767095018157,
+          0.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.307702279120866,
+          0.0,
+          0.0,
+          0.0
+         ]
+        ]
+       ],
+       [
+        [
+         [
+          0.140581949762437,
+          0.660662257585036,
+          0.454300931409427,
+          -0.00435546497313354
+         ],
+         [
+          0.307702279120862,
+          0.0,
+          0.0,
+          0.0
+         ],
+         [
+          -1.55889195290463,
+          0.0,
+          0.0,
+          0.0
+         ]
+        ]
+       ]
+      ]
+     ],
+     "dqnetdV": [
+      [
+       [
+        -2.79032550552852,
+        1.37436454393398,
+        1.17580814964914
+       ],
+       [
+        1.44356130535082,
+        -1.67456969532252,
+        0.289492416568247
+       ],
+       [
+        1.3467642001777,
+        0.300205151388536,
+        -1.46530056621738
+       ]
+      ]
+     ],
+     "dEidV": [
+      [
+       [
+        [
+         [
+          0.394612834801642,
+          0.211809951523892,
+          0.294527592656575,
+          0.431360703512832,
+          0.122814155508229,
+          0.0688269970198581
+         ]
+        ]
+       ],
+       [
+        [
+         [
+          0.333594715582969,
+          0.416216169978843,
+          0.394406167435535,
+          0.320129012196196,
+          0.688081861826486,
+          0.234844416253643
+         ]
+        ]
+       ],
+       [
+        [
+         [
+          0.271792449615389,
+          0.371973878497265,
+          0.311066239907889,
+          0.248510284290972,
+          0.189103982665286,
+          0.696328586726499
+         ]
+        ]
+       ]
+      ]
+     ]
+    },
+    "detailed_kernel": [
+     "Static response:",
+     "Derivatives wrt. a potential at atom 1",
+     " Frontier orbital energy derivatives (a.u.)",
+     " Spin Kpt    Last filled   First empty",
+     "  1   1      0.431361      0.122814",
+     " Atomic population derivatives (a.u.)",
+     " Atom    Mulliken    On-site",
+     "    1   -2.661158   -2.790326",
+     "    2    1.409969    1.374365",
+     "    3    1.251190    1.175808",
+     "",
+     "Static response:",
+     "Derivatives wrt. a potential at atom 2",
+     " Frontier orbital energy derivatives (a.u.)",
+     " Spin Kpt    Last filled   First empty",
+     "  1   1      0.320129      0.688082",
+     " Atomic population derivatives (a.u.)",
+     " Atom    Mulliken    On-site",
+     "    1    1.409969    1.443561",
+     "    2   -1.717671   -1.674570",
+     "    3    0.307702    0.289492",
+     "",
+     "Static response:",
+     "Derivatives wrt. a potential at atom 3",
+     " Frontier orbital energy derivatives (a.u.)",
+     " Spin Kpt    Last filled   First empty",
+     "  1   1      0.248510      0.189104",
+     " Atomic population derivatives (a.u.)",
+     " Atom    Mulliken    On-site",
+     "    1    1.251190    1.346764",
+     "    2    0.307702    0.300205",
+     "    3   -1.558892   -1.465301",
+     ""
+    ],
+    "detailed_main": [],
+    "dV_band.out": [
+     "ATOM 1  KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.107380E+02",
+     "     2    0.576364E+01",
+     "     3    0.801450E+01",
+     "     4    0.117379E+02",
+     "     5    0.334194E+01",
+     "     6    0.187288E+01",
+     "",
+     "ATOM 2  KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.907757E+01",
+     "     2    0.113258E+02",
+     "     3    0.107323E+02",
+     "     4    0.871115E+01",
+     "     5    0.187237E+02",
+     "     6    0.639044E+01",
+     "",
+     "ATOM 3  KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.739585E+01",
+     "     2    0.101219E+02",
+     "     3    0.846454E+01",
+     "     4    0.676231E+01",
+     "     5    0.514578E+01",
+     "     6    0.189481E+02",
+     ""
+    ]
+   },
+   "detailed_blocks": []
+  },
+  "n_scc": 8,
+  "scc_errors": [
+   0.93314424,
+   0.60596673,
+   0.044081029,
+   0.053244914,
+   0.0045550467,
+   0.00010988501,
+   1.3104095e-07,
+   1.5123014e-11
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 2e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "dipole": 1e-06,
+  "pc_forces": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_fr": 1e-06,
+  "n_electrons": 1e-06,
+  "fermi_level": 1e-08,
+  "pol": 1e-08,
+  "dqdE": 1e-08,
+  "dedE": 1e-08,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0001,
+  "dqdE_default": 0.0001
+ }
+}

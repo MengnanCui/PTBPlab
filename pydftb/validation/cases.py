@@ -174,6 +174,10 @@ class Case:
     # switch gives (weights 0 or 1), DFTB+ runs them; pydftb also runs the switch, which must
     # give bitwise the explicit labels' results ("switch" deviation)
     type_switching: dict | None = None
+    # milestone M6f-5: DFTB+ SelectedShells {label: [(file label, shell letters), ...]}, a label's
+    # shells taken from several SK files; the file labels' files come from ``typed``
+    # (write_typed_copies), DFTB+ gets them listed pair by pair (SlaterKosterFiles)
+    selected_shells: dict | None = None
 
     @property
     def corrections(self) -> bool:
@@ -1282,6 +1286,54 @@ CASES = [
          labels=_switch_labels(SWITCH_CLUSTER), type_switching=SWITCH_CLUSTER, torch=False,
          tol=TOL_TYPES, note="cuboctahedron: the 12 outer atoms (CN 5) Cu2, the centre (CN 12) Cu"),
 ]
+# ---- M6f-5: shells from several SK files (DFTB+ SelectedShells), NumPy only ----------------------
+# Cu {"sd" "p"}: the p group from Cu2, a copy of Cu (the same basis reordered: s d p); an O with an
+# extra s shell taken from H's files (Ox, a copy of H) whose reference occupation is set to 0 (s2);
+# H with a second s shell from Cu's files (Hy).  All files of the set share one grid (DFTB+'s rule).
+SEL_CU = {"Cu": [("Cu", "sd"), ("Cu2", "p")]}
+SEL_O = {"O": [("O", "sp"), ("Ox", "s")]}
+SEL_OH = {**SEL_O, "H": [("H", "s"), ("Hy", "s")]}
+TYPED_CU = {"Cu": "Cu", "Cu2": "Cu", "C": "C", "O": "O"}
+TYPED_OX = {"O": "O", "Ox": "H", "H": "H"}
+W_O3 = [[-0.035, -0.030, -0.010], [-0.030, -0.028, -0.020], [-0.010, -0.020, -0.015]]
+# water's forces: DFTB+ differentiates H0 and S numerically (up to 2.7e-6 Ha/Bohr here, as h2o's
+# 1.2e-6); with its step pydftb reproduces them to 1e-9 (test_dftbplus_finite_difference_emulation)
+TOL_SEL_FD = {"energy": 1e-6, "forces": 5e-6, "charges": 1e-6}
+TOL_SEL_OCC = {**TOL_FILL, **TOL_SEL_FD}        # with CustomisedOccupations (as the M6f-2 cases)
+CASES += [
+    Case("cu4co_selected_sdp", _cu4co, filling=("fermi", 300.0), typed=TYPED_CU,
+         selected_shells=SEL_CU, torch=False,
+         note="Cu {sd p}: the p group from Cu2 (a copy), the same as cu4co_300K reordered"),
+    Case("cu_fcc_k6_selected_sdp", _cu_fcc, kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         typed={"Cu": "Cu", "Cu2": "Cu"}, selected_shells=SEL_CU, torch=False,
+         note="periodic, k-points and stress with Cu {sd p}"),
+    Case("h2o_selected_s2", _water, typed=TYPED_OX, selected_shells=SEL_O,
+         occupations={0: {"s2": 0.0}}, analysis={"eigenvectors": True}, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_SEL_OCC},
+         note="O {sp s}: s* from H's files, reference occupation 0 (s2); eigenvec.out labels s2"),
+    Case("h2o_selected_s2_shell_resolved", _water, typed=TYPED_OX, selected_shells=SEL_O,
+         occupations={0: {"s2": 0.0}}, shell_resolved=True, torch=False, tol=TOL_SEL_OCC,
+         note="shell-resolved SCC: the s* shell has H's U"),
+    Case("h2o_selected_s2_noocc", _water, typed=TYPED_OX, selected_shells=SEL_O, torch=False,
+         filling=("fermi", 300.0), tol=TOL_SEL_FD,
+         note="the s* shell keeps H's occupation (1 electron) from its group's file: 9 electrons, "
+              "300 K (at 0 K the half-filled level makes the 3-site Broyden history singular, "
+              "and the two codes leave it differently; M6f-1)"),
+    Case("h2o_selected_both", _water, typed={**TYPED_OX, "Hy": "Cu"}, selected_shells=SEL_OH,
+         occupations={0: {"s2": 0.0}, 1: {"s2": 0.0}, 2: {"s2": 0.0}}, shell_resolved=True,
+         torch=False, tol=TOL_SEL_OCC,
+         note="O {sp s} and H {s s}: 2 x 2 files per O-H pair (second label fastest)"),
+    Case("o2_triplet_selected", _o2, typed={"O": "O", "Ox": "H"}, selected_shells=SEL_O,
+         occupations={0: {"s2": 0.0}, 1: {"s2": 0.0}},
+         spin={"unpaired_electrons": 2.0, "spin_constants": {"O": W_O3}}, torch=False,
+         tol=TOL_FILL,
+         note="collinear spin with a 3 x 3 spin-constant matrix (shells s p s2)"),
+    Case("h2o_selected_dftb3", _water, typed=TYPED_OX, selected_shells=SEL_O,
+         occupations={0: {"s2": 0.0}}, shell_resolved=True,
+         dftb3={"third_order": "full", "hubbard_derivs": {"O": [-0.1575, -0.1575, -0.05],
+                                                          "H": [-0.1857]}, "h_damping": 4.05},
+         torch=False, tol=TOL_SEL_OCC, note="shell-resolved DFTB3: one Hubbard derivative per shell"),
+]
 CASES += [
     # --- analysis outputs (milestone M6f-4a), NumPy only ---
     Case("ch3oh_analysis", _meoh, torch=False, tol=TOL_ANALYSIS,
@@ -1396,5 +1448,75 @@ CASES += [
          casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann", "state": 2,
                  "transition_charges": True}, torch=False, tol={**TOL_CASIDA, **TOL_TRANSQ},
          note="fractional occupations: the charges carry no sqrt(f_i - f_a), unlike the dipole"),
+]
+# ---- M6g-1: polarisability and response kernel (DFTB+ Analysis { Polarisability,
+# ResponseKernel }, the response converged to PerturbSccTol = 1e-11), NumPy only.  The tags of
+# results.tag: alpha of every frequency, the charge and eigenvalue derivatives d/dE of the last
+# one, N_F and dE_F/dE of metals, the kernel's dq/dV, net populations and eigenvalue
+# derivatives; "response_text": the detailed.out blocks and dE_band.out / dV_band.out
+TOL_RESPONSE = {"pol": 1e-8, "dqdE": 1e-8, "dedE": 1e-8, "dEf": 1e-9, "dos": 1e-8,
+                "dqdV": 1e-9, "dqnet": 1e-9, "dedV": 1e-9, "response_text": 1e-4,
+                "dqdE_default": 1e-4}
+TOL_RESP = {"energy": 1e-6, "forces": 2e-6, "charges": 1e-6, "spins": 1e-6, "dipole": 1e-6,
+            "pc_forces": 1e-6, "n_scc": 0, "scc_errors": 1e-4, "e_fr": 1e-6, "n_electrons": 1e-6,
+            "fermi_level": 1e-8, **TOL_RESPONSE}
+POL = {"polarisability": True}
+KERNEL = {"response_kernel": True}
+O2_SPIN = {"unpaired_electrons": 2, "spin_constants": {"O": -0.028}}
+
+
+def _freq(*ev):
+    """Frequencies in Hartree from eV (DFTB+'s Hartree__eV)."""
+    return [x / HARTREE for x in ev]
+
+
+CASES += [
+    Case("h2o_pol", _water, torch=False, tol=TOL_RESP,
+         analysis={"polarisability": {"frequencies": _freq(1.0, 3.0, 5.0)}},
+         note="static and three frequencies below the first excitation"),
+    Case("h2o_pol_nonscc", _water, scc=False, torch=False, tol=TOL_RESP, analysis=POL,
+         note="non-SCC: one pass, the bare response"),
+    Case("h2o_pol_shell", _water, shell_resolved=True, torch=False, tol=TOL_RESP, analysis=POL),
+    Case("ch3oh_pol_dftb3", _meoh, dftb3=DFTB3_3OB, torch=False, tol=TOL_RESP, analysis=POL,
+         note="the full third order linearised at the ground state's charges, H-X damping"),
+    Case("h2o_pol_field", _water, efield=FIELD, torch=False, tol=TOL_RESP, analysis=POL,
+         note="the ground state in an external field (the response operator is unchanged)"),
+    Case("o2_triplet_pol", _o2, spin=O2_SPIN, torch=False, tol=TOL_RESP,
+         analysis={"polarisability": {"frequencies": _freq(2.0)}},
+         note="collinear spin: the response of charge and magnetisation (W)"),
+    Case("h2o_anion_pol_300K", _water, charge=-1.0, filling=("fermi", 300.0), torch=False,
+         tol={**TOL_RESP, "forces": 5e-6}, analysis=POL,
+         note="metallic: a half-filled level, the Fermi level moves (N_F, dE_F/dE)"),
+    Case("cu4co_pol_3000K", _cu4co, filling=("fermi", 3000.0), torch=False, tol=TOL_RESP,
+         analysis=POL, note="metallic Cu cluster, many partly filled levels"),
+    Case("cu4co_pol_fixef", _cu4co, filling=("fermi", 3000.0), fermi={"fixed": -0.17},
+         torch=False, tol=TOL_RESP, analysis=POL,
+         note="fixed Fermi level: no Fermi-level move, the electron count changes"),
+    Case("c6h6_pol", _c6h6, torch=False, tol=TOL_RESP,
+         analysis={"polarisability": {"frequencies": _freq(2.0)}},
+         note="degenerate levels: the eigenvalue derivatives of a degenerate pair"),
+    Case("cuco_pol_300K", _cuco_linear, filling=("fermi", 300.0), torch=False, tol=TOL_RESP,
+         analysis=POL, note="degenerate levels and one half-filled sigma level (metallic)"),
+    Case("o2_pol_300K", _o2, filling=("fermi", 300.0), torch=False, tol=TOL_RESP,
+         analysis={"polarisability": {"frequencies": _freq(2.0)}},
+         note="without spin polarisation: the half-filled degenerate pi* pair is a degenerate "
+              "run inside W (DFTB+ rotates it, pydftb weights the whole run)"),
+    Case("water_box_pol", _water_box, ewald_tolerance=1e-12, torch=False, tol=TOL_RESP,
+         analysis=POL, note="periodic, Gamma point: charge response only (no tensor)"),
+    Case("cuo_chain_pol_k", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 1000.0),
+         ewald_tolerance=1e-12, torch=False, tol={**TOL_RESP, "dqdE": 5e-8},
+         analysis={"polarisability": {"frequencies": _freq(1.0)}, "eta_compat": True},
+         note="k-points (complex eigenvectors), metallic; at the finite frequency DFTB+ keeps "
+              "an eta term that cancels between k and -k (reduced set: compared with "
+              "DFTB._response_eta_compat; 'dqdE_default' is pydftb's full-set value)"),
+    Case("h2o_kernel", _water, torch=False, tol=TOL_RESP, analysis=KERNEL,
+         note="SCC-screened response to a potential on each atom"),
+    Case("h2o_kernel_rpa", _water, torch=False, tol=TOL_RESP,
+         analysis={"response_kernel": {"rpa": True}}, note="the bare (unscreened) response"),
+    Case("h2o_kernel_freq", _water, torch=False, tol=TOL_RESP,
+         analysis={"response_kernel": {"static": False, "frequencies": _freq(2.0, 4.0)}}),
+    Case("o2_triplet_kernel", _o2, spin=O2_SPIN, torch=False, tol=TOL_RESP, analysis=KERNEL),
+    Case("cu4co_kernel_3000K", _cu4co, filling=("fermi", 3000.0), torch=False, tol=TOL_RESP,
+         analysis=KERNEL, note="metallic: the Fermi-level move keeps every column's sum zero"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

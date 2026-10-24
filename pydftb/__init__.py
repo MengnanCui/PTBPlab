@@ -19,7 +19,8 @@ from .calculator import DFTB, DFTBResult
 from .params import ParamSet
 from .skf import SKFile, SKSet, max_l_from_skf
 from .system import System
+from .typeswitch import TypeSwitch
 
 __all__ = ["SCC", "make_kpoints", "DFTB", "DFTBResult", "ParamSet", "SKFile", "SKSet",
-           "max_l_from_skf", "System", "Analysis"]
+           "max_l_from_skf", "System", "Analysis", "TypeSwitch"]
 __version__ = "0.1.0.dev0"

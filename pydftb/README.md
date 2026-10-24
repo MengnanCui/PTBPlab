@@ -73,6 +73,81 @@ mf = pydftb.SCC(pydftb.System.from_ase(atoms, labels=labels), params)
 
 `pydftb.skf.write_typed_copies` creates the files for a new type from existing ones.
 
+The types can also switch smoothly with the environment (milestone M5a; DFTB+ fixes each
+atom's type): every atom of the element mixes its types with weights from its coordination
+number, H0, S and the repulsive are mixed, and forces and stress include the weights'
+derivatives, so geometry optimisation and MD work:
+
+```python
+from pydftb import DFTB, ParamSet, TypeSwitch
+sw = TypeSwitch("Cu", types=("Cu2", "Cu"),   # by rising CN: low-coordinated Cu2, bulk Cu
+                centre=10.5, width=1.0)      # switching window CN 10-11
+sk = ParamSet(skdir).skset(["Cu", "Cu2"])    # every type, with Cu-Cu2.skf and Cu2-Cu.skf
+r = DFTB(sk, kpts=k, type_switching=[sw]).calculate(["Cu"] * n, pos, cell, pbc)
+r.type_weights["Cu2"]                        # each atom's weight of Cu2
+atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])
+```
+
+The types of an element need equal on-site energies, Hubbard values, occupations and basis
+(PTBP's types have them); the files between two types must not start with an on-site line
+(`pydftb/validation/make_cu_types_set.py` makes such a set with hotcent).  NumPy engine only;
+not with Casida, XL-BOMD or the analysis outputs.  Details:
+[`docs/reports/M5a-type-switching.html`](docs/reports/M5a-type-switching.html).
+
+### Shells from several SK files (SelectedShells)
+
+DFTB+'s `MaxAngularMomentum { O = SelectedShells { "sp" "s" } }` builds an atom's basis from
+several SK files, so one angular momentum can appear twice (an sps* basis); milestone M6f-5:
+
+```python
+p = ParamSet(skdir, selected_shells={"O": ("sp", "s")})   # the s group from O2-O2.skf, O-O2.skf, O2-H.skf ...
+p = ParamSet(skdir, selected_shells={"O": (("O", "sp"), ("Ox", "s"))})   # name each group's files
+r = DFTB(p.skset(["O", "H"]), reference_occupations={0: {"s2": 0.0}}).calculate(labels, pos)
+atoms.calc = PyDFTB(skdir, selected_shells={"Cu": ("sd", "p")})
+```
+
+The k-th group's files are named after the label followed by k (DFTB+'s manual: Si, Si2), or
+after the file label given.  As in DFTB+: the orbitals follow the groups in order ("sd" "p" is
+s, d, p); each shell's on-site energy, occupation and U come from its group's homonuclear file;
+atom-resolved SCC uses the first shell's U; the repulsive and the mass come from the first file;
+the files between two groups of one label are heteronuclear (no on-site line;
+`pydftb.skf.write_typed_copies` writes them so); all files of a label pair share one grid.  A
+repeated angular momentum is named "s2" (`reference_occupations`, eigenvec.out).  Spin constants
+and shell-resolved Hubbard derivatives follow the shells' order.  NumPy engine only; not with
+spin-orbit coupling, DFTB+U, onsite corrections, Casida or type switching.  Details:
+[`docs/reports/M6f5-selected-shells.html`](docs/reports/M6f5-selected-shells.html).
+
+### Polarisability and response kernel
+
+DFTB+'s coupled-perturbed response (`Analysis { Polarisability; ResponseKernel }`), static and at
+finite frequencies; milestone M6g-1:
+
+```python
+r = DFTB(sk, analysis={"polarisability": {"frequencies": [0.05]},   # Hartree; static too
+                       "response_kernel": True}).calculate(labels, pos)
+p = r.analysis.polarisability
+p.tensor[0]                 # static polarisability d mu_j / d E_i (a.u.); None if periodic
+p.charge_derivatives[-1]    # (3, n_qm, n_atom) dN_A / dE_i at the last frequency
+k = r.analysis.response_kernel
+k.atom[0, :, 0, :]          # [A, B] = dN_B / dV_A (static, SCC screened)
+print(pydftb.dftbplus_io.response_tables(r))   # DFTB+'s detailed.out blocks
+```
+
+The same spectral sum as DFTB+ (pairs of filled and empty levels weighted by
+(f_i - f_a)/(e_i - e_a [+- omega + i eta]), DFTB+'s window and degenerate runs, the move of the
+Fermi level of metals), solved as a linear system instead of DFTB+'s iterations (DFTB+'s default
+`PerturbSccTol` of 1e-5 leaves 2.5e-7 in water's polarisability).  Options: "static",
+"frequencies", "frequency_range" (start, stop, step), the kernel's "rpa" (the bare response), and
+`analysis["perturbation"] = {"degeneracy_tol": 1e-9, "eta": 1e-8}`.  Also the eigenvalue and
+Fermi-level derivatives (dE_F/dE the physical value, DFTB+ prints it divided by the full
+filling) and `dftbplus_io.write_band_derivatives` (dE_band.out, dV_band.out).  With collinear
+spin, metals, degenerate levels, the full third order, k-points (charge response only; the
+finite-frequency eta term that DFTB+ keeps for time-reversal reduced k-point sets is dropped, so
+reduced and full sets agree) and dispersion.  NumPy engine only; not with non-Fermi smearing,
+solvation, DFTB+U, onsite corrections, two-component spin (milestone M6g-3), the dipole
+correction or selected shells.  Details:
+[`docs/reports/M6g1-response.html`](docs/reports/M6g1-response.html).
+
 ### f orbitals
 
 Parameter sets with f electrons (lanthanides, actinides) use DFTB+'s extended SKF format

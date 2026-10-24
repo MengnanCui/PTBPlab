@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-5 SelectedShells 设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6f-5</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-5 · 设计文档</p>
+    <h1>一个原子的壳层来自几个 SKF：SelectedShells</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd><code>4faff15</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6f5-selected-shells.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">DFTB+ 的 <code>MaxAngularMomentum { Si = SelectedShells { "sp" "s" } }</code> 把几个 SK 文件中的壳层拼成一个原子的基组：第一组 s、p 取自 Si 的文件，第二组 s 取自另一套文件（Si2），于是同一个 l 可以出现两次（sps* 基组）。M6f 的最后一块：pydftb 用 <code>ParamSet(selected_shells=…)</code> 做同样的事。只改 NumPy 引擎；不用这个选项时逐位不变。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节）：
+        <ul>
+          <li>每组壳层对应一个“文件物种”；每对物种列出 n<sub>1</sub> × n<sub>2</sub> 个文件，第二个物种的组号变得快（<code>Si-Si = "Si-Si.skf" "Si-Si2.skf" "Si2-Si.skf" "Si2-Si2.skf"</code>）；原子内的轨道按组、组内按列出的壳层排列（"sd" "p" → s、d、p）；</li>
+          <li>每个壳层的 on-site 能、占据数、U 取自它那一组的同核文件，按该壳层的 l；不分壳层的 SCC 时所有壳层都用第一个壳层的 U；质量取第一组的同核文件；排斥势只取每对物种的第一个文件；</li>
+          <li>同一物种两组之间的文件（Si-Si2）按<strong>异核</strong>格式读（没有 on-site 行），只有对角的组（Si-Si、Si2-Si2）按同核格式读；同一对物种的所有文件必须网格相同，否则报错；</li>
+          <li>同 l 的第二个壳层名为 “s2”，用在 <code>CustomisedOccupations</code>、eigenvec.out 与 detailed.out 中；自旋常数是 n<sub>壳层</sub> × n<sub>壳层</sub> 矩阵，壳层分辨的 Hubbard 导数每个壳层一个。</li>
+        </ul>
+      </li>
+      <li><strong>探针</strong>（第二节，DFTB+ 25.1）：
+        <ul>
+          <li>Cu<sub>4</sub>CO 与 Cu fcc（6 × 6 × 6 k 点）中把 Cu 写成 <code>{"sd" "p"}</code>（p 组取自 Cu 的类型副本 Cu2）时，能量、电荷、应力与普通写法完全相同（−13.004777345054 Ha）——确认了读取顺序与拼表规则；</li>
+          <li>给 O 加一个 s* 壳层（取 H 的 1s，<code>s2 = 0</code>）的水、O<sub>2</sub> 三重态（3 × 3 自旋常数）、壳层分辨的 DFTB3、O 与 H 都分组（2 × 2 个文件）都能算；</li>
+          <li><strong>DFTB+ 的问题</strong>：SelectedShells 与 <code>Type2FileNames</code> 同用时 DFTB+ 25.1 段错误（只有一个文件却按组数去取），不报错；</li>
+          <li>水盒子中 O 的 s*（H 的 1s 放在 O 上）与近邻重叠太大，S 不正定（DFTB+ 与 pydftb 都会失败）：周期体系的验证改用 Cu 的重排。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的接口</strong>（第三节）：<code>ParamSet(skdir, selected_shells={"O": ("sp", "s")})</code>（第 k ≥ 2 组的文件名默认是 “O2”，即 DFTB+ 手册的约定），或写明文件物种 <code>{"O": (("O", "sp"), ("Ox", "s"))}</code>；<code>PyDFTB(skdir, selected_shells=…)</code> 同样。<code>reference_occupations</code> 接受 “s2” 这样的壳层名。</li>
+      <li><strong>不支持</strong>：torch 后端、自动求导、自旋轨道耦合、DFTB+U 与 onsite 修正、Casida、类型切换（这些代码按 l 或按单组取数据），报错并写明原因。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">8</span><span class="lbl">计划的 DFTB+ 参考算例（25.1）</span></li>
+      <li><span class="num">0</span><span class="lbl">Cu 写成 {"sd" "p"} 与普通写法的能量差（DFTB+ 探针，Ha）</span></li>
+      <li><span class="num">段错误</span><span class="lbl">DFTB+ 25.1：SelectedShells + Type2FileNames</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+  <section id="physics">
+    <h2>一、DFTB+ 的做法</h2>
+    <p>源码 041e723（<code>dftbplus/parser.F90</code>：<code>readMaxAngularMomentum</code>、<code>setupOrbitals</code>、<code>readSKFiles</code>、<code>getFullTable</code>、<code>checkSKCompElec</code>；<code>type/orbitals.F90: getShellNames</code>），与 25.1 的行为一致（第二节）。</p>
+    <ol>
+      <li><strong>输入</strong>：<code>SelectedShells { "sp" "s" }</code> 的每个字符串是一组（1–4 个壳层字母，组内不能重复）；不同组可以有相同的 l。一个物种用了几组，<code>SlaterKosterFiles</code> 中每对物种就要列出 n<sub>1</sub> × n<sub>2</sub> 个文件，第一个物种的组号在外层、第二个在内层；<code>Type2FileNames</code> 每对只给一个文件（见第二节的段错误）。</li>
+      <li><strong>轨道顺序</strong>：一个原子的壳层按组、组内按列出的顺序排列（<code>setupOrbitals</code>），例如 "sd" "p" 是 s、d、p，而不是 s、p、d。</li>
+      <li><strong>读文件</strong>（<code>readSKFiles</code>）：
+        <ul>
+          <li>排斥势只从每对物种的第一个文件读（<code>readRep = iSK1 == 1 .and. iSK2 == 1</code>），其余文件的排斥势忽略；</li>
+          <li>同核格式（第二行是 on-site 能、U、占据数）只用于同一物种的对角组（<code>readAtomic = iSp1 == iSp2 .and. iSK1 == iSK2</code>）；同一物种两组之间的文件按异核格式读——若它带 on-site 行，就会像坑 88 那样整体错一行；</li>
+          <li>每个壳层（第 k 组、角动量 l）的 on-site 能、占据数、U = 第 k 组同核文件中 l 的值；不分壳层的 SCC 时 <code>skHubbU(2:) = skHubbU(1)</code>，即所有壳层用第一个壳层的 U；质量 = 第一组同核文件的质量；</li>
+          <li>同一物种（同核对）只读正向的文件列表，反向的表就是它本身。</li>
+        </ul>
+      </li>
+      <li><strong>拼表</strong>（<code>getFullTable</code>）：对 A 的第 i 组中的壳层 l<sub>1</sub> 与 B 的第 j 组中的壳层 l<sub>2</sub>：l<sub>1</sub> ≤ l<sub>2</sub> 时取文件 (A<sub>i</sub>, B<sub>j</sub>)，否则取 (B<sub>j</sub>, A<sub>i</sub>)，列的对应与只有一个文件时相同。所以整块等于“每个组对各算一个子块再拼起来”。</li>
+      <li><strong>网格</strong>（<code>checkSKCompElec</code>）：同一对物种的所有文件必须有相同的网格间距与点数，否则报 “Incompatible SK grid separations / lengths”。拼好的表只有一个网格、一个截断。</li>
+      <li><strong>壳层名</strong>（<code>getShellNames</code>）：s、p、d、f，同一个 l 的第二个起加序号（s2、p2）。<code>CustomisedOccupations</code> 按这些名字读（<code>s2 = 0.0</code>），eigenvec.out 与 detailed.out 的标签也用它们。</li>
+      <li><strong>依赖壳层的其他输入</strong>：自旋常数是 n<sub>壳层</sub> × n<sub>壳层</sub> 矩阵（按上面的壳层顺序），或者一个数；壳层分辨 SCC 的 <code>HubbardDerivs</code> 每个壳层一个值，否则一个值；<code>SpinOrbit</code> 每个壳层一个 ξ；+U 与 onsite 修正按壳层号。</li>
+    </ol>
+  </section>
+
+  <section id="probe">
+    <h2>二、DFTB+ 的实测行为</h2>
+    <p>探针 P18（<code>$S/m6f5/probe_ss.py</code>），DFTB+ 25.1，测试参数 <code>ptbp_hcocu</code>（所有文件的网格都是 0.02 Bohr、719 点），类型副本由 <code>skf.write_typed_copies</code> 写出（同一个基础文件的异标签副本去掉 on-site 行）。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td><code>cu4co_plain</code> / <code>cu4co_sdp</code></td><td>Cu<sub>4</sub>CO：Cu 用 "d"，或 <code>{"sd" "p"}</code>（p 组取自 Cu2 = Cu 的副本）</td><td>E = −13.004777345054 Ha，两者相同，电荷相同</td></tr>
+        <tr><td><code>cufcc_plain</code> / <code>cufcc_sdp</code></td><td>Cu fcc，6 × 6 × 6 k 点，1000 K</td><td>E = −2.159331612987 Ha，应力对角元 1.20714e-3，两者相同</td></tr>
+        <tr><td><code>cu4co_t2f</code></td><td>SelectedShells 与 <code>Type2FileNames</code> 同用</td><td><strong>段错误</strong>（读完第一个文件后，返回码 −11），没有错误信息</td></tr>
+        <tr><td><code>h2o_s2</code></td><td>O <code>{"sp" "s"}</code>，s* 取自 Ox（H 的副本），<code>CustomisedOccupations { s2 = 0 }</code></td><td>E = −3.948438827397 Ha；s2 壳层得到 0.32 个电子；标签 “s2”</td></tr>
+        <tr><td><code>h2o_s2_shellres</code></td><td>同上，壳层分辨 SCC（s* 用 H 的 U）</td><td>E = −3.961195245182 Ha</td></tr>
+        <tr><td><code>h2o_s2_noocc</code></td><td>不改占据数（s2 带 H 的 1 个电子）</td><td>E = −4.239185807094 Ha</td></tr>
+        <tr><td><code>o2_s2_spin</code></td><td>O<sub>2</sub> 三重态，3 × 3 自旋常数</td><td>E = −6.478394898314 Ha</td></tr>
+        <tr><td><code>h2o_s2_dftb3</code></td><td>壳层分辨的 DFTB3，O 三个 Hubbard 导数，H–X 阻尼</td><td>E = −3.967656101852 Ha</td></tr>
+        <tr><td><code>h2o_s2_both</code></td><td>O <code>{"sp" "s"}</code>（s* 取自 H），H <code>{"s" "s"}</code>（第二个 s 取自 Cu），O–H 对 2 × 2 个文件，壳层分辨</td><td>E = −4.134589075398 Ha</td></tr>
+        <tr><td><code>wbox_s2</code></td><td>水盒子中 O 加 s*</td><td>S 不正定（dpotrf info 104）：s* 与近邻 H 的 1s 重叠太大</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="api">
+    <h2>三、pydftb 的接口</h2>
+<pre><code>from pydftb import DFTB, ParamSet
+p = ParamSet(skdir, selected_shells={"O": ("sp", "s")})      # 第二组的文件：O-O2.skf、O2-O2.skf、O2-H.skf ...
+p = ParamSet(skdir, selected_shells={"O": (("O", "sp"), ("Ox", "s"))})   # 写明每组的文件物种
+r = DFTB(p.skset(["O", "H"]), reference_occupations={0: {"s2": 0.0}}).calculate(labels, pos)
+atoms.calc = PyDFTB(skdir, selected_shells={"Cu": ("sd", "p")})</code></pre>
+    <ul>
+      <li>文件名：第 1 组的文件物种默认是标签本身，第 k ≥ 2 组是“标签 + k”（DFTB+ 手册的例子 Si、Si2）；文件对 (A<sub>i</sub>, B<sub>j</sub>) 读 <code>{A_i}-{B_j}.skf</code>。同一物种两组之间的文件必须是异核格式（<code>skf.write_typed_copies</code> 生成的副本正是这样）。</li>
+      <li>壳层分辨与否、<code>hubbard</code>（CustomisedHubbards，每个壳层一个值）、<code>spin_constants</code>（n<sub>壳层</sub> × n<sub>壳层</sub>）、<code>hubbard_derivs</code>（每个壳层一个值）都按上面的壳层顺序；<code>reference_occupations</code> 的字典用 DFTB+ 的壳层名（s、p、s2）。</li>
+      <li>一个组也可以只取部分壳层，例如 <code>{"Cu": ("sd",)}</code> 去掉 p 壳层（DFTB+ 允许）。</li>
+    </ul>
+  </section>
+
+  <details class="dev" id="impl">
+    <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+    <div class="body">
+    <ol>
+      <li><strong><code>skf.SKSet(…, selected_shells=None)</code></strong>：
+        <ul>
+          <li><code>groups[label]</code> = [(文件物种, [l, …]), …]；没有给的标签就是 [(label, 0…l<sub>max</sub>)]，走原来的代码（<code>onsite</code>、<code>hubbard</code>、<code>occupation</code> 仍是 <code>f.onsite[:lmax + 1]</code> 等，逐位不变）；</li>
+          <li>给了的标签：<code>shells(label)</code> 是各组 l 的拼接（可以重复），<code>norb</code> = Σ(2l + 1)；<code>onsite</code>、<code>hubbard</code>、<code>occupation</code> 是<strong>按壳层</strong>的数组（第 k 组同核文件中该 l 的值；默认标签的数组按 l 排，也就是按壳层排）；不分壳层时所有壳层取第一个壳层的 U（<code>hubbard_from</code> 不是 "s" 时报错）；质量取第一组；</li>
+          <li><code>files[(a, b)]</code> 仍是第一个组对的文件（排斥势、截断等原有用法不变）；<code>group_files[(a, b)]</code> 是嵌套列表 [i][j]，只对含多组或非标准壳层的标签对建立；同核格式只用于 a = b 且 i = j（DFTB+ 的 readAtomic）；同一对的所有文件网格必须相同（同 DFTB+ 报错）；<code>cutoff</code> 取所有文件的最大值；<code>truncated</code>、<code>with_hubbard</code> 也处理这些文件与按壳层的 U。</li>
+        </ul>
+      </li>
+      <li><strong><code>params.ParamSet(selected_shells=…)</code></strong>：解析两种写法（壳层字符串，或 (文件物种, 壳层字符串)），检查字母（spdf、组内不重复、1–4 个）、所需文件存在，传给 <code>SKSet</code>；缓存键包含它。</li>
+      <li><strong><code>hamiltonian</code></strong>：<code>Basis</code> 加 <code>shell_local</code>（壳层在原子内的序号）；<code>onsite_energies</code> 对选定壳层的标签按壳层累加偏移（原来的 l² 偏移只适用于 0…l<sub>max</sub>）；<code>build_pairs</code> 对有 <code>group_files</code> 的标签对新加一个分支：<code>blocks(v)</code> 对每个组对用该组对的两个文件调用 <code>sk_block</code>（它本来就接受任意壳层列表），放进整块的对应位置；导数（复步或 DFTB+ 的差分）走同一个函数。单组的分支原样不动。</li>
+      <li><strong><code>calculator</code></strong>：按 l 取每个壳层数据的地方改为按 <code>shell_local</code>（默认标签两者相同，逐位不变）：<code>_sites</code>、<code>_reference_shell_populations</code>、<code>_custom_shell_populations</code>、<code>_site_hubbard_derivs</code>（原来的 <code>.index(l)</code> 在 l 重复时取错）；<code>_reference_occupation_table</code> 用 DFTB+ 的壳层名（与 <code>analysis.orbital_labels</code> 共用一个函数）。<code>DFTB.__init__</code> 拒绝与 torch 后端、自旋轨道、+U、onsite 修正、Casida、类型切换同用，<code>numpy_only_options</code> 加 <code>selected_shells</code>；<code>pydftb.autodiff</code> 遇到选定壳层报错。</li>
+      <li><strong><code>ase_calc.PyDFTB(selected_shells=…)</code></strong> 传给 <code>ParamSet</code>。</li>
+      <li><strong>验证工具</strong>：<code>Case.selected_shells</code>（{标签: [(文件物种, "sp"), …]}，与现有的 <code>typed</code> 一起生成文件副本）；<code>dftbplus.make_hsd</code> 写 <code>SelectedShells</code> 与逐对列出的 <code>SlaterKosterFiles</code>；<code>refgen.run_pydftb</code> 把它传给 <code>ParamSet</code>；<code>reference_occupations</code> 的壳层名写进 <code>CustomisedOccupations</code>。</li>
+    </ol>
+    </div>
+  </details>
+
+  <section id="validation">
+    <h2>五、验证计划</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>算例</th><th>内容</th><th>比较</th></tr></thead>
+      <tbody>
+        <tr><td><code>cu4co_selected_sdp</code></td><td>Cu <code>{"sd" "p"}</code>（Cu2 = 副本）</td><td>能量、力、电荷、轨道布居；pydftb 与 <code>cu4co_300K</code> 相同到 1e-10（测试）</td></tr>
+        <tr><td><code>cu_fcc_k6_selected_sdp</code></td><td>周期、k 点、应力</td><td>同上与应力</td></tr>
+        <tr><td><code>h2o_selected_s2</code></td><td>O <code>{"sp" "s"}</code>（s* 取自 H），<code>s2 = 0</code>，不分壳层；eigenvec.out</td><td>能量、力、电荷；eigenvec.out 的 “s2” 标签与权重</td></tr>
+        <tr><td><code>h2o_selected_s2_shell_resolved</code></td><td>壳层分辨（s* 用 H 的 U）</td><td>能量、力、逐壳层布居</td></tr>
+        <tr><td><code>h2o_selected_both</code></td><td>O 与 H 都分组（2 × 2 个文件），壳层分辨，两个 <code>s2 = 0</code></td><td>同上</td></tr>
+        <tr><td><code>o2_triplet_selected</code></td><td>共线自旋，3 × 3 自旋常数</td><td>能量、磁矩</td></tr>
+        <tr><td><code>h2o_selected_dftb3</code></td><td>壳层分辨的 DFTB3，每个壳层一个 Hubbard 导数，H–X 阻尼</td><td>能量、力</td></tr>
+        <tr><td><code>h2o_selected_s2_noocc</code></td><td>s2 保留 H 的占据数</td><td>能量、电荷</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>自查（<code>tests/test_selected_shells.py</code>）：只有一组且壳层为 0…l<sub>max</sub> 时与默认的 SKSet 逐位相同；Cu 的 {"sd" "p"} 与普通写法相同（轨道重排）；力与应力对能量的差分；拒绝的组合；文件格式与网格的检查；壳层名。</li>
+      <li>golden：不用这个选项时逐位不变（不需要 <code>--allow-new</code>，没有新的结果字段）。</li>
+    </ul>
+  </section>
+
+  <section id="limits">
+    <h2>六、不做的事与风险</h2>
+    <ul>
+      <li>不支持：torch 后端与自动求导、SOC、DFTB+U、onsite 修正、Casida（按 l 取数据或按单组建模的代码）、类型切换；以后需要时逐项放开。</li>
+      <li>风险：把按 l 取值改为按壳层序号取值，涉及几个已有函数——对默认标签两者相同，由 golden 守住逐位不变。</li>
+      <li>额外的 s 壳层若与近邻重叠太大，S 会不正定（探针 <code>wbox_s2</code>），这是参数的问题，pydftb 与 DFTB+ 一样报错。</li>
+    </ul>
+  </section>
+
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6f4b-localisation.html">← M6f-4b 完成报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

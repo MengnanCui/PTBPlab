@@ -622,3 +622,127 @@ def read_transition_charges(path) -> np.ndarray:
     with open(path) as fh:
         return np.array([float(ln.split()[1]) for ln in fh
                          if ln.strip() and not ln.startswith("#")])
+
+
+# ---- M6g-1: polarisability and response kernel ------------------------------------------------
+_CART = "xyz"
+
+
+def _omega_line(label: str, omega: float) -> str:
+    """DFTB+ 25.1's (A, ':', T32, F18.10, T51, A, T54, F16.4, T71, A) frequency line."""
+    head = (label + ":").ljust(31)
+    return f"{head}{omega:18.10f}  H {omega * HARTREE:16.4f}  eV"
+
+
+def response_tables(res, part: str | None = None, dftbplus_fermi: bool = False) -> str:
+    """DFTB+'s detailed.out blocks of the response analyses (``res.analysis.polarisability``,
+    ``res.analysis.response_kernel``) in DFTB+'s order: per atom and frequency of the kernel the frontier orbital derivatives
+    (1X,I2,I4,2F14.6) and the Mulliken and on-site population derivatives (I5, 2F12.6)
+    (written during the perturbation); then the density of states at the Fermi energy
+    (metals), the atomic charge derivatives d q / d E_i of the last frequency ((I4,1X,E20.12),
+    with collinear spin "u"/"d" rows of 1/2 (q +- m)), the Fermi-level derivatives (metals;
+    the physical values, DFTB+ prints them divided by the full filling: ``dftbplus_fermi``)
+    and the polarisability of every frequency (one row per field direction, 3E20.12).
+    ``part``: "kernel" or "main" (the rest) only."""
+    a = res.analysis
+    pol = None if a is None else a.polarisability
+    ker = None if a is None else a.response_kernel
+    if pol is None and ker is None:
+        raise ValueError("no response analysis in this result: calculate with "
+                         "DFTB(analysis={'polarisability': True}) or 'response_kernel'")
+    lines = []
+    if ker is not None and part != "main":
+        natom = ker.atom.shape[1]
+        for at in range(natom):
+            for w, omega in enumerate(ker.frequencies):
+                lines.append("Static response:" if omega == 0.0
+                             else _omega_line("Response at omega = ", omega))
+                lines.append(f"Derivatives wrt. a potential at atom {at + 1}")
+                lines.append(" Frontier orbital energy derivatives (a.u.)")
+                lines.append(" Spin Kpt    Last filled   First empty")
+                for (s, k, lo, hi), de in zip(ker.frontier, ker.eigenvalue_derivatives[w][at]):
+                    lines.append(f" {s + 1:2d}{k + 1:4d}{de[lo]:14.6f}{de[hi]:14.6f}")
+                lines.append(" Atomic population derivatives (a.u.)")
+                lines.append(" Atom    Mulliken    On-site")
+                for b in range(natom):
+                    lines.append(f"{b + 1:5d}{ker.atom[w, at, 0, b]:12.6f}{ker.net[w, at, b]:12.6f}")
+                lines.append("")
+    if part == "kernel":
+        return "\n".join(lines) + "\n"
+    dos = (pol or ker).dos_fermi
+    if dos is not None:
+        vals = np.atleast_1d(dos)
+        if vals.size == 2:
+            lines.append("Density of states at the Fermi energy (a.u.): "
+                         f"{fortran_e(vals[0], 13, 6)} (up) {fortran_e(vals[1], 13, 6)} (down)")
+        else:
+            lines.append("Density of states at the Fermi energy (a.u.): "
+                         + fortran_e(vals[0], 13, 6))
+    if pol is not None:
+        dq = pol.charge_derivatives[-1]                      # (3, n_qm, n_atom)
+        for i in range(3):
+            lines.append(f"Atomic charge derivatives (a.u.), d q / d E_{_CART[i]}:")
+            for at in range(dq.shape[2]):
+                if dq.shape[1] == 1:
+                    lines.append(f"{at + 1:4d} " + fortran_e(dq[i, 0, at], 20, 12))
+                else:
+                    q, m = dq[i, 0, at], dq[i, 1, at]
+                    lines.append(f"{at + 1:4d} u" + fortran_e(0.5 * (q + m), 20, 12))
+                    lines.append("     d" + fortran_e(0.5 * (q - m), 20, 12))
+            lines.append("")
+        if pol.fermi_derivatives is not None:
+            lines.append("Derivative of Fermi energy with respect to electric field")
+            for i in range(3):
+                vals = pol.fermi_derivatives[-1, i]
+                if dftbplus_fermi:
+                    vals = vals / (2.0 if len(vals) == 1 else 1.0)
+                lines.append(f" d E_f / d E_{_CART[i]}:" + "".join(fortran_e(v, 20, 12)
+                                                              for v in vals))
+        if pol.tensor is not None:
+            lines += ["", " Electric field polarisability (a.u.)"]
+            for w, omega in enumerate(pol.frequencies):
+                lines.append("")
+                lines.append(" Static polarisability:" if omega == 0.0
+                             else _omega_line("Polarisability at omega = ", omega))
+                for i in range(3):                           # one row per field direction
+                    lines.append("".join(fortran_e(v, 20, 12) for v in pol.tensor[w, :, i]))
+            lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def write_band_derivatives(path, res, kind: str = "field") -> None:
+    """DFTB+'s dE_band.out (``kind="field"``: for every direction, spin channel and k-point a
+    list-directed header "DIR x KPT k SPIN s KWEIGHT w", then (I6, E16.6) rows of the level
+    derivatives with the levels in eV, per unit field in atomic units) or dV_band.out
+    (``kind="potential"``: per atom "ATOM n KPT ..." blocks, per unit potential in Hartree),
+    of the last frequency of the field and of every frequency of the kernel (DFTB+ keeps only
+    the last frequency of atom 1)."""
+    a = res.analysis
+    kw = np.ones(1) if res.kweights is None else np.asarray(res.kweights, float)
+    nk = len(kw)
+    lines = []
+
+    def block(head, de):
+        for b, d in enumerate(de):
+            s, k = divmod(b, nk)
+            lines.append(head + " KPT " + ld_integer(k + 1) + "  SPIN " + ld_integer(s + 1)
+                         + "  KWEIGHT " + ld_real(kw[k]))
+            lines.extend(f"{i + 1:6d}" + fortran_e(x * HARTREE, 16, 6) for i, x in enumerate(d))
+            lines.append("")
+
+    if kind == "field":
+        pol = None if a is None else a.polarisability
+        if pol is None:
+            raise ValueError("no polarisability in this result")
+        for i in range(3):
+            block(f" DIR {_CART[i]}", pol.eigenvalue_derivatives[-1][i])
+    elif kind == "potential":
+        ker = None if a is None else a.response_kernel
+        if ker is None:
+            raise ValueError("no response kernel in this result")
+        for w in range(len(ker.frequencies)):
+            for at, de in enumerate(ker.eigenvalue_derivatives[w]):
+                block(f"ATOM {at + 1} ", de)
+    else:
+        raise ValueError(f"kind must be 'field' or 'potential', not {kind!r}")
+    _write_text(path, "\n".join(lines) + "\n")

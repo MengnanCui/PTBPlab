@@ -120,6 +120,62 @@ def write_typed_copies(src_dir: str, dst_dir: str, base_of: dict[str, str],
     return written
 
 
+# ---- shells from several SK files (DFTB+ SelectedShells, milestone M6f-5) -------------------
+SHELL_LETTERS = "spdf"
+_ONSITE_LINE_SIZES = (10, 13)        # E, SPE, U, f of the simple (3 shells) / extended format
+
+
+def shell_names(ls) -> list[str]:
+    """DFTB+'s names of an atom's shells (``type/orbitals.F90: getShellNames``): s, p, d, f, a
+    repeated angular momentum numbered from 2 ("s2"; SelectedShells)."""
+    out = []
+    for l in ls:
+        name = SHELL_LETTERS[int(l)]
+        count = sum(1 for prev in out if prev[0] == name)
+        out.append(name + (str(count + 1) if count else ""))
+    return out
+
+
+def parse_selected_shells(spec) -> dict:
+    """DFTB+ ``SelectedShells``: {label: groups} -> {label: [(file label, [l, ...]), ...]}.
+
+    A group is a string of shell letters taken from one SK file (``"sp"``), or (file label,
+    letters).  A bare string's file label is the label itself for the first group and the label
+    followed by k for the k-th (k >= 2), as in DFTB+'s manual (Si, Si2).  1-4 letters per group,
+    none repeated within it (DFTB+'s rules); different groups may repeat an angular momentum."""
+    out = {}
+    for lab, groups in (spec or {}).items():
+        if isinstance(groups, str):
+            groups = (groups,)
+        parsed = []
+        for k, g in enumerate(groups):
+            if isinstance(g, str):
+                flab, letters = (lab if k == 0 else f"{lab}{k + 1}"), g
+            else:
+                flab, letters = g
+            if not isinstance(letters, str):            # already parsed: angular momenta
+                letters = "".join(SHELL_LETTERS[int(l)] for l in letters)
+            letters = letters.lower()
+            if (not 1 <= len(letters) <= 4 or len(set(letters)) != len(letters)
+                    or set(letters) - set(SHELL_LETTERS)):
+                raise ValueError(f"selected_shells[{lab!r}]: invalid shell selection {letters!r} "
+                                 "(1-4 of s, p, d, f, none repeated within a group, as DFTB+)")
+            parsed.append((str(flab), [SHELL_LETTERS.index(c) for c in letters]))
+        if not parsed:
+            raise ValueError(f"selected_shells[{lab!r}] has no shell group")
+        out[lab] = parsed
+    return out
+
+
+def _starts_with_onsite_line(path: str) -> bool:
+    """Whether the line after the header of an SKF is an on-site line (homonuclear format)."""
+    with _open_text(path) as fh:
+        if fh.readline().lstrip().startswith("@"):
+            fh.readline()
+        line = fh.readline()
+    return len(_expand_fortran(line)) in _ONSITE_LINE_SIZES
+
+
 def _expand_fortran(line: str) -> list[float]:
     """Parse a line that may contain Fortran repeat syntax (``20*0.0``)."""
     out: list[float] = []
@@ -485,17 +541,24 @@ class SKSet:
     ``max_l`` maps label -> highest angular momentum; labels missing from it
     are filled with the ASE/PTBP rule (:func:`max_l_from_skf`).
     ``template`` may end in ``.gz`` for compressed files.
+    ``selected_shells`` (milestone M6f-5, DFTB+ ``SelectedShells``): {label: groups}, the shells
+    of a label taken from several SK files (see :func:`parse_selected_shells`); such a label's
+    shells may repeat an angular momentum, and ``onsite``, ``hubbard`` and ``occupation`` hold
+    one value per shell (for the other labels the shells are s, p, ..., l_max, so these arrays
+    are both per shell and per l).
     """
 
     def __init__(self, path: str, elements: list[str], max_l: dict[str, int] | None = None,
                  template: str = "{a}-{b}.skf", shell_resolved: bool = False,
-                 hubbard_from: str = "s"):
+                 hubbard_from: str = "s", selected_shells=None):
         self.path = path
         self.template = template
         self.elements = list(dict.fromkeys(elements))
         self.max_l = dict(max_l or {})
+        # M6f-5: {label: [(file label, [l, ...]), ...]} for labels built from several files
+        self.groups: dict[str, list] = self._selected_groups(selected_shells)
         for a in self.elements:
-            if a not in self.max_l:
+            if a not in self.max_l and a not in self.groups:
                 lmax = max_l_from_skf(self.file_name(a, a))
                 if lmax is None:
                     raise ValueError(f"no occupied shell in {self.file_name(a, a)}; pass max_l")
@@ -503,13 +566,30 @@ class SKSet:
         self.files: dict[tuple[str, str], SKFile] = {}
         for a in self.elements:
             for b in self.elements:
-                self.files[(a, b)] = SKFile.read_cached(self.file_name(a, b), homo=(a == b))
+                self.files[(a, b)] = SKFile.read_cached(
+                    self.file_name(self._file_label(a), self._file_label(b)), homo=(a == b))
+        # M6f-5: the file of every pair of shell groups ([i][j]: group i of a, group j of b) of
+        # the label pairs with a selected label; homonuclear format only for the same group of
+        # one label (DFTB+ readSKFiles: readAtomic)
+        self.group_files: dict[tuple[str, str], list] = {}
+        for a in self.elements:
+            for b in self.elements:
+                if a in self.groups or b in self.groups:
+                    self.group_files[(a, b)] = [
+                        [SKFile.read_cached(self.file_name(fa, fb), homo=(a == b and i == j))
+                         for j, (fb, _) in enumerate(self.shell_groups(b))]
+                        for i, (fa, _) in enumerate(self.shell_groups(a))]
+        if self.groups:
+            self._check_group_files()
         self.shell_resolved = shell_resolved
         self.onsite: dict[str, np.ndarray] = {}
         self.hubbard: dict[str, np.ndarray] = {}
         self.occupation: dict[str, np.ndarray] = {}
         self.mass: dict[str, float] = {}
         for a in self.elements:
+            if a in self.groups:                       # M6f-5: per shell, from its group's file
+                self._selected_shell_data(a, shell_resolved, hubbard_from)
+                continue
             f = self.files[(a, a)]
             lmax = self.max_l[a]
             # shells ordered s, p, d, f
@@ -526,14 +606,95 @@ class SKSet:
         return os.path.join(self.path, self.template.format(a=a, b=b))
 
     def shells(self, el: str) -> list[int]:
+        if el in self.groups:                                         # M6f-5
+            return [l for _, ls in self.groups[el] for l in ls]
         return list(range(self.max_l[el] + 1))
 
     def norb(self, el: str) -> int:
+        if el in self.groups:                                         # M6f-5
+            return sum(2 * l + 1 for l in self.shells(el))
         return (self.max_l[el] + 1) ** 2
 
     @property
     def cutoff(self) -> float:
-        return max(f.cutoff for f in self.files.values())
+        cut = max(f.cutoff for f in self.files.values())
+        if self.group_files:                                          # M6f-5
+            cut = max(cut, max(f.cutoff for rows in self.group_files.values()
+                               for row in rows for f in row))
+        return cut
+
+    # ---- shells from several SK files (DFTB+ SelectedShells, milestone M6f-5) ------------------
+    @property
+    def selected(self) -> bool:
+        """Whether a label takes its shells from several files or a subset of s..l_max."""
+        return bool(self.groups)
+
+    def shell_groups(self, el: str) -> list:
+        """[(file label, [l, ...]), ...]: the groups of a label's shells (one for plain labels)."""
+        return self.groups.get(el) or [(el, list(range(self.max_l[el] + 1)))]
+
+    def _file_label(self, el: str) -> str:
+        return self.groups[el][0][0] if el in self.groups else el
+
+    def _selected_groups(self, spec) -> dict:
+        """Parsed ``selected_shells`` of this set's labels; a label whose only group is its own
+        file with the shells s..l_max is a plain label (its max_l)."""
+        out = {}
+        for lab, groups in parse_selected_shells(spec).items():
+            if lab not in self.elements:
+                continue
+            if len(groups) == 1 and groups[0][0] == lab and groups[0][1] == list(
+                    range(len(groups[0][1]))):
+                self.max_l[lab] = len(groups[0][1]) - 1
+                continue
+            out[lab] = groups
+        return out
+
+    def _check_group_files(self):
+        """DFTB+'s conditions for labels built from several files: every file of a label pair (both
+        directions) on one grid (``checkSKCompElec``); the files between two groups of one label
+        in heteronuclear format, as DFTB+ reads them (one with an on-site line would be misread
+        silently, as in DFTB+)."""
+        for (a, b), rows in self.group_files.items():
+            files = [f for row in rows for f in row]
+            files += [f for row in self.group_files[(b, a)] for f in row]
+            if len({f.dr for f in files}) > 1 or len({f.table.shape[0] for f in files}) > 1:
+                raise ValueError(f"selected_shells: the SK files of {a}-{b} and {b}-{a} are on "
+                                 "different grids (DFTB+: 'Incompatible SK grid separations / "
+                                 "lengths'); all files of a pair need the same spacing and length")
+            if a != b:
+                continue
+            bad = [self.file_name(fa, fb)
+                   for i, (fa, _) in enumerate(self.shell_groups(a))
+                   for j, (fb, _) in enumerate(self.shell_groups(a))
+                   if i != j and _starts_with_onsite_line(self.file_name(fa, fb))]
+            if bad:
+                raise ValueError(f"selected_shells: the files between two shell groups of {a} must "
+                                 "be in heteronuclear format (DFTB+ reads them so), but these start "
+                                 f"with an on-site line: {bad}; remove it (write_typed_copies does)")
+
+    def _selected_shell_data(self, a: str, shell_resolved: bool, hubbard_from: str):
+        """On-site energy, U and occupation of every shell of a selected label, each from the
+        homonuclear file of its group (for its l); the mass from the first group's (DFTB+
+        readSKFiles).  Atom-resolved SCC: every shell takes the first shell's U (DFTB+)."""
+        files = self.group_files[(a, a)]
+        e, u, occ = [], [], []
+        for k, (_, ls) in enumerate(self.groups[a]):
+            fk = files[k][k]
+            for l in ls:
+                e.append(fk.onsite[l])
+                u.append(fk.hubbard[l])
+                occ.append(fk.occupation[l])
+        u = np.array(u)
+        if not shell_resolved:
+            if hubbard_from != "s":
+                raise ValueError("selected_shells: atom-resolved SCC uses the first shell's U "
+                                 "(DFTB+); hubbard_from must be 's'")
+            u[:] = u[0]
+        self.onsite[a] = np.array(e)
+        self.hubbard[a] = u
+        self.occupation[a] = np.array(occ)
+        self.mass[a] = files[0][0].mass
 
     def repulsive(self, a: str, b: str, mode: str = "skf") -> Repulsive | None:
         """Pair repulsive for labels (a, b).
@@ -600,5 +761,12 @@ class SKSet:
                                  f"{pair[1]}; the interpolation needs {N_INTER}")
             new.files[pair] = (f if n == f.table.shape[0]
                                else replace(f, table=f.table[:n], _coef=None))
+        if self.group_files:              # M6f-5: every file of the shell groups (one grid each)
+            new.group_files = {}
+            for pair, rows in self.group_files.items():
+                n = min(int(np.floor(r / rows[0][0].dr)), rows[0][0].table.shape[0])
+                new.group_files[pair] = [[f if n == f.table.shape[0]
+                                          else replace(f, table=f.table[:n], _coef=None)
+                                          for f in row] for row in rows]
         cache[key] = new
         return new

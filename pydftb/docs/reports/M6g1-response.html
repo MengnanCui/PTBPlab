@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6g-1 极化率与响应核报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6g-1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6g-1 · 完成报告</p>
+    <h1>响应性质（上）：电场极化率与响应核</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6g1-response.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在能算 DFTB+ <code>Analysis</code> 中的耦合微扰 SCC 响应。<strong>电场极化率</strong>：静态与频率相关，还给出电荷、本征值和费米能级对电场的导数。<strong>响应核</strong>：各原子与各轨道的布居对一个原子上势的导数，SCC 屏蔽的或裸的（RPA）。公式与 DFTB+ 相同（对未微扰态求和，简并组与金属的费米能级移动照 DFTB+），但 pydftb 直接解线性方程，不迭代。只有 NumPy 引擎；不用这些选项时逐位不变。这是 M6g 的第一块。</p>
+    <ul>
+      <li><strong>与 DFTB+ 25.1 对照</strong>：19 个新的参考算例全部通过（DFTB+ 的响应收敛到 1e-11），SCC 轮数逐个相同：
+        <ul>
+          <li>极化率差 ≤ 3.6e-11 a.u.（CH<sub>3</sub>OH 的 DFTB3），金属 Cu<sub>4</sub>CO（α ≈ 170）≤ 5.4e-12；</li>
+          <li>电场导数 dq/dE ≤ 3.3e-11（分子）、1.8e-10（周期 Γ 点）、1.2e-8（k 点的金属 CuO 链，数值约 25）；</li>
+          <li>响应核 dq/dV ≤ 1.5e-13；</li>
+          <li>写出的 detailed.out 响应块与 dE_band.out、dV_band.out 除数值外与 DFTB+ 逐字节相同；</li>
+          <li>覆盖：静态与频率相关、非 SCC、壳层分辨、完整 DFTB3、外场中的基态、共线自旋、金属（费米能级移动、固定费米能级）、简并（含窗口内半满的简并对）、周期 Γ 点与 k 点、RPA。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的行为</strong>（第五节）：
+        <ul>
+          <li>默认的 <code>PerturbSccTol</code>（1e-5）下，水的极化率只准到 2.5e-7，张量也不对称；</li>
+          <li>dE<sub>F</sub>/dE 打印的是物理值除以满占据；</li>
+          <li>k 点的有限频率响应在约化的 k 点集里留下一个正比于 η 的人为项（实现时发现）；</li>
+          <li>多个频率时 dV_band.out 被覆盖；<code>Static = No</code> 又没给频率时什么也不算。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>：
+        <ul>
+          <li>与 DFTB+ 相同：非 Fermi 展宽、溶剂、只 onsite 的三阶；</li>
+          <li>留到 M6g-3：DFTB+U、onsite 修正、非共线自旋与 SOC；</li>
+          <li>另外：偶极修正、每个 k 点单独填充、选定壳层、XL-BOMD、torch 后端与自动求导。</li>
+        </ul>
+        色散不影响响应，所以允许（DFTB+ 拒绝）。
+      </li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">19</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 3.6e-11</span><span class="lbl">极化率与 DFTB+ 的最大差（a.u.，19 个算例）</span></li>
+      <li><span class="num">2.5e-7</span><span class="lbl">DFTB+ 默认容差下水的极化率误差（pydftb 直接解，没有这项误差）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response.py</code>（新）</td><td>
+              <ul>
+                <li><code>GroundState</code>：
+                  <ul>
+                    <li>重新对角化最后的 H，得到每个 (自旋, k) 块的本征对；</li>
+                    <li>占据数用 DFTB+ 的 θ 函数；</li>
+                    <li>DFTB+ 的 n<sub>F</sub>、n<sub>E</sub> 阈值（1e-7 与单精度 ε）、窗口 W、金属标记；</li>
+                    <li>链式简并组（1e-9 Ha）；</li>
+                    <li>N<sub>F</sub> 与费米移动用的向量 d（Mulliken 与 on-site 两种）。</li>
+                  </ul>
+                </li>
+                <li><code>chi0</code>：
+                  <ul>
+                    <li>壳层势到轨道布居的 χ<sub>0</sub> = Σ<sub>p</sub>Re[G<sub>p</sub>m<sup>X</sup><sub>p</sub>conj(m<sup>μ</sup><sub>p</sub>)]（上/下自旋分块），以及 on-site 布居的同样矩阵；</li>
+                    <li>对 DFTB+ 的对集合按批累加，一次处理全部频率；</li>
+                    <li>窗口内的简并组用与旋转无关的整组权重；</li>
+                    <li>费米移动是秩 1 修正 dd<sup>T</sup>/D，每个通道各自守恒，<code>relax_total_spin</code> 时两个通道共用。</li>
+                  </ul>
+                </li>
+                <li><code>scc_kernel</code>：<code>Coulomb.gamma</code> 加上完整三阶在基态（最后一轮输入电荷）处的 Hessian（<code>third_order_hessian</code>，与 DFTB+ 的 getdShiftdQ 相同）；自旋用 W。</li>
+                <li><code>Response</code>：解 (I − AB)x = AV<sup>ext</sup>，未知量是 SCC 位点上的 dq 与壳层上的 dm。</li>
+                <li><code>eigenvalue_derivatives</code>：M = C<sup>†</sup>dH C 的对角元，简并组内取本征值并按升序排列。</li>
+                <li><code>fermi_derivative</code>：dE<sub>F</sub> = Σδ<sub>i</sub>M<sub>ii</sub>/Σδ<sub>i</sub>。</li>
+                <li><code>polarisability</code>、<code>response_kernel</code>，以及结果数据类 <code>PolarisabilityResult</code>、<code>ResponseKernelResult</code>。</li>
+              </ul></td></tr>
+            <tr><td><code>analysis.py</code></td><td><code>Analysis(polarisability=…, response_kernel=…, perturbation=…)</code>（键与类型检查、频率表在构造时验证）；<code>AnalysisResult.polarisability</code>、<code>.response_kernel</code>；<code>evaluate</code> 调用 <code>response</code>，XL-BOMD 时报错。</td></tr>
+            <tr><td><code>calculator.py</code></td><td><code>_check_response</code>：第二节的拒绝；测试专用的 <code>DFTB._response_eta_compat</code>（第五节）。</td></tr>
+            <tr><td><code>dftbplus_io.py</code></td><td><code>response_tables(res, part=None, dftbplus_fermi=False)</code>：detailed.out 的响应块，顺序同 DFTB+：先响应核，再写 DOS、电荷导数、费米能级导数、极化率；25.1 的频率行格式带 “:”。<code>write_band_derivatives(path, res, kind)</code>：dE_band.out、dV_band.out。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>dftbplus.analysis_block</code> 写 <code>Polarisability</code>、<code>ResponseKernel</code> 与 <code>PerturbSccTol = 1e-11</code>、<code>MaxPerturbIter = 1000</code>（只在 SCC 时写；<code>PerturbEta</code> 只在有有限频率时写，否则 DFTB+ 报“未读的节点”）；</li>
+                <li><code>parse_response</code> 读 results.tag 的 8 个 tag、detailed.out 的两部分文本、dE_band.out 与 dV_band.out；</li>
+                <li><code>refgen._compare_response</code>：比较的键是 <code>pol</code>、<code>dqdE</code>、<code>dedE</code>、<code>dEf</code>、<code>dos</code>、<code>dqdV</code>、<code>dqnet</code>、<code>dedV</code>、<code>response_text</code>；</li>
+                <li>19 个算例。</li>
+              </ul>
+              另有两处小修：
+              <ul>
+                <li><code>_numbers_close</code> 把数前的空格或负号算进数字（接近 0 的数两边符号可能不同）；</li>
+                <li><code>_compare_scc_start</code> 能处理非 SCC 的结果。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td><code>tests/test_response.py</code>（23 项）。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>r = DFTB(sk, analysis={"polarisability": {"frequencies": [0.05]},   # Hartree，静态默认也算
+                       "response_kernel": True}).calculate(labels, pos)
+p = r.analysis.polarisability
+p.tensor[0]                 # 静态极化率 d mu_j / d E_i（a.u.）；周期体系为 None
+p.charge_derivatives[-1]    # (3, n_qm, n_atom)：最后一个频率的 dN_A/dE_i
+k = r.analysis.response_kernel
+k.atom[0, :, 0, :]          # [A, B] = dN_B / dV_A（静态、SCC 屏蔽）
+print(dftbplus_io.response_tables(r))      # DFTB+ detailed.out 的响应块</code></pre>
+      <ul>
+        <li>频率用 Hartree；<code>{"static": False, "frequency_range": (起, 止, 步长)}</code> 照 DFTB+ 生成频率表。</li>
+        <li><code>{"response_kernel": {"rpa": True}}</code> 给裸的 χ<sub>0</sub>；非 SCC 计算总是裸的。</li>
+        <li><code>{"perturbation": {"degeneracy_tol": 1e-9, "eta": 1e-8}}</code> 即 DFTB+ 的 <code>PerturbDegenTol</code>、<code>PerturbEta</code>。没有迭代，也就没有 <code>PerturbSccTol</code>。</li>
+        <li>周期体系只有电荷响应，没有极化率张量（同 DFTB+）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>DFTB+ 25.1，测试参数 <code>ptbp_hcocu</code>，<code>PerturbSccTol = 1e-11</code>，周期算例 <code>EwaldTolerance = 1e-12</code>。下表列出与 DFTB+ results.tag 的最大差，基态的能量、电荷与 SCC 轮数照旧比较，全部在容差内。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>α</th><th>dq/dE</th><th>∂ε/∂E</th><th>其他</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_pol</code></td><td>静态 + 1、3、5 eV</td><td>4.3e-13</td><td>3.5e-13</td><td>5.4e-14</td><td>文本 0</td></tr>
+          <tr><td><code>h2o_pol_nonscc</code></td><td>非 SCC</td><td>7.1e-14</td><td>3.5e-14</td><td>4.2e-15</td><td></td></tr>
+          <tr><td><code>h2o_pol_shell</code></td><td>壳层分辨</td><td>1.0e-12</td><td>8.3e-13</td><td>2.3e-13</td><td></td></tr>
+          <tr><td><code>ch3oh_pol_dftb3</code></td><td>完整 DFTB3、H–X 阻尼</td><td>3.6e-11</td><td>3.3e-11</td><td>6.6e-12</td><td></td></tr>
+          <tr><td><code>h2o_pol_field</code></td><td>外场中的基态</td><td>3.3e-13</td><td>2.8e-13</td><td>6.0e-14</td><td></td></tr>
+          <tr><td><code>o2_triplet_pol</code></td><td>共线自旋，静态 + 2 eV</td><td>1.2e-13</td><td>1.2e-13</td><td>1.2e-14</td><td></td></tr>
+          <tr><td><code>h2o_anion_pol_300K</code></td><td>金属（半满能级）</td><td>1.8e-13</td><td>1.8e-13</td><td>3.0e-14</td><td>dE<sub>F</sub> 5.9e-15、N<sub>F</sub> 1.1e-13</td></tr>
+          <tr><td><code>cu4co_pol_3000K</code></td><td>金属 Cu 团簇</td><td>3.0e-12</td><td>4.1e-12</td><td>6.5e-13</td><td>dE<sub>F</sub> 1.2e-14</td></tr>
+          <tr><td><code>cu4co_pol_fixef</code></td><td>固定费米能级</td><td>5.4e-12</td><td>9.8e-13</td><td>4.0e-13</td><td>dE<sub>F</sub> 0</td></tr>
+          <tr><td><code>c6h6_pol</code></td><td>简并，静态 + 2 eV</td><td>1.4e-12</td><td>8.1e-14</td><td>2.7e-14</td><td></td></tr>
+          <tr><td><code>cuco_pol_300K</code></td><td>简并 + 半满的 σ 能级</td><td>1.3e-13</td><td>1.1e-13</td><td>2.2e-14</td><td>dE<sub>F</sub> 2.6e-15</td></tr>
+          <tr><td><code>o2_pol_300K</code></td><td>窗口内半满的简并 π* 对</td><td>1.7e-13</td><td>1.9e-14</td><td>4.9e-15</td><td>N<sub>F</sub> 2.3e-12</td></tr>
+          <tr><td><code>water_box_pol</code></td><td>周期 Γ 点（无张量）</td><td>—</td><td>1.8e-10</td><td>4.7e-9</td><td></td></tr>
+          <tr><td><code>cuo_chain_pol_k</code></td><td>k 点、金属，静态 + 1 eV</td><td>—</td><td>1.2e-8</td><td>1.4e-9</td><td>N<sub>F</sub> 6.8e-9；pydftb 默认值与 DFTB+ 差 1.3e-5（η 项，第五节）</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>dq/dV</th><th>净布居</th><th>∂ε/∂V</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_kernel</code></td><td>SCC 屏蔽，静态</td><td>1.5e-13</td><td>2.5e-13</td><td>5.1e-14</td></tr>
+          <tr><td><code>h2o_kernel_rpa</code></td><td>RPA（裸）</td><td>3.8e-14</td><td>4.7e-14</td><td>2.1e-15</td></tr>
+          <tr><td><code>h2o_kernel_freq</code></td><td>2、4 eV</td><td>1.8e-13</td><td>2.8e-13</td><td>5.0e-14</td></tr>
+          <tr><td><code>o2_triplet_kernel</code></td><td>共线自旋</td><td>1.3e-14</td><td>1.8e-14</td><td>4.8e-15</td></tr>
+          <tr><td><code>cu4co_kernel_3000K</code></td><td>金属</td><td>9.4e-14</td><td>2.2e-13</td><td>2.3e-13</td></tr>
+        </tbody>
+      </table></div>
+      <p>dE<sub>F</sub>/dE 与 DFTB+ 的 tag 比较时乘回了满占据。写出的文本（detailed.out 的响应块、dE_band.out、单频率的 dV_band.out）版式与 DFTB+ 逐字节相同，数值差 ≤ 1.2e-8。</p>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <ul>
+        <li><strong>与差分比较</strong>：静态极化率等于外场下偶极的中心差分（步长 1e-4 a.u.，相对差 &lt; 2e-5）。覆盖水、壳层分辨、DFTB3、O<sub>2</sub> 三重态、水负离子（300 K）、Cu<sub>4</sub>CO（3000 K）。金属的 dE<sub>F</sub>/dE 等于费米能级的差分（&lt; 1e-6），说明 pydftb 给的是物理值。</li>
+        <li><strong>对称性与守恒</strong>：
+          <ul>
+            <li>静态极化率与响应核对称；</li>
+            <li>响应核每一列的和为 0：绝缘体、金属（费米能级移动）、自旋，RPA 与有限频率都成立；</li>
+            <li>频率很小时，α(ω) − α(0) ∝ ω²。</li>
+          </ul>
+        </li>
+        <li><strong>与旋转无关</strong>：O<sub>2</sub>（无自旋，300 K）的半满简并 π* 对在组内任意旋转，χ<sub>0</sub> 不变（&lt; 1e-9）。</li>
+        <li><strong>k 点</strong>：CuO 链用完整的 16 个 k 点与按时间反演约化的 8 个 k 点，pydftb 的有限频率结果相同（差 1e-12）；保留 η 项时差 2e-6。</li>
+        <li><strong>不影响结果的选项</strong>：开关色散，响应逐位相同。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <ul>
+        <li><strong>默认容差的误差</strong>：DFTB+ 用基态的混合器迭代 SCC 响应，<code>PerturbSccTol</code> 默认 1e-5 且与 <code>SccTolerance</code> 无关。水的极化率因此差 2.5e-7，张量不对称 1.6e-7。设为 1e-11 后，水 7 轮收敛，张量的 12 位有效数字逐位对称。pydftb 直接解线性方程，没有这项误差。</li>
+        <li><strong>k 点的 η 项（实现时发现）</strong>：
+          <ul>
+            <li>频率相关的权重 (f<sub>i</sub> − f<sub>a</sub>)/(Δ ± ω + iη) 是复数。对复数本征向量，布居中留下一项 Im(G)·Im(m<sup>X</sup>m<sup>Y*</sup>)，它在 k 与 −k 之间抵消；</li>
+            <li>DFTB+ 拿到按时间反演约化的 k 点集时，这一项不抵消；</li>
+            <li>CuO 链（1 eV，η = 1e-8）：DFTB+ 偏离完整网格的结果 +2.1e-6。pydftb 若保留这一项，偏离 −2.0e-6，方向相反，因为两边的 Bloch 相位约定互为共轭；</li>
+            <li>pydftb 去掉这一项，所以约化的 k 点集与完整网格给出相同的结果；测试专用的 <code>DFTB._response_eta_compat</code> 复现 DFTB+（参考算例这样比较）。</li>
+          </ul>
+        </li>
+        <li><strong>dE<sub>F</sub>/dE 除以了满占据</strong>：DFTB+ 用未乘满占据的 dρ 的电荷除以已含满占据的 N<sub>F</sub>，无自旋时打印的值只有物理值的一半；电荷与极化率不受影响。pydftb 给物理值，差分验证过。</li>
+        <li><strong>输出</strong>：
+          <ul>
+            <li>多个频率时，dq/dE、∂ε/∂E、dE<sub>F</sub>/dE 只保留最后一个；</li>
+            <li>dV_band.out 中原子 1 的部分每个频率都被覆盖重写；</li>
+            <li>tag 名 <code>staticChargeReponse</code> 有拼写错误；</li>
+            <li>dE_band.out、dV_band.out 中本征值用 eV、微扰用原子单位（pydftb 相同）。</li>
+          </ul>
+        </li>
+        <li><strong>输入</strong>：
+          <ul>
+            <li><code>Static = No</code> 又没有频率时什么也不算，也不提示（pydftb 报错）；</li>
+            <li><code>FrequencyRange</code> 的点数 int((止 − 起)/步长) + 1 可能因舍入丢掉端点（pydftb 照做，测试中写明）；</li>
+            <li><code>PerturbEta</code> 只在有有限频率时读，<code>PerturbSccTol</code>、<code>MaxPerturbIter</code> 只在 SCC 时读，多写会被当作未读的节点而报错。</li>
+          </ul>
+        </li>
+        <li><strong>拒绝的组合</strong>（25.1 的原话）：
+          <ul>
+            <li>只 onsite 的三阶：“Only full 3rd order currently supported for perturbation”；</li>
+            <li>色散：“Dispersion (particularly charge dependent) not currently implemented”；</li>
+            <li>溶剂：“Solvation not currently implemented”；</li>
+            <li>Methfessel–Paxton 展宽：“Choice of filling function currently incompatible”。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6f-5 的记录提交 <code>145e50c</code> 逐字节比较；<code>--allow-new polarisability response_kernel perturbation</code></td><td>@@GOLDEN@@</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>@@REFS@@</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>@@PYTEST@@</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>@@PTBP@@</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>@@G1@@</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>算例</strong>：
+          <ul>
+            <li>新增 <code>o2_pol_300K</code>：设计以为 CuCO（300 K）的窗口里有简并对，实际只有一个半满的 σ 能级。不加自旋的 O<sub>2</sub> 的 π* 对才是窗口内的简并组；</li>
+            <li>共 19 个。</li>
+          </ul>
+        </li>
+        <li><strong>k 点的 η 项</strong>：设计打算照 DFTB+ 的复数公式逐项实现。实现时发现那一项是约化 k 点集的人为项，于是改为默认去掉，另加测试专用开关复现 DFTB+。</li>
+        <li><strong>dV_band.out 的单位</strong>：设计说 DFTB+ 乘错了 eV。实际上两个文件一致地用“本征值 eV、微扰原子单位”，pydftb 照写。真正的问题只是多频率时的覆盖。</li>
+        <li><strong>容差</strong>：
+          <ul>
+            <li>水负离子的力 5e-6（DFTB+ 的差分导数）；</li>
+            <li>k 点 CuO 链的 dq/dE 5e-8（数值约 25，DFTB+ 金属响应迭代的残差）；</li>
+            <li>其他照设计。</li>
+          </ul>
+        </li>
+        <li><strong>写出</strong>：detailed.out 的块顺序照 DFTB+（响应核在前），频率行用 25.1 实际的格式（带 “:”，与 041e723 的源码不同）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6g-2</strong>：坐标导数与 Born 电荷（<code>CoordDerivatives</code>，含 −ε<sub>i</sub>S′ 的一阶密度，dS、dH0 用差分；DFTB+ 的 Born 电荷符号与 −∂μ/∂x 相反），以及 <code>Driver = SecondDerivatives</code> 的 Hessian（hessian.out、born.out，带极化率时的 bornderiv.out）。</li>
+        <li><strong>M6g-3</strong>：DFTB+U、onsite 修正、非共线自旋与 SOC 下的响应，外部点电荷的导数（开发版）。</li>
+        <li>大体系：目前 χ<sub>0</sub> 是显式矩阵（按对分批）。需要时再加无矩阵的 Krylov 解法。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6g1-response.html">← M6g-1 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>
