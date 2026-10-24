@@ -1,0 +1,171 @@
+{
+ "schema": 1,
+ "case": "cu4co_selected_sdp",
+ "note": "Cu {sd p}: the p group from Cu2 (a copy), the same as cu4co_300K reordered",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": {
+   "Cu": "Cu",
+   "Cu2": "Cu",
+   "C": "C",
+   "O": "O"
+  },
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "selected_shells": {
+   "Cu": [
+    [
+     "Cu",
+     "sd"
+    ],
+    [
+     "Cu2",
+     "p"
+    ]
+   ]
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "Cu",
+   "Cu",
+   "Cu",
+   "Cu",
+   "C",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    0.053658854202909556,
+    0.013095295515359682,
+    0.0028949240421602585
+   ],
+   [
+    2.4440952188990654,
+    -0.008321646075431972,
+    -0.010642769378069602
+   ],
+   [
+    1.2475177555555261,
+    2.0811899796952846,
+    -0.0013145450692778472
+   ],
+   [
+    1.235683459089215,
+    0.6605840573991195,
+    2.0265386714149876
+   ],
+   [
+    1.276439541266226,
+    0.7512871919095884,
+    3.9015010092653055
+   ],
+   [
+    1.2378596775619732,
+    0.733639201571414,
+    5.003605680532511
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "Cu": 2,
+   "C": 1,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles {\n    Cu-Cu = \"/tmp/pydftb_ref_tdi77qop/typed/Cu-Cu.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/Cu-Cu2.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/Cu2-Cu.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/Cu2-Cu2.skf\"\n    Cu-C = \"/tmp/pydftb_ref_tdi77qop/typed/Cu-C.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/Cu2-C.skf\"\n    Cu-O = \"/tmp/pydftb_ref_tdi77qop/typed/Cu-O.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/Cu2-O.skf\"\n    C-Cu = \"/tmp/pydftb_ref_tdi77qop/typed/C-Cu.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/C-Cu2.skf\"\n    C-C = \"/tmp/pydftb_ref_tdi77qop/typed/C-C.skf\"\n    C-O = \"/tmp/pydftb_ref_tdi77qop/typed/C-O.skf\"\n    O-Cu = \"/tmp/pydftb_ref_tdi77qop/typed/O-Cu.skf\" \"/tmp/pydftb_ref_tdi77qop/typed/O-Cu2.skf\"\n    O-C = \"/tmp/pydftb_ref_tdi77qop/typed/O-C.skf\"\n    O-O = \"/tmp/pydftb_ref_tdi77qop/typed/O-O.skf\"\n  }\n  MaxAngularMomentum {\n    Cu = SelectedShells { \"sd\" \"p\" }\n    C = \"p\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -13.0021452587,
+  "free_energy": -13.0047773451,
+  "e_zero": -13.0034613019,
+  "e_rep": 0.2170101722,
+  "e_scc": 0.0062977412,
+  "e_band": -13.2254531721,
+  "fermi": -0.146000929935757,
+  "forces": [
+   [
+    -0.00284267949952724,
+    -0.00109140911976469,
+    0.00281976881000248
+   ],
+   [
+    0.00293054099159909,
+    -0.0013298537065115,
+    0.00261174201090251
+   ],
+   [
+    -0.000117860261602183,
+    0.00265626333070861,
+    0.00191509358751303
+   ],
+   [
+    0.000188772127599444,
+    0.000370859889731632,
+    0.00577718249591697
+   ],
+   [
+    0.0219222812502869,
+    0.00972076469360757,
+    -0.633204037005887
+   ],
+   [
+    -0.022081054608356,
+    -0.0103266250877716,
+    0.620080250101552
+   ]
+  ],
+  "charges_net": [
+   -0.0465844419495715,
+   -0.064508944429476,
+   -0.064702306131096,
+   0.267979889853113,
+   0.0718354454752139,
+   -0.164019642818876
+  ],
+  "n_scc": 11
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06
+ }
+}

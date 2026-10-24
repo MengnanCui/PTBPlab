@@ -29,6 +29,7 @@ class Basis:
     shell_l: np.ndarray
     orb_shell: np.ndarray     # shell of each orbital
     orb_atom: np.ndarray
+    shell_local: np.ndarray | None = None   # index of each shell on its atom (M6f-5)
 
     @property
     def norb(self) -> int:
@@ -39,17 +40,19 @@ class Basis:
         norb = np.array([sk.norb(s) for s in species])
         offsets = np.concatenate([[0], np.cumsum(norb)[:-1]])
         shells = [sk.shells(s) for s in species]
-        shell_atom, shell_l, orb_shell, orb_atom = [], [], [], []
+        shell_atom, shell_l, orb_shell, orb_atom, shell_local = [], [], [], [], []
         ish = 0
         for ia, shl in enumerate(shells):
-            for l in shl:
+            for k, l in enumerate(shl):
                 shell_atom.append(ia)
                 shell_l.append(l)
+                shell_local.append(k)
                 orb_shell += [ish] * (2 * l + 1)
                 orb_atom += [ia] * (2 * l + 1)
                 ish += 1
         return cls(list(species), offsets, norb, shells, np.array(shell_atom),
-                   np.array(shell_l), np.array(orb_shell), np.array(orb_atom))
+                   np.array(shell_l), np.array(orb_shell), np.array(orb_atom),
+                   np.array(shell_local, dtype=int))
 
 
 @dataclass
@@ -68,6 +71,38 @@ class PairBlocks:
     dh: np.ndarray | None = None   # (nelem, 3) derivative wrt bond vector
     ds: np.ndarray | None = None
     groups: list | None = None     # (label a, label b, pair indices) in element order
+
+
+def _grouped_blocks(sk: SKSet, a: str, b: str):
+    """The H0/S block function of a label pair whose shells come from several SK files (DFTB+
+    ``SelectedShells``, milestone M6f-5): one :func:`sk_block` per pair of shell groups, with that
+    pair's A-B and B-A files, placed at the groups' orbitals (DFTB+ ``getFullTable``: per shell
+    pair, l_a <= l_b from file (A_i, B_j), else from (B_j, A_i))."""
+    ga, gb = sk.shell_groups(a), sk.shell_groups(b)
+    files_ab, files_ba = sk.group_files[(a, b)], sk.group_files[(b, a)]
+    lmax = max(max(sk.shells(a)), max(sk.shells(b)))
+    off_a = np.cumsum([0] + [sum(2 * l + 1 for l in ls) for _, ls in ga])
+    off_b = np.cumsum([0] + [sum(2 * l + 1 for l in ls) for _, ls in gb])
+
+    def blocks(v):
+        d = np.sqrt((v * v).sum(1))
+        dm = rotation_blocks(bond_frames(v), lmax)
+        hb = sb = None
+        for i, (_, la) in enumerate(ga):
+            for j, (_, lb) in enumerate(gb):
+                fab, fba = files_ab[i][j], files_ba[j][i]
+                iab = fab.evaluate(d, full=False)
+                iba = fba.evaluate(d, full=False)
+                h = sk_block(v, iab, iba, la, lb, 0, dm, fab.colmap, fba.colmap)
+                s = sk_block(v, iab, iba, la, lb, N_INTEGRALS, dm, fab.colmap, fba.colmap)
+                if hb is None:
+                    hb = np.zeros((len(v), off_a[-1], off_b[-1]), dtype=h.dtype)
+                    sb = np.zeros((len(v), off_a[-1], off_b[-1]), dtype=s.dtype)
+                hb[:, off_a[i]:off_a[i + 1], off_b[j]:off_b[j + 1]] = h
+                sb[:, off_a[i]:off_a[i + 1], off_b[j]:off_b[j + 1]] = s
+        return hb, sb
+
+    return blocks
 
 
 def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
@@ -105,6 +140,8 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                 sb = sk_block(v, iab, iba, shells_a, shells_b, N_INTEGRALS, dm, cab, cba)
                 return hb, sb
 
+            if (a, b) in sk.group_files:      # M6f-5: shells from several files (SelectedShells)
+                blocks = _grouped_blocks(sk, a, b)
             v = vec[sel]
             hb, sb = blocks(v)
             if derivatives:
@@ -306,6 +343,11 @@ def onsite_energies(basis: Basis, sk: SKSet) -> np.ndarray:
     eps = np.empty(basis.norb)
     for ia, el in enumerate(basis.species):
         o = basis.offsets[ia]
+        if el in sk.groups:                  # M6f-5: one value per shell, shells in any order
+            for k, l in enumerate(sk.shells(el)):
+                eps[o: o + 2 * l + 1] = sk.onsite[el][k]
+                o += 2 * l + 1
+            continue
         for l in sk.shells(el):
             eps[o + l * l: o + (l + 1) ** 2] = sk.onsite[el][l]
     return eps

@@ -59,7 +59,7 @@ from .occupations import Smearing, fill_at, fill_independent_k
 from .neighbors import neighbor_list
 from .parallel import as_kthreads
 from .solvers import SOLVERS, _density
-from .skf import SKSet
+from .skf import SKSet, shell_names
 from . import spinorbit as so
 from .thirdorder import ThirdOrder
 from . import typeswitch as _typeswitch                 # M5a
@@ -610,6 +610,8 @@ class DFTB:
         self.dipole_correction = _corrections.DipoleCorrection.make(dipole_correction)
         self._check_corrections()
         self.analysis = _analysis.Analysis.make(analysis)              # M6f-4a
+        if getattr(self.sk, "selected", False):                        # M6f-5
+            self._check_selected_shells(type_switching)
         # smooth switching between the parameter sets of an element (M5a)
         self.type_switching = None
         if type_switching is not None:
@@ -762,6 +764,19 @@ class DFTB:
             raise ValueError("the analysis outputs (M6f-4a) do not support type switching yet: "
                              "the atom-resolved repulsive needs the mixed pairs (milestone M5a)")
 
+    def _check_selected_shells(self, type_switching):
+        """Shells from several SK files (SelectedShells, M6f-5): refused with the parts that take
+        per-shell data by angular momentum or one file per label pair (SOC, DFTB+U, onsite
+        corrections, Casida, type switching)."""
+        used = [name for name, on in (("spin-orbit coupling", bool(self.spin_orbit)),
+                                      ("DFTB+U", self.plus_u is not None),
+                                      ("onsite corrections", self.onsite_corrections is not None),
+                                      ("Casida excitations", self.casida is not None),
+                                      ("type switching", type_switching is not None)) if on]
+        if used:
+            raise ValueError(f"selected_shells (milestone M6f-5) is not supported with "
+                             f"{', '.join(used)}")
+
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
         why = None
@@ -829,6 +844,8 @@ class DFTB:
             out.append("analysis")
         if getattr(self, "type_switching", None) is not None:     # M5a
             out.append("type_switching")
+        if getattr(getattr(self, "sk", None), "selected", False):  # M6f-5
+            out.append("selected_shells")
         return out
 
     @property
@@ -1262,10 +1279,10 @@ class DFTB:
         if sk.shell_resolved:
             site_of_orb = basis.orb_shell
             site_atom = basis.shell_atom
-            u = np.array([sk.hubbard[basis.species[a]][l]
-                          for a, l in zip(basis.shell_atom, basis.shell_l)])
-            q0 = np.array([sk.occupation[basis.species[a]][l]
-                           for a, l in zip(basis.shell_atom, basis.shell_l)])
+            u = np.array([sk.hubbard[basis.species[a]][k]
+                          for a, k in zip(basis.shell_atom, basis.shell_local)])
+            q0 = np.array([sk.occupation[basis.species[a]][k]
+                           for a, k in zip(basis.shell_atom, basis.shell_local)])
         else:
             site_of_orb = basis.orb_atom
             site_atom = np.arange(len(basis.species))
@@ -1287,8 +1304,8 @@ class DFTB:
     def _reference_shell_populations(self, basis: Basis) -> np.ndarray:
         """The reference (neutral) population of every shell: the SKF occupations, with DFTB+'s
         ``CustomisedOccupations`` applied (``reference_occupations``, M6f)."""
-        occ = np.array([self.sk.occupation[basis.species[a]][l]
-                        for a, l in zip(basis.shell_atom, basis.shell_l)])
+        occ = np.array([self.sk.occupation[basis.species[a]][k]
+                        for a, k in zip(basis.shell_atom, basis.shell_local)])
         if self.reference_occupations is None:
             return occ
         return _reference_occupation_table(self.reference_occupations, basis, occ)
@@ -1499,9 +1516,9 @@ class DFTB:
         if not self.sk.shell_resolved:
             return np.array([ud[lab][0] for lab in basis.species])
         out = []
-        for a, l in zip(basis.shell_atom, basis.shell_l):
+        for a, k in zip(basis.shell_atom, basis.shell_local):
             v = ud[basis.species[a]]
-            out.append(v[0] if len(v) == 1 else v[self.sk.shells(basis.species[a]).index(l)])
+            out.append(v[0] if len(v) == 1 else v[k])
         return np.array(out)
 
     def _spin_matrix(self, basis: Basis) -> np.ndarray:
@@ -1556,8 +1573,8 @@ class DFTB:
         without spin, (n_shell,) collinear, (3, n_shell) two-component."""
         b = st.basis
         natom = len(st.species)
-        occ = np.array([self.sk.occupation[b.species[a]][l]
-                        for a, l in zip(b.shell_atom, b.shell_l)])
+        occ = np.array([self.sk.occupation[b.species[a]][k]
+                        for a, k in zip(b.shell_atom, b.shell_local)])
         if self.initial_charges is not None:
             charges = _per_atom(self.initial_charges, natom, "initial_charges")
             if abs(charges.sum() - self.charge) > 1e-4:
@@ -2364,7 +2381,7 @@ def _reference_occupation_table(spec: dict, basis: Basis, default: np.ndarray) -
         if not 0 <= a < natom:
             raise ValueError(f"reference_occupations: no atom {atom} (atoms 0..{natom - 1})")
         ls = [int(x) for x in basis.shells[a]]
-        names = ["spdf"[l] for l in ls]
+        names = shell_names(ls)
         if isinstance(val, dict):
             for key, x in val.items():
                 name = str(key).lower()

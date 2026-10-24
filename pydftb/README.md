@@ -94,6 +94,29 @@ The types of an element need equal on-site energies, Hubbard values, occupations
 not with Casida, XL-BOMD or the analysis outputs.  Details:
 [`docs/reports/M5a-type-switching.html`](docs/reports/M5a-type-switching.html).
 
+### Shells from several SK files (SelectedShells)
+
+DFTB+'s `MaxAngularMomentum { O = SelectedShells { "sp" "s" } }` builds an atom's basis from
+several SK files, so one angular momentum can appear twice (an sps* basis); milestone M6f-5:
+
+```python
+p = ParamSet(skdir, selected_shells={"O": ("sp", "s")})   # the s group from O2-O2.skf, O-O2.skf, O2-H.skf ...
+p = ParamSet(skdir, selected_shells={"O": (("O", "sp"), ("Ox", "s"))})   # name each group's files
+r = DFTB(p.skset(["O", "H"]), reference_occupations={0: {"s2": 0.0}}).calculate(labels, pos)
+atoms.calc = PyDFTB(skdir, selected_shells={"Cu": ("sd", "p")})
+```
+
+The k-th group's files are named after the label followed by k (DFTB+'s manual: Si, Si2), or
+after the file label given.  As in DFTB+: the orbitals follow the groups in order ("sd" "p" is
+s, d, p); each shell's on-site energy, occupation and U come from its group's homonuclear file;
+atom-resolved SCC uses the first shell's U; the repulsive and the mass come from the first file;
+the files between two groups of one label are heteronuclear (no on-site line;
+`pydftb.skf.write_typed_copies` writes them so); all files of a label pair share one grid.  A
+repeated angular momentum is named "s2" (`reference_occupations`, eigenvec.out).  Spin constants
+and shell-resolved Hubbard derivatives follow the shells' order.  NumPy engine only; not with
+spin-orbit coupling, DFTB+U, onsite corrections, Casida or type switching.  Details:
+[`docs/reports/M6f5-selected-shells.html`](docs/reports/M6f5-selected-shells.html).
+
 ### f orbitals
 
 Parameter sets with f electrons (lanthanides, actinides) use DFTB+'s extended SKF format

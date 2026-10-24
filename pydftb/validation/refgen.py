@@ -32,7 +32,7 @@ from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
 from ..external import PointCharges
 from ..params import ParamSet
-from ..skf import write_typed_copies
+from ..skf import shell_names, write_typed_copies
 from . import dftbplus
 from .cases import CASES, CASES_BY_NAME, DATA, MAXL, REF_DIR, SKF_SETS, Case, solvation_model
 
@@ -134,7 +134,9 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                                    template="{a}-{b}.skf.gz") and tmp
     skdir = skdir or SKF_SETS[case.skf_set]
     try:
-        params = ParamSet(skdir, max_l=inp["max_l"], shell_resolved=case.shell_resolved)
+        sel = case.selected_shells or {}                  # M6f-5: shells from several files
+        params = ParamSet(skdir, max_l={k: v for k, v in inp["max_l"].items() if k not in sel},
+                          shell_resolved=case.shell_resolved, selected_shells=sel or None)
         labels = inp["labels"]
         switch = None
         if switching:                                     # M5a: element labels, all the types
@@ -425,7 +427,8 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                   **({"analysis": case.analysis} if case.analysis else {}),
                   **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
                       "autotest": True} if case.casida else {}),
-                  **({"fermi": fermi_hsd(case)} if case.fermi else {}))
+                  **({"fermi": fermi_hsd(case)} if case.fermi else {}),
+                  **({"selected_shells": case.selected_shells} if case.selected_shells else {}))
         if case.read_charges is not None:             # M6f-1: two runs
             return dftbplus.run_restart(args[0], np.array(inp["run1_positions_angstrom"]),
                                         args[1], args[2],
@@ -589,7 +592,9 @@ def regenerate(names=None, threads: int = 1):
                             if case.corrections else {}),
                          **({"analysis": case.analysis} if case.analysis else {}),
                          **({"type_switching": case.type_switching}
-                            if case.type_switching else {})},
+                            if case.type_switching else {}),
+                         **({"selected_shells": case.selected_shells}
+                            if case.selected_shells else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -1295,6 +1300,8 @@ def _compare_excited(case: Case, inp: dict, ref: dict, res, sk_q0, **run) -> dic
 
 
 def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
+    if case.selected_shells:              # M6f-5: the shells and their DFTB+ names ("s2")
+        return _neutral_populations_selected(case, inp)
     params_dir = SKF_SETS[case.skf_set]
     base = case.typed or {}
     p = ParamSet(params_dir, max_l={base.get(k, k): v for k, v in inp["max_l"].items()})
@@ -1307,6 +1314,30 @@ def _neutral_populations(case: Case, inp: dict) -> np.ndarray:
             occ["spdf".index(name)] = x
         q0[int(atom)] = occ.sum()
     return q0
+
+
+def _neutral_populations_selected(case: Case, inp: dict) -> np.ndarray:
+    """Neutral atom populations of a SelectedShells case (M6f-5): every shell's occupation from
+    its group's file, CustomisedOccupations by DFTB+'s shell names."""
+    tmp = tempfile.mkdtemp(prefix="pydftb_case_")
+    try:
+        write_typed_copies(SKF_SETS[case.skf_set], tmp, case.typed, template="{a}-{b}.skf.gz")
+        sel = case.selected_shells
+        p = ParamSet(tmp, max_l={k: v for k, v in inp["max_l"].items() if k not in sel},
+                     selected_shells=sel)
+        labels = inp["labels"]
+        sk = p.skset(labels)
+        q0 = np.array([sk.occupation[lab].sum() for lab in labels])
+        for atom, shells in (case.occupations or {}).items():
+            lab = labels[int(atom)]
+            occ = sk.occupation[lab].copy()
+            names = shell_names(sk.shells(lab))
+            for name, x in shells.items():
+                occ[names.index(name)] = x
+            q0[int(atom)] = occ.sum()
+        return q0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backend) -> bool:

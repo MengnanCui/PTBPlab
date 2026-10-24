@@ -756,15 +756,37 @@ def opt_driver(optimiser="LBFGS {}", lattice=False, grad_elem=1e-7, max_steps=30
             f"  Convergence {{ GradElem = {_f(grad_elem)} }}\n}}\n")
 
 
+def sk_files_block(skdir, labels, selected=None) -> str:
+    """``SlaterKosterFiles``: Type2FileNames, or with selected shells (M6f-5) n_A x n_B files per
+    label pair, the second label's group changing fastest (DFTB+ readSKFiles)."""
+    root = os.path.abspath(skdir)
+    if not selected:
+        return (f'  SlaterKosterFiles = Type2FileNames {{\n    Prefix = "{root}/"\n'
+                '    Separator = "-"\n    Suffix = ".skf"\n  }')
+    groups = {lab: [f for f, _ in selected[lab]] if lab in selected else [lab] for lab in labels}
+    lines = ["  SlaterKosterFiles {"]
+    for a in labels:
+        for b in labels:
+            files = " ".join(f'"{root}/{fa}-{fb}.skf"' for fa in groups[a] for fb in groups[b])
+            lines.append(f"    {a}-{b} = {files}")
+    return "\n".join(lines + ["  }"])
+
+
 def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0),
              shell_resolved=False, scc_tol=1e-10, max_scc=500, repulsive="skf",
              richardson=False, charge=0.0, extra_ham="", timing=False, klines=None,
              read_charges=False, convergent_only=True, extra_analysis="", driver="",
-             extra_top="", forces=True, autotest=False, extra_options="", fermi=None) -> str:
+             extra_top="", forces=True, autotest=False, extra_options="", fermi=None,
+             selected_shells=None) -> str:
     """The HSD input.  ``extra_top``: further top-level blocks (e.g. ``ExcitedState``);
     ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d);
-    ``extra_options``: lines of the Options block (M6f); ``fermi``: see :func:`filling_block`."""
-    maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' for e, l in max_l.items())
+    ``extra_options``: lines of the Options block (M6f); ``fermi``: see :func:`filling_block`;
+    ``selected_shells``: {label: [(file label, shell letters), ...]} (M6f-5): SelectedShells
+    and every pair's files listed (the first label's group outer, as DFTB+ reads them)."""
+    sel = selected_shells or {}
+    maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' if e not in sel else
+                     f"    {e} = SelectedShells {{ {' '.join(chr(34) + s + chr(34) for _, s in sel[e])} }}"
+                     for e, l in max_l.items())
     kblock = ""
     if periodic and klines is not None:
         kblock = klines_block(klines)
@@ -790,11 +812,7 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
 Hamiltonian = DFTB {{
   SCC = {"Yes" if scc else "No"}
 {scc_block}  Charge = {_f(charge)}
-  SlaterKosterFiles = Type2FileNames {{
-    Prefix = "{os.path.abspath(skdir)}/"
-    Separator = "-"
-    Suffix = ".skf"
-  }}
+{sk_files_block(skdir, list(max_l), sel)}
   MaxAngularMomentum {{
 {maxl}
   }}
@@ -1001,7 +1019,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
         convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
-        autotest=False, extra_options="", fermi=None, binary=None, analysis=None) -> dict:
+        autotest=False, extra_options="", fermi=None, binary=None, analysis=None,
+        selected_shells=None) -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata; ``scc_errors``: the "SCC error" of every iteration
     as printed (M6f).  ``binary``: another DFTB+ executable (M6f-3: the development build).
@@ -1021,7 +1040,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
                        klines, read_charges, convergent_only, extra_analysis, driver,
-                       extra_top, forces, autotest, extra_options, fermi)
+                       extra_top, forces, autotest, extra_options, fermi, selected_shells)
         with open(os.path.join(workdir, "dftb_in.hsd"), "w") as f:
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))

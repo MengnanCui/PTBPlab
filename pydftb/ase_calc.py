@@ -168,6 +168,8 @@ class PyDFTB(Calculator):
     cut-offs in Bohr, like the other model parameters): the atoms of a switched element mix its
     type labels by their coordination numbers, as in :class:`pydftb.DFTB`; the SK set holds all
     the types; the weights of the last calculation are ``raw.type_weights``.
+    Milestone M6f-5: ``selected_shells`` (DFTB+ ``SelectedShells``), a label's shells taken from
+    several SK files, as in :class:`pydftb.ParamSet`.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole", "energies"]
@@ -192,9 +194,11 @@ class PyDFTB(Calculator):
                  read_charges=None, fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None, analysis=None, type_switching=None, **kwargs):
+                 dipole_correction=None, analysis=None, type_switching=None,
+                 selected_shells=None, **kwargs):
         super().__init__(**kwargs)
-        self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
+        self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved,
+                               selected_shells=selected_shells)
         self.kpts_spec = kpts
         self.time_reversal = time_reversal
         if smearing is None:

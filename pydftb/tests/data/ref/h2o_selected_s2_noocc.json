@@ -1,0 +1,133 @@
+{
+ "schema": 1,
+ "case": "h2o_selected_s2_noocc",
+ "note": "the s* shell keeps H's occupation (1 electron) from its group's file: 9 electrons, 300 K (at 0 K the half-filled level makes the 3-site Broyden history singular, and the two codes leave it differently; M6f-1)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": {
+   "O": "O",
+   "Ox": "H",
+   "H": "H"
+  },
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "selected_shells": {
+   "O": [
+    [
+     "O",
+     "sp"
+    ],
+    [
+     "Ox",
+     "s"
+    ]
+   ]
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles {\n    O-O = \"/tmp/pydftb_ref_b9a19a1p/typed/O-O.skf\" \"/tmp/pydftb_ref_b9a19a1p/typed/O-Ox.skf\" \"/tmp/pydftb_ref_b9a19a1p/typed/Ox-O.skf\" \"/tmp/pydftb_ref_b9a19a1p/typed/Ox-Ox.skf\"\n    O-H = \"/tmp/pydftb_ref_b9a19a1p/typed/O-H.skf\" \"/tmp/pydftb_ref_b9a19a1p/typed/Ox-H.skf\"\n    H-O = \"/tmp/pydftb_ref_b9a19a1p/typed/H-O.skf\" \"/tmp/pydftb_ref_b9a19a1p/typed/H-Ox.skf\"\n    H-H = \"/tmp/pydftb_ref_b9a19a1p/typed/H-H.skf\"\n  }\n  MaxAngularMomentum {\n    O = SelectedShells { \"sp\" \"s\" }\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -4.2378687656,
+  "free_energy": -4.2391858071,
+  "e_zero": -4.2385272864,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0137079819,
+  "e_band": -4.2906319015,
+  "fermi": -0.205087992001707,
+  "forces": [
+   [
+    -0.00170843585040862,
+    0.0963248742759363,
+    0.0596517751056033
+   ],
+   [
+    -0.000528179263624835,
+    0.0112553204053363,
+    0.00367578265006372
+   ],
+   [
+    0.00223661511403345,
+    -0.107580194681273,
+    -0.0633275577556671
+   ]
+  ],
+  "charges_net": [
+   -0.397295673632268,
+   0.171425340710993,
+   0.225870332921275
+  ],
+  "n_scc": 7
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 5e-06,
+  "charges": 1e-06
+ }
+}
