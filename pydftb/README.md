@@ -73,6 +73,27 @@ mf = pydftb.SCC(pydftb.System.from_ase(atoms, labels=labels), params)
 
 `pydftb.skf.write_typed_copies` creates the files for a new type from existing ones.
 
+The types can also switch smoothly with the environment (milestone M5a; DFTB+ fixes each
+atom's type): every atom of the element mixes its types with weights from its coordination
+number, H0, S and the repulsive are mixed, and forces and stress include the weights'
+derivatives, so geometry optimisation and MD work:
+
+```python
+from pydftb import DFTB, ParamSet, TypeSwitch
+sw = TypeSwitch("Cu", types=("Cu2", "Cu"),   # by rising CN: low-coordinated Cu2, bulk Cu
+                centre=10.5, width=1.0)      # switching window CN 10-11
+sk = ParamSet(skdir).skset(["Cu", "Cu2"])    # every type, with Cu-Cu2.skf and Cu2-Cu.skf
+r = DFTB(sk, kpts=k, type_switching=[sw]).calculate(["Cu"] * n, pos, cell, pbc)
+r.type_weights["Cu2"]                        # each atom's weight of Cu2
+atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])
+```
+
+The types of an element need equal on-site energies, Hubbard values, occupations and basis
+(PTBP's types have them); the files between two types must not start with an on-site line
+(`pydftb/validation/make_cu_types_set.py` makes such a set with hotcent).  NumPy engine only;
+not with Casida, XL-BOMD or the analysis outputs.  Details:
+[`docs/reports/M5a-type-switching.html`](docs/reports/M5a-type-switching.html).
+
 ### f orbitals
 
 Parameter sets with f electrons (lanthanides, actinides) use DFTB+'s extended SKF format
