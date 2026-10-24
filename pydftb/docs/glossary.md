@@ -130,6 +130,10 @@
 |---|---|
 | 类型标签（label） | 告诉程序每个原子用哪套参数。通常就是元素名；同一元素要用多套参数时，起不同的名字，如 `Li1`、`Li2`（DFTB+ 和 ASE 的约定），也支持 `Li_el`、`Li@el` 这类写法。 |
 | ParamSet | pydftb 中“参数从哪里来”的对象：一个 SKF 目录加上读取选项。 |
+| wheel | Python 包的标准发行文件（`.whl`）：已经排好目录的 zip 包，`pip install` 直接解压到 site-packages，不需要在安装时构建。pydftb 的 wheel 不含 `docs/` 与 `bench/`，含测试与冻结的参考数据（P1）。 |
+| sdist | 源码发行包（`.tar.gz`）：项目的源文件加构建配置，安装时先构建成 wheel。P1 检查过 sdist 构建出的 wheel 与直接构建的逐字节相同。 |
+| 可编辑安装（editable install） | `pip install -e`：不复制文件，只登记“这个包的源码在某个目录”，改源码立即生效，适合开发。本机的共享环境在 P1 合并后改为 `pip install -e ./pydftb -e .`。 |
+| 命令行入口（console script） | 包在安装时生成的可执行命令，如 `pydftb`、`ptbp`；它调用包里的某个函数（`pydftb.cli:main`）。与 `python -m pydftb` 等价（P1）。 |
 | System | pydftb 中“算什么”的对象：原子的类型标签、元素、坐标、晶胞、总电荷。 |
 | 复步长求导 | 一种数学技巧：给输入加一个极小的虚数扰动，从结果的虚部直接得到导数，精度可以达到计算机能表示的极限。 |
 | 灾难性抵消 | 两个几乎相等的大数相减，有效数字大量丢失。DFTB+ 的 γ 公式在两个 U 几乎相等时就是这样失效的。 |
