@@ -1,0 +1,233 @@
+{
+ "schema": 1,
+ "case": "meoh_water_halogen",
+ "note": "CH3-Cl-H (Cl a copy of O) and a water, r(O-Cl) = 3.0 A: sigma = 1",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": {
+   "C": "C",
+   "H": "H",
+   "O": "O",
+   "Cl": "O"
+  },
+  "dftb3": {
+   "third_order": "full",
+   "hubbard_derivs": {
+    "H": -0.1857,
+    "C": -0.1492,
+    "O": -0.1575,
+    "Cl": -0.1575,
+    "Br": -0.1575,
+    "N": -0.1575
+   },
+   "h_damping": 4.0
+  },
+  "spin": null,
+  "scc_tol": 1e-09,
+  "ewald_tolerance": null,
+  "h5": null,
+  "halogen": {},
+  "dipole_correction": null,
+  "stress_fd": false,
+  "dftbplus": "25.1"
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "C",
+   "Cl",
+   "H",
+   "H",
+   "H",
+   "H",
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    -0.047131,
+    0.664389,
+    0.0
+   ],
+   [
+    -0.047131,
+    -0.758551,
+    0.0
+   ],
+   [
+    -1.092995,
+    0.969785,
+    0.0
+   ],
+   [
+    0.878534,
+    -1.048458,
+    0.0
+   ],
+   [
+    0.437145,
+    1.080376,
+    0.891772
+   ],
+   [
+    0.437145,
+    1.080376,
+    -0.891772
+   ],
+   [
+    -0.047131,
+    -3.7585509999999998,
+    0.0
+   ],
+   [
+    0.4121976964555462,
+    -4.3548599999999995,
+    -0.6095497680529858
+   ],
+   [
+    -0.5064596964555462,
+    -4.3548599999999995,
+    0.6095497680529858
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "C": 1,
+   "Cl": 1,
+   "H": 0,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-09\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_uj1qh2xp/typed/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n    Cl = \"p\"\n    H = \"s\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  ThirdOrderFull = Yes\n  HubbardDerivs {\n    H = -0.1857\n    C = -0.1492\n    O = -0.1575\n    Cl = -0.1575\n  }\n  HCorrection = Damping { Exponent = 4.0 }\n  HalogenXCorr = Yes\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -10.0049202517,
+  "free_energy": -10.0049202517,
+  "e_zero": -10.0049202517,
+  "e_rep": 0.1613038658,
+  "e_scc": 0.0499735461,
+  "e_band": -10.2151190319,
+  "e_3rd": -0.0075528785,
+  "e_halogen": 0.0064742468,
+  "fermi": -0.0572046524448181,
+  "forces": [
+   [
+    0.00870833876829437,
+    0.00198056390913949,
+    5.85682812711349e-06
+   ],
+   [
+    -0.0817449375519479,
+    -0.0668927088058037,
+    1.03865198139298e-05
+   ],
+   [
+    -0.0902362295715243,
+    0.0247996342364259,
+    -3.75003713982012e-06
+   ],
+   [
+    0.0770993908916991,
+    -0.0203599564029027,
+    8.64041158122998e-05
+   ],
+   [
+    0.0424720135387705,
+    0.0334481365476205,
+    0.0761983694205449
+   ],
+   [
+    0.0424719485869888,
+    0.0334505205036433,
+    -0.0762025618902327
+   ],
+   [
+    0.00217121216339703,
+    0.0936044685173403,
+    0.000486819852018811
+   ],
+   [
+    0.0351404935565443,
+    -0.0505092209020087,
+    -0.0476376963991372
+   ],
+   [
+    -0.0360822303822219,
+    -0.0495214376034544,
+    0.0470561715901926
+   ]
+  ],
+  "charges_net": [
+   0.0287926366548137,
+   -0.503901516743721,
+   0.0658902116182929,
+   0.346112717160554,
+   0.0315596212197357,
+   0.0314983959781647,
+   -0.692560583606092,
+   0.343221747895213,
+   0.349386769823032
+  ],
+  "n_scc": 14,
+  "scc_errors": [
+   0.93260127,
+   0.66472232,
+   0.11366973,
+   0.049158852,
+   0.019857129,
+   0.010092304,
+   0.0018728165,
+   0.00086418217,
+   7.2449037e-05,
+   3.8111762e-06,
+   1.445957e-07,
+   1.059286e-07,
+   2.8740832e-09,
+   2.105951e-10
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_halogen": 1e-10
+ }
+}

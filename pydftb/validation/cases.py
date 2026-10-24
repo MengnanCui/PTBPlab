@@ -150,9 +150,26 @@ class Case:
     hubbard: dict | None = None           # CustomisedHubbards {label: U or [U per shell]} (Ha)
     occupations: dict | None = None       # CustomisedOccupations {atom (0-based): {shell: e}}
     truncate_sk: dict | None = None       # TruncateSKRange {"max_distance" (Bohr), "hard_cutoff"}
-    stress_fd: bool = False               # reference stress from strain differences of DFTB+'s
+    stress_fd: bool | tuple = False       # reference stress from strain differences of DFTB+'s
                                           # force-related energy (its analytic stress of a
-                                          # charged cell is not that derivative)
+                                          # charged cell is not that derivative); a tuple of
+                                          # (a, b): those components only (M6f-3), the others
+                                          # DFTB+'s analytic stress
+    # milestone M6f-3: corrections (HCorrection = H5, HalogenXCorr, DipoleCorrection)
+    h5: bool | dict | None = None         # True or {"r_scaling", "w_scaling", "scaling": {el: k}}
+    halogen: dict | None = None           # HalogenXCorr: {"compat": compare DFTB+'s forces with
+                                          # pydftb's DFTB+ sign of the switching terms,
+                                          # "forces_fd": reference forces from differences of
+                                          # DFTB+'s energy}
+    dipole_correction: bool | dict | None = None   # True or {"layer_position": z0 (A)}
+    dftbplus: str = "25.1"                # "dev": references from the development build
+                                          # ($DFTBPLUS_DEV), for what 25.1 does not have
+
+    @property
+    def corrections(self) -> bool:
+        """M6f-3 settings: H5, the halogen correction, the dipole correction."""
+        return (self.h5 is not None or self.halogen is not None
+                or self.dipole_correction is not None)
 
     @property
     def overrides(self) -> bool:
@@ -165,7 +182,7 @@ class Case:
     def track_scc(self) -> bool:
         """References keep the SCC error of every iteration and pydftb must take the same
         number of iterations (M6f cases)."""
-        return self.scc_start or self.overrides
+        return self.scc_start or self.overrides or self.corrections
 
     @property
     def scc_start(self) -> bool:
@@ -421,6 +438,49 @@ def _h2co_box():
     return a
 
 
+def _meoh_water(r):
+    """CH3OH and one water (M6f-3): the water's O on the methanol's C->O axis at r (A) from the
+    methanol's O, the water's H atoms pointing away; the methanol's O (atom 1) and the water's
+    O (atom 6) are the ones relabelled as halogen and acceptor."""
+    m = molecule("CH3OH")
+    c, o = m.positions[0], m.positions[1]
+    u = (o - c) / np.linalg.norm(o - c)
+    w = molecule("H2O")
+    w.positions -= w.positions[0]
+    w.rotate((0, 0, -1), u)
+    w.rotate(37.0, u)
+    w.positions += o + r * u
+    return m + w
+
+
+def _relabel(**at):
+    """Type labels: the chemical symbols with atom k (0-based) renamed, ``at`` = {"a1": "Cl"}."""
+    def labels(a):
+        out = a.get_chemical_symbols()
+        for key, lab in at.items():
+            out[int(key[1:])] = lab
+        return out
+    return labels
+
+
+def _water_layer(z=(0.0, 0.0, 0.0, 0.0), seed=11):
+    """Four waters in a layer, every dipole along +z, in a 6 x 6 x 20 A cell (M6f-3); ``z``
+    shifts each molecule (a whole period puts it into another image)."""
+    w = molecule("H2O")
+    w.rotate(180, "x")
+    a = Atoms(cell=[6.0, 6.0, 20.0], pbc=True)
+    for (x, y), dz in zip([(0.0, 0.0), (3.0, 0.0), (0.0, 3.0), (3.0, 3.0)], z):
+        m = w.copy()
+        m.translate([x + 0.5, y + 0.7, dz])
+        a += m
+    a.rattle(0.05, seed=seed)
+    return a
+
+
+def _water_layer_folded():
+    return _water_layer((15.0, -5.0, 15.0, -5.0), seed=16)
+
+
 W_HCO = {"H": -0.072, "C": -0.023, "O": -0.028}       # spin constants of the Casida cases
 TOL_CASIDA = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "exc": 1e-8, "exc_osc": 1e-7,
               "exc_tdip": 1e-7, "exc_table": 0, "spx": 0, "exc_state": 1e-9}
@@ -441,6 +501,11 @@ BROYDEN_WEIGHTS = {"kind": "broyden", "mixing": 0.3, "inverse_jacobi_weight": 0.
 # stress_fd
 TOL_FILL = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "n_scc": 0,
             "scc_errors": 1e-4, "e_fr": 1e-6, "n_electrons": 1e-6, "fermi_level": 1e-8}
+# M6f-3: corrections; "e_halogen" against detailed.out's "Halogen correction energy" (10 decimals)
+TOL_CORR = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "n_scc": 0, "scc_errors": 1e-4,
+            "e_halogen": 1e-10}
+UD_HALOGEN = {**UD_3OB, "Cl": UD_3OB["O"], "Br": UD_3OB["O"], "N": UD_3OB["O"]}   # type copies
+                                                                               # of O: test only
 
 
 def solvation_model(spec):
@@ -1067,5 +1132,65 @@ CASES = [
     Case("water_box_truncated_sk_soft", _water_box,
          truncate_sk={"max_distance": 6.0, "hard_cutoff": False}, scc_tol=1e-9,
          ewald_tolerance=1e-12, torch=False, tol={**TOL_FILL, "stress": 1e-9}),
+    # ---- M6f-3: corrections (DFTB+ HCorrection = H5, HalogenXCorr, DipoleCorrection), NumPy
+    # only.  Acceptors other than O and the halogens are type copies of O (DFTB+ identifies them
+    # by species name, so its code runs exactly as for the real elements: test values only).
+    # The periodic halogen correction (25.1 refuses it) and the dipole correction (after 25.1)
+    # have references from the development build 041e723 (dftbplus="dev") ---------------------
+    Case("water_dimer_h5", _water_dimer, h5=True, torch=False, tol=TOL_CORR,
+         note="H5 with the paper's values (DFTB2): gamma of the O-H pairs times 1 + g(r)"),
+    Case("water_dimer_h5_typed_n", _water_dimer, typed={"O": "O", "N": "O", "H": "H"},
+         labels=_relabel(a3="N"), h5=True, torch=False, tol=TOL_CORR,
+         note="second water's O typed N (a copy of O): N's default scaling 0.18 and radius"),
+    Case("water_dimer_h5_typed_s_custom", _water_dimer, typed={"O": "O", "S": "O", "H": "H"},
+         labels=_relabel(a3="S"), torch=False, tol=TOL_CORR,
+         h5={"r_scaling": 0.8, "w_scaling": 0.3, "scaling": {"O": 0.1, "S": 0.3}},
+         note="second water's O typed S; RScaling, WScaling and H5Scaling set"),
+    Case("water_dimer_dftb3_d3h5", _water_dimer, h5=True, torch=False, tol=TOL_CORR,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_3OB},
+         dispersion={"model": "dftd3", "damping": "zerodamping", "sr6": 1.25, "alpha6": 29.61,
+                     "s6": 1.0, "s8": 0.49, "hhrepulsion": True},
+         note="DFTB3 + H5 + D3 with the H-H repulsion: the published DFTB3-D3H5 model"),
+    Case("ch3oh_h5_cscale", _meoh, h5={"scaling": {"C": 0.1}}, torch=False, tol=TOL_CORR,
+         note="H5Scaling {C = 0.1}: the C-H pairs too (and O-H inside the molecule)"),
+    Case("water_box_h5", _water_box, h5=True, ewald_tolerance=1e-12, scc_tol=4e-10, torch=False,
+         tol={**TOL_CORR, "stress": 1e-9}, note="H5 in the short-range part of Ewald; stress"),
+    Case("water_dimer_h5_exc_forces", _water_dimer, h5=True,
+         casida={**EXC_FD, "n": 6, "state": 1, "compat": ["damping"]}, scc_tol=1e-12,
+         torch=False, tol={**TOL_CORR, **TOL_EXC, **TOL_EXC_FD},
+         note="S1 forces: DFTB+'s gamma' in the excited gradient has no H5 (the excitation "
+              "energies do)"),
+    Case("meoh_water_halogen", lambda: _meoh_water(3.0), labels=_relabel(a1="Cl"),
+         typed={"C": "C", "H": "H", "O": "O", "Cl": "O"}, halogen={},
+         dftb3={"third_order": "full", "hubbard_derivs": UD_HALOGEN, "h_damping": 4.0},
+         scc_tol=1e-9, torch=False, tol=TOL_CORR,
+         note="CH3-Cl-H (Cl a copy of O) and a water, r(O-Cl) = 3.0 A: sigma = 1"),
+    Case("meoh_water_halogen_switch", lambda: _meoh_water(2.45), labels=_relabel(a1="Cl"),
+         typed={"C": "C", "H": "H", "O": "O", "Cl": "O"},
+         halogen={"compat": True, "forces_fd": True},
+         dftb3={"third_order": "full", "hubbard_derivs": UD_HALOGEN, "h_damping": 4.0},
+         scc_tol=1e-12, torch=False, tol={**TOL_CORR, "forces": 1e-8, "forces_dftbp": 1e-6},
+         note="r(O-Cl) = 2.45 A, in the switching region (2.289-2.616 A): DFTB+'s forces are "
+              "wrong there; forces against differences of its energy"),
+    Case("meoh_water_halogen_nbr_h5", lambda: _meoh_water(2.9), labels=_relabel(a1="Br", a6="N"),
+         typed={"C": "C", "H": "H", "Br": "O", "N": "O"}, halogen={}, h5=True,
+         dftb3={"third_order": "onsite", "hubbard_derivs": UD_HALOGEN},
+         scc_tol=2e-10, torch=False, tol=TOL_CORR,
+         note="N-Br pair (copies of O), on-site third order, H5 on N-H"),
+    Case("water_box_halogen", _water_box, labels=_relabel(a0="Cl", a12="Cl", a3="N"),
+         typed={"O": "O", "Cl": "O", "N": "O", "H": "H"}, halogen={}, ewald_tolerance=1e-12,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_HALOGEN, "h_damping": 4.0},
+         dftbplus="dev", torch=False, tol={**TOL_CORR, "stress": 1e-9},
+         note="periodic halogen correction (development DFTB+); no pair in a switching region"),
+    Case("water_slab_dipole", _water_layer, kgrid=(2, 2, 1), dipole_correction=True,
+         ewald_tolerance=1e-12, scc_tol=1e-9, dftbplus="dev", torch=False,
+         stress_fd=((0, 0), (1, 1), (2, 2), (0, 1)), tol={**TOL_CORR, "stress": 1e-9},
+         note="dipole correction (development DFTB+), layer at -h/2; DFTB+ has no stress term "
+              "(xx, yy, zz, xy against its energy differences; it refuses z shears)"),
+    Case("water_slab_dipole_layer", _water_layer_folded, kgrid=(2, 2, 1),
+         dipole_correction={"layer_position": 5.0}, ewald_tolerance=1e-12, dftbplus="dev",
+         stress_fd=((0, 0), (1, 1), (2, 2), (0, 1)), torch=False,
+         tol={**TOL_CORR, "stress": 1e-9},
+         note="layer at 5 A, two molecules given one period lower (folded)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

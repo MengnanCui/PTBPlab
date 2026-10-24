@@ -43,6 +43,7 @@ from ase.data import atomic_numbers as _NUMBERS
 from . import blockpot, external
 from . import casida as _casida
 from . import casida_grad as _cgrad
+from . import corrections as _corrections
 from . import solvation as _solvation
 from .backend import ops
 from .backend.spec import make_backend
@@ -68,7 +69,8 @@ class DFTBResult:
 
     Energy names follow DFTB+'s ``detailed.out``:
     ``energy`` = "Total energy" (E_H0 + E_SCC + E_3rd + E_spin + E_LS + E_U + E_onsite + E_ext
-    + E_solv + E_rep + E_disp); E_SCC includes the external point charges, as DFTB+'s,
+    + E_solv + E_rep + E_disp + E_halogen); E_SCC includes the external point charges and the
+    dipole correction, as DFTB+'s,
     ``free_energy`` = "Total Mermin free energy" (Total - TS),
     ``e_zero`` = "Extrapolated to 0" (Total - TS/2).
     """
@@ -132,6 +134,10 @@ class DFTBResult:
     q0_atom: np.ndarray | None = None    # reference populations per atom when they are custom
                                          # (DFTB+ CustomisedOccupations); charges are q0_atom -
                                          # charges then
+    # M6f-3: corrections
+    e_halogen: float = 0.0               # halogen correction (DFTB+ "Halogen correction energy")
+    e_dipole_corr: float | None = None   # dipole correction 2 pi D^2 / V, a part of e_scc (as in
+                                         # DFTB+, which does not print it)
 
     @property
     def e_total(self) -> float:
@@ -169,7 +175,8 @@ class DFTBResult:
         return {"H0": self.e_band, "SCC": self.e_scc, "3rd": self.e_3rd, "spin": self.e_spin,
                 "LS": self.e_ls, "+U": self.e_plus_u, "onsite": self.e_onsite,
                 "ext": self.e_ext, "solvation": self.e_solv,
-                "repulsive": self.e_rep, "dispersion": self.e_disp, "-TS": -self.ts}
+                "repulsive": self.e_rep, "dispersion": self.e_disp, "halogen": self.e_halogen,
+                "-TS": -self.ts}
 
 
 @dataclass(frozen=True)
@@ -214,6 +221,8 @@ class _Setup:
     block: "blockpot.BlockTerms | None" = None   # DFTB+U / onsite corrections (M6b)
     ext: "external.ExternalTerms | None" = None  # fields, point charges, site potentials (M6c)
     solv: "object | None" = None                 # implicit solvation (M6c)
+    halogenx: "_corrections.HalogenTerms | None" = None    # halogen correction (M6f-3)
+    dipole_corr: "_corrections.DipoleSetup | None" = None  # dipole correction (M6f-3)
 
     @property
     def kw_dev(self):
@@ -398,6 +407,19 @@ class DFTB:
                           ``TruncateSKRange``), or {"max_distance": r, "hard_cutoff": bool}: with
                           the hard cut-off (default) the tail ends at r; repulsives are not cut;
                           ``self.sk`` is a copy.
+    h5 : bool | dict      the H5 hydrogen-bond correction of gamma (DFTB+ ``HCorrection = H5``,
+                          milestone M6f-3): True for the paper's values, or {"r_scaling",
+                          "w_scaling", "scaling": {element: k}} (k <= 0 switches an element off;
+                          defaults O 0.06, N 0.18, S 0.21).  Pairs of one H and an acceptor get
+                          gamma (1 + g(r)); not with ``h_damping``; not in the third order.
+    halogen_correction : bool  DFTB+'s ``HalogenXCorr`` for O/N - Cl/Br/I pairs (DFTB3 only):
+                          a geometry-only pair term, ``DFTBResult.e_halogen``; its forces and
+                          stress are the derivatives of the energy (DFTB+'s are wrong in the
+                          switching region).
+    dipole_correction : bool | dict  DFTB+'s ``DipoleCorrection`` of slabs (after 25.1): a dipole
+                          layer at {"layer_position": z0} (Bohr; default -h/2) in the vacuum along
+                          z, E = 2 pi D^2 / V in E_SCC (``DFTBResult.e_dipole_corr``); periodic,
+                          neutral, the slab normal along z; with the stress term DFTB+ lacks.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -405,8 +427,12 @@ class DFTB:
     """
 
     # test use only: leave out what DFTB+'s excited-state gradient leaves out ("external",
-    # "damping", "window"), to show that its differences from pydftb's are those terms (M6e)
+    # "damping", "window"), to show that its differences from pydftb's are those terms (M6e);
+    # "damping" drops the H-X damping and H5 from gamma' (M6f-3)
     _excited_compat = frozenset()
+    # test use only: the halogen correction's gradient and virial with DFTB+'s sign of the
+    # switching-function terms (M6f-3)
+    _halogen_compat = False
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
@@ -426,7 +452,8 @@ class DFTB:
                  force_evaluation: str = "traditional", initial_charges=None,
                  fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
-                 truncate_sk_range=None):
+                 truncate_sk_range=None, h5=None, halogen_correction: bool = False,
+                 dipole_correction=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -552,6 +579,11 @@ class DFTB:
                 raise ValueError("Casida linear response does not work with custom reference "
                                  "occupations (as DFTB+: 'Custom occupation not compatible with "
                                  "linear response')")
+        # corrections (M6f-3)
+        self.h5 = _corrections.H5.make(h5)
+        self.halogen_correction = bool(halogen_correction)
+        self.dipole_correction = _corrections.DipoleCorrection.make(dipole_correction)
+        self._check_corrections()
         self.force_evaluation = str(force_evaluation).lower()
         if self.force_evaluation not in FORCE_EVALUATIONS:
             raise ValueError(f"force_evaluation must be one of {FORCE_EVALUATIONS}, "
@@ -638,6 +670,31 @@ class DFTB:
             raise ValueError("independent_k_filling does not support collinear spin (DFTB+ 25.1 "
                              "crashes there: its array of k-point weights is too short)")
 
+    def _check_corrections(self):
+        """The combinations of H5, the halogen correction and the dipole correction (M6f-3)."""
+        if self.h5 is not None:
+            if not self.scc:
+                raise ValueError("the H5 correction needs SCC (as in DFTB+)")
+            if self.h_damping is not None:
+                raise ValueError("h5 and h_damping are exclusive (DFTB+'s HCorrection is either "
+                                 "H5 or Damping)")
+        if self.halogen_correction and not self.third_order:
+            raise ValueError("the halogen correction needs third_order (DFTB+: only fitted for 3rd "
+                             "order models; it reads HalogenXCorr with ThirdOrder[Full] only)")
+        if self.dipole_correction is not None:
+            why = None
+            if not self.scc:
+                why = "needs SCC"
+            elif abs(self.charge) > _corrections.ELEC_TOL_MAX:
+                why = "only applies to charge neutral systems (as DFTB+)"
+            elif self.fixed_fermi_level is not None:
+                why = "needs a neutral system, not a fixed Fermi level"
+            elif self.point_charges is not None or self.electric_field is not None:
+                why = ("does not combine with external point charges or fields (DFTB+ leaves "
+                       "them out of the dipole)")
+            if why:
+                raise ValueError(f"the dipole correction {why}")
+
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
         why = None
@@ -695,6 +752,12 @@ class DFTB:
                 out.append(name)
         if getattr(self, "independent_k_filling", False):
             out.append("independent_k_filling")
+        if getattr(self, "h5", None) is not None:                 # M6f-3
+            out.append("h5")
+        if getattr(self, "halogen_correction", False):
+            out.append("halogen_correction")
+        if getattr(self, "dipole_correction", None) is not None:
+            out.append("dipole_correction")
         return out
 
     @property
@@ -972,6 +1035,9 @@ class DFTB:
             why = "does not combine with excited-state forces"
         if why:
             raise ValueError(f"XL-BOMD {why} (as in DFTB+)")
+        if self.dipole_correction is not None:
+            raise ValueError("XL-BOMD does not support the dipole correction (DFTB+ runs it, but "
+                             "its XL gradient lacks the correction's terms)")
         if self._custom_filling:
             raise ValueError("XL-BOMD with a fixed Fermi level or independent k-point filling "
                              "is not supported")
@@ -1062,8 +1128,9 @@ class DFTB:
         p_e, coef = _cgrad.pair_terms(rel, gs, pb.rows, pb.cols, v_orb, vs_orb)
         grad, _ = self._add_pair_terms(st, np.zeros_like(st.pos), p_e, coef)
         coul = st.coulomb
-        if "damping" in compat and coul.damped.any():
-            coul = Coulomb(st.pos, coul.site_atom, coul.tau / 3.2)   # DFTB+: no damping in gamma'
+        if "damping" in compat and (coul.damped.any() or coul.h5 is not None):
+            coul = Coulomb(st.pos, coul.site_atom, coul.tau / 3.2)   # DFTB+: no damping, no H5
+                                                                     # in gamma'
         dq = self._atom_dq(st, sc.q_out)
         dqex = rel.dqex_total
         grad = grad + 2.0 * coul.gradient(dq, other=dqex)[0]
@@ -1188,9 +1255,10 @@ class DFTB:
             damped = None
             if self.h_damping is not None:
                 damped = np.array([sk.mass[lab] < 3.5 for lab in species])   # H, as in DFTB+
+            h5 = None if self.h5 is None else self.h5.atom_parameters(species)   # M6f-3
             coul = Coulomb(pos, site_atom, hub, cell if periodic else None,
                            pbc if periodic else None, damped=damped,
-                           damp_exp=self.h_damping or 0.0)
+                           damp_exp=self.h_damping or 0.0, h5=h5)
             if self.third_order:
                 third = ThirdOrder(coul, self._site_hubbard_derivs(basis),
                                    onsite_only=self.third_order == "onsite")
@@ -1224,9 +1292,22 @@ class DFTB:
                                             pbc if periodic else None, grad=forces,
                                             charge=self.charge)
             timings["dispersion"] = time.perf_counter() - t1
+        halogenx = dipole_corr = None
+        if self.halogen_correction and matrices:                     # M6f-3
+            if periodic:
+                warnings.warn("Halogen correction was not fitted for periodic systems in original "
+                              "paper (as DFTB+ after 25.1; 25.1 refuses periodic systems)",
+                              RuntimeWarning, stacklevel=4)
+            halogenx = _corrections.halogen_terms(species, pos, cell if periodic else None,
+                                                  pbc if periodic else None, grad=forces,
+                                                  compat=self._halogen_compat)
+        if self.dipole_correction is not None:
+            dipole_corr = self.dipole_correction.setup(pos, cell if periodic else None,
+                                                       pbc if periodic else None)
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
-                      pauli=pauli, block=block, ext=ext, solv=solv)
+                      pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
+                      dipole_corr=dipole_corr)
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -1483,6 +1564,9 @@ class DFTB:
         if st.solv is not None:
             dq_atom = ops.segment_sum(dq, st.site_atom, len(st.species))
             v_orb = v_orb + st.solv.shift(dq_atom)[st.basis.orb_atom]
+        if st.dipole_corr is not None:                               # M6f-3
+            dq_atom = ops.segment_sum(dq, st.site_atom, len(st.species))
+            v_orb = v_orb + st.dipole_corr.potential(dq_atom)[st.basis.orb_atom]
         if st.pauli is not None:        # (3, N): W m_a for a = x, y, z
             w = st.pauli.w
             return v_orb, None if w is None else (w @ m.T).T[:, st.basis.orb_shell]
@@ -1763,6 +1847,8 @@ class DFTB:
             e_scc = e_scc + e_pc
             energy = energy + e_ext + e_pc + e_solv
             env = dict(e_ext=e_ext, e_solv=e_solv)
+        if st.halogenx is not None or st.dipole_corr is not None:   # M6f-3
+            e_scc, energy = self._correction_energies(st, dq_atom, e_scc, energy, env)
         q_atom = ops.segment_sum(sc.q_orb, b.orb_atom, natom)
         q_shell = ops.segment_sum(sc.q_orb, b.orb_shell, len(b.shell_l))
         magmoms = np.stack([ops.segment_sum(m[a], b.shell_atom, natom) for a in range(3)], axis=1)
@@ -1778,6 +1864,20 @@ class DFTB:
                           e_spin=e_spin, magmoms=magmoms, q_spin=q_spin,
                           e_ls=e_ls, orbital_moments=lmom, e_plus_u=e_u, e_onsite=e_ons,
                           dipole=self._dipole(st, dq_atom), **env)
+
+    @staticmethod
+    def _correction_energies(st: _Setup, dq_atom, e_scc, energy, extra) -> tuple[float, float]:
+        """(E_SCC, total energy) with the halogen correction and the dipole correction added
+        (the latter is a part of E_SCC, as in DFTB+); ``extra`` gets their result fields."""
+        if st.halogenx is not None:
+            energy = energy + st.halogenx.energy
+            extra["e_halogen"] = st.halogenx.energy
+        if st.dipole_corr is not None:
+            e_dc = st.dipole_corr.energy(dq_atom)
+            e_scc = e_scc + e_dc
+            energy = energy + e_dc
+            extra["e_dipole_corr"] = e_dc
+        return e_scc, energy
 
     def _dipole(self, st: _Setup, dq_atom) -> np.ndarray | None:
         """sum_A (q0_A - q_A) r_A for molecules, as DFTB+'s detailed.out (unscaled)."""
@@ -1844,6 +1944,8 @@ class DFTB:
             e_scc = e_scc + e_pc
             energy = energy + e_ext + e_pc + e_solv
             extra.update(e_ext=e_ext, e_solv=e_solv)
+        if st.halogenx is not None or st.dipole_corr is not None:   # M6f-3
+            e_scc, energy = self._correction_energies(st, dq_atom, e_scc, energy, extra)
         extra["dipole"] = self._dipole(st, dq_atom)
         return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, mu, q_atom,
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
@@ -1911,6 +2013,12 @@ class DFTB:
                 grad = grad + st.ext.gradient(dq_atom)
             if st.solv is not None:
                 grad = grad + st.solv.gradient(dq_atom)
+        if st.halogenx is not None:                                  # M6f-3
+            grad = grad + st.halogenx.gradient
+        if st.dipole_corr is not None:
+            if dq_atom is None:
+                dq_atom = ops.segment_sum(dq, st.site_atom, natom)
+            grad = grad + st.dipole_corr.gradient(dq_atom)
         if not virial:
             return grad, None
         w = gp.T @ pb.vec + w_rep                                  # band + SCC shift + repulsive
@@ -1922,6 +2030,10 @@ class DFTB:
             w = w + st.disp.virial
         if st.ext is not None:
             w = w + st.ext.virial(dq_atom)
+        if st.halogenx is not None:
+            w = w + st.halogenx.virial
+        if st.dipole_corr is not None:
+            w = w + st.dipole_corr.virial(dq_atom)
         return grad, 0.5 * (w + w.T)
 
     @staticmethod

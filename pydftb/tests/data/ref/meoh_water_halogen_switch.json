@@ -1,0 +1,287 @@
+{
+ "schema": 1,
+ "case": "meoh_water_halogen_switch",
+ "note": "r(O-Cl) = 2.45 A, in the switching region (2.289-2.616 A): DFTB+'s forces are wrong there; forces against differences of its energy",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": {
+   "C": "C",
+   "H": "H",
+   "O": "O",
+   "Cl": "O"
+  },
+  "dftb3": {
+   "third_order": "full",
+   "hubbard_derivs": {
+    "H": -0.1857,
+    "C": -0.1492,
+    "O": -0.1575,
+    "Cl": -0.1575,
+    "Br": -0.1575,
+    "N": -0.1575
+   },
+   "h_damping": 4.0
+  },
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "h5": null,
+  "halogen": {
+   "compat": true,
+   "forces_fd": true
+  },
+  "dipole_correction": null,
+  "stress_fd": false,
+  "dftbplus": "25.1"
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "C",
+   "Cl",
+   "H",
+   "H",
+   "H",
+   "H",
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    -0.047131,
+    0.664389,
+    0.0
+   ],
+   [
+    -0.047131,
+    -0.758551,
+    0.0
+   ],
+   [
+    -1.092995,
+    0.969785,
+    0.0
+   ],
+   [
+    0.878534,
+    -1.048458,
+    0.0
+   ],
+   [
+    0.437145,
+    1.080376,
+    0.891772
+   ],
+   [
+    0.437145,
+    1.080376,
+    -0.891772
+   ],
+   [
+    -0.047131,
+    -3.208551,
+    0.0
+   ],
+   [
+    0.4121976964555462,
+    -3.8048599999999997,
+    -0.6095497680529858
+   ],
+   [
+    -0.5064596964555462,
+    -3.8048599999999997,
+    0.6095497680529858
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "C": 1,
+   "Cl": 1,
+   "H": 0,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_gor4660f/typed/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n    Cl = \"p\"\n    H = \"s\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  ThirdOrderFull = Yes\n  HubbardDerivs {\n    H = -0.1857\n    C = -0.1492\n    O = -0.1575\n    Cl = -0.1575\n  }\n  HCorrection = Damping { Exponent = 4.0 }\n  HalogenXCorr = Yes\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -9.9988812465,
+  "free_energy": -9.9988812465,
+  "e_zero": -9.9988812465,
+  "e_rep": 0.1613038658,
+  "e_scc": 0.0495978007,
+  "e_band": -10.2137578874,
+  "e_3rd": -0.0073371691,
+  "e_halogen": 0.0113121435,
+  "fermi": -0.0515516573230082,
+  "forces": [
+   [
+    0.00869800722733309,
+    0.00109650007051623,
+    6.53050954738489e-06
+   ],
+   [
+    -0.0819723146067173,
+    -0.0709188846126765,
+    2.10590914892347e-05
+   ],
+   [
+    -0.0903453077068308,
+    0.0251326078802702,
+    -5.7259141498784e-06
+   ],
+   [
+    0.0760399474250148,
+    -0.0217716231645004,
+    0.000185488892647933
+   ],
+   [
+    0.0425688396734005,
+    0.0338664051704942,
+    0.0763471467511159
+   ],
+   [
+    0.0425681014014246,
+    0.0338691883414367,
+    -0.076352080021473
+   ],
+   [
+    0.00386929681250443,
+    0.0990091735845795,
+    0.00074258532767808
+   ],
+   [
+    0.0349434357024383,
+    -0.0509607092911854,
+    -0.0479806754858355
+   ],
+   [
+    -0.0363700059285677,
+    -0.0493226579789346,
+    0.0470356708489798
+   ]
+  ],
+  "charges_net": [
+   0.0265739195084976,
+   -0.496162970935604,
+   0.0633897573488597,
+   0.347655515863501,
+   0.0287175409390418,
+   0.0286414145419579,
+   -0.686463042341489,
+   0.338862917810575,
+   0.348784947264659
+  ],
+  "n_scc": 16,
+  "scc_errors": [
+   0.93138348,
+   0.66046789,
+   0.11382756,
+   0.047096433,
+   0.021906789,
+   0.009892491,
+   0.0017911212,
+   0.0008198913,
+   6.4618469e-05,
+   5.4169156e-06,
+   6.3754642e-07,
+   9.621041e-08,
+   1.3776724e-08,
+   4.8228443e-10,
+   6.1717831e-10,
+   1.2700951e-13
+  ],
+  "forces_fd": [
+   [
+    0.008698010323845057,
+    0.0010964907026789206,
+    6.530500584744913e-06
+   ],
+   [
+    -0.08197230557449585,
+    -0.06638133886127662,
+    2.105916922327348e-05
+   ],
+   [
+    -0.09034530999466975,
+    0.025132607358221055,
+    -5.7258908725543725e-06
+   ],
+   [
+    0.07603993830448037,
+    -0.02177162255663963,
+    0.00018548884354411635
+   ],
+   [
+    0.04256883929354415,
+    0.0338664048271653,
+    0.07634714363676427
+   ],
+   [
+    0.042568100987831294,
+    0.03386918797717205,
+    -0.07635207680471248
+   ],
+   [
+    0.003869296808881965,
+    0.09447163187884891,
+    0.000742585283634393
+   ],
+   [
+    0.03494343404260765,
+    -0.050960706176420935,
+    -0.047980672136146055
+   ],
+   [
+    -0.036370004239394405,
+    -0.04932265487589404,
+    0.04703566755341152
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-08,
+  "charges": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_halogen": 1e-10,
+  "forces_dftbp": 1e-06
+ },
+ "forces_fd": "-dE_Mermin/dR of DFTB+ (results.tag mermin_energy), 4-point central differences, h = 0.0001 Bohr"
+}

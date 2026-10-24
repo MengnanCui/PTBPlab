@@ -50,6 +50,13 @@ def _truncation_au(spec):
     return float(r) / BOHR, bool(hard)
 
 
+def _dipole_correction_au(spec):
+    """``dipole_correction`` with the layer position from Angstrom to Bohr."""
+    if isinstance(spec, dict) and spec.get("layer_position") is not None:
+        return {**spec, "layer_position": float(spec["layer_position"]) / BOHR}
+    return spec
+
+
 @contextlib.contextmanager
 def _as_calculation_failed():
     """A linear-algebra failure of the engine as ASE's ``CalculationFailed``, the error
@@ -127,6 +134,9 @@ class PyDFTB(Calculator):
     parameters), ``reference_occupations`` (electrons; ``charges`` are then relative to them)
     and ``truncate_sk_range`` (Angstrom, or {"max_distance", "hard_cutoff"}) as in
     :class:`pydftb.DFTB`.
+    Milestone M6f-3: ``h5`` (the H5 hydrogen-bond correction), ``halogen_correction`` (DFTB3)
+    and ``dipole_correction`` (slabs; {"layer_position": z0} in Angstrom) as in
+    :class:`pydftb.DFTB`.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole"]
@@ -150,7 +160,8 @@ class PyDFTB(Calculator):
                  xlbomd=None, force_evaluation: str | None = None, initial_charges=None,
                  read_charges=None, fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
-                 truncate_sk_range=None, **kwargs):
+                 truncate_sk_range=None, h5=None, halogen_correction: bool = False,
+                 dipole_correction=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -181,7 +192,9 @@ class PyDFTB(Calculator):
                                 fixed_fermi_level=_fermi_au(fixed_fermi_level),
                                 independent_k_filling=independent_k_filling, hubbard=hubbard,
                                 reference_occupations=reference_occupations,
-                                truncate_sk_range=_truncation_au(truncate_sk_range))
+                                truncate_sk_range=_truncation_au(truncate_sk_range), h5=h5,
+                                halogen_correction=halogen_correction,
+                                dipole_correction=_dipole_correction_au(dipole_correction))
         self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e

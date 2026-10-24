@@ -268,6 +268,28 @@ takes the Fermi level in eV and the truncation in Angstrom, and reports `e_force
 the force-consistent `free_energy`.  NumPy engine only.  Details:
 [`docs/reports/M6f2-occupations-overrides.html`](docs/reports/M6f2-occupations-overrides.html).
 
+### H5, halogen and dipole corrections
+
+DFTB+'s `HCorrection = H5`, `HalogenXCorr` (DFTB3) and `DipoleCorrection` (slabs; DFTB+ after
+25.1):
+
+```python
+DFTB(sk, h5=True)                                # the paper's values; or {"r_scaling", "w_scaling",
+                                                 #   "scaling": {"O": 0.06, "N": 0.18, "S": 0.21}}
+r = DFTB(sk, third_order="full", hubbard_derivs=ud, halogen_correction=True).calculate(labels, pos)
+r.e_halogen                                      # O/N - Cl/Br/I pairs, in energy and free_energy
+r = DFTB(sk, kpts=(k, w), dipole_correction=True).calculate(labels, pos, cell, pbc)
+r.e_dipole_corr                                  # 2 pi D^2 / V, a part of e_scc as in DFTB+
+DFTB(sk, kpts=(k, w), dipole_correction={"layer_position": 9.45})      # Bohr; PyDFTB: Angstrom
+```
+
+Forces and stress are the derivatives of the energy, also where DFTB+'s are not: the halogen
+correction's switching region (DFTB+ has the wrong sign there), excited-state forces with H5
+(DFTB+ leaves H5 out of gamma') and the dipole correction's stress (DFTB+ has no stress term).
+H5 and the halogen correction recognise elements, DFTB+ species names (type labels such as
+`O2` differ).  NumPy engine only.  Details:
+[`docs/reports/M6f3-corrections.html`](docs/reports/M6f3-corrections.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

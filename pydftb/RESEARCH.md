@@ -238,7 +238,7 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | 晶体：k 点、周期性静电（Ewald）、电子温度展宽、受力 | ✅ 完成 | — |
 | 其他展宽方式（Methfessel-Paxton、Gaussian） | ✅ M1 完成（更正：PTBP 实际并未使用 MP，见文首） | 低 |
 | 应力（晶胞形状优化、恒压模拟需要） | ✅ M2a 完成 | 中 |
-| DFTB3（三阶修正，对含氢体系更准）、氢键修正 | ✅ M2b 完成（H–X 阻尼；H5 修正未做） | 低–中 |
+| DFTB3（三阶修正，对含氢体系更准）、氢键修正 | ✅ M2b 完成（H–X 阻尼）；H5 氢键修正与 DFTB3 的卤素修正 ✅ M6f-3 完成（只有 NumPy 引擎；DFTB+ 在卤素开关区间内的力符号错、激发态的力漏了 H5，pydftb 给出能量的导数）[文献 S13、S14] | 低–中 |
 | 自旋极化（磁性体系） | ✅ M2c 完成（共线） | 低–中 |
 | 非共线自旋、自旋轨道耦合（重元素） | ✅ M6a 完成（只有 NumPy 引擎；16 个 DFTB+ 参考算例全部通过，SCC 轮数相同）[文献 S1、D2] | 中 |
 | DFTB+U（强关联 d/f 电子修正）、onsite 修正 | ✅ M6b 完成（FLL、pSIC，onsite 修正附 DFTB+ 手册的 PBE 常数；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过，SCC 轮数相同或差 1）[文献 S2、S3] | 中 |
@@ -249,6 +249,7 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | 结构优化、分子动力学 | ✅ M2f 完成（用 ASE 的驱动，与 DFTB+ 自带驱动对照）；XL-BOMD ✅ M6e 完成（DFTB+ 的 `Xlbomd`、`XlbomdFast`：积分器、影子能量与它的力、`ForceEvaluation`；7 个 DFTB+ 轨迹算例与 DFTB+ 一致到它打印的位数，每步 SCC 轮数相同）[文献 X1、S12] | 低–中（前期可直接用 ASE 驱动，接口已有） |
 | SCC 的起点与重启（初始电荷、初始自旋、电荷文件） | ✅ M6f-1 完成（DFTB+ 的 `InitialCharges`、共线 `InitialSpins`、读写 charges.bin/.dat，文本逐字节相同；只有 NumPy 引擎；25 个 DFTB+ 参考算例与 1 条 MD 全部通过，SCC 轮数逐个相同） | 低 |
 | 固定费米能级、按 k 点填充、参数覆盖（自定义 U、参考占据、SK 截断） | ✅ M6f-2 完成（DFTB+ 的 `FixedFermiLevel`、`IndependentKFilling`、`CustomisedHubbards`、`CustomisedOccupations`、`TruncateSKRange`；力与应力是力相关能量 F − Σ N<sub>s</sub>E<sub>f,s</sub> 的梯度，带电晶胞的应力比 DFTB+ 的对；只有 NumPy 引擎；20 个 DFTB+ 参考算例全部通过，SCC 轮数逐个相同） | 低 |
+| 平板的偶极修正（表面计算） | ✅ M6f-3 完成（DFTB+ 的 `DipoleCorrection`，25.1 之后才有，用自编的开发版对照；pydftb 补上 DFTB+ 缺的应力项；只有 NumPy 引擎）[文献 S15] | 低 |
 | 声子、极化率 | ⬜ M6g（DFTB+ 的耦合微扰极化率、响应核、Born 电荷，以及数值 Hessian） | 中（有自动求导后更容易） |
 | 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力 ✅ M6e 完成（Z 向量方法，单重态、三重态、自旋极化，含外场、点电荷、阻尼和能量窗口的完整导数；激发态的电荷与偶极，激发态的结构优化与 MD；11 个单点和 2 个驱动的 DFTB+ 参考算例全部通过）[文献 S8–S11] | 中–高 |
 | 输运（NEGF，算电流） | ⬜ | **很高**（建议直接调用 libNEGF） |
@@ -370,5 +371,8 @@ print(atoms.get_potential_energy(), atoms.get_forces())       # 单位：eV、eV
 - **S10** Davidson, *J. Comput. Phys.* 17, 87 (1975)：Davidson 方法（M6d 用分块形式、以对角元为预条件，解大体系的 Casida 方程）。
 - **S11** Heringer, Niehaus, Frauenheim, *J. Comput. Chem.* 28, 2589 (2007)：TD-DFTB 的解析激发态梯度（Z 向量方法，DFTB+ 的 `linrespgrad.F90`；M6e 照此实现，并补上外加势、阻尼的 γ′ 与能量窗口的正则轨道项）；Furche, Ahlrichs, *J. Chem. Phys.* 117, 7433 (2002)：TDDFT 激发态梯度的 Z 向量与拉格朗日写法。
 - **S12** Niklasson, *Phys. Rev. Lett.* 100, 123004 (2008)：扩展拉格朗日 Born–Oppenheimer 分子动力学；Niklasson et al., *J. Chem. Phys.* 130, 214109 (2009)：耗散项与 K = 5、6、7 的系数（DFTB+ 的 `extlagrangian.F90` 用的就是这组）。
+- **S13** Řezáč, *J. Chem. Theory Comput.* 13, 4804 (2017), doi:10.1021/acs.jctc.7b00629：DFTB3 的 H5 氢键修正（DFTB3-D3H5，DFTB+ 的 `h5correction.F90`；M6f-3）；范德华半径取自 Bondi, *J. Phys. Chem.* 68, 441 (1964) 与 Mantina et al., *J. Phys. Chem. A* 113, 5806 (2009)（`vdwdata.F90`）。
+- **S14** Kubillus et al., *J. Chem. Theory Comput.* 11, 332 (2015), doi:10.1021/ct5009137：DFTB3 的 Br、Cl、I 等参数与卤素修正（DFTB+ 的 `halogenx.F90` 照其表 3 与式 5、8、12；M6f-3）。
+- **S15** Neugebauer, Scheffler, *Phys. Rev. B* 46, 16067 (1992)；Bengtsson, *Phys. Rev. B* 59, 12301 (1999)：周期平板计算的偶极修正（M6f-3；DFTB+ 的 `dipolecorr.F90` 没有注明出处）。
 - **P1** TBMaLT, *J. Chem. Phys.* 158, 034801 (2023)；**P2** dxtb, *J. Chem. Phys.* 161, 062501 (2024)：可自动求导的紧束缚程序。
 - 其他同类项目：LATTE/PROGRESS（LANL，SP2 + GPU）、CP2K（线性标度 DFTB）、hotbit（Python DFTB）、PYSEQM（GPU 半经验方法）。

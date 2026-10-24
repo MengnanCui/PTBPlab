@@ -152,6 +152,9 @@ DYN_CASES = [
     DynCase("water_dimer_anderson_md", "water_dimer_hdamp_mixer_anderson", "md",
             tol={**TOL_MD, "n_scc": 0},
             note="Anderson mixer: the SCC iterations of every step from the reused charges"),
+    # M6f-3: H5 along a trajectory (the O-H distances sweep the Gaussian)
+    DynCase("water_dimer_h5_md", "water_dimer_h5", "md", tol=TOL_MD,
+            note="H5 correction of gamma"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -209,7 +212,8 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 **refgen.block_options(base, inp["labels"]),
                 **refgen.environment_ase_options(base),
                 **refgen.casida_options(base),              # M6e: an excited state's forces
-                **refgen.scc_start_options(base))           # M6f-1: mixer, initial charges
+                **refgen.scc_start_options(base),           # M6f-1: mixer, initial charges
+                **refgen.corrections_ase_options(base))     # M6f-3: H5, halogen, dipole
     if case.xlbomd is not None:                                 # M6e
         opts.update(xlbomd=dict(case.xlbomd), force_evaluation=case.force_evaluation)
     opts.update(overrides)
@@ -316,7 +320,9 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
                  + refgen.block_hsd(base, inp) + refgen.environment_hsd(base)
                  + dftbplus.mixer_block(base.mixer)
-                 + dftbplus.initial_charges_block(base.initial_charges))
+                 + dftbplus.initial_charges_block(base.initial_charges)
+                 + dftbplus.corrections_block(base.h5, base.halogen, base.dipole_correction,
+                                              inp["labels"]))
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"

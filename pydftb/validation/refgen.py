@@ -143,7 +143,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
                     **pauli_options(case, labels), **block_options(case, labels),
                     **environment_options(case), **casida_options(case, casida_solver),
-                    **scc_start_options(case), **fill_options(case, labels))
+                    **scc_start_options(case), **fill_options(case, labels),
+                    **corrections_options(case))
         q_init = options.pop("q_init", None)
         calc = DFTB(sk, **{**opts, **options})
         if q_init is None and case.read_charges is not None and "charges_file" in inp:
@@ -184,6 +185,45 @@ def fill_options(case: Case, labels) -> dict:
     if case.truncate_sk:
         out["truncate_sk_range"] = dict(case.truncate_sk)
     return out
+
+
+def corrections_options(case: Case) -> dict:
+    """:class:`pydftb.DFTB` options of an M6f-3 case: H5, the halogen correction, the dipole
+    correction (its layer position in Bohr)."""
+    out = {}
+    if case.h5 is not None:
+        out["h5"] = case.h5
+    if case.halogen is not None:
+        out["halogen_correction"] = True
+    if case.dipole_correction is not None:
+        dc = case.dipole_correction
+        if isinstance(dc, dict) and dc.get("layer_position") is not None:
+            dc = {**dc, "layer_position": float(dc["layer_position"]) / BOHR}
+        out["dipole_correction"] = dc
+    return out
+
+
+def corrections_ase_options(case: Case) -> dict:
+    """:class:`pydftb.ase_calc.PyDFTB` options of an M6f-3 case (Angstrom)."""
+    out = {}
+    if case.h5 is not None:
+        out["h5"] = case.h5
+    if case.halogen is not None:
+        out["halogen_correction"] = True
+    if case.dipole_correction is not None:
+        out["dipole_correction"] = case.dipole_correction
+    return out
+
+
+def dftbplus_binary(case: Case) -> str | None:
+    """The DFTB+ executable of a case: the development build ($DFTBPLUS_DEV) for what 25.1
+    does not have (M6f-3), else the default."""
+    if case.dftbplus == "dev":
+        path = os.environ.get("DFTBPLUS_DEV")
+        if not path:
+            raise FileNotFoundError(f"{case.name} needs the development DFTB+: set $DFTBPLUS_DEV")
+        return path
+    return None
 
 
 def fermi_hsd(case: Case) -> dict | None:
@@ -324,7 +364,9 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                  + dftbplus.initial_charges_block(case.initial_charges)
                  + dftbplus.custom_hubbards_block(case.hubbard, set(inp["labels"]))
                  + dftbplus.custom_occupations_block(case.occupations)
-                 + dftbplus.truncate_block(case.truncate_sk))
+                 + dftbplus.truncate_block(case.truncate_sk)
+                 + dftbplus.corrections_block(case.h5, case.halogen, case.dipole_correction,
+                                              inp["labels"]))
         if case.casida and case.casida.get("spin_constants") and not case.spin:
             extra += dftbplus.spin_constants_block(case.casida["spin_constants"],
                                                    set(inp["labels"]))
@@ -337,6 +379,7 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
         kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
                   scc_tol=case.scc_tol, threads=threads, charge=case.charge,
+                  binary=dftbplus_binary(case),
                   **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
                       "autotest": True} if case.casida else {}),
                   **({"fermi": fermi_hsd(case)} if case.fermi else {}))
@@ -496,7 +539,11 @@ def regenerate(names=None, threads: int = 1):
                          **({"fermi": case.fermi, "hubbard": case.hubbard,
                              "occupations": case.occupations, "truncate_sk": case.truncate_sk,
                              "stress_fd": case.stress_fd, "charge": case.charge}
-                            if case.overrides else {})},
+                            if case.overrides else {}),
+                         **({"h5": case.h5, "halogen": case.halogen,
+                             "dipole_correction": case.dipole_correction,
+                             "stress_fd": case.stress_fd, "dftbplus": case.dftbplus}
+                            if case.corrections else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -521,7 +568,8 @@ def regenerate(names=None, threads: int = 1):
                           or case.overrides and k in ("scc_errors", "e_spin", "spins", "e_3rd",
                                                       "e_plus_u", "e_onsite", "e_ls",
                                                       "e_force_related",
-                                                      "number_of_electrons", "fermi_levels")},
+                                                      "number_of_electrons", "fermi_levels")
+                          or case.corrections and k in ("scc_errors", "e_3rd", "e_halogen")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -538,10 +586,18 @@ def regenerate(names=None, threads: int = 1):
                                     f"mermin_energy), 4-point central differences, h = {FD_STEP} "
                                     "Bohr")
         if case.stress_fd:                                              # M6f-2
-            doc["reference"]["stress_fd"] = stress_fd(case, inp, threads).tolist()
+            doc["reference"]["stress_fd"] = stress_fd(case, inp, threads,
+                                                      analytic=ref.get("stress")).tolist()
             doc["stress_fd"] = ("-(1/V) dE_FR/d(strain) of DFTB+ (results.tag "
                                 "forcerelated_energy), 4-point central differences of a "
                                 f"symmetric strain, h = {STRESS_FD_STEP}")
+            if isinstance(case.stress_fd, tuple):                       # M6f-3
+                doc["stress_fd"] += (f"; components {list(case.stress_fd)} only, the others "
+                                     "DFTB+'s analytic stress")
+        if case.halogen and case.halogen.get("forces_fd"):            # M6f-3
+            doc["reference"]["forces_fd"] = forces_fd(case, inp, threads).tolist()
+            doc["forces_fd"] = ("-dE_Mermin/dR of DFTB+ (results.tag mermin_energy), 4-point "
+                                f"central differences, h = {FD_STEP} Bohr")
         if case.klines or case.regions or case.dp_dos:
             doc["reference"].update(_band_reference(case, ref))
             doc["band_hsd"] = ref.get("band", {}).get("hsd")
@@ -577,27 +633,49 @@ def excited_forces_fd(case: Case, inp: dict, threads: int = 1, h: float = FD_STE
 STRESS_FD_STEP = 1e-4   # strain: differences of DFTB+'s force-related energy (M6f-2)
 
 
-def stress_fd(case: Case, inp: dict, threads: int = 1, h: float = STRESS_FD_STEP) -> np.ndarray:
+def stress_fd(case: Case, inp: dict, threads: int = 1, h: float = STRESS_FD_STEP,
+              analytic=None) -> np.ndarray:
     """-(1/V) dE_FR/d(strain) of DFTB+ (Hartree/Bohr^3, its sign convention) by 4-point
     central differences of a symmetric strain (24 runs; fractional coordinates and k-points
     kept; two points leave an h^2 error of 1e-9 in a metal): where its analytic stress of a
-    charged cell is not this derivative (M6f-2)."""
+    charged cell is not this derivative (M6f-2).  A tuple ``case.stress_fd`` limits the
+    components (M6f-3: DFTB+ refuses slabs sheared out of their plane); the others are then
+    ``analytic`` (DFTB+'s stress)."""
     pos0, cell0 = np.array(inp["positions_angstrom"]), np.array(inp["cell_angstrom"])
     vol = abs(np.linalg.det(cell0 / BOHR))
-    out = np.zeros((3, 3))
-    for a in range(3):
-        for b in range(a, 3):
+    comps = (case.stress_fd if isinstance(case.stress_fd, tuple)
+             else [(a, b) for a in range(3) for b in range(a, 3)])
+    out = np.zeros((3, 3)) if analytic is None else np.array(analytic, float)
+    for a, b in comps:
+        e = {}
+        for sgn in (-2, -1, 1, 2):
+            eps = np.zeros((3, 3))
+            eps[a, b] += 0.5 * sgn * h
+            eps[b, a] += 0.5 * sgn * h
+            m = np.eye(3) + eps
+            r = run_dftbplus(case, dict(inp, positions_angstrom=(pos0 @ m.T).tolist(),
+                                        cell_angstrom=(cell0 @ m.T).tolist()), threads)
+            e[sgn] = r["e_force_related"]
+        de = (8.0 * (e[1] - e[-1]) - (e[2] - e[-2])) / (12.0 * h)
+        out[a, b] = out[b, a] = -de / vol
+    return out
+
+
+def forces_fd(case: Case, inp: dict, threads: int = 1, h: float = FD_STEP) -> np.ndarray:
+    """-dE_Mermin/dR of DFTB+ (Ha/Bohr) by 4-point central differences of results.tag's
+    full-precision mermin_energy: where its analytic forces are not this derivative (M6f-3:
+    the halogen correction's switching region)."""
+    pos0 = np.array(inp["positions_angstrom"])
+    out = np.zeros_like(pos0)
+    for a in range(len(pos0)):
+        for k in range(3):
             e = {}
-            for sgn in (-2, -1, 1, 2):
-                eps = np.zeros((3, 3))
-                eps[a, b] += 0.5 * sgn * h
-                eps[b, a] += 0.5 * sgn * h
-                m = np.eye(3) + eps
-                r = run_dftbplus(case, dict(inp, positions_angstrom=(pos0 @ m.T).tolist(),
-                                            cell_angstrom=(cell0 @ m.T).tolist()), threads)
-                e[sgn] = r["e_force_related"]
-            de = (8.0 * (e[1] - e[-1]) - (e[2] - e[-2])) / (12.0 * h)
-            out[a, b] = out[b, a] = -de / vol
+            for s in (-2, -1, 1, 2):
+                p = pos0.copy()
+                p[a, k] += s * h * BOHR
+                r = run_dftbplus(case, dict(inp, positions_angstrom=p.tolist()), threads)
+                e[s] = float(np.atleast_1d(r["mermin_tag"])[0])
+            out[a, k] = -(8.0 * (e[1] - e[-1]) - (e[2] - e[-2])) / (12.0 * h)
     return out
 
 
@@ -660,6 +738,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
                                       **backend))
     if case.overrides:
         dev.update(_compare_fill(case, ref, res))
+    if case.corrections:
+        dev.update(_compare_corrections(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
+                                        **backend))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -671,7 +752,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
                                               "exc_table", "spx", "exc_state", "exc_charges",
                                               "exc_dipole", "forces_dftbp", "n_scc",
                                               "scc_errors", "charges_file", "e_fr",
-                                              "n_electrons", "fermi_level") if k in dev))
+                                              "n_electrons", "fermi_level", "e_halogen")
+                  if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -717,6 +799,28 @@ def _compare_fill(case: Case, ref: dict, res) -> dict:
     if case.fermi and "fermi_levels" in ref:   # the given levels, or the k-weighted mean
         mine = np.ravel(res.fermi_spin if res.fermi_spin is not None else [res.fermi])
         dev["fermi_level"] = float(np.abs(mine - np.ravel(ref["fermi_levels"])).max())
+    if "stress_fd" in ref and ref.get("stress") is not None:
+        dev["stress_dftbp"] = float(np.abs(res.stress - np.array(ref["stress"])).max())
+    return dev
+
+
+def _compare_corrections(case: Case, inp: dict, ref: dict, res, **run) -> dict:
+    """Deviations of an M6f-3 case: the halogen energy (detailed.out, 10 decimals); with
+    ``forces_fd`` the forces against differences of DFTB+'s energy, and pydftb's forces with
+    DFTB+'s sign of the halogen switching terms (``compat``) against DFTB+'s own; with a
+    ``stress_fd`` also DFTB+'s own stress (for the record, not a criterion)."""
+    dev = {}
+    if "e_halogen" in ref:
+        dev["e_halogen"] = abs(res.e_halogen - ref["e_halogen"])
+    if "forces_fd" in ref and not case.casida:
+        dev["forces"] = float(np.abs(res.forces - np.array(ref["forces_fd"])).max())
+        if (case.halogen or {}).get("compat"):
+            DFTB._halogen_compat = True
+            try:
+                compat = run_pydftb(case, inp, **run)
+            finally:
+                DFTB._halogen_compat = False
+            dev["forces_dftbp"] = float(np.abs(compat.forces - np.array(ref["forces"])).max())
     if "stress_fd" in ref and ref.get("stress") is not None:
         dev["stress_dftbp"] = float(np.abs(res.stress - np.array(ref["stress"])).max())
     return dev
@@ -939,8 +1043,8 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             continue
         if backend.get("backend") == "torch" and not case.torch:
             print(f"{case.name:26s} skipped: NumPy-only physics (M6a two-component, M6b blocks, "
-                  "M6c environment, M6d excitations, M6f SCC start, mixers, occupations and "
-                  "overrides)")
+                  "M6c environment, M6d excitations, M6f SCC start, mixers, occupations, "
+                  "overrides and corrections)")
             continue
         r = compare(doc, solver, casida_solver=casida_solver, **backend)
         d = r["dev"]
@@ -973,6 +1077,17 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             ef = f", |dE_f| {d['fermi_level']:.1e} Ha" if "fermi_level" in d else ""
             print(f"{'':26s}   Filling: |dE_FR| {d.get('e_fr', 0.0):.1e} Ha, "
                   f"|dN| {d.get('n_electrons', 0.0):.1e}{ef}{sd}")
+        if case.corrections and ("e_halogen" in d or "stress_dftbp" in d
+                                 or ("forces_dftbp" in d and not case.casida)):   # M6f-3
+            parts = []
+            if "e_halogen" in d:
+                parts.append(f"|dE_halogen| {d['e_halogen']:.1e} Ha")
+            if "forces_dftbp" in d and not case.casida:
+                parts.append(f"forces vs DFTB+'s energy differences, as DFTB+ (compat) "
+                             f"{d['forces_dftbp']:.1e}")
+            if "stress_dftbp" in d:
+                parts.append(f"DFTB+'s own stress {d['stress_dftbp']:.1e} (vs stress_fd)")
+            print(f"{'':26s}   Corrections: " + ", ".join(parts))
     return all_ok
 
 

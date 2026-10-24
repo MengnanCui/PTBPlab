@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-3 修正项报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6f-3</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-3 · 完成报告</p>
+    <h1>修正项：H5、卤素修正与偶极修正</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6f3-corrections.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在支持 DFTB+ 的三项修正：H5 氢键修正（<code>HCorrection = H5</code>）、DFTB3 的卤素修正（<code>HalogenXCorr</code>）、平板的偶极修正（<code>DipoleCorrection</code>，25.1 之后才有）。与 DFTB+ 对照沿用 M6f 的严格标准：SCC 轮数逐个相同，每一轮的 SCC 误差也相同。只在 NumPy 引擎中；不用这些选项时逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：13 个新的单点参考算例和 1 条 MD 全部通过：
+        <ul>
+          <li>SCC 轮数逐个相同（最长 18 轮）；能量差 ≤ 8.5e-11 Ha，卤素修正能量差 ≤ 4.8e-11 Ha（detailed.out 只有 10 位小数）；</li>
+          <li>25.1 拒绝周期体系的卤素修正，也没有偶极修正：这三个算例对照自编的开发版 DFTB+（041e723）。开发版在 13 个已有算例上与 25.1 的冻结参考一致：能量逐位相同，力差 ≤ 3.4e-14。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的三个错误</strong>（第五节）：pydftb 给出能量的导数，测试专用的开关能复现 DFTB+ 的结果，证明差别只在这些项上：
+        <ul>
+          <li>卤素修正在开关区间内的力和应力符号错，力差 4.5e-3 Ha/Bohr；pydftb 的力与 DFTB+ 能量的差分一致到 8.1e-11；</li>
+          <li>激发态的力漏了 H5（激发能里有），差 4.1e-3；pydftb 与 E<sub>0</sub> + ω 的差分一致到 4.1e-11；</li>
+          <li>偶极修正没有应力项，DFTB+ 的应力恰好差 (E/V)·diag(1, 1, −1)，即 1.2e-6；pydftb 与 DFTB+ 能量的应变差分一致到 3.7e-10。</li>
+        </ul>
+      </li>
+      <li><strong>接口</strong>：<code>DFTB(h5=True | {…}, halogen_correction=True, dipole_correction=True | {"layer_position": z0})</code>；结果加 <code>e_halogen</code>、<code>e_dipole_corr</code>。<code>PyDFTB</code> 的层位置用 Å。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">13 + 1</span><span class="lbl">新的 DFTB+ 参考算例与 MD，全部通过</span></li>
+      <li><span class="num">0</span><span class="lbl">SCC 轮数与 DFTB+ 之差</span></li>
+      <li><span class="num">4.5e-3</span><span class="lbl">卤素开关区间内 DFTB+ 的力误差（Ha/Bohr）；pydftb 8e-11</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#margins">六、SCC 收敛的余量</a></li>
+      <li><a href="#tests">七、测试与门槛</a></li>
+      <li><a href="#deviations">八、与设计的偏差</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>corrections.py</code>（新）</td><td>
+              <ul>
+                <li>范德华半径表（照 <code>vdwdata.F90</code>，pm；只收有值的元素）与 <code>vdw_radius</code>；</li>
+                <li><code>H5</code>：<code>make</code> 解析 None、True 或字典（未知键、<code>w_scaling</code> ≤ 0 报错）；<code>atom_parameters</code> 给出每个原子的（是否 H、缩放 k、半径）与两个缩放系数，没有 H 时报错，缩放 &gt; 0 而没有半径时警告并跳过（同 DFTB+）；<code>h5_scale</code> 给出 S′ 与 dS′；</li>
+                <li><code>halogen_terms</code> → <code>HalogenTerms(energy, gradient, virial, atom_energies)</code>：原子对取自 <code>neighbor_list</code>（含周期像），截断同 DFTB+，r &lt; 0.7R 时不计算 f(r)；<code>compat=True</code> 时 dσ 项反号；</li>
+                <li><code>DipoleCorrection.setup</code> → <code>DipoleSetup</code>：检查晶格；平板法向 n = a<sub>p</sub> × a<sub>q</sub>/|a<sub>p</sub> × a<sub>q</sub>|（朝 +z），周期 h = V/|a<sub>p</sub> × a<sub>q</sub>|，折叠后相对层中心的高度；<code>dipole</code>（每次都查 |ΣΔq| ≤ 1e-7）、<code>potential</code>、<code>energy</code>、<code>gradient</code>、<code>virial</code> = E(2nn<sup>T</sup> − I)。</li>
+              </ul>
+            </td></tr>
+            <tr><td><code>coulomb.py</code></td><td><code>Coulomb(..., h5=None)</code>；<code>_sp_short</code> 在阻尼分支之后加 H5 分支（原子对中正好一个 H、另一个 k &gt; 0）。γ 矩阵、势、梯度、维里、Casida 的 γ、XL 的双线性项都经过 <code>_sp_short</code>，自动带上 H5；<code>thirdorder.py</code> 不受影响。</td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li><code>DFTB(h5=…, halogen_correction=…, dipole_correction=…)</code> 与 <code>_check_corrections</code>；三项都加入 <code>numpy_only_options</code>（torch 后端与 <code>pydftb.autodiff</code> 因此报错）；</li>
+                <li><code>_setup</code>：给 Coulomb 传 H5 参数；卤素项（只依赖几何）与偶极修正的几何存为 <code>_Setup.halogenx</code>、<code>_Setup.dipole_corr</code>；</li>
+                <li><code>_potentials</code>：溶剂项之后加偶极势（新分支）；</li>
+                <li><code>_energies</code> 与 <code>_energies_pauli</code> 共用 <code>_correction_energies</code>：卤素能量计入总能量，2πD²/V 计入 E<sub>SCC</sub> 与总能量；新字段 <code>e_halogen</code>（默认 0.0）、<code>e_dipole_corr</code>（默认 None），<code>terms</code> 加 “halogen”；</li>
+                <li><code>_gradient</code>：卤素与偶极修正的梯度和维里，普通路径与两分量路径共用；</li>
+                <li><code>_excited_gradient</code> 的 compat <code>"damping"</code> 同时去掉 H5；<code>_check_xl</code> 拒绝偶极修正；测试专用的类属性 <code>_halogen_compat</code>。</li>
+              </ul>
+              默认参数走原来的代码。</td></tr>
+            <tr><td><code>ase_calc.py</code></td><td><code>PyDFTB</code> 的三个选项（层的位置 Å → Bohr）。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>cases.py</code>：<code>Case.h5</code>、<code>halogen</code>（<code>compat</code>、<code>forces_fd</code>）、<code>dipole_correction</code>、<code>dftbplus</code>（<code>"dev"</code>）；<code>stress_fd</code> 可只取部分分量；几何 <code>_meoh_water</code>、<code>_water_layer</code>、<code>_water_layer_folded</code>，类型标签 <code>_relabel</code>；<code>TOL_CORR</code>、<code>UD_HALOGEN</code>；13 个算例；</li>
+                <li><code>dftbplus.py</code>：<code>corrections_block</code>（<code>HCorrection = H5 {…}</code>、<code>HalogenXCorr = Yes</code>、<code>DipoleCorrection {…}</code>）；<code>run(..., binary=)</code>；解析 “Halogen correction energy”；</li>
+                <li><code>refgen.py</code>：<code>corrections_options</code>、<code>corrections_ase_options</code>、<code>dftbplus_binary</code>（<code>"dev"</code> 的算例重新生成时用 <code>$DFTBPLUS_DEV</code>）；基态的 <code>forces_fd</code>（DFTB+ 的 E<sub>Mermin</sub> 的 4 点差分，h = 1e-4 Bohr）；<code>stress_fd</code> 的部分分量；<code>_compare_corrections</code>（卤素能量、对 <code>forces_fd</code> 的力、compat 的力对 DFTB+，并记录 DFTB+ 自己的应力偏差）；</li>
+                <li><code>dynamics.py</code>：MD <code>water_dimer_h5_md</code>。</li>
+              </ul>
+            </td></tr>
+            <tr><td>测试</td><td>13 个参考 JSON 与 1 个动力学 JSON；<code>tests/test_corrections.py</code>（18 项）；<code>test_xlbomd.py</code> 加 H5 的参数化。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb import DFTB
+
+calc = DFTB(sk, h5=True)                       # 论文的参数：RScaling 0.714，WScaling 0.25，O 0.06、N 0.18、S 0.21
+calc = DFTB(sk, h5={"r_scaling": 0.8, "w_scaling": 0.3,
+                    "scaling": {"O": 0.1, "S": 0.3, "C": 0.1}})   # 按元素；≤ 0 表示不修正
+
+calc = DFTB(sk, third_order="full", hubbard_derivs=ud, h_damping=4.0,
+            halogen_correction=True)           # DFTB3 + 卤素修正
+r = calc.calculate(labels, positions)
+r.e_halogen                                    # 已计入 energy 与 free_energy
+
+calc = DFTB(sk, kpts=(k, w), dipole_correction=True)         # 平板；偶极层在 −h/2
+calc = DFTB(sk, kpts=(k, w), dipole_correction={"layer_position": 9.45})      # Bohr
+r = calc.calculate(labels, positions, cell, pbc)
+r.e_dipole_corr                                # 2πD²/V，已含在 e_scc 中；r.stress 含 DFTB+ 缺的项
+
+atoms.calc = PyDFTB(skdir, kpts=(2, 2, 1), dipole_correction={"layer_position": 5.0})   # Å</code></pre>
+      <ul>
+        <li><strong>H5</strong>：需要 SCC；不能与 <code>h_damping</code> 同用（DFTB+ 的 <code>HCorrection</code> 只有一个值）；没有 H 原子时报错。pydftb 按元素识别 H 与受体，DFTB+ 按物种名：只有带后缀的类型标签（如 <code>O2</code>）结果不同。γ、势、力、应力、Casida 的 γ、激发态的力、XL-BOMD 的力都含 H5；三阶不含（同 DFTB+）。</li>
+        <li><strong>卤素修正</strong>：需要 <code>third_order</code>（完整的或只 onsite 的）；体系中没有 O/N 或没有 Cl/Br/I 时报错；周期体系给警告（同开发版，25.1 拒绝）。力和应力是能量的导数；r &lt; 0.7R 时不计算 f(r)，不会出 NaN。</li>
+        <li><strong>偶极修正</strong>：周期体系，平板法向沿 z（a<sub>3</sub> ∥ z，a<sub>1</sub>、a<sub>2</sub> 没有 z 分量：比 DFTB+ 严格）；总电荷为 0，每轮 |ΣΔq| ≤ 1e-7；不能与固定费米能级、点电荷、外场、XL-BOMD 同用。只要没有原子跨过偶极层，层放在哪里、坐标给在哪个周期像上，结果都相同。</li>
+        <li>三项都只在 NumPy 引擎中。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>参数为测试用的 <code>ptbp_hcocu</code>；N、S、Cl、Br 是 O 的类型副本（DFTB+ 只按物种名识别受体和卤素，走的是与真实元素完全相同的代码，“只用于测试”）。周期体系 <code>EwaldTolerance = 1e-12</code>。“SCC 误差”是逐轮误差的最大相对差（只比较 DFTB+ 打印值大于 1e-7 的轮）。带 * 的力和应力对 DFTB+ 能量的 4 点差分比较（<code>forces_fd</code>、激发态的 E<sub>0</sub> + ω、<code>stress_fd</code>），括号里是 DFTB+ 自己的解析值与差分之差；“compat”是测试专用开关复现的 DFTB+ 的力与 DFTB+ 之差。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>DFTB+</th><th>|ΔE| Ha</th><th>|ΔF| Ha/Bohr</th><th>|Δq| e</th><th>|Δσ|</th><th>SCC 轮数</th><th>SCC 误差</th><th>另外</th></tr></thead>
+        <tbody>
+<tr><td><code>water_dimer_h5</code></td><td>DFTB2 + H5（论文的参数）</td><td>25.1</td><td>3.1e-11</td><td>1.0e-08</td><td>8.5e-15</td><td>—</td><td>11/11</td><td>3.8e-08</td><td></td></tr>
+<tr><td><code>water_dimer_h5_typed_n</code></td><td>第二个 O 标为 N，默认缩放 0.18</td><td>25.1</td><td>4.3e-11</td><td>1.0e-08</td><td>1.0e-15</td><td>—</td><td>11/11</td><td>3.4e-08</td><td></td></tr>
+<tr><td><code>water_dimer_h5_typed_s_custom</code></td><td>标为 S；RScaling 0.8、WScaling 0.3、{O 0.1, S 0.3}</td><td>25.1</td><td>4.4e-11</td><td>1.0e-08</td><td>1.8e-14</td><td>—</td><td>11/11</td><td>3.2e-08</td><td></td></tr>
+<tr><td><code>water_dimer_dftb3_d3h5</code></td><td>DFTB3 + H5 + D3（HHRepulsion），即 DFTB3-D3H5</td><td>25.1</td><td>8.1e-12</td><td>1.0e-08</td><td>5.1e-15</td><td>—</td><td>12/12</td><td>3.7e-08</td><td>|ΔE<sub>disp</sub>| 4.9e-11</td></tr>
+<tr><td><code>ch3oh_h5_cscale</code></td><td>H5Scaling {C = 0.1}：C–H 也修正</td><td>25.1</td><td>4.5e-11</td><td>1.4e-08</td><td>8.5e-15</td><td>—</td><td>12/12</td><td>3.6e-08</td><td></td></tr>
+<tr><td><code>water_box_h5</code></td><td>Ewald 的短程部分，应力</td><td>25.1</td><td>2.7e-11</td><td>1.1e-08</td><td>8.3e-11</td><td>4.9e-11</td><td>18/18</td><td>2.5e-07</td><td></td></tr>
+<tr><td><code>water_dimer_h5_exc_forces</code></td><td>Casida S1 的力</td><td>25.1</td><td>3.1e-11</td><td>4.1e-11*</td><td>3.0e-15</td><td>—</td><td>12/12</td><td>3.8e-08</td><td>|Δω| 1.7e-11；compat 2.7e-8</td></tr>
+<tr><td><code>meoh_water_halogen</code></td><td>O–Cl，r = 3.0 Å（σ = 1），DFTB3</td><td>25.1</td><td>1.1e-11</td><td>1.0e-08</td><td>2.3e-14</td><td>—</td><td>14/14</td><td>4.3e-07</td><td>|ΔE<sub>hal</sub>| 4.8e-11</td></tr>
+<tr><td><code>meoh_water_halogen_switch</code></td><td>r = 2.45 Å，在开关区间 2.289–2.616 Å 内</td><td>25.1</td><td>4.9e-11</td><td>8.1e-11*（4.5e-03）</td><td>1.8e-14</td><td>—</td><td>16/16</td><td>1.7e-08</td><td>|ΔE<sub>hal</sub>| 3.2e-11；compat 1.0e-8</td></tr>
+<tr><td><code>meoh_water_halogen_nbr_h5</code></td><td>N–Br，只 onsite 的三阶，加 H5</td><td>25.1</td><td>4.3e-11</td><td>1.0e-08</td><td>4.4e-14</td><td>—</td><td>14/14</td><td>3.6e-08</td><td>|ΔE<sub>hal</sub>| 1.6e-11</td></tr>
+<tr><td><code>water_box_halogen</code></td><td>周期体系，两个 Cl、一个 N，应力</td><td>开发版</td><td>8.5e-11</td><td>1.0e-08</td><td>1.2e-10</td><td>4.7e-11</td><td>18/18</td><td>1.0e-07</td><td>|ΔE<sub>hal</sub>| 3.7e-11</td></tr>
+<tr><td><code>water_slab_dipole</code></td><td>4 个水成一层，6 × 6 × 20 Å，k 2 × 2 × 1</td><td>开发版</td><td>3.3e-11</td><td>8.4e-09</td><td>3.7e-11</td><td>3.7e-10*（1.2e-06）</td><td>16/16</td><td>6.6e-07</td><td></td></tr>
+<tr><td><code>water_slab_dipole_layer</code></td><td>层在 5 Å，两个分子给在低一个周期处</td><td>开发版</td><td>2.0e-11</td><td>6.1e-09</td><td>3.6e-11</td><td>2.2e-10*（1.2e-06）</td><td>17/17</td><td>2.8e-07</td><td></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>力差 1e-8 来自 DFTB+ 用差分求 H0、S 的导数（M1 以来已知）。</li>
+        <li>偶极修正的应力：xx、yy、zz、xy 对 <code>stress_fd</code> 比较，xz、yz 对 DFTB+ 的解析应力（DFTB+ 拒绝面外剪切的晶胞；偶极修正在这两个分量上为零）。</li>
+        <li>MD <code>water_dimer_h5_md</code>（25.1）：每步的能量差 ≤ 1.2e-8 Ha，位置差 ≤ 4.5e-8 Å，SCC 轮数 391/391 相同。</li>
+        <li>参考 JSON 记下 DFTB+ 的版本串；开发版是 “DFTB+ development version (commit: 041e723e, base: 25.1)”。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <ul>
+        <li><strong>H5</strong>：
+          <ul>
+            <li><code>h5_scale</code> 的 S′ 正是 γ(1 + g)，dS′ 与差分一致到 1e-10；</li>
+            <li>水二聚体的力、水盒子的力与维里是能量的导数（2e-9、5e-8；维里用 1e-5 的两点应变差分，避开 SK 表的格点）；</li>
+            <li>缩放全部 ≤ 0 时与不开 H5 逐位相同；类型标签 <code>O2</code> 与普通标签结果相同（1e-11，按元素识别）；</li>
+            <li>XL-BOMD：XL 的力是影子能量的梯度，H5 时也一致到 2e-10（DFTB+ 的 XL 梯度漏了 H5，不做 DFTB+ 参考）。</li>
+          </ul>
+        </li>
+        <li><strong>卤素修正</strong>：
+          <ul>
+            <li>O–Cl、N–Br、O–I 三种原子对在开关区间两侧的对能与公式一致（相对 1e-13），每个原子一半；梯度与差分一致（1e-11），在 0.7R、0.8R 处能量与梯度连续；</li>
+            <li>compat 只改变开关区间内的梯度；截断 = 出现的最大 d + 4.2245 Å；r &lt; d 时能量有限；</li>
+            <li>甲醇–水（开关区间内）的力、水盒子的力与应力是能量的导数。</li>
+          </ul>
+        </li>
+        <li><strong>偶极修正</strong>：
+          <ul>
+            <li>E = 2πD²/V（相对 1e-12），与探针 P11 的 5.896e-3 一致；</li>
+            <li>力（步长 5e-5 Bohr：原子 0 离 SK 格点只有 2e-4 Bohr）与全部 6 个应力分量（含面外剪切，测试中关掉晶格检查）是能量的导数；</li>
+            <li>分子给在低一个周期处时折叠到同一平板；层在 z<sub>0</sub>、z<sub>0</sub> + h、−h/2、h/2 结果相同；整体平移 0.4 Bohr（没有原子跨层）能量不变；<code>PyDFTB</code> 的单位。</li>
+          </ul>
+        </li>
+        <li><strong>拒绝</strong>：各种不支持的组合、错误的晶胞、未知的键、torch 后端、<code>pydftb.autodiff.evaluate</code>。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <h3>1. H5</h3>
+      <ul>
+        <li><strong>激发态的力漏了 H5</strong>：<code>linrespgrad</code> 直接调用 <code>expGammaPrime</code>，既没有阻尼也没有 H5，而激发能用的 γ 矩阵含 H5。水二聚体 S1 的力与 E<sub>0</sub> + ω 的差分：不带 H5 时 2.7e-8，带 H5 时 4.1e-3。pydftb 扩充测试专用的 compat <code>"damping"</code>（γ′ 去掉阻尼与 H5）后与 DFTB+ 的力一致到 2.7e-8。</li>
+        <li>XL-BOMD 的梯度（<code>addGradientsDcXlbomd</code>）也漏了 H5（源码）；pydftb 的 XL 力含 H5。</li>
+        <li>DFTB+ 按物种名识别 H5 的受体，半径按名字的前两个字符查：物种名 <code>O2</code> 的 O–H 对不修正，给了 <code>H5Scaling { O2 = 0.06 }</code> 也只警告半径“not available”；pydftb 按元素。</li>
+        <li><code>HCorrection</code> 只有一个值，H5 与阻尼写不到一起；源码中 “H5 correction is not compatible with X-H damping” 的检查从输入到不了。</li>
+      </ul>
+      <h3>2. 卤素修正</h3>
+      <ul>
+        <li><strong>开关区间内的符号错误</strong>：梯度中 dσ 的两项是 +σ′[f(r) − f(0.7R)]，正确的是 −σ′[…]。r = 2.45 Å 时 DFTB+ 的力与其能量差分差 4.54e-3；把这两项反号的公式能把 DFTB+ 的卤素力复现到 7.9e-17。应力同样错：探针中原子对落在开关区间内的水盒子，应力差 2.1e-5。参考算例因此存 DFTB+ 能量的差分 <code>forces_fd</code>。</li>
+        <li>r &lt; d 时 (r − d)<sup>4.518</sup> 是 NaN（源码），σ = 0 也乘不掉；pydftb 在 r &lt; 0.7R 时不计算 f(r)。</li>
+        <li>25.1 只在非周期体系中读 <code>HalogenXCorr</code>，周期体系报“未处理的节点”；开发版改成警告。</li>
+        <li>没有三阶，或没有 O/N 与 Cl/Br/I 物种时，这个节点“未处理”，DFTB+ 报错退出；“only fitted for 3rd order models” 的检查同样到不了。</li>
+      </ul>
+      <h3>3. 偶极修正（开发版）</h3>
+      <ul>
+        <li><strong>没有应力项</strong>：DFTB+ 的应力与其能量的应变差分之差为 +1.213e-6（xx、yy）、−1.214e-6（zz）、4e-13（xy），正好是 (E/V)·diag(1, 1, −1)；pydftb 的维里 W = E(2nn<sup>T</sup> − I) 补上了这一项。</li>
+        <li>晶格检查只看 a<sub>3</sub>：a<sub>1</sub> 带 z 分量的晶胞也照算，结果没有意义；pydftb 两者都查。含 z 的剪切应变会使晶胞通不过 DFTB+ 的检查，所以 <code>stress_fd</code> 只能做 xx、yy、zz、xy。</li>
+        <li>能量记在 E<sub>SCC</sub> 里，不单独打印；外部点电荷不算进 D（pydftb 拒绝同用）。</li>
+      </ul>
+      <h3>4. SK 表格点附近的力</h3>
+      <ul>
+        <li>DFTB+ 用差分求 H0、S 的导数，原子对的距离靠近 SK 表的格点时与解析导数差到 1e-6：最初的水层几何上不带偶极修正也差 6.1e-7（折叠的 5.4e-6），与偶极修正无关。参考算例换了随机扰动的种子（第八节）。同样的原因，自查的差分要用小步长或两点应变差分。</li>
+      </ul>
+    </section>
+
+    <section id="margins">
+      <h2>六、SCC 收敛的余量</h2>
+      <p>DFTB+ 倒数第二轮误差与阈值之比、阈值与最后一轮误差之比，以及因此选的 SCC 容差（要求两侧都至少约 2 倍）。两个差分算例用 1e-12，使力的差分不受 SCC 的残差影响。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>容差</th><th>轮数</th><th>倒数第二轮 / 容差</th><th>容差 / 最后一轮</th></tr></thead>
+        <tbody>
+<tr><td><code>water_dimer_h5</code></td><td>1e-10</td><td>11</td><td>11796.5</td><td>2.7</td></tr>
+<tr><td><code>water_dimer_h5_typed_n</code></td><td>1e-10</td><td>11</td><td>11778.7</td><td>2.7</td></tr>
+<tr><td><code>water_dimer_h5_typed_s_custom</code></td><td>1e-10</td><td>11</td><td>8204.6</td><td>3.4</td></tr>
+<tr><td><code>water_dimer_dftb3_d3h5</code></td><td>1e-10</td><td>12</td><td>65.4</td><td>46.7</td></tr>
+<tr><td><code>ch3oh_h5_cscale</code></td><td>1e-10</td><td>12</td><td>126.6</td><td>95.7</td></tr>
+<tr><td><code>water_box_h5</code></td><td>4e-10</td><td>18</td><td>4.4</td><td>2.5</td></tr>
+<tr><td><code>water_dimer_h5_exc_forces</code></td><td>1e-12</td><td>12</td><td>36.8</td><td>86.6</td></tr>
+<tr><td><code>meoh_water_halogen</code></td><td>1e-09</td><td>14</td><td>2.9</td><td>4.7</td></tr>
+<tr><td><code>meoh_water_halogen_switch</code></td><td>1e-12</td><td>16</td><td>617.2</td><td>7.9</td></tr>
+<tr><td><code>meoh_water_halogen_nbr_h5</code></td><td>2e-10</td><td>14</td><td>76.6</td><td>2.9</td></tr>
+<tr><td><code>water_box_halogen</code></td><td>1e-10</td><td>18</td><td>2.1</td><td>2.1</td></tr>
+<tr><td><code>water_slab_dipole</code></td><td>1e-09</td><td>16</td><td>4.4</td><td>5.0</td></tr>
+<tr><td><code>water_slab_dipole_layer</code></td><td>1e-10</td><td>17</td><td>8.7</td><td>21.8</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>七、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6f-2 的记录提交 <code>89b24d4</code> 逐字节比较（<code>--allow-new e_halogen e_dipole_corr h5 halogenx dipole_corr</code>）</td><td>conda 环境 639 次计算、141,402 个量，最小环境 600 次、134,109 个量，逐位相同；新算例的 40 次计算（13 个单点 × 3 种求解设置与 1 条 MD；最小环境没有 D3，37 次）只在工作树中，不比较</td></tr>
+          <tr><td>参考</td><td><code>refgen --check</code>（NumPy、torch；Casida 算例另用 <code>--casida-solver exact</code>、<code>davidson</code>、<code>arpack</code>），<code>dynamics --check</code></td><td>NumPy：217 个单点全部通过（其中新增 13 个）；30 个 Casida 算例用三种求解器各检查一遍，全部通过；torch：74 个通过，NumPy 专有的 143 个（新增的 13 个都是）按设计跳过；24 个优化/MD 全部通过（新增 <code>water_dimer_h5_md</code>）</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 880 个通过、143 个跳过（NumPy 专有参考算例的 torch 参数化）；最小环境 648 个通过、254 个跳过；最小环境 + torch 845 个通过、178 个跳过。比 M6f-2 多出的与新测试一致：13 个参考算例、1 条 MD、<code>test_corrections.py</code> 18 项、XL-BOMD 的 H5 参数化（最小环境没有 D3 与 torch，D3H5 算例与 H5 的拒绝测试跳过）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>224 个通过，7 个已知的界面冒烟测试失败（与之前相同），1 个跳过</td></tr>
+          <tr><td>PTBP 结果</td><td><code>tools/engine_parity.py --compare-serial</code>，发表点</td><td>energygeometry 损失 0.9198547924（与 M6f-2 相同），1 核与自动核数逐位相同（PTBP 不用这些选项）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与设计的偏差</h2>
+      <ul>
+        <li><strong>偶极修正的维里</strong>：设计中是 W = (4πD/V)·sym(e<sub>z</sub> ⊗ Σ<sub>A</sub>Δq<sub>A</sub>r<sub>f,A</sub>) − E·I。其中 xz、yz 两项随原子取哪个面内周期像而变，能量却不变，所以它不是能量的导数。实现改为以平板法向定义高度：n = a<sub>1</sub> × a<sub>2</sub>/|a<sub>1</sub> × a<sub>2</sub>|，u = r·n，h = V/|a<sub>1</sub> × a<sub>2</sub>|。均匀应变 ε 下 u 与 h 都乘 (1 + n<sup>T</sup>εn)，于是 D 也乘这个因子，V 乘 (1 + tr ε)，得到 W = ∂E/∂ε = E(2nn<sup>T</sup> − I)。n = e<sub>z</sub> 时 xx、yy 为 −E，zz 为 +E，剪切为 0；6 个分量都用差分验证过。</li>
+        <li><strong>水层的几何</strong>：最初的几何上 DFTB+ 的力差 6.1e-7（折叠的 5.4e-6），原因是 SK 格点附近的差分导数（第五节第 4 条）。改用随机扰动的种子 11 与 16 后力差为 8.4e-9、6.1e-9。</li>
+        <li><strong><code>stress_fd</code></strong>：偶极修正的算例只取 xx、yy、zz、xy 四个分量（DFTB+ 拒绝面外剪切的晶胞），其余取 DFTB+ 的解析应力。</li>
+        <li><strong>卤素能量的容差</strong>：设计中 <code>e_halogen</code> 的容差是 1e-12，实际为 1e-10，因为 detailed.out 的 “Halogen correction energy” 只有 10 位小数。</li>
+        <li><strong>SCC 容差</strong>：<code>water_box_h5</code> 4e-10、<code>meoh_water_halogen</code> 1e-9、<code>meoh_water_halogen_nbr_h5</code> 2e-10、<code>water_slab_dipole</code> 1e-9，使收敛判断离阈值足够远（第六节）；两个差分算例 1e-12。</li>
+        <li><strong>开发版的检验</strong>：设计中要求 6–8 个已有算例，实际比较了 13 个（含 SOC、DFTB+U、Casida、GB 溶剂），能量全部逐位相同，力差 ≤ 3.4e-14，应力差 ≤ 1.8e-16。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li>M6f-4：分析输出（按原子分解的能量，含卤素与偶极修正；净布居、CM5、静电势、Pipek–Mezey、键分析、Casida 跃迁电荷、eigenvec.out 与 band.out）。键布居、键能与 Mayer 键级 25.1 没有，用这次编的开发版对照。</li>
+        <li>之后 M6f-5 SelectedShells；再做 M6g、M6h。PTBP 的参数化不变：每个元素三个参数 r0_w、r0_d、σ_rep。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6f3-corrections.html">← M6f-3 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M6f-3</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -27,6 +27,7 @@ from pydftb.xlbomd import COEFFS, ON, XLBOMD, ExtLagrangian, Integrator
 DIMER = CASES_BY_NAME["water_dimer_hdamp"]           # DFTB2 with H-X damping, T = 0
 DIMER3 = replace(DIMER, dftb3=DFTB3_3OB)             # full third order (ThirdOrderFull)
 CUO = CASES_BY_NAME["cuo_chain_k422"]                # k-points, Fermi 500 K
+DIMER_H5 = CASES_BY_NAME["water_dimer_h5"]           # H5 (M6f-3; DFTB+'s XL gradient lacks it)
 ONE_STEP = SCCControl(1, 1, 1e-5)                    # XlbomdFast: one SCC iteration
 
 
@@ -120,12 +121,14 @@ def _fd(energy, x0, idx, h):
 
 @pytest.mark.parametrize("case, kind, tol", [(DIMER, "dynamics_t0", 2e-10),
                                              (DIMER3, "dynamics_t0", 2e-10),
-                                             (CUO, "dynamics", 2e-9)],
-                         ids=["dftb2_hdamp", "dftb3", "cuo_k_500K"])
+                                             (CUO, "dynamics", 2e-9),
+                                             (DIMER_H5, "dynamics_t0", 2e-10)],
+                         ids=["dftb2_hdamp", "dftb3", "cuo_k_500K", "dftb2_h5"])
 def test_forces_are_the_shadow_energy_gradient(case, kind, tol):
     """One XlbomdFast step from populations n off self-consistency: the forces are
     -dE_shadow/dR at fixed n, E_shadow = E_band[D(n)] + 1/2 (2 q_out - n).gamma.n (+ the
-    linearised third order), and so is the stress of the periodic chain."""
+    linearised third order), and so is the stress of the periodic chain.  With H5 too (M6f-3):
+    DFTB+'s XL gradient leaves H5 out, pydftb's gamma' has it."""
     res, calc, inp = _engine(case, force_evaluation=kind)
     labels = inp["labels"]
     pos, cell, pbc = _geometry(inp)

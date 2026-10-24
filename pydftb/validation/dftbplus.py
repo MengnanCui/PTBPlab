@@ -151,6 +151,33 @@ def dftb3_block(opts, labels=None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def corrections_block(h5=None, halogen=None, dipole=None, labels=()) -> str:
+    """HSD lines of milestone M6f-3: ``HCorrection = H5`` (True or {"r_scaling", "w_scaling",
+    "scaling": {element: k}}, written for the type labels of those elements), ``HalogenXCorr``
+    and ``DipoleCorrection`` (True or {"layer_position": z0 in Angstrom})."""
+    lines = []
+    if h5 is not None:
+        spec = {} if h5 is True else dict(h5)
+        lines.append("  HCorrection = H5 {")
+        for key, name in (("r_scaling", "RScaling"), ("w_scaling", "WScaling")):
+            if key in spec:
+                lines.append(f"    {name} = {_f(spec[key])}")
+        if spec.get("scaling"):
+            lines.append("    H5Scaling {")
+            lines += [f"      {lab} = {_f(spec['scaling'][lab])}"
+                      for lab in dict.fromkeys(labels) if lab in spec["scaling"]]
+            lines.append("    }")
+        lines.append("  }")
+    if halogen is not None:
+        lines.append("  HalogenXCorr = Yes")
+    if dipole is not None:
+        z0 = None if dipole is True else dict(dipole).get("layer_position")
+        lines.append("  DipoleCorrection {" if z0 is not None else "  DipoleCorrection {}")
+        if z0 is not None:
+            lines += [f"    DipoleLayerPos [AA] = {_f(z0)}", "  }"]
+    return "".join(f"{ln}\n" for ln in lines)
+
+
 def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     """HSD for pydftb's spin options (unpaired_electrons, relax_total_spin, spin_constants).
 
@@ -818,12 +845,13 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
         convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
-        autotest=False, extra_options="", fermi=None) -> dict:
+        autotest=False, extra_options="", fermi=None, binary=None) -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata; ``scc_errors``: the "SCC error" of every iteration
-    as printed (M6f)."""
-    if not available():
-        raise FileNotFoundError("dftb+ binary not found; set $DFTBPLUS")
+    as printed (M6f).  ``binary``: another DFTB+ executable (M6f-3: the development build)."""
+    binary = binary or DFTBPLUS
+    if not (binary and os.path.exists(binary)):
+        raise FileNotFoundError(f"dftb+ binary not found ({binary!r}); set $DFTBPLUS")
     own_dir = workdir is None
     workdir = workdir or tempfile.mkdtemp(prefix="dftbp_")
     try:
@@ -837,7 +865,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
             f.write(hsd)
         env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
         t0 = time.perf_counter()
-        p = subprocess.run([DFTBPLUS], cwd=workdir, env=env, capture_output=True, text=True)
+        p = subprocess.run([binary], cwd=workdir, env=env, capture_output=True, text=True)
         wall = time.perf_counter() - t0
         if p.returncode != 0:
             raise RuntimeError(p.stdout[-3000:] + p.stderr[-3000:])
@@ -851,7 +879,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                           ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
                           ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
                           ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite"),
-                          ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy")]:
+                          ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy"),
+                          ("e_halogen", "Halogen correction energy")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))

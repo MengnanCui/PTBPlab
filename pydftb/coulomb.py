@@ -21,6 +21,7 @@ from scipy.special import erfc
 
 from .backend import ops
 from .constants import MIN_HUB_DIFF, MIN_SHORT_GAMMA, TOL_SHORT_GAMMA
+from .corrections import h5_scale
 from .neighbors import neighbor_list
 
 EWALD_TOL = 1e-12
@@ -146,10 +147,13 @@ class Coulomb:
     hubbard : (n_site,) Hubbard U of every site
     damped : (n_atom,) bool, atoms whose pairs get the H-X damping of DFTB+
              ``HCorrection = Damping``: S -> S exp(-((U_a + U_b)/2)^damp_exp r^2)
+    h5 : (is_h, k, R, r_scaling, w_scaling), the per-atom H5 parameters of
+         :meth:`pydftb.corrections.H5.atom_parameters`: DFTB+'s ``HCorrection = H5`` on pairs
+         of one H and an atom with k > 0, S -> S (1 + g) - g / r (milestone M6f-3)
     """
 
     def __init__(self, atom_pos, site_atom, hubbard, cell=None, pbc=None, damped=None,
-                 damp_exp: float = 0.0):
+                 damp_exp: float = 0.0, h5=None):
         self.pos = np.asarray(atom_pos, float)
         self.site_atom = np.asarray(site_atom)
         self.natom = len(self.pos)
@@ -160,6 +164,7 @@ class Coulomb:
         self.periodic = self.cell is not None and self.pbc.any()
         self.damped = np.zeros(self.natom, bool) if damped is None else np.asarray(damped, bool)
         self.damp_exp = float(damp_exp)
+        self.h5 = h5
         if self.periodic and not self.pbc.all():
             raise NotImplementedError("Only 0D or 3D periodicity implemented")
         # sites of each atom, padded to a rectangular table (-1 = no site)
@@ -226,6 +231,15 @@ class Coulomb:
             h = np.exp(-u ** self.damp_exp * r * r)
             ds[m] = ds[m] * h - 2.0 * r * u ** self.damp_exp * s[m] * h
             s[m] = s[m] * h
+        if self.h5 is not None:                     # DFTB+'s H5 (not with damping; M6f-3)
+            is_h, k, radius, r_scaling, w_scaling = self.h5
+            i, j = self.nl[0], self.nl[1]
+            kp = np.where(is_h[i] != is_h[j], k[np.where(is_h[i], j, i)], -1.0)[self.sp_pair]
+            m = kp > 0.0
+            if m.any():
+                p = self.sp_pair[m]
+                s[m], ds[m] = h5_scale(s[m], ds[m], self.sp_d[m], kp[m],
+                                       radius[i[p]] + radius[j[p]], r_scaling, w_scaling)
         return s, ds
 
     def _expand(self, mat_atoms):
