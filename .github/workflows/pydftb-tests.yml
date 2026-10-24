@@ -31,10 +31,47 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: pydftb/pyproject.toml
       - name: Install minimal dependencies and PyTorch (CPU wheel)
         run: |
           pip install numpy scipy ase threadpoolctl pytest
           pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
       - name: Run pydftb tests, including the torch backend
         run: PYTHONPATH=. pytest -q pydftb/tests -o addopts="-ra"
+
+  # P1: pydftb as a package of its own. Build the wheel (from the sdist), check what it
+  # holds, install it into a clean venv (no PTBP) and run its tests outside the checkout.
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the sdist and the wheel
+        run: |
+          pip install build
+          python -m build pydftb --outdir dist
+      - name: Check the wheel's contents
+        run: |
+          python - <<'EOF'
+          import glob, subprocess, zipfile
+          (whl,) = glob.glob("dist/pydftb-*.whl")
+          names = zipfile.ZipFile(whl).namelist()
+          bad = [n for n in names if n.startswith(("pydftb/docs/", "pydftb/bench/"))]
+          assert not bad, bad
+          # every tracked test data file (344 at P1), and nothing else
+          data = {n for n in names if n.startswith("pydftb/tests/data/")}
+          git = subprocess.run(["git", "ls-files", "-z", "pydftb/tests/data"], check=True,
+                               capture_output=True, text=True)
+          tracked = set(git.stdout.split("\0")) - {""}
+          assert data == tracked, (sorted(tracked - data)[:5], sorted(data - tracked)[:5])
+          print(f"{whl}: {len(names)} entries, {len(data)} test data files")
+          EOF
+      - name: Install the wheel into a clean venv and test it outside the checkout
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install dist/*.whl pytest
+          cd "$(mktemp -d)"
+          /tmp/v/bin/pydftb --help
+          /tmp/v/bin/python -m pytest --pyargs pydftb.tests -q -p no:cacheprovider

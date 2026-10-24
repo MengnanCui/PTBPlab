@@ -42,10 +42,17 @@ cd hotcent && pip install -e .
 #    Pin to the nompi build to avoid pulling mpich/scalapack as dependencies.
 mamba install -c conda-forge "dftbplus=25.1=nompi_*"
 
-# 4. PTBP itself — installs `ase`, `scikit-optimize`, etc., and registers a
-#    `ptbp` console-script entry point. Run from the repo root (i.e. ptbp_lab/).
-pip install -e .
+# 4. pydftb and PTBP — two packages from this repository; run from the repo root
+#    (i.e. ptbp_lab/). pydftb (the DFTB engine in pydftb/) installs numpy, scipy, ase,
+#    threadpoolctl and the `pydftb` command; PTBP depends on it, installs
+#    scikit-optimize etc. and registers the `ptbp` command.
+pip install ./pydftb .            # to work on the code: pip install -e ./pydftb -e .
+#    pydftb's extras: "./pydftb[torch]" (PyTorch backend, GPUs, the loss gradient of
+#    section 4e) and "./pydftb[dispersion]" (D3/D4), e.g.
+#    pip install "./pydftb[torch]" .
 ```
+
+pydftb also installs and works without PTBP (`pip install ./pydftb`; see `pydftb/README.md`). The old forms keep working: `python -m pydftb.validation.refgen --check` is `pydftb refgen --check`, `python tools/engine_parity.py ...` is `ptbp parity ...`, and a checkout runs without installing (`PYTHONPATH=.`).
 
 Verified working combination (May 2026, macOS arm64, Python 3.11):
 `ase 3.28.0`, `scikit-optimize 0.10.2`, `pylibxc 7.0.0`, `hotcent 2.0.1`,
@@ -76,8 +83,8 @@ ptbp --skf_generator full --symbols H O --known_parameters PTBP
 
 ## Quick start
 
-After `pip install -e .`, the toolkit exposes four subcommands via the
-`ptbp` console script:
+After installing (see above), the toolkit exposes four main subcommands via the
+`ptbp` console script (plus `ptbp parity` and `ptbp plan`, sections 4b and 4c):
 
 ```bash
 ptbp setup                                  # Interactive TUI wizard (start here if unsure)
@@ -376,7 +383,7 @@ Related options (also accepted as YAML keys):
 | `--pydftb-forces {dftbplus,exact}` | `dftbplus` (default) reproduces DFTB+'s 0.01 Bohr finite-difference forces; `exact` uses exact derivatives. |
 | `--pydftb-backend {numpy,torch}`, `--device`, `--dtype` | pydftb on PyTorch, on the CPU or a GPU (section 4f). |
 
-To check the two engines against each other on your own dataset, run `python tools/engine_parity.py`, which evaluates the real loss at fixed parameter points.
+To check the two engines against each other on your own dataset, run `ptbp parity DATASET --workdir DIR` (in a checkout also `python tools/engine_parity.py`), which evaluates the real loss at fixed parameter points.
 
 ### 4c. Several cores: `--ncores` and `ptbp plan`
 
@@ -404,11 +411,11 @@ After every BO step it prints the measured stage times next to the estimates (`[
 - In a parallel step every DFTB+ run gets its own folder `dftb_tasks/sNNNN/` in the step folder; it is removed after a successful run and kept after a failure.
 - `PTBP_BACKEND=serial` forces serial execution (debugging); systems other than Linux run serially. `PTBP_HOTCENT_REFERENCE=1` and `PTBP_PHYSREP_REFERENCE=1` select the original hotcent driver and repulsion loop.
 
-`python tools/engine_parity.py DATASET --compare-serial` evaluates the loss with one core and with all of them, checks that the loss and the step's files are identical and prints the measured stage times next to the estimates. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `M3b-hotcent-physrep.html`, `M3c-recommender.html` and the matching reports in `pydftb/docs/reports/`.
+`ptbp parity DATASET --compare-serial` evaluates the loss with one core and with all of them, checks that the loss and the step's files are identical and prints the measured stage times next to the estimates. Design and measurements: `pydftb/docs/design/M3a-dispatch.html`, `M3b-hotcent-physrep.html`, `M3c-recommender.html` and the matching reports in `pydftb/docs/reports/`.
 
 ### 4d. DFTB+ configuration advisor
 
-With the DFTB+ engine, PTBP checks the first DFTB+ run of every optimisation (and every DFTB+ run that fails) with the DFTB+ configuration advisor and prints what it finds with an `[advisor]` prefix; the findings also go to `advisor.json` in the run folder. It only reports: no setting is changed and the results are byte-identical. On PTBP's historical input (`--smearing none`) it reports that DFTB+ converts the input from parser version 1 (shell-resolved SCC, H and S differentiated with a 0.01 Bohr step) and ignores the `Fermi`/`MethfesselPaxton` blocks written outside `Filling` (the calculation runs at T = 0); these are marked as expected, since the published parameters were fitted that way. `PTBP_ADVISOR=0` turns the check off; `python -m pydftb.advisor RUN_DIR` checks any DFTB+ run directory by hand. Details: `pydftb/docs/reports/M3d-advisor.html`.
+With the DFTB+ engine, PTBP checks the first DFTB+ run of every optimisation (and every DFTB+ run that fails) with the DFTB+ configuration advisor and prints what it finds with an `[advisor]` prefix; the findings also go to `advisor.json` in the run folder. It only reports: no setting is changed and the results are byte-identical. On PTBP's historical input (`--smearing none`) it reports that DFTB+ converts the input from parser version 1 (shell-resolved SCC, H and S differentiated with a 0.01 Bohr step) and ignores the `Fermi`/`MethfesselPaxton` blocks written outside `Filling` (the calculation runs at T = 0); these are marked as expected, since the published parameters were fitted that way. `PTBP_ADVISOR=0` turns the check off; `pydftb advisor RUN_DIR` checks any DFTB+ run directory by hand. Details: `pydftb/docs/reports/M3d-advisor.html`.
 
 ### 4e. Gradient of the loss: `--optimizer gradient` / `bo_grad`
 
@@ -457,7 +464,7 @@ With `--engine pydftb`, the SCC linear algebra (k-point matrices, Cholesky facto
 density matrices) can run on PyTorch, on the CPU or on a GPU (milestones M4a and M4d):
 
 ```bash
-python -m pydftb.validation.gpu_check --json gpu_check.json      # check the GPU first
+pydftb gpu-check --json gpu_check.json                           # check the GPU first
 ptbp optimize dft/dft.xyz --engine pydftb --pydftb-backend torch --device cuda
 ptbp optimize dft/dft.xyz --engine pydftb --pydftb-backend torch --device mps --dtype float32
 ```

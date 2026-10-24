@@ -222,7 +222,8 @@ def test_gpu_suggestion_only_for_pydftb_on_numpy():
     shapes = [cu_cell((8, 8, 8))] * 8
     found = {"torch": "2.14.1", "cuda": ["NVIDIA A100"], "mps": False, "xpu": []}
     plan = plan_of(shapes, 4, accelerators=found)
-    assert any("GPU available (NVIDIA A100)" in s and "gpu_check" in s for s in plan.suggestions)
+    assert any("GPU available (NVIDIA A100)" in s and "pydftb gpu-check" in s
+               for s in plan.suggestions)
     torch_gpu = {"pydftb_backend": "torch", "device": "cuda", "dtype": "float64"}
     assert not any("GPU" in s for s in plan_of(shapes, 4, accelerators=found,
                                                 backend=torch_gpu).suggestions)

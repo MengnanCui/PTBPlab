@@ -8,8 +8,11 @@ so the MD steps take the same SCC paths.  XL-BOMD (M6e) runs the same way, DFTB+
 ``Xlbomd``/``XlbomdFast`` against ``PyDFTB(xlbomd=...)``, and compares the SCC iterations of
 every step as well.
 
-    python -m pydftb.validation.dynamics --regenerate   # needs dftb+; writes JSON
-    python -m pydftb.validation.dynamics --check        # pydftb vs the frozen JSON
+    pydftb dynamics --regenerate   # needs dftb+; writes JSON (in a git checkout)
+    pydftb dynamics --check        # pydftb vs the frozen JSON
+
+(``python -m pydftb.validation.dynamics ...`` is the same.)  ``--regenerate`` writes into
+the package's ``tests/data/ref_dynamics``: run it in a git checkout, not an installed copy.
 
 Optimisations are compared at the end point (energy, structure after alignment, cell).
 They start from the base structure relaxed to 0.02 eV/A (frozen in the JSON), so both
@@ -479,8 +482,9 @@ def check(names=None, **overrides) -> bool:
     return all_ok
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main(argv=None, prog=None):
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--regenerate", action="store_true", help="run dftb+ and write reference JSON")
     g.add_argument("--check", action="store_true", help="compare pydftb with the frozen JSON")

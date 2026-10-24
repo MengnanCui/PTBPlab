@@ -14,7 +14,8 @@ and its on-site energies, Hubbard values and spin constants are those of the fre
 
     python -m pydftb.validation.make_f_set     # needs hotcent and pylibxc; ~2 min
 
-Prints the Gd spin constants used by ``validation/cases.py``.
+Prints the Gd spin constants used by ``validation/cases.py``.  It writes into the package's
+``tests/data/skf``: run it in a git checkout, not in an installed copy of pydftb.
 """
 import gzip
 import os

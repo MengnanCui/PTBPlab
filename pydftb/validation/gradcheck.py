@@ -1,7 +1,9 @@
 """Derivatives of :mod:`pydftb.autodiff` against finite differences of the engine (M4b, G3).
 
-    python -m pydftb.validation.gradcheck --check               # the standard set; exit 1 on failure
-    python -m pydftb.validation.gradcheck h2o --kinds tables hubbard --mode implicit
+    pydftb gradcheck --check               # the standard set; exit 1 on failure
+    pydftb gradcheck h2o --kinds tables hubbard --mode implicit
+
+(``python -m pydftb.validation.gradcheck ...`` is the same.)
 
 Every case is a frozen reference structure (``refgen``) converged to SCC tolerance 1e-13.
 For each parameter kind (SK tables, on-site energies, Hubbard U and derivatives, spin
@@ -285,8 +287,8 @@ def check(names=None, kinds=None, step: float = STEP, tol: dict = TOL,
     return ok
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv=None, prog=None):
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cases", nargs="*", help="case names (default: the standard set)")
     ap.add_argument("--check", action="store_true", help="exit 1 if any check fails")

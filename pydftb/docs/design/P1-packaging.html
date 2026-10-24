@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>P1 打包设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / P1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">P1 · 设计文档</p>
+    <h1>打包：pydftb 与 PTBP 两个包，各有命令</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd><code>6bacb73</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/P1-packaging.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">把仓库拆成两个可安装的包：<strong>pydftb</strong>（DFTB 引擎，运行只依赖 numpy、scipy、ase、threadpoolctl，可以单独安装）和 <strong>ptbp</strong>（依赖 pydftb）。两个包各有命令，用户不再需要 <code>python xxx.py 命令</code>：<code>pydftb advisor|refgen|dynamics|golden|gpu-check|gradcheck</code>，<code>ptbp parity</code>（原 <code>tools/engine_parity.py</code>）。<strong>不移动任何文件</strong>，旧的 <code>python -m …</code> 与脚本写法照旧可用。</p>
+    <ul>
+      <li><strong>布局</strong>（第二节）：在包目录里放第二个项目根 <code>pydftb/pyproject.toml</code>，用 <code>package-dir = {"pydftb" = "."}</code> 把包 <code>pydftb</code> 映射到它所在的目录。源码原地不动，仓库根目录下 <code>import pydftb</code> 与以前完全一样：golden 从旧提交的 git 工作树根目录导入 pydftb，CI 和测试用 <code>PYTHONPATH=.</code>，文档里的路径都不变。</li>
+      <li><strong>包清单</strong>：显式列出 6 个包，<code>include-package-data = false</code>，测试数据用 <code>package-data</code> 收进来。自动发现会把 <code>docs/</code>、<code>bench/</code>、<code>tests/data/*</code>、<code>build/</code> 当成命名空间包。预期的轮子：439 个文件（32 个顶层模块，advisor、autodiff、backend 各 6 个，validation 11 个，测试 34 个 .py 与 344 个数据文件），没有 <code>docs/</code>、<code>bench/</code> 和 README。</li>
+      <li><strong>命令</strong>（第三节）：<code>pydftb 子命令 参数…</code> 用到时才导入对应工具，参数原样交给工具已有的 <code>main(argv)</code>；缺 torch 时给一句话的提示（退出码 2）。<code>ptbp parity</code> 在 argparse 之前把参数交给 <code>tools/engine_parity.main</code>。</li>
+      <li><strong>选型</strong>：setuptools ≥ 77（PEP 639 的许可证元数据）。读过 setuptools 84 与 pip 26 的源码：轮子、sdist、PEP 660 可编辑安装都支持这种布局。hatchling 的可编辑安装不适合；不改成 <code>src/</code> 布局（那要移动文件）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2</span><span class="lbl">可安装的包：pydftb、ptbp</span></li>
+      <li><span class="num">6 + 1</span><span class="lbl">新命令：pydftb 的 6 个子命令与 ptbp parity</span></li>
+      <li><span class="num">0</span><span class="lbl">移动的文件</span></li>
+      <li><span class="num">439</span><span class="lbl">预期的 pydftb 轮子文件数（不含元数据）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#goal">一、目标与约束</a></li>
+      <li><a href="#layout">二、布局：包目录里的第二个项目根</a></li>
+      <li><a href="#commands">三、命令</a></li>
+      <li><a href="#install">四、依赖与安装</a></li>
+      <li><a href="#impl">五、实现清单</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">六、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="goal">
+      <h2>一、目标与约束</h2>
+      <ul>
+        <li><strong>目标</strong>（用户决定）：
+          <ul>
+            <li>pydftb 单独可装，运行依赖只有 numpy、scipy、ase、threadpoolctl；torch、dftd3/dftd4 是可选的；</li>
+            <li>ptbp 依赖 pydftb；</li>
+            <li>两个包都有命令：<code>pydftb</code> 的子命令调用现有工具的 <code>main(argv)</code>，不改工具本身；<code>tools/engine_parity.py</code> 变成 <code>ptbp parity</code>；</li>
+            <li>文档改用新命令；旧的 <code>python -m …</code> 与脚本写法都要继续可用。</li>
+          </ul>
+        </li>
+        <li><strong>约束：不移动文件</strong>。很多地方依赖 <code>pydftb/</code> 是仓库根目录下可导入的包：
+          <ul>
+            <li>golden 逐字节回归在旧提交的 git 工作树里以 <code>PYTHONPATH=工作树</code> 导入 pydftb；</li>
+            <li>CI 与测试在仓库根目录用 <code>PYTHONPATH=.</code>；</li>
+            <li>文档、设计与报告里的路径（<code>pydftb/validation/…</code>、<code>pydftb/tests/data/…</code>）。</li>
+          </ul>
+        </li>
+        <li><strong>不变的东西</strong>：不改任何数值计算；golden 必须逐字节相同（不加 <code>--allow-new</code>）。</li>
+      </ul>
+    </section>
+
+    <section id="layout">
+      <h2>二、布局：包目录里的第二个项目根</h2>
+<pre><code>PTBPlab/
+  pyproject.toml          # ptbp：cli*、utils*、tools*、parameterize；依赖 pydftb
+  parameterize.py  cli/  utils/  tools/  tests/
+  pydftb/
+    pyproject.toml        # pydftb：package-dir = {"pydftb" = "."}
+    LICENSE               # 根目录 LICENSE 的副本（license-files 写 ".." 已弃用）
+    __init__.py  cli.py  __main__.py  …  advisor/ autodiff/ backend/ validation/ tests/
+    docs/  bench/         # 不进轮子</code></pre>
+      <ul>
+        <li><strong>映射</strong>：<code>package-dir = {"pydftb" = "."}</code> 让包 <code>pydftb</code> 就是 <code>pydftb/pyproject.toml</code> 所在的目录，子包 <code>pydftb.validation</code> 是 <code>./validation</code>。目录本身仍是仓库根目录下的普通包，所以不安装时一切照旧。</li>
+        <li><strong>包清单要写死</strong>：<code>packages = ["pydftb", "pydftb.advisor", "pydftb.autodiff", "pydftb.backend", "pydftb.tests", "pydftb.validation"]</code>。自动发现（pyproject 配置下默认找命名空间包）会把 <code>pydftb.docs*</code>、<code>pydftb.bench</code>、<code>pydftb.tests.data.*</code> 以及在源码树里构建时留下的 <code>pydftb.build.*</code> 都当成包。新测试检查清单与目录树一致（有 <code>__init__.py</code> 的目录）。</li>
+        <li><strong>数据</strong>：<code>include-package-data = false</code>，只用 <code>"pydftb.tests" = ["data/**/*"]</code> 收测试数据（冻结的 DFTB+ 参考、SKF、顾问的运行）。<code>docs/</code>、<code>bench/</code>（<code>bench/throughput.py</code> 导入 PTBP 的 <code>utils</code>，留在仓库里）、README、图片都不进轮子。</li>
+        <li><strong>版本</strong>：<code>dynamic = ["version"]</code>，取 <code>pydftb.__version__</code>（现为 <code>0.1.0.dev0</code>），setuptools 静态读取，构建时不导入 numpy。</li>
+        <li><strong>pytest 配置</strong>：<code>pydftb/pyproject.toml</code> 里不放 <code>[tool.pytest*]</code>：否则在仓库根目录跑 <code>pytest pydftb/tests</code> 时 rootdir 会变。</li>
+        <li><strong>可编辑安装</strong>（PEP 660，setuptools 的默认 lenient 模式）：
+          <ul>
+            <li>pydftb 的映射不是 <code>{"": …}</code>，setuptools 用 <code>_TopLevelFinder</code>：在 site-packages 写一个 finder，MAPPING 为 <code>{'pydftb': '仓库/pydftb'}</code>，<strong>追加</strong>到 <code>sys.meta_path</code> 末尾，所以当前目录与 <code>PYTHONPATH</code> 仍然优先（golden 的子进程照旧导入各自工作树里的 pydftb）；</li>
+            <li>ptbp 的映射是 <code>{"": "."}</code>，setuptools 用静态 <code>.pth</code>，把仓库根目录加进 <code>sys.path</code>（与现在相同）；</li>
+            <li>不要用 <code>editable_mode=compat</code>：它用静态 <code>.pth</code> 把 <code>pydftb/</code> 目录本身加进 <code>sys.path</code>，其中的模块（<code>cli</code>、<code>tests</code>、<code>system</code> 等）都成了顶层模块，与 PTBP 的 <code>cli</code>、<code>tests</code> 撞名。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="commands">
+      <h2>三、命令</h2>
+<pre><code>pydftb advisor RUN_DIR           # = python -m pydftb.advisor RUN_DIR
+pydftb refgen --check            # = python -m pydftb.validation.refgen --check
+pydftb dynamics --check          # = python -m pydftb.validation.dynamics --check
+pydftb golden --base COMMIT      # 只能在 git 检出中运行
+pydftb gpu-check --quick         # 别名 gpu_check；需要 torch
+pydftb gradcheck --check         # 需要 torch
+pydftb --help | --version        # python -m pydftb … 是同一个命令
+
+ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 \
+     --engines pydftb --compare-serial --workdir /tmp/parity   # = python tools/engine_parity.py …</code></pre>
+      <ul>
+        <li><strong><code>pydftb/cli.py</code></strong>：子命令表 <code>COMMANDS</code>（名字 → 模块）；用到时才 <code>importlib.import_module</code>，参数原样交给 <code>main(argv, prog="pydftb 子命令")</code>，返回 <code>int(rc or 0)</code>（refgen、dynamics、gradcheck 的 <code>main</code> 返回 None）。工具自己的 <code>SystemExit</code>（argparse 的错误、<code>--check</code> 的 <code>sys.exit</code>）照常穿过。缺 torch（<code>ModuleNotFoundError</code>，<code>name == "torch"</code>）时打印一句话，退出码 2。<code>--help</code> 列出子命令，<code>--version</code> 打印版本；未知子命令由 argparse 报错（退出码 2）。<code>pydftb/__main__.py</code> 让 <code>python -m pydftb</code> 可用。</li>
+        <li><strong><code>prog=</code></strong>：六个工具的 <code>main</code> 加一个关键字参数 <code>prog=None</code>，用法行显示为 <code>pydftb refgen</code>；不传时与以前相同（advisor 默认仍是 <code>python -m pydftb.advisor</code>）。</li>
+        <li><strong><code>ptbp parity</code></strong>：<code>cli/main.py</code> 的 <code>dispatch</code> 一开始（argparse 之前）就把 <code>argv[1:]</code> 交给 <code>tools.engine_parity.main</code>：用 argparse 的 REMAINDER 会把开头的 <code>--help</code> 当成 ptbp 自己的。<code>_build_top_parser</code> 里加一个只用于帮助的占位子命令，让它出现在 <code>ptbp --help</code> 中；<code>SUBCOMMANDS</code>（<code>cli/main.py</code>）与 <code>NEW_SUBCOMMANDS</code>（<code>parameterize.py</code>）加上 <code>parity</code>。</li>
+        <li><strong>golden 在安装的副本中</strong>：golden 在包的上一级目录运行 <code>git</code>，从轮子安装时那是 site-packages。新增检查：上一级目录必须是一个跟踪着 <code>pydftb/</code> 的 git 检出的顶层，否则给出清楚的错误（退出码 2）。</li>
+        <li><strong>重新生成参考</strong>：<code>refgen --regenerate</code>、<code>dynamics --regenerate</code>、<code>make_f_set</code>、<code>make_poly_set</code>、<code>advisor_cases</code> 写进包里的 <code>tests/data</code>，只在检出中使用；在文档字符串与 README 中写明。</li>
+      </ul>
+    </section>
+
+    <section id="install">
+      <h2>四、依赖与安装</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>包</th><th>依赖</th><th>可选</th><th>命令</th></tr></thead>
+        <tbody>
+          <tr><td><code>pydftb</code> 0.1.0.dev0</td><td><code>numpy</code>、<code>scipy&gt;=1.15</code>、<code>ase&gt;=3.23</code>、<code>threadpoolctl</code></td><td><code>torch</code>（<code>torch&gt;=2.14</code>）、<code>dispersion</code>（<code>dftd3</code>、<code>dftd4</code>）、<code>test</code>（<code>pytest</code>）</td><td><code>pydftb</code></td></tr>
+          <tr><td><code>ptbp</code> 0.3.0</td><td><code>pydftb&gt;=0.1.0.dev0</code> 与原有依赖</td><td><code>torch = ["pydftb[torch]"]</code>、<code>dispersion = ["pydftb[dispersion]"]</code>、<code>mpi</code>、<code>dev</code></td><td><code>ptbp</code></td></tr>
+        </tbody>
+      </table></div>
+<pre><code>pip install ./pydftb .                  # 在仓库根目录：两个包
+pip install -e ./pydftb -e .            # 开发：两个都可编辑
+pip install ./pydftb                    # 只要引擎
+python -m pytest --pyargs pydftb.tests  # 安装后在任意目录跑 pydftb 的测试</code></pre>
+      <ul>
+        <li>依赖写 <code>pydftb&gt;=0.1.0.dev0</code>，不写 <code>&gt;=0.1</code>：后者不接受预发布版 0.1.0.dev0。</li>
+        <li>PEP 508 没有可移植的相对路径，所以 ptbp 的依赖不能指向 <code>./pydftb</code>：从检出安装时两个路径一起给 pip。</li>
+        <li>ptbp 的包清单改为 <code>include = ["cli*", "utils*", "tools*"]</code>，<code>exclude</code> 加 <code>"pydftb*"</code>；保留 <code>package-dir = {"" = "."}</code>、<code>py-modules = ["parameterize"]</code>、pytest 配置与 <code>ptbp = "parameterize:main"</code>。</li>
+        <li>不安装也照旧：仓库根目录 <code>PYTHONPATH=.</code>，或 <code>python -m pydftb …</code>。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">五、实现清单</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>新文件</strong>：<code>pydftb/pyproject.toml</code>、<code>pydftb/LICENSE</code>、<code>pydftb/cli.py</code>、<code>pydftb/__main__.py</code>、<code>pydftb/tests/test_cli.py</code>、<code>pydftb/tests/test_packaging.py</code>。</li>
+          <li><strong>工具</strong>：<code>refgen</code>、<code>dynamics</code>、<code>golden</code>、<code>gpu_check</code>、<code>gradcheck</code>、<code>advisor/__main__</code> 的 <code>main</code> 加 <code>prog=None</code>；golden 加 <code>checkout_problem()</code>；文档字符串改用新命令，并写明重新生成只在检出中做。</li>
+          <li><strong>PTBP</strong>：根目录 <code>pyproject.toml</code>（0.3.0、依赖与包清单）；<code>cli/main.py</code> 的 <code>parity</code>；<code>parameterize.py</code>；<code>tools/engine_parity.py</code>（<code>main(argv=None, prog=None)</code> 已有，只加 <code>prog</code>）；界面中的提示（<code>utils/recommender.py</code>、<code>cli/cmd_optimize.py</code>、<code>cli/tui/screens/optimize_step6_advanced.py</code>）改为 <code>pydftb gpu-check</code>，<code>tests/test_recommender.py</code> 随之改。</li>
+          <li><strong>小修</strong>：<code>pydftb/tests/test_api.py</code> 的 <code>_tmp_maxl</code> 写在包目录里，改用 <code>tmp_path</code>（安装后的包目录可能不可写）。</li>
+          <li><strong>CI</strong>（<code>.github/workflows/pydftb-tests.yml</code>）：保留两个作业，pip 缓存改看 <code>pydftb/pyproject.toml</code>；新作业 <code>wheel</code>：<code>python -m build pydftb</code>，检查轮子里没有 <code>docs/</code>、<code>bench/</code> 并有全部测试数据，装进干净的 venv，在仓库外运行 <code>pydftb --help</code> 与 <code>pytest --pyargs pydftb.tests</code>。</li>
+          <li><strong>文档</strong>：两个 README 的安装部分（两个包、可选依赖、两个命令、<code>pytest --pyargs pydftb.tests</code>）；现行文档中的 <code>python -m pydftb.…</code> 与 <code>python tools/engine_parity.py</code> 换成新命令。带日期的设计与报告是历史记录，不改（旧写法仍然有效）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">六、验证计划</span></summary>
+      <div class="body">
+        <p>所有构建都在 <code>git ls-files -co --exclude-standard</code> 导出的副本中做，不在仓库里（源码树内构建会留下 <code>pydftb/build/</code> 与 egg-info）。</p>
+        <ol>
+          <li><strong>构建</strong>：conda 环境（setuptools 84）<code>pip wheel --no-build-isolation</code> 构建两个轮子；数 pydftb 轮子的文件（预期 439 + <code>licenses/LICENSE</code>），ptbp 轮子里不能有 <code>pydftb/</code>；<code>python -m build</code>（隔离环境）走 sdist → 轮子。</li>
+          <li><strong>只装 pydftb</strong>：conda 的 Python 与 <code>/usr/bin/python3</code> 各建一个 venv（不用 <code>--system-site-packages</code>：conda 环境的 ptbp <code>.pth</code> 会把仓库加进 <code>sys.path</code>），装轮子与 pytest；在仓库外检查 <code>find_spec('utils') is None</code>，运行 <code>pydftb --help</code>、<code>pydftb refgen --check</code>、<code>pytest --pyargs pydftb.tests</code>。</li>
+          <li><strong>两个包</strong>：同一个 venv 中 <code>pip check</code>、<code>ptbp --help</code>、<code>ptbp parity --help</code>、<code>import pydftb, utils, cli, tools, parameterize</code>。</li>
+          <li><strong>可编辑</strong>：<code>pip install -e 仓库/pydftb -e 仓库</code>；在 <code>/</code> 下导入指向仓库；<code>git status</code> 不变。</li>
+          <li><strong>门槛</strong>：golden 两个环境对 <code>5b90f55</code> 逐字节相同（不加 <code>--allow-new</code>）；<code>refgen --check</code> 217 个单点、<code>dynamics --check</code> 24 个；三个环境的 pydftb 测试（基线 880/143、648/254、845/178，加上新测试）；PTBP 测试（224 个通过与 7 个已知的界面冒烟测试失败）；G1：<code>engine_parity</code> 与 <code>ptbp parity</code> 两种写法，损失 0.9198547924，1 核与自动核数逐位相同。</li>
+        </ol>
+        <h3>新测试</h3>
+        <ul>
+          <li><code>test_cli.py</code>：分派、<code>--help</code>、<code>--version</code>、未知子命令与选项、参数原样传递与 <code>prog</code>、None 的返回值、<code>SystemExit</code> 穿过、缺 torch 的提示、通过命令运行真实的 advisor、<code>python -m pydftb</code>。</li>
+          <li><code>test_packaging.py</code>：<code>pyproject.toml</code> 的包清单与目录树一致（安装的副本中没有该文件时跳过）；在新的解释器中导入 pydftb 的每个模块，导入系统拒绝 PTBP 的顶层名字 <code>utils</code>、<code>cli</code>、<code>tools</code>、<code>parameterize</code>，不能有任何一次尝试。</li>
+          <li>PTBP 一侧：<code>ptbp parity</code> 把参数原样交给工具，<code>--help</code> 是工具自己的，<code>parameterize.main</code> 把 <code>parity</code> 交给分派。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>不移动文件，不改成 <code>src/</code> 布局；</li>
+            <li>不发布到 PyPI；<code>advisor_cases</code>、<code>make_f_set</code>、<code>make_poly_set</code> 这些只在检出中用的生成工具不做成子命令（仍用 <code>python -m</code>）；</li>
+            <li>不改共享的 conda 环境：合并后由主线把它换成两个可编辑安装（命令见报告）。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>真实构建与设计不符（例如 setuptools 不接受这种映射）：先做构建验证；不行就停下汇报，不改布局；</li>
+            <li>PyPI 上还没有名为 <code>pydftb</code> 的项目：只装 ptbp 时 pip 找不到 pydftb 并报错；将来若有人注册这个名字，单独 <code>pip install .</code> 会装上别人的包。安装说明一律把 <code>./pydftb</code> 与 <code>.</code> 一起给 pip；</li>
+            <li>可编辑安装的 lenient 模式：<code>_TopLevelFinder</code> 排在 <code>PathFinder</code> 之后，所以当前目录与 <code>PYTHONPATH</code> 上的 pydftb 优先；但若那棵树里缺少某个直接子模块，finder 会从可编辑安装的目录补上（只影响在旧树里运行新代码这类情形，golden 不会遇到）。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6f3-corrections.html">← M6f-3 完成报告</a><a href="../reports/P1-packaging.html">P1 完成报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -34,19 +34,14 @@ def test_element_of_label():
         System(["O-1"], np.zeros((1, 3)))
 
 
-def test_max_l_rule_matches_ase():
+def test_max_l_rule_matches_ase(tmp_path):
     from ase.calculators.dftb import read_max_angular_momentum
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_maxl")
-    os.makedirs(tmp, exist_ok=True)
-    try:
-        for name in ["H-H", "O-O", "Li-Li"]:
-            plain = os.path.join(tmp, name + ".skf")
-            with gzip.open(os.path.join(SKF_ORBIT, name + ".skf.gz"), "rb") as fi, open(plain, "wb") as fo:
-                shutil.copyfileobj(fi, fo)
-            assert max_l_from_skf(plain) == read_max_angular_momentum(plain)
-        assert max_l_from_skf(os.path.join(SKF_HCOCU, "Cu-Cu.skf.gz")) == 2
-    finally:
-        shutil.rmtree(tmp)
+    for name in ["H-H", "O-O", "Li-Li"]:
+        plain = os.path.join(tmp_path, name + ".skf")
+        with gzip.open(os.path.join(SKF_ORBIT, name + ".skf.gz"), "rb") as fi, open(plain, "wb") as fo:
+            shutil.copyfileobj(fi, fo)
+        assert max_l_from_skf(plain) == read_max_angular_momentum(plain)
+    assert max_l_from_skf(os.path.join(SKF_HCOCU, "Cu-Cu.skf.gz")) == 2
 
 
 def test_polynomial_repulsive_columns():
