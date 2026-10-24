@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-4b 局域化与键分析设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6f-4b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-4b · 设计文档</p>
+    <h1>分析输出（下）：Pipek–Mezey 局域化、键布居与键级、跃迁电荷</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6f4b-localisation.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6f-4 的后一半：DFTB+ <code>Analysis</code> 中需要本征向量或激发态的三项输出。<strong>Pipek–Mezey 局域轨道</strong>（<code>Localise { PipekMezey }</code>）、<strong>键布居、键能与 Mayer 键级</strong>（<code>WriteBondPopulation</code>、<code>WriteBondEnergy</code>、<code>WriteBondOrder</code>，开发版的新功能），以及 <strong>Casida 跃迁电荷</strong>（<code>WriteTransitionCharges</code>）。只做 NumPy 引擎；不开这些选项时逐位不变。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节）：
+        <ul>
+          <li>局域化每个自旋通道最低的 nint(N<sub>σ</sub>/(3 − n<sub>spin</sub>)) 个轨道，泛函是各轨道 Mulliken 布居的平方和；稠密算法按轨道对依次做 Jacobi 旋转，旋转角由 acos 求得；</li>
+          <li>键布居 B<sub>AB</sub> = Σ<sub>T</sub> Σ<sub>μ∈A, ν∈B</sub> P<sub>μν</sub>(T)S<sub>μν</sub>(T)，键能把 S 换成 H0，Mayer 键级用 (PS)<sub>μν</sub>(PS)<sub>νμ</sub>，都用自旋求和的密度；</li>
+          <li>跃迁电荷 q<sub>A</sub> = κ Σ<sub>ia</sub> q<sup>ia</sup><sub>A</sub>(X+Y)<sub>ia</sub>，κ = √2（无自旋）或 1（自旋极化），只对指定的态。</li>
+        </ul>
+      </li>
+      <li><strong>探针中的发现</strong>（第二节）：
+        <ul>
+          <li>按 DFTB+ 的顺序做的原型，从 DFTB+ 自己的本征向量出发，复现了它的局域轨道（系数差 ≤ 5e-9，泛函差 1e-13）；从 pydftb 的本征向量出发，泛函差 ≤ 1.4e-10，每个局域轨道的 Mulliken 布居差 ≤ 2.3e-10；</li>
+          <li>acos 在 1 附近的精度使旋转角只能分辨到约 4e-9 rad，局域轨道只能确定到这个量级；有简并时（O<sub>2</sub>）扫描次数取决于舍入，局域轨道的选取也不同，但泛函与布居的集合相同；</li>
+          <li><strong>k 点的 Pipek–Mezey 有问题</strong>：DFTB+ 用不取共轭的乘积，结果随本征向量的任意相位改变（同一组 k 点的泛函和为 78.5、70.0 或 68.0），在 CuO 链上 8 个 k 点全部超过最大扫描次数，结果随 <code>MaxIterations</code> 变化（78.33、80.33）。pydftb 只局域化实数轨道（分子与 Γ 点），k 点报错并说明原因；</li>
+          <li>键分析包含全部周期像（一个原子的 fcc Cu：B = 11 = 电子数），ΣB = N、行和 = Mulliken 布居、ΣE = E<sub>H0</sub>；周期体系拒绝 Mayer 键级；</li>
+          <li>跃迁电荷：三重态拒绝；<code>StateOfInterest = Brightest</code> 时 DFTB+ 写出 NaN（拿 −1 当下标），pydftb 用找到的最亮态。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的接口</strong>（第三节）：<code>Analysis(localise=…, bond_populations=…, bond_energies=…, bond_orders=…)</code>，结果在 <code>r.analysis.localisation</code>、<code>r.analysis.bond_populations</code> 等；<code>Casida(transition_charges=True)</code> 给 <code>r.excitations.transition_charges</code>；文件由 <code>dftbplus_io</code> 写出（localOrbs.out/.bin、bond_*.dat、ATQ.DAT）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">10</span><span class="lbl">DFTB+ 参考算例（其中 4 个用开发版）</span></li>
+      <li><span class="num">2.3e-10</span><span class="lbl">从 pydftb 的本征向量局域化，各局域轨道 Mulliken 布居与 DFTB+ 的最大差</span></li>
+      <li><span class="num">78 / 70 / 68</span><span class="lbl">DFTB+ 的 k 点算法：同一体系换本征向量相位后的泛函和</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码为 DFTB+ 的 041e723（<code>dftb/pmlocalisation.F90</code>、<code>dftbplus/main.F90</code> 的 <code>calcPipekMezeyLocalisation</code> 与 <code>getBondInfo</code>、<code>dftb/bondpopulations.F90</code>、<code>dftbplus/mainio.F90</code> 的 <code>writeBondInfo</code>、<code>timedep/linrespgrad.F90</code> 的 <code>getAndWriteTransitionCharges</code>、<code>dftbplus/initprogram.F90</code>、<code>dftbplus/parser.F90</code>）。局域化与跃迁电荷与 25.1 相同（用 25.1 的二进制确认）；键分析的三个关键字在 25.1 中只属于 <code>ElectronDynamics</code>，基态的版本是 25.1 之后的新功能，对照开发版。</p>
+
+      <h3>Pipek–Mezey 局域化</h3>
+      <p>输入 <code>Analysis { Localise { PipekMezey { MaxIterations = 100; Dense = No; SparseTolerances = {…}; Tolerance = 1e-4 } } }</code>。</p>
+      <ul>
+        <li><strong>局域化哪些轨道</strong>：在全部几何步之后，对最后的本征向量（最后一轮输入电荷的 H）做一次。每个自旋通道（及 k 点）取最低的 n = nint(N<sub>σ</sub>/(3 − n<sub>spin</sub>)) 个轨道，N<sub>σ</sub> 是该通道的电子数（无自旋时为总电子数），Fortran 的 nint 远离零取整；不看占据数，分数占据时只警告。两个自旋通道各自局域化。不支持非共线与 SOC（报错）。</li>
+        <li><strong>泛函</strong>：P = Σ<sub>i</sub> Σ<sub>A</sub> (Q<sub>i</sub><sup>A</sup>)²，Q<sub>i</sub><sup>A</sup> = Σ<sub>μ∈A</sub> c<sub>μi</sub>(Sc<sub>i</sub>)<sub>μ</sub>（k 点为 Re[c*<sub>μi</sub>(Sc<sub>i</sub>)<sub>μ</sub>]）。</li>
+        <li><strong>稠密实数算法</strong>（<code>PipekMezeyOld_real</code>）：每次扫描先令 α<sub>max</sub> = 0，再对 s = 1…n、t = s+1…n 依次处理轨道对，每对算完立即旋转：
+          <ul>
+            <li>Q<sub>st</sub><sup>A</sup> = ½Σ<sub>μ∈A</sub>[c<sub>μs</sub>(Sc<sub>t</sub>)<sub>μ</sub> + c<sub>μt</sub>(Sc<sub>s</sub>)<sub>μ</sub>]，A<sub>st</sub> = Σ<sub>A</sub>[(Q<sub>st</sub><sup>A</sup>)² − ¼(Q<sub>ss</sub><sup>A</sup> − Q<sub>tt</sub><sup>A</sup>)²]，B<sub>st</sub> = Σ<sub>A</sub>Q<sub>st</sub><sup>A</sup>(Q<sub>ss</sub><sup>A</sup> − Q<sub>tt</sub><sup>A</sup>)；</li>
+            <li>α = ¼·acos(−A/√(A² + B²))，B ≤ 0 时取负，A² + B² = 0 时 α = 0；c<sub>s</sub> ← cos α c<sub>s</sub> + sin α c<sub>t</sub>，c<sub>t</sub> ← cos α c<sub>t</sub> − sin α c<sub>s</sub>；</li>
+            <li><code>if (alphamax &lt; abs(alpha)) alphamax = alpha</code>：存的是带符号的 α，所以 α<sub>max</sub> 不是最大的 |α|，而取决于各对的顺序与符号；</li>
+            <li>扫描结束后从第 3 次起检查 ||α<sub>max</sub>| − |α<sub>last</sub>|| &lt; Tolerance 或 α<sub>max</sub> = 0，满足就停；超过 MaxIterations 只警告。α<sub>last</sub> 的初值有隐式 SAVE，但前两次扫描不检查，不影响结果。</li>
+          </ul>
+        </li>
+        <li><strong>稀疏算法</strong>（分子默认，<code>PipekMezeySuprtRegion_real</code>）：收敛阈值 <code>TPipekMezeyInp%tolerance</code> 在这条路径上从未赋值；本轮不做，也不拿来对照（甲醇上它碰巧收敛到与稠密算法相同的泛函）。</li>
+        <li><strong>输入规则</strong>：分子不写 <code>Dense = Yes</code> 时 <code>Tolerance</code> 不读，只写 Tolerance 会因“未处理的节点”退出；周期体系强制稠密，写 <code>Dense</code> 或 <code>SparseTolerances</code> 会退出。</li>
+        <li><strong>k 点</strong>（<code>PipekMezeyOld_kpoint</code>）：每个 k 点独立，用同样的实数旋转，但 Q<sub>st</sub>、Q<sub>ss</sub> 由不取共轭的乘积 c<sub>μs</sub>(Sc<sub>t</sub>)<sub>μ</sub> 构成，A 用 |Q|²，B 取实部；结束后把每个轨道绝对值最大的系数转成正实数。这样的 Q 不是 Mulliken 布居，会随每个本征向量的任意相位 e<sup>iφ</sup> 改变（第二节）。</li>
+        <li><strong>输出</strong>：标准输出每个通道一行 <code>Original localisation</code>（E15.8）与 <code>Final localisation </code>（E20.12；k 点对 k 与自旋直接相加，不乘权重）；autotest.tag 的 <code>pm_localisation</code> 是最后一个通道的终值（只写 autotest.tag）；localOrbs.bin 总是写（格式同 eigenvec.bin：被局域化的 n 个轨道换成局域轨道，其余不变）；localOrbs.out 只在 <code>WriteEigenvectors = Yes</code> 且 <code>EigenvectorsAsText = Yes</code> 时写（格式同 eigenvec.out）。</li>
+      </ul>
+
+      <h3>键布居、键能与 Mayer 键级</h3>
+      <ul>
+        <li>输入 <code>Analysis { WriteBondPopulation = Yes; WriteBondEnergy = Yes; WriteBondOrder = Yes }</code>（开发版；MPI 版不读 WriteBondOrder）。每个几何步在输出电荷之后算一次，用最后的输出密度 rhoPrim(:,1)（自旋求和）。</li>
+        <li><strong>键布居</strong>：B<sub>AB</sub> = Σ<sub>T</sub> Σ<sub>μ∈A, ν∈B</sub> P<sub>μν</sub>(T)S<sub>μν</sub>(T)，T 取遍所有周期像（半近邻表中每个像对一次，再对称填充；对角含自身的周期像）。ΣB = N，行和 = Mulliken 布居。</li>
+        <li><strong>键能</strong>：同式，S 换成 H0（含在位能），ΣE = E<sub>H0</sub>。</li>
+        <li><strong>Mayer 键级</strong>：M<sub>AB</sub> = Σ<sub>μ∈A, ν∈B</sub> (PS)<sub>μν</sub>(PS)<sub>νμ</sub>，P、S 为 Γ 点展开的方阵；只用总密度（开壳层的 Mayer 键级本应加上自旋密度项）；周期体系报错（“currently only supported for non-periodic, cluster geometries”）。闭壳层整数占据时行和 = 2 × 布居。</li>
+        <li><strong>输出</strong>：只在写 tag 时（<code>WriteAutotestTag</code> 或 <code>WriteResultsTag</code>）写 bond_pop.dat、bond_energy.dat、bond_order.dat：两行注释（<code># Mulliken bond populations: B_AB = sum_{mu in A, nu in B} P_{mu nu} S_{mu nu}</code> 等，<code># nAtom = N</code>），每个原子一行 <code>(*(ES16.8,1x))</code>；tag <code>bond_populations</code>、<code>bond_energies</code>、<code>bond_orders</code>（全精度，每个几何步追加）。</li>
+      </ul>
+
+      <h3>Casida 跃迁电荷</h3>
+      <ul>
+        <li>输入 <code>ExcitedState { Casida { WriteTransitionCharges = Yes } }</code>。要求 <code>StateOfInterest</code> ≠ 0，单重态或自旋极化；三重态与 <code>Symmetry = Both</code> 报错。</li>
+        <li>q<sub>A</sub> = κ Σ<sub>ia</sub> q<sub>A</sub><sup>ia</sup>(X+Y)<sub>ia,n</sub>，n 是指定的态，κ = √2（无自旋单重态）或 1（自旋极化，两个通道的跃迁直接相加）；q<sup>ia</sup> 是 Mulliken 跃迁电荷（与 Casida 矩阵所用的相同）。<strong>不乘 √(n<sub>i</sub> − n<sub>a</sub>)</strong>：Casida 矩阵与跃迁偶极都带这个因子，跃迁电荷没有（分数占据时两者不同）。</li>
+        <li>输出 ATQ.DAT：三行头（<code>#</code>、<code>#  atom     transition charge</code>、<code>#</code>），每个原子一行 <code>(2x,i5,5x,f12.9)</code>；autotest.tag 的 <code>transq_sqr</code> = q<sub>A</sub>²。</li>
+        <li><code>StateOfInterest = Brightest</code>（内部为 −1）能通过检查，但写跃迁电荷时直接拿 −1 当下标，结果是 NaN。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为</h2>
+      <p>DFTB+ 25.1（局域化、跃迁电荷）与开发版 041e723（键分析），参数 <code>ptbp_hcocu</code>，用现有算例的几何与设置。探针与原型在 scratchpad 的 <code>m6f4b/</code>。</p>
+
+      <h3>P15：Pipek–Mezey（稠密，Tolerance 1e-10，MaxIterations 10000）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>甲醇（7 个轨道）、O<sub>2</sub> 三重态（7 + 5）、水盒子 Γ 点（32）</td><td><code>pm_localisation</code> 4.60995609907495、3.53848197636037（自旋向下一个通道的值；向上为 6.55560832048）、25.2361201136659；扫描次数 8、4 + 114、9；写了 localOrbs.out 与 localOrbs.bin</td></tr>
+          <tr><td>原型（逐行照 <code>PipekMezeyOld_real</code>），输入 DFTB+ 的 eigenvec.bin</td><td>甲醇：扫描 8 次，与 localOrbs.bin 的系数差 3.6e-9，泛函差 2e-14；水盒子：系数差 5.3e-9，泛函差 6e-14；O<sub>2</sub>：泛函相同（差 3e-14），但局域轨道不同（π 轨道简并，扫描次数 984/2956 与 DFTB+ 的 4/114 不同），各轨道布居的集合相同（差 3.6e-15）</td></tr>
+          <tr><td>原型，输入 pydftb 的本征向量</td><td>泛函差：甲醇 1e-14、O<sub>2</sub> 2e-14、水盒子 1.4e-10；各局域轨道的 Mulliken 布居按最佳配对后最大差 7.6e-11、1.3e-14、2.3e-10</td></tr>
+          <tr><td>O<sub>2</sub> 的收敛</td><td>π 轨道简并，泛函沿简并方向是平的，旋转角由舍入决定；DFTB+ 的判据要求相邻两次的 |α<sub>max</sub>| 相差 &lt; Tolerance，只能碰巧满足：DFTB+ 用了 4 + 114 次，pydftb 的定稿代码自旋向下的通道 10000 次仍未满足（泛函早已与 DFTB+ 相同到 6e-14）。参考算例改用没有简并的甲醛阳离子：DFTB+ 9 + 8 次、pydftb 5 + 7 次，两个通道的泛函差 5e-15</td></tr>
+          <tr><td>输入规则</td><td>甲醇只写 Tolerance：退出（“Code halting due to the presence of errors in dftb_in file”）；水盒子写 <code>Dense = Yes</code>：退出；甲醇什么都不写（稀疏算法）：泛函 4.60995609907495，与稠密相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>系数差 4e-9 的来源：接近收敛时 −A/√(A² + B²) = 1 − B²/(2A²) + …，当 |B/A| ≲ 1e-8 时舍入成 1，acos 得 0；acos 在 1 附近的分辨率约 1.5e-8，旋转角只能分辨到约 4e-9 rad。这是 DFTB+ 算法本身的精度下限，比较局域轨道只能到 1e-8 量级。</p>
+
+      <h3>k 点的 Pipek–Mezey</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>DFTB+ 25.1，CuO 链 4 × 2 × 2（8 个 k 点，17 个轨道）</td><td>初值 73.3600482306（与 pydftb 的本征向量算出的初值相同）；Tolerance 1e-4、MaxIterations 100：7 个 k 点 “Exceeded iterations”，终值 78.33；Tolerance 1e-10、MaxIterations 2000：8 个 k 点全部超出，终值 80.33</td></tr>
+          <tr><td>原型（照 <code>PipekMezeyOld_kpoint</code>），pydftb 的本征向量，原样或乘随机相位 e<sup>iφ<sub>n</sub></sup></td><td>2000 次扫描都不收敛；k 点之和 78.48、70.01、67.99；有的 k 点终值低于初值（8.95 → 8.80，换相位后 7.56）</td></tr>
+        </tbody>
+      </table></div>
+      <p>结论：DFTB+ 的 k 点算法依赖本征求解器给出的任意相位，既不收敛也不能复现；pydftb 不实现它，k 点（复数本征向量）时报错并说明原因。真正的复数 Pipek–Mezey 需要复数的两参数旋转，不在本轮范围内。</p>
+
+      <h3>P16：键分析（开发版）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>甲醇、O<sub>2</sub> 三重态（三项）；CuO 链 k 点、fcc Cu（1 个原子）、GdO 岩盐（布居与键能）</td><td>三个文件与三个 tag（N × N，对称）；ΣB = N（14、12、34、11、16）；行和 = Mulliken 布居（≤ 1e-8，8 位小数）；ΣE − E<sub>H0</sub> ≤ 4.4e-11；fcc Cu 的 B = 11：周期像全部计入</td></tr>
+          <tr><td>CuO 链加 <code>WriteBondOrder</code></td><td>退出：“WriteBondOrder is currently only supported for non-periodic, cluster geometries”</td></tr>
+          <tr><td>甲醇的 Mayer 键级</td><td>C–O 0.946、C–H 0.948/0.949/0.940、O–H 0.869；对角为 Σ<sub>μν∈A</sub>(PS)<sub>μν</sub>(PS)<sub>νμ</sub></td></tr>
+          <tr><td>原型：k 空间的 Σ<sub>k</sub>w<sub>k</sub>Re[ρ<sub>μν</sub>(k)S<sub>νμ</sub>(k)]（或 H0）按原子求和；Mayer 用 PS∘(PS)<sup>T</sup></td><td>与开发版的三个 tag 差：分子 ≤ 5.7e-14，fcc Cu 7.5e-15，GdO 2.7e-11；CuO 链 4.2e-8，是 DFTB+ 默认 <code>EwaldTolerance = 1e-9</code> 的误差，收紧到 1e-12 后 4.0e-11（与 M6f-4a 相同，周期参考算例都收紧 Ewald）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>P17：跃迁电荷（25.1）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>甲醛单重态第 2 个态；阳离子（自旋极化）第 2 个态；3000 K 分数占据第 2 个态</td><td>写了 ATQ.DAT 与 <code>transq_sqr</code>；q 之和为 0（−0.014175 + 0.033545 − 0.009625 − 0.009745 = 0）</td></tr>
+          <tr><td><code>StateOfInterest = Brightest</code></td><td>ATQ.DAT 与 tag 全是 NaN</td></tr>
+          <tr><td>三重态第 1 个态</td><td>退出：“Transition charges are not written for triplets.”</td></tr>
+          <tr><td>原型：κ·q<sup>T</sup>(X+Y)<sub>n</sub>，用 pydftb 已有的 q<sup>ia</sup> 与 X+Y</td><td>q² 与 <code>transq_sqr</code> 差 ≤ 8.1e-15，与 ATQ.DAT 差 ≤ 4.9e-10（9 位小数）；q 的整体符号随 X+Y 的符号任意（单重态算例与 DFTB+ 相反），比较时对齐符号；Σq = 0；整数占据时 Σq<sub>A</sub>R<sub>A</sub> 等于跃迁偶极（差 2e-17），3000 K 时差 0.54：确认不乘 √n；最亮态 pydftb 找到第 5 个态</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>from pydftb import DFTB, Analysis, Casida
+calc = DFTB(sk, analysis=Analysis(localise=True))           # MaxIterations 100, Tolerance 1e-4
+calc = DFTB(sk, analysis={"localise": {"max_iterations": 10000, "tolerance": 1e-10},
+                          "bond_populations": True, "bond_energies": True,
+                          "bond_orders": True})
+r = calc.calculate(labels, pos)
+loc = r.analysis.localisation
+loc.orbitals              # 每个自旋通道 (N, N)：最低的 n 个换成局域轨道（同 localOrbs）
+loc.n_localised           # 每个通道的 n = nint(N_σ / (3 − n_spin))
+loc.initial, loc.final    # 每个通道的泛函；loc.value = final[-1]（DFTB+ 的 pm_localisation）
+loc.sweeps, loc.converged
+loc.populations           # 每个通道 (n, n_atom)：局域轨道的 Mulliken 布居 Q_i^A
+r.analysis.bond_populations, r.analysis.bond_energies, r.analysis.bond_orders   # (n_atom, n_atom)
+
+calc = DFTB(sk, casida=Casida(6, state_of_interest=2, transition_charges=True))
+r.excitations.transition_charges        # (n_atom,)，指定态的跃迁电荷
+
+from pydftb import dftbplus_io as io
+io.write_eigenvectors("localOrbs.out", r, localised=True)   # 或 localOrbs.bin（text=False）
+io.write_bond_files(r, ".")              # bond_pop.dat、bond_energy.dat、bond_order.dat
+io.write_transition_charges("ATQ.DAT", r)</code></pre>
+      <ul>
+        <li><strong>局域化</strong>：<code>localise=True</code> 或 <code>{"max_iterations", "tolerance"}</code>（默认同 DFTB+：100、1e-4）。只有 DFTB+ 的稠密算法（分子默认也用它；DFTB+ 分子默认的稀疏算法不做）。逐步照 DFTB+：轨道对的顺序、立即旋转、acos 求角、带符号的 α<sub>max</sub>、第 3 次扫描起检查。有分数占据时警告（同 DFTB+）。拒绝：k 点（复数本征向量，见第二节）、非共线与 SOC（同 DFTB+）。</li>
+        <li><strong>键分析</strong>：三个开关各自独立；用最后的输出密度（自旋求和）。B<sub>AB</sub> 与 E<sub>AB</sub> 在 k 空间算：Σ<sub>k</sub> w<sub>k</sub> Re[ρ<sub>μν</sub>(k) S<sub>νμ</sub>(k)]（或 H0）按原子求和，与实空间对所有周期像求和恒等。Mayer 键级只用于分子（周期体系报错，同 DFTB+）。非共线时用电荷分量（同 DFTB+ 的 rhoPrim(:,1)）。</li>
+        <li><strong>跃迁电荷</strong>：<code>Casida(transition_charges=True)</code>，要求指定态（<code>state_of_interest</code> ≠ 0）与单重态或自旋极化（同 DFTB+）；<code>state_of_interest &lt; 0</code>（最亮态）时用找到的态号（DFTB+ 写 NaN）。</li>
+        <li><strong>限制</strong>：只在 NumPy 引擎中（<code>analysis</code>、<code>casida</code> 已在 <code>numpy_only_options</code>）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong><code>analysis.py</code></strong>：
+            <ul>
+              <li><code>Analysis</code> 加 <code>localise</code>（False、True 或字典）、<code>bond_populations</code>、<code>bond_energies</code>、<code>bond_orders</code>；<code>make</code> 认新键；新数据类 <code>Localisation</code>；<code>AnalysisResult</code> 加 <code>localisation</code>、<code>bond_populations</code>、<code>bond_energies</code>、<code>bond_orders</code>；</li>
+              <li><code>pipek_mezey(c, s, starts, tolerance, max_iterations)</code>：逐行照 <code>PipekMezeyOld_real</code>（Sc<sub>t</sub> 在每个 s 开头对 t &gt; s 一次算好，Sc<sub>s</sub> 每对重算，原子的和用 <code>np.add.reduceat</code>）；返回轨道、扫描次数、是否收敛；<code>pm_functional(c, s, starts)</code>；</li>
+              <li><code>_localise(st, sc, res, spec)</code>：本征向量由 <code>_eigenvectors</code> 的同一个函数给出（重新对角化 <code>sc.h</code>）；每个通道 n = floor(N<sub>σ</sub>/(3 − n<sub>spin</sub>) + 0.5)，N<sub>σ</sub> 取自结果的电子数（自旋极化时由占据数求和）；</li>
+              <li><code>bond_analysis(st, sc, which)</code>：ρ 用 <code>sc.rho</code> 对自旋求和（Pauli 用 <code>so.components</code> 的电荷分量），S 用 <code>st.smat_precise</code>、H0 用 <code>st.h0</code>，<code>np.einsum("k,kij,kji->ij")</code> 后对行列按原子求和；Mayer：PS = P @ S（Γ 点实数方阵），M = Σ (PS)∘(PS)<sup>T</sup> 按原子求和。</li>
+            </ul>
+          </li>
+          <li><strong><code>casida.py</code></strong>：<code>Casida.transition_charges</code>（默认 False，检查同 DFTB+）；<code>Excitations.transition_charges</code>：在 <code>excitations()</code> 中、态号确定之后，用已有的 q<sup>ia</sup>（<code>transition_charges(gs, pairs)</code>）与该态的 X+Y 相乘，κ 按自旋。</li>
+          <li><strong><code>dftbplus_io.py</code></strong>：<code>write_eigenvectors(…, localised=False)</code>（localised 时写局域轨道及其权重）；<code>write_bond_files(res, directory)</code> 与 <code>write_bond_matrix(path, matrix, kind)</code>（两行注释 + <code>ES16.8,1x</code>）；<code>write_transition_charges(path, res)</code>（ATQ.DAT）；读回用的 <code>read_bond_matrix</code>、<code>read_transition_charges</code>。</li>
+          <li><strong><code>calculator.py</code></strong>：不改 <code>_run</code>（分析的钩子 M6f-4a 已有）；Casida 的新选项经 <code>Casida</code> 数据类传入。<code>ase_calc.py</code> 无需改动（<code>analysis=</code> 已有）。</li>
+          <li><strong>验证工具</strong>：<code>Case.analysis</code> 加 <code>localise</code>、<code>bonds</code>；<code>Case.casida</code> 加 <code>"transition_charges"</code>；<code>dftbplus.analysis_block</code> 写 <code>Localise</code> 与键分析的关键字（分子写 <code>Dense = Yes</code>，周期不写），<code>casida_block</code> 写 <code>WriteTransitionCharges</code>；<code>run()</code> 解析 stdout 的每通道初值与终值、autotest.tag 的 <code>pm_localisation</code>/<code>transq_sqr</code>、results.tag 的三个键矩阵、bond_*.dat 与 ATQ.DAT 文本、localOrbs.bin（全精度系数，用 pydftb 的 S 换成每个局域轨道的 Mulliken 布居，与 pydftb 的结果做最佳配对比较）；<code>refgen._compare_analysis</code> 加新键。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th><th>DFTB+</th><th>比较</th></tr></thead>
+          <tbody>
+            <tr><td><code>ch3oh_pm</code></td><td>稠密，Tolerance 1e-10，MaxIterations 10000；localOrbs.out</td><td>25.1</td><td>每通道初值、终值与 <code>pm_localisation</code> 1e-9；局域轨道布居（最佳配对）1e-7；localOrbs.out 的版式</td></tr>
+            <tr><td><code>h2co_cation_pm</code></td><td>自旋极化，两个通道（6 + 5 个轨道）</td><td>25.1</td><td>同上（tag 为自旋向下的值）</td></tr>
+            <tr><td><code>water_box_pm</code></td><td>周期 Γ 点（强制稠密）</td><td>25.1</td><td>同上</td></tr>
+            <tr><td><code>ch3oh_bonds</code>、<code>o2_triplet_bonds</code></td><td>键布居、键能、Mayer 键级</td><td>开发版</td><td>三个矩阵 1e-9；三个文件的版式</td></tr>
+            <tr><td><code>cuo_chain_k422_bonds</code>、<code>cu_fcc_k6_bonds</code></td><td>k 点、周期像（无 Mayer）</td><td>开发版</td><td>键布居、键能 1e-9</td></tr>
+            <tr><td><code>h2co_exc_transq</code></td><td>单重态，第 2 个态</td><td>25.1</td><td>q² 1e-9、ATQ.DAT（数值 1e-9，版式逐字）</td></tr>
+            <tr><td><code>h2co_cation_exc_transq</code></td><td>自旋极化</td><td>25.1</td><td>同上</td></tr>
+            <tr><td><code>h2co_casida_3000K_transq</code></td><td>分数占据（确认不乘 √n）</td><td>25.1</td><td>同上</td></tr>
+          </tbody>
+        </table></div>
+        <p>SCC 轮数与以往一样必须相同；周期算例 <code>EwaldTolerance = 1e-12</code>。</p>
+        <h3>自洽测试（<code>tests/test_analysis.py</code>）</h3>
+        <ul>
+          <li>局域化：局域轨道 S-正交（C<sup>T</sup>SC = I）、张成的空间不变（Σ<sub>i</sub>c<sub>i</sub>c<sub>i</sub><sup>T</sup> 不变）、泛函不减；翻转输入轨道的符号，输出只差符号；拒绝 k 点、Pauli；分数占据的警告；</li>
+          <li>键分析：ΣB = N、行和 = Mulliken 布居、ΣE = 结果的 H0 能量；闭壳层 Mayer 行和 = 2 × 布居；Γ 点超胞与 k 点的一致；拒绝周期 Mayer；</li>
+          <li>跃迁电荷：Σq = 0；整数占据时 Σq<sub>A</sub>R<sub>A</sub> = 该态的跃迁偶极；最亮态取找到的态；拒绝三重态、无指定态；</li>
+          <li>写出与读回：localOrbs.out/.bin、bond_*.dat、ATQ.DAT；不开这些选项时结果逐位不变。</li>
+        </ul>
+        <h3>门槛</h3>
+        <p>与以往相同：golden 两个环境逐位相同（<code>--allow-new</code> 只放新增的字段名）；<code>refgen --check</code>、<code>dynamics --check</code>；三个环境的 pydftb 测试；PTBP 测试；engine_parity。</p>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>DFTB+ 的稀疏 Pipek–Mezey（收敛阈值未赋值）与 k 点算法（依赖相位、不收敛）；复数轨道的局域化；</li>
+            <li>开壳层的 Mayer 键级的自旋项（DFTB+ 也没有）；周期体系的 Mayer 键级；</li>
+            <li>电子动力学中的键布居与键能（实时 TD 不在这一波）；</li>
+            <li>新功能的 torch 与自动求导版本。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>局域轨道只能确定到 acos 的分辨率（约 4e-9），简并时局域轨道的选取与扫描次数由舍入决定：参考比较泛函与布居的集合，不比较系数与扫描次数；参考算例避开简并的体系；</li>
+            <li>键分析只在开发版中，参考算例的生成依赖 <code>$S/dftbdev</code>（与 M6f-3 的偶极修正相同，参考 JSON 里记录版本）；</li>
+            <li>默认路径：新代码只在对应选项打开时走，golden 逐位比较。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6f4a-analysis.html">← M6f-4a 完成报告</a><a href="../reports/M6f4b-localisation.html">M6f-4b 完成报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

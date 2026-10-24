@@ -1,4 +1,4 @@
-"""Analysis outputs of DFTB+'s ``Analysis`` block (milestone M6f-4a).
+"""Analysis outputs of DFTB+'s ``Analysis`` block (milestones M6f-4a and M6f-4b).
 
 * **Atom-resolved energies** (``AtomResolvedEnergies``): every term of the total energy split
   over the atoms as DFTB+ does (``dftb/getenergies.F90``), from the last output populations:
@@ -24,11 +24,20 @@
   when there is a field or point charges; ESP.dat holds both in V.
 * **Eigenvectors** (``WriteEigenvectors``): of the last Hamiltonian (built from the last input
   populations, as DFTB+), with their Mulliken weights for eigenvec.out/.bin.
+* **Pipek-Mezey localisation** (``Localise { PipekMezey }``, M6f-4b): the lowest
+  nint(N_sigma / (3 - n_spin)) eigenvectors of every spin channel localised by DFTB+'s dense
+  algorithm, which maximises sum_i sum_A (Q_i^A)^2 (Q the orbitals' Mulliken populations) by
+  Jacobi rotations of orbital pairs; real orbitals only (molecules and the Gamma point).
+* **Bond analysis** (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``,
+  M6f-4b): sum_T sum_{mu on A, nu on B} P_mu,nu(T) S_mu,nu(T), the same with H0, and Mayer bond
+  orders sum (PS)_mu,nu (PS)_nu,mu (molecules), from the spin-summed output density.
 
 The files are written by :mod:`pydftb.dftbplus_io`.  NumPy engine only.
 """
 from __future__ import annotations
 
+import math
+import warnings
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -37,6 +46,7 @@ from scipy.special import erf, erfc
 
 from . import spinorbit as so
 from .backend import ops
+from .constants import ELEC_TOL_MAX
 from .external import ERF_ARG_LIMIT
 from .neighbors import cross_pairs
 from .solvation import CM5, GeneralizedBorn, cm5_charges
@@ -53,6 +63,9 @@ ORBITAL_NAMES = {0: ("",), 1: ("y", "z", "x"), 2: ("xy", "yz", "z2", "xz", "x2-y
 _ESP_KEYS = {"points", "grid", "fractional", "softening"}
 _GRID_KEYS = {"spacing", "origin", "points", "directions"}
 _CM5_KEYS = {"alpha", "radii", "cutoff"}
+PM_MAX_ITERATIONS = 100        # DFTB+'s PipekMezey defaults (MaxIterations, Tolerance)
+PM_TOLERANCE = 1e-4
+_LOCALISE_KEYS = {"max_iterations", "tolerance"}
 
 
 @dataclass(frozen=True)
@@ -61,12 +74,19 @@ class Analysis:
     "cutoff" (Bohr)}; ``esp``: {"points": (M, 3)} or {"grid": {"spacing" (3,), "origin" (3,),
     "points" (3 ints), "directions" (3, 3) rows, optional}}, with "fractional": True for
     fractional coordinates of a periodic system and "softening" (Bohr, default 1e-6);
-    ``eigenvectors``: keep the eigenvectors and their Mulliken weights (for eigenvec.out)."""
+    ``eigenvectors``: keep the eigenvectors and their Mulliken weights (for eigenvec.out);
+    ``localise``: Pipek-Mezey localised orbitals, True or {"max_iterations" (100),
+    "tolerance" (1e-4)} (DFTB+'s dense algorithm and defaults); ``bond_populations``,
+    ``bond_energies``, ``bond_orders``: the pairwise bond matrices (Mayer orders: molecules)."""
     atom_energies: bool = False
     net_populations: bool = False
     cm5: bool | dict | CM5 = False
     esp: dict | None = None
     eigenvectors: bool = False
+    localise: bool | dict = False
+    bond_populations: bool = False
+    bond_energies: bool = False
+    bond_orders: bool = False
 
     def __post_init__(self):
         if not (isinstance(self.cm5, (bool, dict, CM5))):
@@ -76,6 +96,18 @@ class Analysis:
                              f"(use {sorted(_CM5_KEYS)})")
         if self.esp is not None:
             _check_esp(self.esp)
+        if not isinstance(self.localise, (bool, dict)):
+            raise TypeError("analysis localise must be True/False or a dict of "
+                            f"{sorted(_LOCALISE_KEYS)}")
+        if isinstance(self.localise, dict):
+            if set(self.localise) - _LOCALISE_KEYS:
+                raise ValueError(f"analysis localise: unknown keys "
+                                 f"{sorted(set(self.localise) - _LOCALISE_KEYS)} "
+                                 f"(use {sorted(_LOCALISE_KEYS)})")
+            if int(self.localise.get("max_iterations", PM_MAX_ITERATIONS)) < 1:
+                raise ValueError("analysis localise: max_iterations must be at least 1")
+            if not float(self.localise.get("tolerance", PM_TOLERANCE)) > 0.0:
+                raise ValueError("analysis localise: tolerance must be positive")
 
     @classmethod
     def make(cls, spec) -> "Analysis | None":
@@ -88,7 +120,8 @@ class Analysis:
         if isinstance(spec, Analysis):
             return spec
         if isinstance(spec, dict):
-            known = {"atom_energies", "net_populations", "cm5", "esp", "eigenvectors"}
+            known = {"atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
+                     "localise", "bond_populations", "bond_energies", "bond_orders"}
             unknown = set(spec) - known
             if unknown:
                 raise ValueError(f"analysis: unknown keys {sorted(unknown)} (use {sorted(known)})")
@@ -106,6 +139,16 @@ class Analysis:
             return replace(self.cm5, double_count=False)
         return CM5(**self.cm5)
 
+    @property
+    def localise_options(self) -> dict | None:
+        if self.localise is False:
+            return None
+        opts = {"max_iterations": PM_MAX_ITERATIONS, "tolerance": PM_TOLERANCE}
+        if isinstance(self.localise, dict):
+            opts.update(self.localise)
+        return {"max_iterations": int(opts["max_iterations"]),
+                "tolerance": float(opts["tolerance"])}
+
 
 @dataclass
 class ESPResult:
@@ -122,6 +165,28 @@ class ESPResult:
 
 
 @dataclass
+class Localisation:
+    """Pipek-Mezey localised orbitals, per spin channel: ``orbitals`` (N, N) with the lowest
+    ``n_localised`` columns localised and the others the canonical eigenvectors (DFTB+'s
+    localOrbs), their Mulliken ``weights`` c (S c), ``populations`` (n_localised, n_atom) the
+    localised orbitals' Q_i^A, the functional sum_i sum_A (Q_i^A)^2 before (``initial``) and
+    after (``final``), ``sweeps`` and ``converged``."""
+    orbitals: list
+    weights: list
+    populations: list
+    n_localised: list
+    initial: list
+    final: list
+    sweeps: list
+    converged: list
+
+    @property
+    def value(self) -> float:
+        """DFTB+'s ``pm_localisation``: the last spin channel's final functional."""
+        return self.final[-1]
+
+
+@dataclass
 class AnalysisResult:
     """``DFTBResult.analysis``: what :class:`Analysis` asked for (atomic units)."""
     atom_energies: dict | None = None        # term -> (n_atom,), see the module docstring
@@ -134,6 +199,10 @@ class AnalysisResult:
     eigenvector_kind: str | None = None      # "real", "complex" or "pauli"
     orbitals: list | None = None             # (atom, label, shell, name) of every orbital
     n_kpoints: int | None = None
+    localisation: Localisation | None = None     # M6f-4b
+    bond_populations: np.ndarray | None = None   # (n_atom, n_atom), electrons
+    bond_energies: np.ndarray | None = None      # (n_atom, n_atom), Hartree
+    bond_orders: np.ndarray | None = None        # (n_atom, n_atom), Mayer
 
 
 def _check_esp(spec):
@@ -305,8 +374,16 @@ def evaluate(calc, analysis: Analysis, st, sc, res, xl: bool = False) -> Analysi
                                                  cell, pbc)
     if analysis.esp is not None:
         out.esp = electrostatic_potential_of(calc, analysis.esp, st, dq_atom, cell, periodic)
-    if analysis.eigenvectors:
-        _eigenvectors(st, sc, out, periodic)
+    if analysis.eigenvectors or analysis.localise:
+        vecs, weights = _eigenvectors(st, sc, out, periodic)
+        if analysis.eigenvectors:
+            out.eigenvectors, out.mulliken_weights = vecs, weights
+        if analysis.localise:
+            out.localisation = _localise(st, res, vecs, out.eigenvector_kind,
+                                         analysis.localise_options)
+    if analysis.bond_populations or analysis.bond_energies or analysis.bond_orders:
+        out.bond_populations, out.bond_energies, out.bond_orders = bond_analysis(
+            st, sc, analysis.bond_populations, analysis.bond_energies, analysis.bond_orders)
     return out
 
 
@@ -414,8 +491,9 @@ def electrostatic_potential_of(calc, spec: dict, st, dq_atom, cell, periodic) ->
     return ESPResult(pts, internal, external, shape, origin, axes)
 
 
-def _eigenvectors(st, sc, out: AnalysisResult, periodic: bool):
-    """Eigenvectors of the last Hamiltonian and their Mulliken weights."""
+def _eigenvectors(st, sc, out: AnalysisResult, periodic: bool) -> tuple:
+    """Eigenvectors of the last Hamiltonian and their Mulliken weights, per (spin, k) block;
+    the kind, orbital labels and number of k-points go to ``out``."""
     h = np.asarray(sc.h)
     nk = len(st.kw)
     pauli = st.pauli is not None
@@ -437,8 +515,141 @@ def _eigenvectors(st, sc, out: AnalysisResult, periodic: bool):
             w = np.real(c.conj() * sc_)
         vecs.append(c)
         weights.append(w)
-    out.eigenvectors, out.mulliken_weights = vecs, weights
     out.eigenvector_kind = ("pauli" if pauli else
                             "real" if not periodic or st.gamma_only else "complex")
     out.orbitals = orbital_labels(st.basis)
     out.n_kpoints = nk
+    return vecs, weights
+
+
+# ---- Pipek-Mezey localisation (M6f-4b) -------------------------------------------------------
+def pm_populations(c, s, starts) -> np.ndarray:
+    """Mulliken populations Q_i^A = sum_{mu on A} c_mu,i (S c_i)_mu of the real orbitals ``c``
+    (columns; ``starts`` the first orbital of every atom), (n_orbitals, n_atom)."""
+    return np.add.reduceat(c * (s @ c), starts, axis=0).T
+
+
+def pipek_mezey(c, s, starts, tolerance: float = PM_TOLERANCE,
+                max_iterations: int = PM_MAX_ITERATIONS) -> tuple:
+    """DFTB+'s dense Pipek-Mezey localisation of the real S-orthonormal orbitals ``c``
+    (columns), step by step as ``PipekMezeyOld_real``: sweeps over the pairs s < t in order,
+    each rotated at once by alpha = 1/4 acos(-A / sqrt(A^2 + B^2)) (negative for B <= 0), with
+    Q_st^A = 1/2 sum_{mu on A} [c_mu,s (S c_t)_mu + c_mu,t (S c_s)_mu],
+    A = sum_A [(Q_st^A)^2 - 1/4 (Q_ss^A - Q_tt^A)^2] and B = sum_A Q_st^A (Q_ss^A - Q_tt^A).  A
+    sweep's alpha_max keeps the signed angle (``if (alphamax < abs(alpha)) alphamax = alpha``)
+    and from the third sweep on the loop stops when ||alpha_max| - |alpha_last|| < tolerance
+    or alpha_max = 0.  The acos resolves angles to about 4e-9 near convergence.  Returns
+    (orbitals, sweeps, converged)."""
+    c = np.array(c, float)
+    n = c.shape[1]
+    last = 1.0
+    sweeps = 0
+    for sweeps in range(1, max_iterations + 1):
+        amax = 0.0
+        for i in range(n):
+            sc_t = s @ c[:, i + 1:]            # S c_t for t > i, before this row of pairs
+            for j in range(i + 1, n):
+                sc_s = s @ c[:, i]
+                st = sc_t[:, j - i - 1]
+                q_st = 0.5 * (np.add.reduceat(c[:, i] * st, starts)
+                              + np.add.reduceat(c[:, j] * sc_s, starts))
+                d = (np.add.reduceat(c[:, i] * sc_s, starts)
+                     - np.add.reduceat(c[:, j] * st, starts))
+                a = float(np.sum(q_st * q_st - 0.25 * d * d))
+                b = float(np.sum(q_st * d))
+                ab = a * a + b * b
+                alpha = 0.0
+                if ab > 0.0:
+                    alpha = 0.25 * math.acos(-a / math.sqrt(ab))
+                    if b <= 0.0:
+                        alpha = -alpha
+                if amax < abs(alpha):
+                    amax = alpha
+                sin, cos = math.sin(alpha), math.cos(alpha)
+                ci = c[:, i].copy()
+                c[:, i] = cos * ci + sin * c[:, j]
+                c[:, j] = cos * c[:, j] - sin * ci
+        if sweeps > 2 and (abs(abs(amax) - abs(last)) < tolerance or amax == 0.0):
+            return c, sweeps, True
+        last = amax
+    return c, sweeps, False
+
+
+def _localise(st, res, vecs, kind: str, opts: dict) -> Localisation:
+    """Localise the lowest nint(N_sigma / (3 - n_spin)) eigenvectors of every spin channel
+    (DFTB+ calcPipekMezeyLocalisation; N_sigma from the occupations)."""
+    if kind != "real":
+        raise ValueError(
+            "Pipek-Mezey localisation needs real eigenvectors (molecules or the Gamma point): "
+            "DFTB+'s k-point version multiplies unconjugated coefficients, so its result "
+            "depends on the arbitrary phases of the eigenvectors, and it does not converge"
+            if kind == "complex" else
+            "Pipek-Mezey localisation is not implemented for non-collinear spin or spin-orbit "
+            "coupling (as DFTB+)")
+    natom = len(st.species)
+    starts = np.searchsorted(np.asarray(st.basis.orb_atom), np.arange(natom))
+    s = np.asarray(st.smat_precise)[0].real
+    full = 2.0 if len(vecs) == 1 else 1.0
+    occ = [np.asarray(f, float) for f in res.occupations]
+    if any(np.any(np.abs(np.fmod(f, full)) > ELEC_TOL_MAX) for f in occ):
+        warnings.warn("Fractional occupations allocated for electron localisation (as DFTB+)",
+                      RuntimeWarning, stacklevel=4)
+    out = Localisation([], [], [], [], [], [], [], [])
+    for c, f in zip(vecs, occ):
+        c = np.asarray(c).real
+        n = int(math.floor(f.sum() / full + 0.5))         # Fortran nint of N_sigma >= 0
+        loc, sweeps, converged = pipek_mezey(c[:, :n], s, starts, opts["tolerance"],
+                                             opts["max_iterations"])
+        if not converged:
+            warnings.warn("Exceeded iterations in Pipek-Mezey localisation (as DFTB+)",
+                          RuntimeWarning, stacklevel=4)
+        orbitals = c.copy()
+        orbitals[:, :n] = loc
+        q0, q = pm_populations(c[:, :n], s, starts), pm_populations(loc, s, starts)
+        out.orbitals.append(orbitals)
+        out.weights.append(orbitals * (s @ orbitals))
+        out.populations.append(q)
+        out.n_localised.append(n)
+        out.initial.append(float((q0 ** 2).sum()))
+        out.final.append(float((q ** 2).sum()))
+        out.sweeps.append(sweeps)
+        out.converged.append(converged)
+    return out
+
+
+# ---- bond populations, bond energies, Mayer bond orders (M6f-4b) ----------------------------
+def _atom_blocks(m, starts) -> np.ndarray:
+    """(n_atom, n_atom) sums of the orbital blocks of ``m``."""
+    return np.add.reduceat(np.add.reduceat(m, starts, axis=0), starts, axis=1)
+
+
+def bond_analysis(st, sc, populations: bool = True, energies: bool = True,
+                  orders: bool = False) -> tuple:
+    """DFTB+'s pairwise bond populations sum_T sum_{mu on A, nu on B} P_mu,nu(T) S_mu,nu(T)
+    (rows sum to the Mulliken populations, all to N), bond energies (H0 for S; they sum to
+    E_H0) and Mayer bond orders sum (PS)_mu,nu (PS)_nu,mu (molecules only, as DFTB+), from the
+    spin-summed output density (the charge part with two-component spin).  The lattice sums
+    are sum_k w_k Re[rho(k)_mu,nu S(k)_nu,mu].  Returns the three matrices (None if not
+    asked for)."""
+    natom = len(st.species)
+    starts = np.searchsorted(np.asarray(st.basis.orb_atom), np.arange(natom))
+    nk = len(st.kw)
+    rho = np.asarray(sc.rho)
+    if st.pauli is not None:
+        rho = so.components(rho)[0]
+    else:
+        rho = sum(rho[s:s + nk] for s in range(0, len(rho), nk))
+    smat = np.asarray(st.smat_precise)
+    out = [None, None, None]
+    if populations:
+        out[0] = _atom_blocks(np.einsum("k,kij,kji->ij", st.kw, rho, smat).real, starts)
+    if energies:
+        out[1] = _atom_blocks(np.einsum("k,kij,kji->ij", st.kw, rho,
+                                        np.asarray(st.h0)).real, starts)
+    if orders:
+        if st.cell is not None and bool(np.any(st.pbc)):
+            raise ValueError("Mayer bond orders are only for molecules (cluster geometries; "
+                             "as DFTB+)")
+        ps = rho[0].real @ smat[0].real
+        out[2] = _atom_blocks(ps * ps.T, starts)
+    return tuple(out)

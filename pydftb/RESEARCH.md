@@ -250,7 +250,7 @@ PTBP 每试一组参数，都要把数据集里所有结构算一遍。现在的
 | SCC 的起点与重启（初始电荷、初始自旋、电荷文件） | ✅ M6f-1 完成（DFTB+ 的 `InitialCharges`、共线 `InitialSpins`、读写 charges.bin/.dat，文本逐字节相同；只有 NumPy 引擎；25 个 DFTB+ 参考算例与 1 条 MD 全部通过，SCC 轮数逐个相同） | 低 |
 | 固定费米能级、按 k 点填充、参数覆盖（自定义 U、参考占据、SK 截断） | ✅ M6f-2 完成（DFTB+ 的 `FixedFermiLevel`、`IndependentKFilling`、`CustomisedHubbards`、`CustomisedOccupations`、`TruncateSKRange`；力与应力是力相关能量 F − Σ N<sub>s</sub>E<sub>f,s</sub> 的梯度，带电晶胞的应力比 DFTB+ 的对；只有 NumPy 引擎；20 个 DFTB+ 参考算例全部通过，SCC 轮数逐个相同） | 低 |
 | 平板的偶极修正（表面计算） | ✅ M6f-3 完成（DFTB+ 的 `DipoleCorrection`，25.1 之后才有，用自编的开发版对照；pydftb 补上 DFTB+ 缺的应力项；只有 NumPy 引擎）[文献 S15] | 低 |
-| 分析输出：按原子的能量、CM5 电荷、静电势、本征向量与 band.out 文件 | ✅ M6f-4a 完成（各项按 DFTB+ 的方式拆到原子上，19 个 DFTB+ 参考算例全部通过，按原子的能量一致到 detailed.out 8 位小数的舍入；DFTB+ 对 D3 色散平均分给每个原子，pydftb 按原子对；只有 NumPy 引擎）；Pipek–Mezey 局域化、键分析、跃迁电荷 ⬜ M6f-4b | 低 |
+| 分析输出：按原子的能量、CM5 电荷、静电势、本征向量与 band.out 文件 | ✅ M6f-4a 完成（各项按 DFTB+ 的方式拆到原子上，19 个 DFTB+ 参考算例全部通过，按原子的能量一致到 detailed.out 8 位小数的舍入；DFTB+ 对 D3 色散平均分给每个原子，pydftb 按原子对；只有 NumPy 引擎）；Pipek–Mezey 局域化、键布居/键能/Mayer 键级、Casida 跃迁电荷 ✅ M6f-4b 完成（10 个 DFTB+ 参考算例全部通过，局域轨道布居一致到 1.9e-8，键矩阵到 4e-11；k 点局域化不做，DFTB+ 的 k 点算法依赖本征向量的相位） | 低 |
 | 声子、极化率 | ⬜ M6g（DFTB+ 的耦合微扰极化率、响应核、Born 电荷，以及数值 Hessian） | 中（有自动求导后更容易） |
 | 激发态（TD-DFTB） | ✅ M6d 完成（Casida 线性响应：单重态、三重态、共线自旋极化，分数占据、onsite 修正、Γ 点、能量与振子窗口、指定态与最亮态；稠密、分块 Davidson、ARPACK 三种求解器；只有 NumPy 引擎；18 个 DFTB+ 参考算例全部通过）；激发态的力 ✅ M6e 完成（Z 向量方法，单重态、三重态、自旋极化，含外场、点电荷、阻尼和能量窗口的完整导数；激发态的电荷与偶极，激发态的结构优化与 MD；11 个单点和 2 个驱动的 DFTB+ 参考算例全部通过）[文献 S8–S11] | 中–高 |
 | 输运（NEGF，算电流） | ⬜ | **很高**（建议直接调用 libNEGF） |

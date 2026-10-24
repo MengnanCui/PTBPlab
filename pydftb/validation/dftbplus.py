@@ -31,6 +31,7 @@ Notes on matching DFTB+ exactly:
 from __future__ import annotations
 
 import base64
+import math
 import os
 import re
 import shutil
@@ -178,10 +179,13 @@ def corrections_block(h5=None, halogen=None, dipole=None, labels=()) -> str:
     return "".join(f"{ln}\n" for ln in lines)
 
 
-def analysis_block(spec) -> str:
+def analysis_block(spec, periodic: bool = False) -> str:
     """HSD lines of the Analysis block for a case's ``analysis`` (milestone M6f-4a):
     ``AtomResolvedEnergies``, ``WriteNetCharges``, ``CM5``, ``ElectrostaticPotential``
-    (points or grid in Angstrom, or fractional) and ``WriteEigenvectors`` as text."""
+    (points or grid in Angstrom, or fractional) and ``WriteEigenvectors`` as text; M6f-4b:
+    ``Localise { PipekMezey }`` (``Dense = Yes`` for molecules, the only way DFTB+ reads their
+    Tolerance; periodic systems are dense anyway and refuse the keyword) and the bond analysis
+    (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``; DFTB+ after 25.1)."""
     if not spec:
         return ""
     lines = []
@@ -226,15 +230,33 @@ def analysis_block(spec) -> str:
         lines.append("  }")
     if spec.get("eigenvectors"):
         lines += ["  WriteEigenvectors = Yes", "  EigenvectorsAsText = Yes"]
+    loc = spec.get("localise")
+    if loc:
+        opts = {} if loc is True else loc
+        lines += ["  Localise {", "    PipekMezey {"]
+        if not periodic:
+            lines.append("      Dense = Yes")
+        if "tolerance" in opts:
+            lines.append(f"      Tolerance = {_f(opts['tolerance'])}")
+        if "max_iterations" in opts:
+            lines.append(f"      MaxIterations = {int(opts['max_iterations'])}")
+        lines += ["    }", "  }"]
+    for key, word in (("bond_populations", "WriteBondPopulation"),
+                      ("bond_energies", "WriteBondEnergy"), ("bond_orders", "WriteBondOrder")):
+        if spec.get(key):
+            lines.append(f"  {word} = Yes")
     return "".join(f"{ln}\n" for ln in lines)
 
 
-def parse_analysis(workdir, det: str, spec: dict) -> dict:
+def parse_analysis(workdir, det: str, spec: dict, stdout: str = "") -> dict:
     """The analysis outputs of a DFTB+ run (M6f-4a) for the reference files: the four
     atom-resolved energy blocks and the net populations (detailed.out, 8 decimals), the CM5
     charges (results.tag), the potentials (autotest.tag, full precision, and ESP.dat's text),
     band.out's levels and text, the Mulliken weights of eigenvec.out and the text of the
-    detailed.out blocks."""
+    detailed.out blocks; M6f-4b: the Pipek-Mezey functional per spin channel before and
+    after (standard output, E15.8 and E20.12) and ``pm_localisation`` (autotest.tag), the
+    localised orbitals (localOrbs.bin, full precision: the columns per channel) and the text
+    of localOrbs.out, and the bond matrices (results.tag) with the text of their files."""
     from pydftb import dftbplus_io as io
     out, blocks = {}, []
     if spec.get("atom_energies"):
@@ -275,6 +297,30 @@ def parse_analysis(workdir, det: str, spec: dict) -> dict:
         kind, vecs = io.read_eigenvec_out(os.path.join(workdir, "eigenvec.out"))
         out["eigvec"] = {"kind": kind, "headers": [h for h, _ in vecs],
                          "weights": [w.tolist() for _, w in vecs]}
+    if spec.get("localise"):
+        auto = parse_results_tag(os.path.join(workdir, "autotest.tag"))
+        final = [float(x) for x in re.findall(r"^Final localisation\s*(\S+)", stdout, re.M)]
+        with open(os.path.join(workdir, "localOrbs.bin"), "rb") as fh:
+            data = np.frombuffer(fh.read()[4:], "<f8")
+        norb = int(round(math.sqrt(data.size / len(final))))
+        out["pm"] = {"value": float(np.ravel(auto["pm_localisation"])[0]),
+                     "initial": [float(x) for x in re.findall(
+                         r"^Original localisation\s*(\S+)", stdout, re.M)],
+                     "final": final,
+                     "orbitals": [blk.T.tolist() for blk in data.reshape(-1, norb, norb)]}
+        path = os.path.join(workdir, "localOrbs.out")
+        if os.path.exists(path):
+            with open(path) as fh:
+                out["pm"]["file"] = fh.read().splitlines()
+    bonds = {}
+    for key, fname in (("bond_populations", "bond_pop.dat"), ("bond_energies", "bond_energy.dat"),
+                       ("bond_orders", "bond_order.dat")):
+        if spec.get(key):
+            with open(os.path.join(workdir, fname)) as fh:
+                bonds[key] = {"matrix": np.atleast_2d(tag[key]).tolist(),
+                              "file": fh.read().splitlines()}
+    if bonds:
+        out["bonds"] = bonds
     out["detailed_blocks"] = blocks
     return out
 
@@ -780,7 +826,8 @@ def casida_block(spec, forces: bool = True) -> str:
     """Top-level HSD ``ExcitedState { Casida }`` (M6d) for a spec {"n": NrOfExcitations,
     "symmetry": "singlet" | "triplet" | "both" | None (spin polarised), "solver": "Arpack" |
     "Stratmann", "state": StateOfInterest, "energy_window" (Hartree), "oscillator_window",
-    "excited_forces", "excited_charges"}.  With forces and no state of interest DFTB+ needs
+    "excited_forces", "excited_charges", "transition_charges"}.  With forces and no state of
+    interest DFTB+ needs
     ``ExcitedStateForces = No``; excited forces or charges write the excited state's Mulliken
     charges and dipole (``WriteMulliken``: XCH.DAT, XREST.DAT; M6e)."""
     if not spec:
@@ -798,6 +845,8 @@ def casida_block(spec, forces: bool = True) -> str:
               "    WriteTransitionDipole = Yes"]
     if spec.get("excited_forces") or spec.get("excited_charges"):
         lines.append("    WriteMulliken = Yes")
+    if spec.get("transition_charges"):                  # M6f-4b: ATQ.DAT, transq_sqr
+        lines.append("    WriteTransitionCharges = Yes")
     if forces:          # the state of interest's forces, or the ground state's
         lines.append(f"    ExcitedStateForces = {'Yes' if spec.get('excited_forces') else 'No'}")
     lines += ["  }", "}"]
@@ -809,7 +858,8 @@ def parse_casida(workdir, detailed: str) -> dict:
     oscillator strengths, |transition dipole| per degenerate group), ``exc_energies`` (every
     state from TRA.DAT, Hartree), ``exc_rows`` (EXC.DAT: w eV, oscillator strength, i, a,
     weight, KS eV, symmetry or D<S^2>), ``spx_rows`` (SPX.DAT: w eV, oscillator strength,
-    i, a, spin) and ``excitation_energy`` (detailed.out, the state of interest)."""
+    i, a, spin), ``excitation_energy`` (detailed.out, the state of interest) and with
+    transition charges (M6f-4b) ``transq_sqr`` (autotest.tag) and ``atq_file`` (ATQ.DAT)."""
     out = {}
     path = os.path.join(workdir, "autotest.tag")
     if os.path.exists(path):
@@ -820,6 +870,8 @@ def parse_casida(workdir, detailed: str) -> dict:
                                         ("transdip", "exc_transdip")) if n in t}
         if "mermin_energy" in t:        # with a state of interest: E_Mermin + Omega, full digits
             out["excited_mermin_tag"] = float(t["mermin_energy"])
+        if "transq_sqr" in t:           # M6f-4b: squared transition charges, full digits
+            out["transq_sqr"] = np.atleast_1d(t["transq_sqr"]).astype(float).tolist()
     path = os.path.join(workdir, "TRA.DAT")
     if os.path.exists(path):
         found = re.findall(r"^\s+Energy\s+\d+\s+(\S+)\s+eV\s*(\S?)", open(path).read(), re.M)
@@ -843,6 +895,9 @@ def parse_casida(workdir, detailed: str) -> dict:
     m = re.search(r"^Excitation Energy:\s+(\S+)\s+H", detailed, re.M)
     if m:
         out["excitation_energy"] = float(m.group(1))
+    path = os.path.join(workdir, "ATQ.DAT")                # M6f-4b: transition charges
+    if os.path.exists(path):
+        out["atq_file"] = open(path).read().splitlines()
     path = os.path.join(workdir, "XCH.DAT")                # M6e: excited-state Mulliken
     if os.path.exists(path):
         rows = re.findall(r"^\s*(\d+)\s+(\S+)\s*$", open(path).read(), re.M)
@@ -961,8 +1016,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         write_gen(os.path.join(workdir, "geo.gen"), labels, np.asarray(pos_ang),
                   None if cell_ang is None else np.asarray(cell_ang))
         if analysis:
-            extra_analysis = extra_analysis + analysis_block(analysis)
-            autotest = autotest or bool(analysis.get("esp"))
+            extra_analysis = extra_analysis + analysis_block(analysis, cell_ang is not None)
+            autotest = autotest or bool(analysis.get("esp") or analysis.get("localise"))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
                        klines, read_charges, convergent_only, extra_analysis, driver,
@@ -1019,7 +1074,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         if "number_of_electrons" in tag:      # per spin channel with collinear spin
             res["number_of_electrons"] = np.atleast_1d(tag["number_of_electrons"]).astype(float)
         if analysis:                          # M6f-4a
-            res["analysis"] = parse_analysis(workdir, det, analysis)
+            res["analysis"] = parse_analysis(workdir, det, analysis, p.stdout)
         ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)
         res["version"] = ver.group(1) if ver else "unknown"
         # one line each (\s would also match the newlines of Casida's Stratmann progress table)

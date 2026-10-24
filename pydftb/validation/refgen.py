@@ -205,11 +205,12 @@ def corrections_options(case: Case) -> dict:
     return out
 
 
-ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors")
+ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
+                 "localise", "bond_populations", "bond_energies", "bond_orders")   # M6f-4b
 
 
 def analysis_options(case: Case) -> dict:
-    """:class:`pydftb.DFTB` options of an M6f-4a case: its analysis with the electrostatic
+    """:class:`pydftb.DFTB` options of an M6f-4a/b case: its analysis with the electrostatic
     potential's points and grid in Bohr ("band_out" and "compat" are for the comparison)."""
     if not case.analysis:
         return {}
@@ -348,8 +349,8 @@ def environment_ase_options(case: Case) -> dict:
 def casida_options(case: Case, solver: str = "auto") -> dict:
     """:class:`pydftb.DFTB` options of a Casida case (M6d): the forces of the state of interest
     when the spec asks for them ("excited_forces", M6e; else the ground state's), and the spin
-    constants of spin-restricted triplets; ``solver`` is pydftb's (the case's "solver" is
-    DFTB+'s)."""
+    constants of spin-restricted triplets, the transition charges ("transition_charges",
+    M6f-4b); ``solver`` is pydftb's (the case's "solver" is DFTB+'s)."""
     spec = case.casida
     if not spec:
         return {}
@@ -358,7 +359,8 @@ def casida_options(case: Case, solver: str = "auto") -> dict:
                             energy_window=spec.get("energy_window"),
                             oscillator_window=spec.get("oscillator_window"),
                             solver=solver, excited_forces=bool(spec.get("excited_forces")),
-                            excited_charges=bool(spec.get("excited_charges")))}
+                            excited_charges=bool(spec.get("excited_charges")),
+                            transition_charges=bool(spec.get("transition_charges")))}
     if spec.get("spin_constants") and not case.spin:
         out["spin_constants"] = spec["spin_constants"]
     return out
@@ -608,9 +610,11 @@ def regenerate(names=None, threads: int = 1):
         if case.casida:
             doc["reference"]["exc_tags"] = {k: np.asarray(v).tolist()
                                             for k, v in ref["exc_tags"].items()}
-            for k in ("excited_charges_net", "excited_dipole_debye"):         # M6e
+            for k in ("excited_charges_net", "excited_dipole_debye",          # M6e
+                      "transq_sqr", "atq_file"):                               # M6f-4b
                 if k in ref:
-                    doc["reference"][k] = np.asarray(ref[k]).tolist()
+                    doc["reference"][k] = (ref[k] if k == "atq_file"
+                                           else np.asarray(ref[k]).tolist())
             if case.casida.get("forces_fd"):
                 doc["reference"]["forces_fd"] = excited_forces_fd(case, inp, threads).tolist()
                 doc["forces_fd"] = ("-d(E_Mermin + Excitation Energy)/dR of DFTB+ (autotest.tag "
@@ -762,6 +766,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         dev.update(env)
     if case.casida:
         dev.update(_compare_casida(ref, res))
+        if case.casida.get("transition_charges"):
+            dev.update(_compare_transition_charges(ref, res))
         dev.update(_compare_excited(case, inp, ref, res, sk_q0, solver=solver, fd_delta=fd_delta,
                                     casida_solver=casida_solver, **backend))
     if case.track_scc:
@@ -862,7 +868,9 @@ def _compare_corrections(case: Case, inp: dict, ref: dict, res, **run) -> dict:
 
 
 ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "eigvec",
-                "band_out", "band_occ", "detailed")
+                "band_out", "band_occ", "detailed",
+                "pm_value", "pm_initial", "pm_final", "pm_populations", "pm_file",   # M6f-4b
+                "bonds", "bonds_file", "transq", "atq_file")
 
 
 def _degenerate_groups(e, tol: float = 1e-6):
@@ -958,6 +966,20 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
                 worst = max(worst, float(np.abs(mine - theirs).max()) / (hi - lo))
             iv += len(e)
         dev["eigvec"] = worst
+    if "pm" in r:
+        dev.update(_compare_localisation(case, inp, r["pm"], a, **run))
+    if "bonds" in r:
+        worst = file_dev = 0.0
+        with tempfile.TemporaryDirectory(prefix="pydftb_bonds_") as tmp:
+            for kind, d in r["bonds"].items():
+                mine = getattr(a, kind)
+                worst = max(worst, float(np.abs(mine - np.array(d["matrix"])).max()))
+                path = os.path.join(tmp, kind)
+                io.write_bond_matrix(path, mine, kind)
+                with open(path) as fh:
+                    bad, w = _numbers_close(fh.read().splitlines(), d["file"])
+                file_dev = max(file_dev, bad + w)
+        dev["bonds"], dev["bonds_file"] = worst, file_dev
     if r.get("detailed_blocks"):
         mine = io.detailed_tables(res).strip("\n").split("\n\n")
         theirs = [b.strip("\n") for b in r["detailed_blocks"]]
@@ -971,6 +993,74 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
             b, worst = _numbers_close(match[0].splitlines(), block.splitlines())
             bad += b
         dev["detailed"] = bad
+    return dev
+
+
+def _compare_localisation(case: Case, inp: dict, r: dict, a, **run) -> dict:
+    """Pipek-Mezey against DFTB+ (M6f-4b): ``pm_localisation`` (autotest.tag), the functional
+    of every spin channel after (E20.12) and before (E15.8, relative), the Mulliken populations
+    of the localised orbitals, those of DFTB+'s (localOrbs.bin) computed with pydftb's overlap
+    and paired with pydftb's by the best assignment (the localised orbitals come in any order
+    and sign), and localOrbs.out's layout (numbers and signs aside)."""
+    from scipy.optimize import linear_sum_assignment
+    from .. import analysis as ana
+    from .. import dftbplus_io as io
+    loc = a.localisation
+    dev = {"pm_value": abs(loc.value - r["value"])}
+    same = len(loc.final) == len(r["final"]) == len(r["initial"])
+    dev["pm_final"] = (max(abs(x - y) for x, y in zip(loc.final, r["final"])) if same
+                       else np.inf)
+    dev["pm_initial"] = (max(abs(x - y) / abs(y) for x, y in zip(loc.initial, r["initial"]))
+                         if same else np.inf)
+    _, calc = run_pydftb(case, inp, engine=True, **run)
+    periodic = inp["cell_angstrom"] is not None
+    cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
+    st = calc._setup(inp["labels"], np.array(inp["positions_angstrom"]) / BOHR, cell,
+                     np.ones(3, bool) if periodic else None, False, {})
+    s = np.asarray(st.smat_precise)[0].real
+    starts = np.searchsorted(np.asarray(st.basis.orb_atom), np.arange(len(inp["labels"])))
+    worst = 0.0 if len(r["orbitals"]) == len(loc.populations) else np.inf
+    for c_ref, q, n in zip(r["orbitals"], loc.populations, loc.n_localised):
+        q_ref = ana.pm_populations(np.array(c_ref)[:, :n], s, starts)
+        cost = np.abs(q[:, None, :] - q_ref[None, :, :]).max(axis=2)
+        rows, cols = linear_sum_assignment(cost)
+        worst = max(worst, float(cost[rows, cols].max()))
+    dev["pm_populations"] = worst
+    if "file" in r:
+        with tempfile.TemporaryDirectory(prefix="pydftb_pm_") as tmp:
+            path = os.path.join(tmp, "localOrbs.out")
+            io.write_eigenvectors(path, _Wrapped(a), localised=True)
+            with open(path) as fh:            # the signs of the orbitals are arbitrary
+                bad, _ = _numbers_close([ln.replace("-", " ") for ln in fh.read().splitlines()],
+                                        [ln.replace("-", " ") for ln in r["file"]])
+        dev["pm_file"] = float(bad)
+    return dev
+
+
+class _Wrapped:
+    """A result-like holder of an analysis (for the writers of :mod:`pydftb.dftbplus_io`)."""
+
+    def __init__(self, analysis):
+        self.analysis = analysis
+
+
+def _compare_transition_charges(ref: dict, res) -> dict:
+    """Casida transition charges against DFTB+ (M6f-4b): q^2 against ``transq_sqr``
+    (autotest.tag, full precision) and ATQ.DAT (9 decimals; the sign of X + Y, and so of all
+    charges, is arbitrary: aligned first) with its layout exactly."""
+    from .. import dftbplus_io as io
+    q = res.excitations.transition_charges
+    dev = {"transq": float(np.abs(q ** 2 - np.array(ref["transq_sqr"])).max())}
+    theirs = np.array([float(ln.split()[1]) for ln in ref["atq_file"] if not ln.startswith("#")])
+    sign = 1.0 if np.dot(q, theirs) >= 0 else -1.0
+    with tempfile.TemporaryDirectory(prefix="pydftb_atq_") as tmp:
+        path = os.path.join(tmp, "ATQ.DAT")
+        io.write_transition_charges(path, res)
+        with open(path) as fh:
+            mine = fh.read().splitlines()
+    layout = sum(x.startswith("#") != y.startswith("#") or len(x) != len(y)
+                 for x, y in zip(mine, ref["atq_file"])) + abs(len(mine) - len(ref["atq_file"]))
+    dev["atq_file"] = float(layout) + float(np.abs(sign * q - theirs).max())
     return dev
 
 
@@ -1207,9 +1297,11 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
               f"{r['n_scc']:>5}/{str(r['n_scc_ref']):<5} {r['wall']:6.2f}  {'yes' if r['ok'] else 'NO'}")
         if "exc" in d:                                    # M6d: the excitations
             state = f", |dE_exc| {d['exc_state']:.1e} Ha" if "exc_state" in d else ""
+            tq = (f", transition charges |dq^2| {d['transq']:.1e}, ATQ.DAT {d['atq_file']:.1e}"
+                  if "transq" in d else "")
             print(f"{'':26s}   Casida: |dw| {d['exc']:.1e} Ha, |df| {d['exc_osc']:.1e}, "
                   f"|dmu| {d['exc_tdip']:.1e} e Bohr, table/SPX differences "
-                  f"{int(d['exc_table'])}/{int(d['spx'])}{state}")
+                  f"{int(d['exc_table'])}/{int(d['spx'])}{state}{tq}")
         if "exc_charges" in d:                            # M6e: the state of interest
             fd = ("forces vs DFTB+'s energy differences, as DFTB+ (compat) "
                   f"{d['forces_dftbp']:.1e}; " if "forces_dftbp" in d else "")

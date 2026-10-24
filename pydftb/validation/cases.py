@@ -522,6 +522,16 @@ TOL_ANALYSIS_ONLY = {"atom_energies": 1e-8, "net_populations": 1e-8,
 TOL_ANALYSIS = {**TOL_ANALYSIS, **TOL_ANALYSIS_ONLY}
 ESP3 = [[0.0, 0.0, 2.5], [1.0, -1.5, 0.3], [-2.0, 0.5, -1.0]]           # Angstrom
 ATOM_E = {"atom_energies": True}
+# M6f-4b: the Pipek-Mezey functional (autotest.tag and the final values printed with 12
+# digits; the initial ones with 8, E15.8, compared relative), the localised orbitals' populations
+# (the acos angles fix the orbitals to ~1e-8 only), the bond matrices (results.tag; the
+# files with 8 digits) and the transition charges (q^2 in autotest.tag, ATQ.DAT 9 decimals)
+TOL_LOC = {"pm_value": 1e-9, "pm_final": 1e-9, "pm_initial": 1e-7, "pm_populations": 1e-7,
+           "pm_file": 0}
+TOL_BONDS = {"bonds": 1e-9, "bonds_file": 5e-8}
+TOL_TRANSQ = {"transq": 1e-9, "atq_file": 1e-9}
+PM_TIGHT = {"tolerance": 1e-10, "max_iterations": 10000}
+BONDS = {"bond_populations": True, "bond_energies": True, "bond_orders": True}
 
 
 def solvation_model(spec):
@@ -1285,5 +1295,43 @@ CASES += [
                                                              [0.5, 0.5, 18.0]]}},
          note="the dipole correction in the SCC energies and the potential (development "
               "DFTB+)"),
+    # --- Pipek-Mezey, bond analysis, transition charges (milestone M6f-4b), NumPy only ---
+    Case("ch3oh_pm", _meoh, torch=False, tol={**TOL_ANALYSIS, **TOL_LOC},
+         analysis={"localise": PM_TIGHT, "eigenvectors": True},
+         note="Pipek-Mezey (DFTB+'s dense algorithm), localOrbs.out"),
+    Case("h2co_cation_pm", _h2co, charge=1.0, spin={"unpaired_electrons": 1,
+                                                    "spin_constants": W_HCO},
+         torch=False, tol={**TOL_ANALYSIS, **TOL_LOC}, analysis={"localise": PM_TIGHT},
+         note="spin polarised: each channel localised (the tag holds the second); O2's "
+              "degenerate pi orbitals make the sweep count a matter of rounding"),
+    Case("water_box_pm", _water_box, ewald_tolerance=1e-12, scc_tol=1.7e-10, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_LOC}, analysis={"localise": PM_TIGHT},
+         note="periodic, Gamma point (DFTB+ always uses the dense algorithm there)"),
+    Case("ch3oh_bonds", _meoh, dftbplus="dev", torch=False, tol={**TOL_ANALYSIS, **TOL_BONDS},
+         analysis=BONDS, note="bond populations, energies, Mayer orders (development DFTB+)"),
+    Case("o2_triplet_bonds", _o2, spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}},
+         dftbplus="dev", torch=False, tol={**TOL_ANALYSIS, **TOL_BONDS}, analysis=BONDS,
+         note="spin polarised: the spin-summed density (development DFTB+)"),
+    Case("cuo_chain_k422_bonds", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         ewald_tolerance=1e-12, dftbplus="dev", torch=False, tol={**TOL_ANALYSIS, **TOL_BONDS},
+         analysis={"bond_populations": True, "bond_energies": True},
+         note="k-points (no Mayer orders for periodic systems, as DFTB+)"),
+    Case("cu_fcc_k6_bonds", _cu_fcc, kgrid=(6, 6, 6), filling=("fermi", 1000.0),
+         ewald_tolerance=1e-12, dftbplus="dev", torch=False, tol={**TOL_ANALYSIS, **TOL_BONDS},
+         analysis={"bond_populations": True, "bond_energies": True},
+         note="one atom per cell: every bond is with its own images (B = 11 electrons)"),
+    Case("h2co_exc_transq", _h2co,
+         casida={"n": 6, "symmetry": "singlet", "solver": "Arpack", "state": 2,
+                 "transition_charges": True}, torch=False, tol={**TOL_CASIDA, **TOL_TRANSQ},
+         note="transition charges of the second singlet (ATQ.DAT, transq_sqr)"),
+    Case("h2co_cation_exc_transq", _h2co, charge=1.0,
+         spin={"unpaired_electrons": 1, "spin_constants": W_HCO},
+         casida={"n": 6, "symmetry": None, "solver": "Stratmann", "state": 2,
+                 "transition_charges": True}, torch=False, tol={**TOL_CASIDA, **TOL_TRANSQ},
+         note="spin polarised: kappa = 1, both channels' transitions"),
+    Case("h2co_casida_3000K_transq", _h2co, filling=("fermi", 3000.0),
+         casida={"n": 6, "symmetry": "singlet", "solver": "Stratmann", "state": 2,
+                 "transition_charges": True}, torch=False, tol={**TOL_CASIDA, **TOL_TRANSQ},
+         note="fractional occupations: the charges carry no sqrt(f_i - f_a), unlike the dipole"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

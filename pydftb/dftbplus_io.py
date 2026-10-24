@@ -23,7 +23,10 @@ Analysis outputs (milestone M6f-4a; DFTB+ ``dftbplus/mainio.F90``, from
 :class:`pydftb.analysis.AnalysisResult`): ``band.out`` (:func:`write_band_out`),
 ``eigenvec.out``/``eigenvec.bin`` (:func:`write_eigenvectors`), ``ESP.dat``
 (:func:`write_esp`) and the analysis blocks of ``detailed.out`` (:func:`detailed_tables`),
-each in DFTB+'s format; readers for the tests and the validation tools.
+each in DFTB+'s format; readers for the tests and the validation tools.  Milestone M6f-4b:
+``localOrbs.out``/``.bin`` (``write_eigenvectors(..., localised=True)``), ``bond_pop.dat``,
+``bond_energy.dat``, ``bond_order.dat`` (:func:`write_bond_files`) and the Casida transition
+charges ``ATQ.DAT`` (:func:`write_transition_charges`).
 """
 from __future__ import annotations
 
@@ -380,21 +383,29 @@ def _analysis_of(res, what: str):
     return a
 
 
-def write_eigenvectors(path, res, text: bool | None = None, run_id: int = 0) -> None:
+def write_eigenvectors(path, res, text: bool | None = None, run_id: int = 0,
+                      localised: bool = False) -> None:
     """DFTB+'s eigenvec.out (``EigenvectorsAsText``) or eigenvec.bin from a result calculated
     with ``analysis={"eigenvectors": True}``.  The text file lists every eigenvector (per spin
     channel and k-point) with the coefficient and Mulliken weight of every orbital, in DFTB+'s
     real, complex (k-points) or two-component format; the binary file is a stream of the int32
     ``run_id`` (DFTB+ draws a random one for waveplot) and the eigenvectors column by column,
-    k-points fastest.  ``text`` defaults to whether ``path`` ends with ".out"."""
-    a = _analysis_of(res, "eigenvectors")
+    k-points fastest.  ``text`` defaults to whether ``path`` ends with ".out".  ``localised``:
+    the Pipek-Mezey orbitals of ``analysis={"localise": ...}`` instead, as DFTB+'s
+    localOrbs.out/.bin (M6f-4b)."""
+    if localised:
+        a = _analysis_of(res, "localisation")
+        vectors, weights = a.localisation.orbitals, a.localisation.weights
+    else:
+        a = _analysis_of(res, "eigenvectors")
+        vectors, weights = a.eigenvectors, a.mulliken_weights
     if text is None:
         text = str(path).endswith(".out")
     if not text:
         tmp = f"{path}.tmp"
         with open(tmp, "wb") as f:
             f.write(struct.pack("<i", int(run_id)))
-            for c in a.eigenvectors:
+            for c in vectors:
                 c = np.asarray(c)
                 dtype = "<f8" if a.eigenvector_kind == "real" else "<c16"
                 for i in range(c.shape[1]):
@@ -409,7 +420,7 @@ def write_eigenvectors(path, res, text: bool | None = None, run_id: int = 0) -> 
     for atom, lab, ish, name in a.orbitals:
         heads.append((atom, (f"{atom + 1:5d} {lab[:2]:<2s}  " if ish == 0 else " " * 10) + name))
     norb = len(heads)
-    for b, (c, w) in enumerate(zip(a.eigenvectors, a.mulliken_weights)):
+    for b, (c, w) in enumerate(zip(vectors, weights)):
         c, w = np.asarray(c), np.asarray(w)
         s, k = divmod(b, nk)
         spin = ("up", "down")[s] if kind != "pauli" else ""
@@ -548,3 +559,66 @@ def detailed_tables(res) -> str:
                       for i, e in enumerate(a.atom_energies[key])]
             lines.append("")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+# ---- M6f-4b: bond matrices and transition charges ---------------------------------------------
+BOND_FILES = {
+    "bond_populations": ("bond_pop.dat", "# Mulliken bond populations: B_AB = sum_{mu in A, "
+                                         "nu in B} P_{mu nu} S_{mu nu}"),
+    "bond_energies": ("bond_energy.dat", "# Non-SCC bond energies: E_AB = sum_{mu in A, nu in B}"
+                                         " P_{mu nu} H0_{mu nu} (a.u.)"),
+    "bond_orders": ("bond_order.dat", "# Mayer bond orders: B_AB = sum_{mu in A, nu in B} "
+                                      "(PS)_{mu nu} (PS)_{nu mu}")}
+
+
+def write_bond_matrix(path, matrix, kind: str) -> None:
+    """One of DFTB+'s bond_pop.dat, bond_energy.dat, bond_order.dat (``kind`` the analysis
+    field "bond_populations", "bond_energies" or "bond_orders"): two comment lines, then a row
+    per atom, ``(*(ES16.8,1x))`` (gfortran writes no trailing blank)."""
+    m = np.atleast_2d(np.asarray(matrix, float))
+    lines = [BOND_FILES[kind][1], f"# nAtom = {len(m)}"]
+    lines += [" ".join(f"{x:16.8E}" for x in row) for row in m]
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def write_bond_files(res, directory=".") -> list:
+    """The bond files of a result calculated with ``analysis={"bond_populations": True, ...}``
+    (those it has), in ``directory`` under DFTB+'s names; returns the names."""
+    a = getattr(res, "analysis", None)
+    names = []
+    for kind, (name, _) in BOND_FILES.items():
+        m = None if a is None else getattr(a, kind)
+        if m is not None:
+            write_bond_matrix(os.path.join(directory, name), m, kind)
+            names.append(name)
+    if not names:
+        raise ValueError("no bond analysis in this result: calculate with "
+                         "DFTB(analysis={'bond_populations': True, ...})")
+    return names
+
+
+def read_bond_matrix(path) -> np.ndarray:
+    """The matrix of a bond_*.dat file."""
+    with open(path) as fh:
+        return np.array([ln.split() for ln in fh if ln.strip() and not ln.startswith("#")],
+                        float)
+
+
+def write_transition_charges(path, res) -> None:
+    """DFTB+'s ATQ.DAT from a result with ``Casida(..., transition_charges=True)``: three
+    comment lines, then ``(2x,i5,5x,f12.9)`` per atom."""
+    exc = getattr(res, "excitations", None)
+    q = None if exc is None else getattr(exc, "transition_charges", None)
+    if q is None:
+        raise ValueError("no transition charges in this result: use "
+                         "Casida(..., transition_charges=True) with a state of interest")
+    lines = ["#", "#  atom     transition charge", "#"]
+    lines += [f"  {i:5d}     {x:12.9f}" for i, x in enumerate(np.asarray(q, float), 1)]
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def read_transition_charges(path) -> np.ndarray:
+    """The charges of an ATQ.DAT file."""
+    with open(path) as fh:
+        return np.array([float(ln.split()[1]) for ln in fh
+                         if ln.strip() and not ln.startswith("#")])

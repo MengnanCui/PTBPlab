@@ -53,7 +53,9 @@ class Casida:
     the excited state, -d(E_0 + Omega)/dR (milestone M6e, :mod:`pydftb.casida_grad`), unless
     ``excited_forces=False`` asks for the ground-state ones (DFTB+ ``ExcitedStateForces =
     No``).  ``excited_charges`` gives the excited state's Mulliken charges and dipole also
-    without forces (DFTB+ ``WriteMulliken``).  ``solver``: "exact" (dense Omega), "davidson"
+    without forces (DFTB+ ``WriteMulliken``); ``transition_charges`` the state of interest's
+    atomic transition charges (DFTB+ ``WriteTransitionCharges``, milestone M6f-4b; singlets or
+    spin polarisation).  ``solver``: "exact" (dense Omega), "davidson"
     (matrix-free block Davidson with the diagonal w^2 as preconditioner: Omega is that diagonal
     plus a coupling of rank n_atom, so few iterations), "arpack" (matrix-free, SciPy's ARPACK;
     slower, an independent check) or "auto" (exact up to :data:`EXACT_LIMIT` transitions, else
@@ -67,6 +69,7 @@ class Casida:
     solver: str = "auto"
     excited_forces: bool = True
     excited_charges: bool = False
+    transition_charges: bool = False
 
     def __post_init__(self):
         if int(self.n_excitations) < 1:
@@ -76,6 +79,11 @@ class Casida:
             raise ValueError(f"symmetry must be one of {sorted(SYMMETRIES)}, got {self.symmetry!r}")
         if self.solver not in SOLVERS:
             raise ValueError(f"solver must be one of {SOLVERS}, got {self.solver!r}")
+        if self.transition_charges and self.symmetry != "singlet":
+            raise ValueError("transition charges are not written for triplets (as DFTB+)")
+        if self.transition_charges and self.state_of_interest == 0:
+            raise ValueError("transition charges need a state of interest "
+                             "(state_of_interest != 0; as DFTB+)")
         if self.state_of_interest < 0 and self.symmetry != "singlet":
             raise ValueError("the brightest state (state_of_interest < 0) is only for singlets "
                              "(as in DFTB+)")
@@ -143,6 +151,7 @@ class Excitations:
     spin_contamination: np.ndarray | None = None
     state: int = 0                  # state of interest (1-based, as DFTB+), 0 for none
     xmy: np.ndarray | None = None   # X - Y = F sqrt(Omega / w)
+    transition_charges: np.ndarray | None = None   # (n_atom,) of the state of interest (M6f-4b)
 
     @property
     def energies(self) -> np.ndarray:
@@ -540,12 +549,18 @@ def _properties(cas: Casida, gs: GroundState, resp: Response, omega2, f, dip, sp
     elif cas.state_of_interest < 0:
         state = int(np.argmax(osc)) + 1
     s2 = _spin_contamination(gs, resp.pairs, xpy) if gs.spin_polarised else None
+    tq = None
+    if cas.transition_charges and state > 0:
+        # DFTB+ getAndWriteTransitionCharges: kappa sum_ia q^ia (X+Y)_ia, kappa = sqrt(2)
+        # closed shell (1 spin polarised); unlike the dipole not weighted by sqrt(n_ia)
+        tq = (1.0 if gs.spin_polarised else math.sqrt(2.0)) * (resp.q.T @ xpy[:, state - 1])
     return Excitations(omega2=omega2, oscillator_strengths=osc, transition_dipoles=tdip,
                        symmetries=None if gs.spin_polarised else [sym] * len(omega2),
                        transitions=resp.pairs[dominant], weights=weights_all[dominant,
                                                                              np.arange(len(omega2))],
                        ks_energies=resp.w[dominant], xpy=xpy, pairs=resp.pairs,
-                       single_particle=spx, spin_contamination=s2, state=state, xmy=xmy)
+                       single_particle=spx, spin_contamination=s2, state=state, xmy=xmy,
+                       transition_charges=tq)
 
 
 def _spin_contamination(gs: GroundState, pairs, xpy) -> np.ndarray:

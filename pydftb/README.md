@@ -351,6 +351,32 @@ which DFTB+ spreads evenly (E/N) and pydftb resolves by atom pairs.  Grids:
 or `"fractional": True` in a periodic cell.  NumPy engine only.  Details:
 [`docs/reports/M6f4a-analysis.html`](docs/reports/M6f4a-analysis.html).
 
+Pipek-Mezey localised orbitals, bond populations, bond energies and Mayer bond orders, and
+Casida transition charges (milestone M6f-4b):
+
+```python
+r = DFTB(sk, analysis={"localise": True,  # or {"max_iterations": 1000, "tolerance": 1e-8}
+                       "bond_populations": True, "bond_energies": True,
+                       "bond_orders": True}).calculate(labels, pos)
+loc = r.analysis.localisation
+loc.orbitals[0][:, :loc.n_localised[0]]  # localised orbitals (columns) of the first spin channel
+loc.populations[0], loc.value            # their Mulliken populations; DFTB+'s pm_localisation
+r.analysis.bond_populations              # (n_atom, n_atom): rows sum to the Mulliken populations
+r.analysis.bond_energies, r.analysis.bond_orders   # sum to E_H0; Mayer orders (molecules)
+io.write_eigenvectors("localOrbs.out", r, localised=True)
+io.write_bond_files(r, ".")              # bond_pop.dat, bond_energy.dat, bond_order.dat
+
+from pydftb.casida import Casida
+r = DFTB(sk, casida=Casida(6, state_of_interest=2, transition_charges=True)).calculate(labels, pos)
+r.excitations.transition_charges         # (n_atom,), overall sign arbitrary (as in DFTB+)
+io.write_transition_charges("ATQ.DAT", r)
+```
+
+The localisation is DFTB+'s dense algorithm, step by step; it needs real orbitals (molecules,
+the Gamma point): DFTB+'s k-point version multiplies unconjugated coefficients, so its result
+depends on the eigensolver's arbitrary phases.  Details:
+[`docs/reports/M6f4b-localisation.html`](docs/reports/M6f4b-localisation.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):
