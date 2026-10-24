@@ -431,8 +431,10 @@ class DFTB:
     analysis : True | dict | Analysis  DFTB+'s ``Analysis`` outputs (milestone M6f-4a) in
                           ``DFTBResult.analysis``: atom-resolved energies, net populations and
                           hybridisation ratios, CM5 charges, the electrostatic potential,
-                          eigenvectors with Mulliken weights (see :mod:`pydftb.analysis`; files
-                          by :mod:`pydftb.dftbplus_io`).  True: the first three.
+                          eigenvectors with Mulliken weights, localised orbitals, bond
+                          analysis (M6f-4b), the polarisability and response kernel (M6g-1)
+                          (see :mod:`pydftb.analysis`; files by :mod:`pydftb.dftbplus_io`).
+                          True: the first three.
     type_switching : smooth switching between parameter sets of one element (milestone M5a): a
                           :class:`pydftb.typeswitch.TypeSwitch` (or a dict of its fields) or a list
                           of them, one per element.  Every atom of a switched element (given to
@@ -458,6 +460,9 @@ class DFTB:
     _halogen_compat = False
     # test use only: DFTB+'s atom-resolved D3 library energy, spread evenly (E/N) (M6f-4a)
     _atom_energy_compat = False
+    # test use only: the finite-frequency response of complex eigenvectors with DFTB+'s
+    # eta term (it cancels between k and -k; DFTB+ keeps it for reduced k-point sets) (M6g-1)
+    _response_eta_compat = False
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
@@ -610,6 +615,7 @@ class DFTB:
         self.dipole_correction = _corrections.DipoleCorrection.make(dipole_correction)
         self._check_corrections()
         self.analysis = _analysis.Analysis.make(analysis)              # M6f-4a
+        self._check_response()                                         # M6g-1
         if getattr(self.sk, "selected", False):                        # M6f-5
             self._check_selected_shells(type_switching)
         # smooth switching between the parameter sets of an element (M5a)
@@ -763,6 +769,34 @@ class DFTB:
         if getattr(self, "analysis", None) is not None:
             raise ValueError("the analysis outputs (M6f-4a) do not support type switching yet: "
                              "the atom-resolved repulsive needs the mixed pairs (milestone M5a)")
+
+    def _check_response(self):
+        """The response analyses (M6g-1, DFTB+ ``Polarisability``/``ResponseKernel``): DFTB+'s
+        conditions (Fermi filling, no solvation, full third order only) and the parts left for
+        milestone M6g-3 (DFTB+U, onsite corrections, two-component spin)."""
+        a = self.analysis
+        if a is None or (a.polarisability is False and a.response_kernel is False):
+            return
+        why = None
+        if self.smearing.kind != "fermi":
+            why = ("Fermi filling only (DFTB+: 'Choice of filling function currently "
+                   "incompatible with perturbation calculations')")
+        elif self.solvation is not None:
+            why = "no implicit solvation (DFTB+: 'Solvation not currently implemented')"
+        elif self.third_order == "onsite":
+            why = "the full third order only (DFTB+: 'Only full 3rd order currently supported')"
+        elif self.plus_u is not None or self.onsite_corrections is not None:
+            why = "not with DFTB+U or onsite corrections yet (milestone M6g-3)"
+        elif self.pauli:
+            why = "not with non-collinear spin or spin-orbit coupling yet (milestone M6g-3)"
+        elif self.dipole_correction is not None:
+            why = "not with the dipole correction (DFTB+'s response leaves its potential out)"
+        elif self.independent_k_filling:
+            why = "not with independent k-point filling"
+        elif getattr(self.sk, "selected", False):
+            why = "not with selected shells (milestone M6f-5) yet"
+        if why:
+            raise ValueError(f"the polarisability and response kernel (M6g-1) need {why}")
 
     def _check_selected_shells(self, type_switching):
         """Shells from several SK files (SelectedShells, M6f-5): refused with the parts that take

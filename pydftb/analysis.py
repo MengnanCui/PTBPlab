@@ -31,6 +31,9 @@
 * **Bond analysis** (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``,
   M6f-4b): sum_T sum_{mu on A, nu on B} P_mu,nu(T) S_mu,nu(T), the same with H0, and Mayer bond
   orders sum (PS)_mu,nu (PS)_nu,mu (molecules), from the spin-summed output density.
+* **Polarisability and response kernel** (``Polarisability``, ``ResponseKernel``, M6g-1):
+  the coupled-perturbed SCC response to an electric field and to a potential on each atom,
+  static and at finite frequencies (see :mod:`pydftb.response`).
 
 The files are written by :mod:`pydftb.dftbplus_io`.  NumPy engine only.
 """
@@ -44,6 +47,7 @@ import numpy as np
 from ase.data import atomic_numbers
 from scipy.special import erf, erfc
 
+from . import response as _response
 from . import spinorbit as so
 from .backend import ops
 from .constants import ELEC_TOL_MAX
@@ -77,7 +81,11 @@ class Analysis:
     ``eigenvectors``: keep the eigenvectors and their Mulliken weights (for eigenvec.out);
     ``localise``: Pipek-Mezey localised orbitals, True or {"max_iterations" (100),
     "tolerance" (1e-4)} (DFTB+'s dense algorithm and defaults); ``bond_populations``,
-    ``bond_energies``, ``bond_orders``: the pairwise bond matrices (Mayer orders: molecules)."""
+    ``bond_energies``, ``bond_orders``: the pairwise bond matrices (Mayer orders: molecules);
+    ``polarisability``: the electric-field response, True or {"static" (True), "frequencies"
+    (Hartree), "frequency_range" (start, stop, step)}; ``response_kernel``: the response to a
+    potential on each atom, the same keys and "rpa" (False); ``perturbation``:
+    {"degeneracy_tol" (1e-9 Ha), "eta" (1e-8 Ha)} of both (milestone M6g-1)."""
     atom_energies: bool = False
     net_populations: bool = False
     cm5: bool | dict | CM5 = False
@@ -87,6 +95,9 @@ class Analysis:
     bond_populations: bool = False
     bond_energies: bool = False
     bond_orders: bool = False
+    polarisability: bool | dict = False
+    response_kernel: bool | dict = False
+    perturbation: dict | None = None
 
     def __post_init__(self):
         if not (isinstance(self.cm5, (bool, dict, CM5))):
@@ -108,6 +119,13 @@ class Analysis:
                 raise ValueError("analysis localise: max_iterations must be at least 1")
             if not float(self.localise.get("tolerance", PM_TOLERANCE)) > 0.0:
                 raise ValueError("analysis localise: tolerance must be positive")
+        for name in ("polarisability", "response_kernel"):            # M6g-1
+            spec = getattr(self, name)
+            if not isinstance(spec, (bool, dict)):
+                raise TypeError(f"analysis {name} must be True/False or a dict")
+            if spec is not False:
+                _response.frequencies(spec, name)
+        _response.perturbation_options(self.perturbation)
 
     @classmethod
     def make(cls, spec) -> "Analysis | None":
@@ -121,7 +139,8 @@ class Analysis:
             return spec
         if isinstance(spec, dict):
             known = {"atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
-                     "localise", "bond_populations", "bond_energies", "bond_orders"}
+                     "localise", "bond_populations", "bond_energies", "bond_orders",
+                     "polarisability", "response_kernel", "perturbation"}
             unknown = set(spec) - known
             if unknown:
                 raise ValueError(f"analysis: unknown keys {sorted(unknown)} (use {sorted(known)})")
@@ -203,6 +222,8 @@ class AnalysisResult:
     bond_populations: np.ndarray | None = None   # (n_atom, n_atom), electrons
     bond_energies: np.ndarray | None = None      # (n_atom, n_atom), Hartree
     bond_orders: np.ndarray | None = None        # (n_atom, n_atom), Mayer
+    polarisability: "_response.PolarisabilityResult | None" = None    # M6g-1
+    response_kernel: "_response.ResponseKernelResult | None" = None
 
 
 def _check_esp(spec):
@@ -384,6 +405,17 @@ def evaluate(calc, analysis: Analysis, st, sc, res, xl: bool = False) -> Analysi
     if analysis.bond_populations or analysis.bond_energies or analysis.bond_orders:
         out.bond_populations, out.bond_energies, out.bond_orders = bond_analysis(
             st, sc, analysis.bond_populations, analysis.bond_energies, analysis.bond_orders)
+    if analysis.polarisability is not False or analysis.response_kernel is not False:
+        if xl:
+            raise ValueError("the response analyses (M6g-1) are not defined for the XL-BOMD "
+                             "shadow Hamiltonian")
+        opts = _response.perturbation_options(analysis.perturbation)
+        if analysis.polarisability is not False:
+            out.polarisability = _response.polarisability(calc, st, sc, analysis.polarisability,
+                                                          opts)
+        if analysis.response_kernel is not False:
+            out.response_kernel = _response.response_kernel(calc, st, sc,
+                                                            analysis.response_kernel, opts)
     return out
 
 

@@ -222,7 +222,8 @@ def corrections_options(case: Case) -> dict:
 
 
 ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
-                 "localise", "bond_populations", "bond_energies", "bond_orders")   # M6f-4b
+                 "localise", "bond_populations", "bond_energies", "bond_orders",   # M6f-4b
+                 "polarisability", "response_kernel", "perturbation")              # M6g-1
 
 
 def analysis_options(case: Case) -> dict:
@@ -862,7 +863,8 @@ def _compare_scc_start(case: Case, inp: dict, ref: dict, res, **run) -> dict:
     moments, and for a charge file that its class populations are pydftb's own input
     populations of run 1."""
     dev = {"n_scc": abs(int(res.n_scc) - int(ref["n_scc"]))}
-    t, e = np.array(ref["scc_errors"]), np.asarray(res.scc_errors)
+    t = np.array(ref["scc_errors"])
+    e = np.asarray(res.scc_errors if res.scc_errors is not None else [])     # non-SCC: none
     n = min(len(t), len(e))
     keep = t[:n] > SCC_ERROR_FLOOR
     dev["scc_errors"] = (float((np.abs(e[:n] - t[:n]) / t[:n])[keep].max()) if keep.any()
@@ -923,7 +925,9 @@ def _compare_corrections(case: Case, inp: dict, ref: dict, res, **run) -> dict:
 ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "eigvec",
                 "band_out", "band_occ", "detailed",
                 "pm_value", "pm_initial", "pm_final", "pm_populations", "pm_file",   # M6f-4b
-                "bonds", "bonds_file", "transq", "atq_file")
+                "bonds", "bonds_file", "transq", "atq_file",
+                "pol", "dqdE", "dedE", "dEf", "dos", "dqdV", "dqnet", "dedV",       # M6g-1
+                "response_text", "dqdE_default")
 
 
 def _degenerate_groups(e, tol: float = 1e-6):
@@ -940,7 +944,9 @@ def _numbers_close(mine: list, theirs: list) -> tuple[int, float]:
     """(lines whose text differs apart from the numbers, largest number difference) of two
     texts given as lists of lines."""
     import re
-    num = re.compile(r"[-+]?\d+\.\d+(?:E[-+]?\d+)?")
+    # a number with the blank or minus sign before it: values at the noise level near zero may
+    # come with either sign
+    num = re.compile(r"[ +-]?\d+\.\d+(?:E[-+]?\d+)?")
     if len(mine) != len(theirs):
         return max(len(mine), len(theirs)), 0.0
     bad, worst = 0, 0.0
@@ -1033,6 +1039,15 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
                     bad, w = _numbers_close(fh.read().splitlines(), d["file"])
                 file_dev = max(file_dev, bad + w)
         dev["bonds"], dev["bonds_file"] = worst, file_dev
+    if "response" in r:                                               # M6g-1
+        if case.analysis.get("eta_compat"):      # DFTB+'s eta term of reduced k-point sets
+            dev["dqdE_default"] = _compare_response(r["response"], res).get("dqdE", 0.0)
+            DFTB._response_eta_compat = True
+            try:
+                res = run_pydftb(case, inp, **run)
+            finally:
+                DFTB._response_eta_compat = False
+        dev.update(_compare_response(r["response"], res))
     if r.get("detailed_blocks"):
         mine = io.detailed_tables(res).strip("\n").split("\n\n")
         theirs = [b.strip("\n") for b in r["detailed_blocks"]]
@@ -1046,6 +1061,69 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
             b, worst = _numbers_close(match[0].splitlines(), block.splitlines())
             bad += b
         dev["detailed"] = bad
+    return dev
+
+
+def _compare_response(r: dict, res) -> dict:
+    """The response analyses against DFTB+ (M6g-1), from results.tag: the polarisability of
+    every frequency, the charge and eigenvalue derivatives d/dE of the last frequency (DFTB+
+    keeps only those), N_F and dE_F/dE (DFTB+ prints the latter divided by the full filling),
+    and the kernel's dq/dV per orbital (DFTB+'s tag pads every atom to the largest orbital
+    count), net populations and eigenvalue derivatives of every frequency; "response_text":
+    the detailed.out blocks, dE_band.out and (one frequency: DFTB+ rewrites the first atom's
+    part for every frequency) dV_band.out, layout exactly and numbers within the tolerance."""
+    from .. import dftbplus_io as io
+    tags = {k: np.array(v) for k, v in r["tags"].items()}
+    a = res.analysis
+    dev, text = {}, 0.0
+    pol, ker = a.polarisability, a.response_kernel
+    if pol is not None:
+        if "staticPolResponse" in tags:                    # (n_w, i, j) = d mu_j / d E_i
+            dev["pol"] = float(np.abs(np.transpose(pol.tensor, (0, 2, 1))
+                                      - tags["staticPolResponse"]).max())
+        dev["dqdE"] = float(np.abs(pol.charge_derivatives[-1]
+                                   - tags["staticChargeReponse"]).max())
+        if "dEidEfield" in tags:
+            ref = tags["dEidEfield"]
+            dev["dedE"] = float(np.abs(np.asarray(pol.eigenvalue_derivatives[-1]).reshape(ref.shape)
+                                       - ref).max())
+        if "neFermi" in tags:
+            dev["dos"] = float(np.abs(pol.dos_fermi - tags["neFermi"]).max())
+        if "dEfdE" in tags:
+            fill = 2.0 if len(pol.dos_fermi) == 1 else 1.0
+            dev["dEf"] = float(np.abs(pol.fermi_derivatives[-1] / fill - tags["dEfdE"]).max())
+    if ker is not None:
+        ref = tags["dqdV"]                                  # (n_w, A, c, B, mOrb)
+        mine = np.zeros(ref.shape)
+        o = 0
+        for b, n in enumerate(np.bincount(ker.orbital_atom)):
+            mine[..., b, :n] = ker.orbital[..., o:o + n]
+            o += n
+        dev["dqdV"] = float(np.abs(mine - ref).max())
+        dev["dqnet"] = float(np.abs(ker.net - tags["dqnetdV"]).max())
+        ref = tags["dEidV"]
+        dev["dedV"] = float(np.abs(np.asarray(ker.eigenvalue_derivatives).reshape(ref.shape)
+                                   - ref).max())
+        if "neFermi" in tags and pol is None:
+            dev["dos"] = float(np.abs(ker.dos_fermi - tags["neFermi"]).max())
+    with tempfile.TemporaryDirectory(prefix="pydftb_resp_") as tmp:
+        for part, key in (("kernel", "detailed_kernel"), ("main", "detailed_main")):
+            if r.get(key):
+                mine = io.response_tables(res, part=part, dftbplus_fermi=True).splitlines()
+                bad, worst = _numbers_close(mine, r[key])
+                text = max(text, bad + worst)
+        files = []
+        if pol is not None and "dE_band.out" in r:
+            files.append(("dE_band.out", "field"))
+        if ker is not None and "dV_band.out" in r and len(ker.frequencies) == 1:
+            files.append(("dV_band.out", "potential"))
+        for name, kind in files:
+            path = os.path.join(tmp, name)
+            io.write_band_derivatives(path, res, kind)
+            with open(path) as fh:
+                bad, worst = _numbers_close(fh.read().splitlines(), r[name])
+            text = max(text, bad + worst)
+    dev["response_text"] = text
     return dev
 
 

@@ -117,6 +117,37 @@ and shell-resolved Hubbard derivatives follow the shells' order.  NumPy engine o
 spin-orbit coupling, DFTB+U, onsite corrections, Casida or type switching.  Details:
 [`docs/reports/M6f5-selected-shells.html`](docs/reports/M6f5-selected-shells.html).
 
+### Polarisability and response kernel
+
+DFTB+'s coupled-perturbed response (`Analysis { Polarisability; ResponseKernel }`), static and at
+finite frequencies; milestone M6g-1:
+
+```python
+r = DFTB(sk, analysis={"polarisability": {"frequencies": [0.05]},   # Hartree; static too
+                       "response_kernel": True}).calculate(labels, pos)
+p = r.analysis.polarisability
+p.tensor[0]                 # static polarisability d mu_j / d E_i (a.u.); None if periodic
+p.charge_derivatives[-1]    # (3, n_qm, n_atom) dN_A / dE_i at the last frequency
+k = r.analysis.response_kernel
+k.atom[0, :, 0, :]          # [A, B] = dN_B / dV_A (static, SCC screened)
+print(pydftb.dftbplus_io.response_tables(r))   # DFTB+'s detailed.out blocks
+```
+
+The same spectral sum as DFTB+ (pairs of filled and empty levels weighted by
+(f_i - f_a)/(e_i - e_a [+- omega + i eta]), DFTB+'s window and degenerate runs, the move of the
+Fermi level of metals), solved as a linear system instead of DFTB+'s iterations (DFTB+'s default
+`PerturbSccTol` of 1e-5 leaves 2.5e-7 in water's polarisability).  Options: "static",
+"frequencies", "frequency_range" (start, stop, step), the kernel's "rpa" (the bare response), and
+`analysis["perturbation"] = {"degeneracy_tol": 1e-9, "eta": 1e-8}`.  Also the eigenvalue and
+Fermi-level derivatives (dE_F/dE the physical value, DFTB+ prints it divided by the full
+filling) and `dftbplus_io.write_band_derivatives` (dE_band.out, dV_band.out).  With collinear
+spin, metals, degenerate levels, the full third order, k-points (charge response only; the
+finite-frequency eta term that DFTB+ keeps for time-reversal reduced k-point sets is dropped, so
+reduced and full sets agree) and dispersion.  NumPy engine only; not with non-Fermi smearing,
+solvation, DFTB+U, onsite corrections, two-component spin (milestone M6g-3), the dipole
+correction or selected shells.  Details:
+[`docs/reports/M6g1-response.html`](docs/reports/M6g1-response.html).
+
 ### f orbitals
 
 Parameter sets with f electrons (lanthanides, actinides) use DFTB+'s extended SKF format

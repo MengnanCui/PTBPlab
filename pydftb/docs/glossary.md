@@ -140,6 +140,12 @@
 | SelectedShells（壳层组） | DFTB+ 的一种写法：一个原子的基组由几个 SK 文件中的壳层拼成，每个文件提供一组壳层（如 "sp" 与 "s"），同一个 l 可以出现两次；每对原子要列出各组对的文件，排斥势只取第一个文件。pydftb 用 `ParamSet(selected_shells=…)`（M6f-5）。 |
 | sps* 基组 | 在通常的 s、p 之外再加一个 s 壳层（s*）的扩展基组，常用来改善导带（如 Si）；DFTB 里靠 SelectedShells 从另一套文件取这个 s*（M6f-5）。 |
 | 壳层名（s2） | DFTB+ 给同一个 l 的第二个壳层加序号：s、p、s2。自定义占据（`reference_occupations={0: {"s2": 0.0}}`）、eigenvec.out 的标签都用这些名字（M6f-5）。 |
+| 极化率（polarisability） | 偶极对外电场的导数 α<sub>ji</sub> = ∂μ<sub>j</sub>/∂E<sub>i</sub>（原子单位 Bohr³）。DFTB 中偶极是 Σ(q0 − q)R，电场作用在原子的 Mulliken 电荷上，所以分子平面外的极化率很小。频率相关的 α(ω) 在激发能附近发散（M6g-1）。 |
+| 响应核（response kernel） | 各原子（或轨道）的布居对一个原子上的势的导数 ∂N<sub>B</sub>/∂V<sub>A</sub>；静态时对称、每列和为 0（电子数守恒）。SCC 屏蔽的响应核含电荷重新分布的反作用，RPA（DFTB+ 的叫法）只是裸的一次响应（M6g-1）。 |
+| 耦合微扰 SCC（CPKS） | 求一阶响应的方法：外加微扰改变 H，H 改变密度，密度又经 γ、W、三阶项改变 H，直到自洽。DFTB+ 迭代求解，pydftb 把它写成线性方程 (I − χ<sub>0</sub>K)x = χ<sub>0</sub>V 直接解（M6g-1）。 |
+| 谱求和（spectral sum） | 用未微扰的本征态展开一阶密度矩阵：对占据–空态对 (i, a) 求和，权重 (f<sub>i</sub> − f<sub>a</sub>)/(ε<sub>i</sub> − ε<sub>a</sub>)，频率相关时分母加 ±ω + iη（M6g-1）。 |
+| 费米能级的移动（金属） | 部分占据的体系受微扰时，带内项 −δ<sub>i</sub>∂ε<sub>i</sub> 改变电子数，费米能级随之移动 dE<sub>F</sub> = Σδ<sub>i</sub>∂ε<sub>i</sub>/Σδ<sub>i</sub> 以保持电子数，δ = βf(1 − f)；N<sub>F</sub> 是费米能级处的态密度（M6g-1）。 |
+| η（PerturbEta） | 频率相关响应的分母中的小虚部（默认 1e-8 Ha），避免在激发能处除以零；它让权重变成复数（M6g-1）。 |
 | ParamSet | pydftb 中“参数从哪里来”的对象：一个 SKF 目录加上读取选项。 |
 | wheel | Python 包的标准发行文件（`.whl`）：已经排好目录的 zip 包，`pip install` 直接解压到 site-packages，不需要在安装时构建。pydftb 的 wheel 不含 `docs/` 与 `bench/`，含测试与冻结的参考数据（P1）。 |
 | sdist | 源码发行包（`.tar.gz`）：项目的源文件加构建配置，安装时先构建成 wheel。P1 检查过 sdist 构建出的 wheel 与直接构建的逐字节相同。 |

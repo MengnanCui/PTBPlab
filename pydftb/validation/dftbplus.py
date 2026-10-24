@@ -179,13 +179,16 @@ def corrections_block(h5=None, halogen=None, dipole=None, labels=()) -> str:
     return "".join(f"{ln}\n" for ln in lines)
 
 
-def analysis_block(spec, periodic: bool = False) -> str:
+def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
     """HSD lines of the Analysis block for a case's ``analysis`` (milestone M6f-4a):
     ``AtomResolvedEnergies``, ``WriteNetCharges``, ``CM5``, ``ElectrostaticPotential``
     (points or grid in Angstrom, or fractional) and ``WriteEigenvectors`` as text; M6f-4b:
     ``Localise { PipekMezey }`` (``Dense = Yes`` for molecules, the only way DFTB+ reads their
     Tolerance; periodic systems are dense anyway and refuse the keyword) and the bond analysis
-    (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``; DFTB+ after 25.1)."""
+    (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``; DFTB+ after 25.1);
+    M6g-1: ``Polarisability`` and ``ResponseKernel`` (frequencies in Hartree) with the response
+    converged tightly (``PerturbSccTol = 1e-11``, ``MaxPerturbIter = 1000``, SCC only; DFTB+
+    reads ``PerturbEta`` only with a finite frequency)."""
     if not spec:
         return ""
     lines = []
@@ -245,6 +248,32 @@ def analysis_block(spec, periodic: bool = False) -> str:
                       ("bond_energies", "WriteBondEnergy"), ("bond_orders", "WriteBondOrder")):
         if spec.get(key):
             lines.append(f"  {word} = Yes")
+    finite = False
+    for key, word in (("polarisability", "Polarisability"), ("response_kernel", "ResponseKernel")):
+        r = spec.get(key)
+        if not r:
+            continue
+        opts = {} if r is True else r
+        lines.append(f"  {word} {{")
+        if opts.get("rpa"):
+            lines.append("    RPA = Yes")
+        if opts.get("static", True) is False:
+            lines.append("    Static = No")
+        freqs = list(np.atleast_1d(opts.get("frequencies", ())))
+        if freqs:
+            lines.append("    Frequencies = " + " ".join(_f(w) for w in freqs))
+        if opts.get("frequency_range") is not None:
+            lines.append("    FrequencyRange = " + " ".join(_f(x) for x in opts["frequency_range"]))
+        lines.append("  }")
+        finite = finite or any(float(w) != 0.0 for w in freqs) or opts.get("frequency_range")
+    if spec.get("polarisability") or spec.get("response_kernel"):
+        pert = spec.get("perturbation") or {}
+        if scc:
+            lines += ["  PerturbSccTol = 1e-11", "  MaxPerturbIter = 1000"]
+        if "degeneracy_tol" in pert:
+            lines.append(f"  PerturbDegenTol = {_f(pert['degeneracy_tol'])}")
+        if finite and "eta" in pert:
+            lines.append(f"  PerturbEta = {_f(pert['eta'])}")
     return "".join(f"{ln}\n" for ln in lines)
 
 
@@ -321,7 +350,62 @@ def parse_analysis(workdir, det: str, spec: dict, stdout: str = "") -> dict:
                               "file": fh.read().splitlines()}
     if bonds:
         out["bonds"] = bonds
+    if spec.get("polarisability") or spec.get("response_kernel"):         # M6g-1
+        out["response"] = parse_response(workdir, det, tag)
     out["detailed_blocks"] = blocks
+    return out
+
+
+RESPONSE_TAGS = ("staticPolResponse", "staticChargeReponse", "dEidEfield", "neFermi", "dEfdE",
+                 "dqdV", "dqnetdV", "dEidV")
+
+
+def parse_response(workdir, det: str, tag: dict) -> dict:
+    """The response outputs of a DFTB+ run (M6g-1): the tags of ``RESPONSE_TAGS`` present in
+    results.tag (arrays with the Fortran dimensions reversed, as :func:`parse_results_tag`),
+    the detailed.out text of the kernel blocks and of the rest (density of states, charge and
+    Fermi-level derivatives, polarisabilities), and dE_band.out and dV_band.out."""
+    out = {"tags": {k: np.asarray(tag[k]).tolist() for k in RESPONSE_TAGS if k in tag}}
+    lines = det.splitlines()
+    head = re.compile(r"^(Static response:|Response at omega)")
+    kstart = next((i for i, ln in enumerate(lines) if head.match(ln)), None)
+    kernel = []
+    if kstart is not None:
+        i = kstart
+        while i < len(lines) and head.match(lines[i]):
+            j = lines.index("", i)                       # every block ends with a blank line
+            kernel += lines[i:j + 1]
+            i = j + 1
+    main = []
+    mstart = next((i for i, ln in enumerate(lines)
+                   if ln.startswith(("Density of states at the Fermi energy",
+                                     "Atomic charge derivatives"))), None)
+    if mstart is not None:
+        i = mstart
+        if lines[i].startswith("Density of states"):
+            main.append(lines[i])
+            i += 1
+        while i < len(lines) and lines[i].startswith("Atomic charge derivatives"):
+            j = lines.index("", i)
+            main += lines[i:j + 1]
+            i = j + 1
+        if i < len(lines) and lines[i].startswith("Derivative of Fermi energy"):
+            main += lines[i:i + 4]
+            i += 4
+        if i + 1 < len(lines) and lines[i + 1] == " Electric field polarisability (a.u.)":
+            j = i + 2
+            while j + 1 < len(lines) and lines[j] == "" and (
+                    lines[j + 1] == " Static polarisability:"
+                    or lines[j + 1].startswith("Polarisability at omega")):
+                j += 5
+            main += lines[i:j + 1]
+    out["detailed_kernel"] = kernel
+    out["detailed_main"] = main
+    for name in ("dE_band.out", "dV_band.out"):
+        path = os.path.join(workdir, name)
+        if os.path.exists(path):
+            with open(path) as fh:
+                out[name] = fh.read().splitlines()
     return out
 
 
@@ -1035,7 +1119,7 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         write_gen(os.path.join(workdir, "geo.gen"), labels, np.asarray(pos_ang),
                   None if cell_ang is None else np.asarray(cell_ang))
         if analysis:
-            extra_analysis = extra_analysis + analysis_block(analysis, cell_ang is not None)
+            extra_analysis = extra_analysis + analysis_block(analysis, cell_ang is not None, scc)
             autotest = autotest or bool(analysis.get("esp") or analysis.get("localise"))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
