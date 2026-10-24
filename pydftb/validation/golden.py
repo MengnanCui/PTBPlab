@@ -88,6 +88,9 @@ def flat(prefix, obj, out, depth=0):
         out[prefix] = ("a", a.dtype.str, a.shape, a.tobytes())
     elif obj is None or isinstance(obj, str):
         out[prefix] = ("v", obj)
+    elif isinstance(obj, tuple) and hasattr(obj, "_fields"):     # named tuples by field name
+        for k in obj._fields:
+            flat(f"{prefix}.{k}", getattr(obj, k), out, depth + 1)
     elif isinstance(obj, (list, tuple)):
         for i, v in enumerate(obj):
             flat(f"{prefix}[{i}]", v, out, depth + 1)

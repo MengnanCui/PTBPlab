@@ -290,6 +290,35 @@ H5 and the halogen correction recognise elements, DFTB+ species names (type labe
 `O2` differ).  NumPy engine only.  Details:
 [`docs/reports/M6f3-corrections.html`](docs/reports/M6f3-corrections.html).
 
+### Analysis outputs
+
+DFTB+'s `Analysis` outputs (atom-resolved energies, net populations, CM5 charges, the
+electrostatic potential, eigenvectors) and its files:
+
+```python
+from pydftb import DFTB, Analysis, dftbplus_io as io
+
+r = DFTB(sk, analysis=True).calculate(labels, pos)   # atom energies, net populations, CM5
+a = r.analysis
+a.atom_energies["total"]                 # (n_atom,), sums to r.energy; also "electronic",
+                                         # "repulsive", "dispersion" and every term ("h0", ...)
+a.net_populations, a.hybridisation, a.cm5_charges
+r = DFTB(sk, analysis={"esp": {"points": pts}, "eigenvectors": True}).calculate(labels, pos)
+r.analysis.esp.internal                  # Hartree/e (physical potential), points in Bohr
+io.write_esp("ESP.dat", r.analysis.esp)  # DFTB+'s formats: ESP.dat (V), eigenvec.out/.bin,
+io.write_eigenvectors("eigenvec.out", r) # band.out and the analysis blocks of detailed.out
+io.write_band_out("band.out", r)
+print(io.detailed_tables(r))
+atoms.calc = PyDFTB(skdir, analysis={"atom_energies": True})
+atoms.get_potential_energies()           # eV, sums to the potential energy
+```
+
+Every term is split over the atoms as DFTB+ does, except the D3 library's dispersion energy,
+which DFTB+ spreads evenly (E/N) and pydftb resolves by atom pairs.  Grids:
+`{"grid": {"spacing", "origin", "points", "directions"}}`, the last index running fastest,
+or `"fractional": True` in a periodic cell.  NumPy engine only.  Details:
+[`docs/reports/M6f4a-analysis.html`](docs/reports/M6f4a-analysis.html).
+
 ### Dispersion
 
 `dispersion=` takes a dict that mirrors DFTB+'s `Dispersion` block (Bohr, Hartree):

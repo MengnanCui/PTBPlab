@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from ase.data import atomic_numbers as _NUMBERS
 
+from . import analysis as _analysis
 from . import blockpot, external
 from . import casida as _casida
 from . import casida_grad as _cgrad
@@ -138,6 +139,8 @@ class DFTBResult:
     e_halogen: float = 0.0               # halogen correction (DFTB+ "Halogen correction energy")
     e_dipole_corr: float | None = None   # dipole correction 2 pi D^2 / V, a part of e_scc (as in
                                          # DFTB+, which does not print it)
+    # M6f-4a: analysis outputs (DFTB(analysis=...))
+    analysis: object | None = None       # pydftb.analysis.AnalysisResult
 
     @property
     def e_total(self) -> float:
@@ -420,6 +423,11 @@ class DFTB:
                           layer at {"layer_position": z0} (Bohr; default -h/2) in the vacuum along
                           z, E = 2 pi D^2 / V in E_SCC (``DFTBResult.e_dipole_corr``); periodic,
                           neutral, the slab normal along z; with the stress term DFTB+ lacks.
+    analysis : True | dict | Analysis  DFTB+'s ``Analysis`` outputs (milestone M6f-4a) in
+                          ``DFTBResult.analysis``: atom-resolved energies, net populations and
+                          hybridisation ratios, CM5 charges, the electrostatic potential,
+                          eigenvectors with Mulliken weights (see :mod:`pydftb.analysis`; files
+                          by :mod:`pydftb.dftbplus_io`).  True: the first three.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -433,6 +441,8 @@ class DFTB:
     # test use only: the halogen correction's gradient and virial with DFTB+'s sign of the
     # switching-function terms (M6f-3)
     _halogen_compat = False
+    # test use only: DFTB+'s atom-resolved D3 library energy, spread evenly (E/N) (M6f-4a)
+    _atom_energy_compat = False
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
@@ -453,7 +463,7 @@ class DFTB:
                  fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None):
+                 dipole_correction=None, analysis=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -584,6 +594,7 @@ class DFTB:
         self.halogen_correction = bool(halogen_correction)
         self.dipole_correction = _corrections.DipoleCorrection.make(dipole_correction)
         self._check_corrections()
+        self.analysis = _analysis.Analysis.make(analysis)              # M6f-4a
         self.force_evaluation = str(force_evaluation).lower()
         if self.force_evaluation not in FORCE_EVALUATIONS:
             raise ValueError(f"force_evaluation must be one of {FORCE_EVALUATIONS}, "
@@ -758,6 +769,8 @@ class DFTB:
             out.append("halogen_correction")
         if getattr(self, "dipole_correction", None) is not None:
             out.append("dipole_correction")
+        if getattr(self, "analysis", None) is not None:           # M6f-4a
+            out.append("analysis")
         return out
 
     @property
@@ -861,6 +874,10 @@ class DFTB:
             res.n_ef = self._reservoir_term(setup, res)
         if self.reference_occupations is not None:
             res.q0_atom = ops.segment_sum(setup.q0, setup.site_atom, len(setup.species))
+        if self.analysis is not None:                                   # M6f-4a
+            t1 = time.perf_counter()
+            res.analysis = _analysis.evaluate(self, self.analysis, setup, state, res, xl=xl)
+            timings["analysis"] = time.perf_counter() - t1
         rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()

@@ -13,6 +13,7 @@ High-level (PySCF-style) entry points::
 Design notes, the DFTB+ source map and milestone reports live in
 ``pydftb/docs/``.
 """
+from .analysis import Analysis
 from .api import SCC, make_kpoints
 from .calculator import DFTB, DFTBResult
 from .params import ParamSet
@@ -20,5 +21,5 @@ from .skf import SKFile, SKSet, max_l_from_skf
 from .system import System
 
 __all__ = ["SCC", "make_kpoints", "DFTB", "DFTBResult", "ParamSet", "SKFile", "SKSet",
-           "max_l_from_skf", "System"]
+           "max_l_from_skf", "System", "Analysis"]
 __version__ = "0.1.0.dev0"

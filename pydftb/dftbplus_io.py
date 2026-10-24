@@ -18,6 +18,12 @@ Charge restart files ``charges.bin`` / ``charges.dat`` (DFTB+ ``dftb/sccinit.F90
 ``charges.dat`` is the same in Fortran list-directed text, written here exactly as gfortran
 writes it.  How a calculation's mixing vector maps onto these arrays is
 :meth:`pydftb.DFTB.charge_data` and :meth:`pydftb.DFTB.populations_from_file`.
+
+Analysis outputs (milestone M6f-4a; DFTB+ ``dftbplus/mainio.F90``, from
+:class:`pydftb.analysis.AnalysisResult`): ``band.out`` (:func:`write_band_out`),
+``eigenvec.out``/``eigenvec.bin`` (:func:`write_eigenvectors`), ``ESP.dat``
+(:func:`write_esp`) and the analysis blocks of ``detailed.out`` (:func:`detailed_tables`),
+each in DFTB+'s format; readers for the tests and the validation tools.
 """
 from __future__ import annotations
 
@@ -27,6 +33,8 @@ import struct
 from dataclasses import dataclass, field
 
 import numpy as np
+
+from .constants import BOHR, HARTREE
 
 RESTART_FORMAT = 8
 CHECKSUM_TOL = 1e-7          # DFTB+ elecTolMax: the checksums must match their arrays
@@ -299,3 +307,244 @@ def ld_real(x: float) -> str:
         return " " + f"{x:.{16 - e}f}".rjust(20) + " " * 5
     sign = "-" if e < 0 else "+"
     return " " + f"{mant}E{sign}{abs(e):03d}".rjust(25)
+
+
+# ---- analysis outputs (milestone M6f-4a) ------------------------------------------------------
+PAULI_COLUMNS = ("   Atom   Orb         up spin coefficients   down spin coefficients  "
+                 "  charge    x         y         z")
+
+
+def fortran_e(x: float, width: int, digits: int) -> str:
+    """Fortran Ew.d as gfortran writes it: 0.ddd...E+xx (E dropped for |exponent| > 99)."""
+    x = float(x)
+    if x == 0.0:
+        body = "0." + "0" * digits + "E+00"
+    else:
+        mant, exp = f"{abs(x):.{digits - 1}E}".split("E")
+        e = int(exp) + 1
+        body = "0." + mant.replace(".", "") + (f"E{e:+03d}" if abs(e) <= 99 else f"{e:+04d}")
+        if x < 0:
+            body = "-" + body
+    return body.rjust(width)
+
+
+def _write_text(path, text: str) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def write_band_out(path, res) -> None:
+    """DFTB+'s band.out (``WriteBandOut``): for every spin channel and k-point the
+    list-directed header "KPT k SPIN s KWEIGHT w", lines (I6, F12.4, F9.5) of every level (eV)
+    and its occupation (with the factor 2 without spin, not times the k weight), then a blank
+    line.  ``res`` is a :class:`pydftb.DFTBResult`."""
+    kw = np.ones(1) if res.kweights is None else np.asarray(res.kweights, float)
+    nk = len(kw)
+    lines = []
+    for b, (e, f) in enumerate(zip(res.eigenvalues, res.occupations)):
+        s, k = divmod(b, nk)
+        lines.append(" KPT " + ld_integer(k + 1) + "  SPIN " + ld_integer(s + 1) + "  KWEIGHT "
+                     + ld_real(kw[k]))
+        lines.extend(f"{i + 1:6d}{x * HARTREE:12.4f}{y:9.5f}" for i, (x, y)
+                     in enumerate(zip(np.asarray(e, float), np.asarray(f, float).ravel())))
+        lines.append("")
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def read_band_out(path) -> list:
+    """The blocks of a band.out: [{"k", "spin", "weight", "energies" (eV), "occupations"}]."""
+    blocks = []
+    with open(path) as fh:
+        for line in fh:
+            t = line.split()
+            if not t:
+                continue
+            if t[0] == "KPT":
+                blocks.append({"k": int(t[1]), "spin": int(t[3]), "weight": float(t[5]),
+                               "energies": [], "occupations": []})
+            else:
+                blocks[-1]["energies"].append(float(t[1]))
+                blocks[-1]["occupations"].append(float(t[2]))
+    for b in blocks:
+        b["energies"], b["occupations"] = np.array(b["energies"]), np.array(b["occupations"])
+    return blocks
+
+
+def _analysis_of(res, what: str):
+    a = getattr(res, "analysis", None)
+    if a is None or getattr(a, what) is None:
+        raise ValueError(f"no {what} in this result: calculate with DFTB(analysis=...) asking "
+                         f"for them")
+    return a
+
+
+def write_eigenvectors(path, res, text: bool | None = None, run_id: int = 0) -> None:
+    """DFTB+'s eigenvec.out (``EigenvectorsAsText``) or eigenvec.bin from a result calculated
+    with ``analysis={"eigenvectors": True}``.  The text file lists every eigenvector (per spin
+    channel and k-point) with the coefficient and Mulliken weight of every orbital, in DFTB+'s
+    real, complex (k-points) or two-component format; the binary file is a stream of the int32
+    ``run_id`` (DFTB+ draws a random one for waveplot) and the eigenvectors column by column,
+    k-points fastest.  ``text`` defaults to whether ``path`` ends with ".out"."""
+    a = _analysis_of(res, "eigenvectors")
+    if text is None:
+        text = str(path).endswith(".out")
+    if not text:
+        tmp = f"{path}.tmp"
+        with open(tmp, "wb") as f:
+            f.write(struct.pack("<i", int(run_id)))
+            for c in a.eigenvectors:
+                c = np.asarray(c)
+                dtype = "<f8" if a.eigenvector_kind == "real" else "<c16"
+                for i in range(c.shape[1]):
+                    f.write(np.ascontiguousarray(c[:, i], dtype=dtype).tobytes())
+        os.replace(tmp, path)
+        return
+    kind, nk = a.eigenvector_kind, a.n_kpoints
+    lines = ["Coefficients and Mulliken populations of the atomic orbitals", ""]
+    if kind == "pauli":
+        lines += [PAULI_COLUMNS, ""]
+    heads = []
+    for atom, lab, ish, name in a.orbitals:
+        heads.append((atom, (f"{atom + 1:5d} {lab[:2]:<2s}  " if ish == 0 else " " * 10) + name))
+    norb = len(heads)
+    for b, (c, w) in enumerate(zip(a.eigenvectors, a.mulliken_weights)):
+        c, w = np.asarray(c), np.asarray(w)
+        s, k = divmod(b, nk)
+        spin = ("up", "down")[s] if kind != "pauli" else ""
+        for i in range(c.shape[1]):
+            if kind == "real":
+                lines += [f"Eigenvector:{i + 1:4d}    ({spin})", ""]
+            elif kind == "complex":
+                lines += [f"K-point: {k + 1:4d}    Eigenvector: {i + 1:4d}    ({spin})", ""]
+            else:
+                lines.append(f"K-point: {k + 1:4d}    Eigenvector: {i + 1:4d}")
+            for mu, (atom, head) in enumerate(heads):
+                lead = head[:21].ljust(21)
+                if kind == "real":
+                    lines.append(f"{lead} {c[mu, i]:10.6f} {w[mu, i]:10.6f}")
+                elif kind == "complex":
+                    lines.append(f"{lead} ({c[mu, i].real:10.6f},{c[mu, i].imag:10.6f} ) "
+                                 f"{w[mu, i]:10.6f}")
+                else:
+                    up, dn = c[mu, i], c[mu + norb, i]
+                    lines.append(f"{lead} ({up.real:10.6f},{up.imag:10.6f})"
+                                 f"({dn.real:10.6f},{dn.imag:10.6f}) "
+                                 + "".join(f"{x:10.6f}" for x in w[:, mu, i]))
+                if mu + 1 == norb or heads[mu + 1][0] != atom:
+                    lines.append("")
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def read_eigenvec_out(path) -> tuple[str, list]:
+    """(kind, [(header line, weights)]) of an eigenvec.out: the Mulliken weight of every
+    orbital ((n_orb,), two-component (n_orb, 4): charge, x, y, z)."""
+    out, cur, pauli = [], None, False
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith("   Atom   Orb"):
+                pauli = True
+            elif line.startswith(("Eigenvector:", "K-point:")):
+                cur = [line.strip(), []]
+                out.append(cur)
+            elif cur is not None and line.strip():
+                t = line.replace("(", " ").replace(")", " ").replace(",", " ").split()
+                cur[1].append([float(x) for x in t[-4:]] if pauli else float(t[-1]))
+    kind = "pauli" if pauli else ("complex" if out and out[0][0].startswith("K-point") else "real")
+    return kind, [(h, np.array(w)) for h, w in out]
+
+
+def write_esp(path, esp, geo_step: int | None = None, append: bool = False) -> None:
+    """DFTB+'s ESP.dat from a :class:`pydftb.analysis.ESPResult`: the header
+    ('# ', L2, 3I6, 1x, I0) (external column?, grid points or 0 0 0, number of points), for a
+    grid the origin and the three step vectors (A, '#' then 3E20.12), the column titles, then
+    the potentials in V (E20.12; points with their coordinates in A, 3E12.4).  The grid header
+    holds the correct origin and steps also for rotated grids (DFTB+ writes them wrongly when
+    ``Directions`` is not the identity).  ``append`` adds to an existing file without a new
+    header, ``geo_step`` labels the block (DFTB+ ``AppendFile`` during MD)."""
+    ext = esp.external is not None
+    grid = esp.shape is not None
+    pts = np.asarray(esp.points, float)
+    lines = []
+    if not (append and os.path.exists(path) and os.path.getsize(path) > 0):
+        shape = esp.shape if grid else (0, 0, 0)
+        lines.append("# " + (" T" if ext else " F") + "".join(f"{int(n):6d}" for n in shape)
+                     + f" {len(pts)}")
+        if grid:
+            lines.append("#" + "".join(fortran_e(x * BOHR, 20, 12) for x in esp.origin))
+            for row in np.asarray(esp.axes, float):
+                lines.append("#" + "".join(fortran_e(x * BOHR, 20, 12) for x in row))
+    tag = "" if geo_step is None else f" Geo {int(geo_step)}"
+    if grid:
+        lines.append(("# Internal (V)        External (V)" if ext else "# Internal (V)") + tag)
+    else:
+        lines.append(("#           Location (AA)             Internal (V)        External (V)"
+                      if ext else "#           Location (AA)             Internal (V)") + tag)
+    for i, p in enumerate(pts):
+        row = "" if grid else "".join(fortran_e(x * BOHR, 12, 4) for x in p)
+        row += fortran_e(esp.internal[i] * HARTREE, 20, 12)
+        if ext:
+            row += fortran_e(esp.external[i] * HARTREE, 20, 12)
+        lines.append(row)
+    text = "\n".join(lines) + "\n"
+    if append and os.path.exists(path):
+        with open(path, "a") as f:
+            f.write(text)
+    else:
+        _write_text(path, text)
+
+
+def read_esp(path) -> dict:
+    """An ESP.dat: {"external" (bool), "shape", "n", "origin", "axes" (A, grids), "points"
+    (A, point lists), "internal", "external_values" (V)}."""
+    with open(path) as fh:
+        lines = fh.read().splitlines()
+    head = lines[0][2:].split()
+    out = {"external": head[0] == "T", "shape": tuple(int(x) for x in head[1:4]),
+           "n": int(head[4]), "origin": None, "axes": None, "points": None}
+    grid = all(x > 0 for x in out["shape"])
+    comments = [ln for ln in lines if ln.startswith("#")]
+    if grid:
+        out["origin"] = np.array(comments[1][1:].split(), float)
+        out["axes"] = np.array([c[1:].split() for c in comments[2:5]], float)
+    data = np.array([ln.split() for ln in lines if ln.strip() and not ln.startswith("#")], float)
+    data = data.reshape(len(data), -1)
+    if not grid:
+        out["points"], data = data[:, :3], data[:, 3:]
+    out["internal"] = data[:, 0]
+    out["external_values"] = data[:, 1] if out["external"] else None
+    return out
+
+
+def detailed_tables(res) -> str:
+    """The analysis blocks of DFTB+'s detailed.out for ``res.analysis``: net populations and
+    hybridisation ratios (I5, 1X, F16.8, F16.8), CM5 charges (I5, 1X, F16.8) and the
+    atom-resolved electronic, repulsive, total and (with dispersion) dispersion energies
+    (I5, F16.8, ' H', F16.6, ' eV'), each followed by a blank line."""
+    a = res.analysis
+    if a is None:
+        raise ValueError("no analysis in this result: calculate with DFTB(analysis=...)")
+    lines = []
+    if a.net_populations is not None:
+        lines += [" Atomic net (on-site) populations and hybridisation ratios",
+                  " Atom       Population         Hybrid."]
+        lines += [f"{i + 1:5d} {q:16.8f}{h:16.8f}"
+                  for i, (q, h) in enumerate(zip(a.net_populations, a.hybridisation))]
+        lines.append("")
+    if a.cm5_charges is not None:
+        lines += [" CM5 corrected atomic gross charges (e)", " Atom           Charge"]
+        lines += [f"{i + 1:5d} {q:16.8f}" for i, q in enumerate(a.cm5_charges)]
+        lines.append("")
+    if a.atom_energies is not None:
+        titles = [("electronic", "Atom resolved electronic energies"),
+                  ("repulsive", "Atom resolved repulsive energies"),
+                  ("total", "Atom resolved total energies")]
+        if np.any(a.atom_energies["dispersion"] != 0.0):
+            titles.append(("dispersion", "Atom resolved dispersion energies "))
+        for key, title in titles:
+            lines.append(title)
+            lines += [f"{i + 1:5d}{e:16.8f} H{e * HARTREE:16.6f} eV"
+                      for i, e in enumerate(a.atom_energies[key])]
+            lines.append("")
+    return "\n".join(lines) + ("\n" if lines else "")

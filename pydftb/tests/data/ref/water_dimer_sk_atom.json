@@ -1,0 +1,258 @@
+{
+ "schema": 1,
+ "case": "water_dimer_sk_atom",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "analysis": {
+   "atom_energies": true
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H",
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.06762102815201425,
+    -0.01863749482163331,
+    0.12057480654714338
+   ],
+   [
+    0.016300651319860315,
+    0.7316820788549705,
+    -0.47696437708376205
+   ],
+   [
+    -3.5615434317254514e-05,
+    -0.8334279722538168,
+    -0.43634067977346025
+   ],
+   [
+    0.32401994063678197,
+    0.07498284104132961,
+    3.012400069552171
+   ],
+   [
+    0.32021197496787007,
+    0.8527847433923341,
+    2.413243036853098
+   ],
+   [
+    0.24187034350036835,
+    -0.6410557875243245,
+    2.4279082362114814
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": {
+   "model": "slaterkirkwood",
+   "polar_radius_charge": [
+    [
+     3.62,
+     7.14,
+     3.15
+    ],
+    [
+     2.67,
+     6.62,
+     0.8
+    ],
+    [
+     2.67,
+     6.62,
+     0.8
+    ],
+    [
+     0.0,
+     7.14,
+     3.15
+    ],
+    [
+     2.67,
+     6.62,
+     0.8
+    ],
+    [
+     2.67,
+     6.62,
+     0.8
+    ]
+   ]
+  },
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_fwlfb4wf/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  Dispersion = SlaterKirkwood {\n    PolarRadiusCharge = {\n      3.62 7.14 3.15\n      2.67 6.62 0.8\n      2.67 6.62 0.8\n      0.0 7.14 3.15\n      2.67 6.62 0.8\n      2.67 6.62 0.8\n    }\n  }\n\n}\nAnalysis {\n  AtomResolvedEnergies = Yes\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -7.8146044755,
+  "free_energy": -7.8146044755,
+  "e_zero": -7.8146044755,
+  "e_rep": 0.1107478135,
+  "e_scc": 0.0500050121,
+  "e_band": -7.9752843305,
+  "e_disp": -7.29706e-05,
+  "fermi": -0.0283800188454911,
+  "forces": [
+   [
+    0.011771938808039,
+    -0.0211019735171452,
+    0.117746551489882
+   ],
+   [
+    -0.00624201307589213,
+    0.0698847605162058,
+    -0.069819149713668
+   ],
+   [
+    -0.00538804085830764,
+    -0.0488390797192511,
+    -0.0464372941337007
+   ],
+   [
+    0.0139652547815662,
+    0.0510678276713637,
+    0.148773874459883
+   ],
+   [
+    -0.00111885216333027,
+    0.0536167106399782,
+    -0.0523969137662028
+   ],
+   [
+    -0.0129882874920752,
+    -0.104628245591151,
+    -0.0978670683361934
+   ]
+  ],
+  "charges_net": [
+   -0.563674919596024,
+   0.288733100027422,
+   0.276344049953445,
+   -0.571287337757173,
+   0.271595069338127,
+   0.298290038034199
+  ],
+  "analysis": {
+   "atom_energies": {
+    "electronic": [
+     -3.38659422,
+     -0.28589874,
+     -0.28762789,
+     -3.3808481,
+     -0.29387186,
+     -0.2904385
+    ],
+    "repulsive": [
+     0.0247154,
+     0.01407364,
+     0.01064293,
+     0.0306563,
+     0.01144776,
+     0.01921179
+    ],
+    "total": [
+     -3.36187917,
+     -0.27184269,
+     -0.2770035,
+     -3.3501918,
+     -0.28244345,
+     -0.27124386
+    ],
+    "dispersion": [
+     -3.6e-07,
+     -1.759e-05,
+     -1.854e-05,
+     0.0,
+     -1.934e-05,
+     -1.714e-05
+    ]
+   },
+   "detailed_blocks": [
+    "Atom resolved electronic energies\n    1     -3.38659422 H      -92.153917 eV\n    2     -0.28589874 H       -7.779701 eV\n    3     -0.28762789 H       -7.826753 eV\n    4     -3.38084810 H      -91.997558 eV\n    5     -0.29387186 H       -7.996660 eV\n    6     -0.29043850 H       -7.903234 eV\n",
+    "Atom resolved repulsive energies\n    1      0.02471540 H        0.672540 eV\n    2      0.01407364 H        0.382963 eV\n    3      0.01064293 H        0.289609 eV\n    4      0.03065630 H        0.834200 eV\n    5      0.01144776 H        0.311509 eV\n    6      0.01921179 H        0.522779 eV\n",
+    "Atom resolved total energies\n    1     -3.36187917 H      -91.481387 eV\n    2     -0.27184269 H       -7.397216 eV\n    3     -0.27700350 H       -7.537649 eV\n    4     -3.35019180 H      -91.163357 eV\n    5     -0.28244345 H       -7.685677 eV\n    6     -0.27124386 H       -7.380921 eV\n",
+    "Atom resolved dispersion energies \n    1     -0.00000036 H       -0.000010 eV\n    2     -0.00001759 H       -0.000479 eV\n    3     -0.00001854 H       -0.000504 eV\n    4      0.00000000 H        0.000000 eV\n    5     -0.00001934 H       -0.000526 eV\n    6     -0.00001714 H       -0.000467 eV\n"
+   ]
+  },
+  "n_scc": 11,
+  "scc_errors": [
+   0.93498989,
+   0.63585644,
+   0.028395644,
+   0.012353308,
+   0.0034972053,
+   0.0026761526,
+   0.00015508103,
+   3.6080193e-05,
+   2.1085485e-06,
+   1.2679718e-06,
+   3.0799363e-11
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "atom_energies": 1e-08,
+  "net_populations": 1e-08,
+  "cm5": 1e-09,
+  "esp": 1e-09,
+  "esp_file": 1e-09,
+  "eigvec": 6e-07,
+  "band_out": 0.000101,
+  "band_occ": 1.01e-05,
+  "detailed": 0
+ }
+}

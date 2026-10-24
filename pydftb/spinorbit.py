@@ -182,6 +182,17 @@ def dual_soc_energy(blocks, lam, basis: Basis) -> float:
     return e
 
 
+def dual_soc_atom_energies(blocks, lam, basis: Basis) -> np.ndarray:
+    """:func:`dual_soc_energy` atom by atom (milestone M6f-4a)."""
+    out = np.zeros(len(basis.species))
+    for a, q in enumerate(blocks):
+        o = basis.offsets[a]
+        sl = slice(o, o + basis.norb_atom[a])
+        for c in range(3):
+            out[a] -= float(np.sum(q[c + 1].imag.T * lam[c][sl, sl]))
+    return out
+
+
 def orbital_moments(lim, onsite_imag, basis: Basis) -> np.ndarray:
     """<L_a> of every shell, (n_shell, 3): -sum_{mu,nu in shell} Im(L_a)_{mu nu} X_{nu mu},
     with X the imaginary part of the atom block of the charge density (onsite model,

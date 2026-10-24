@@ -164,6 +164,10 @@ class Case:
     dipole_correction: bool | dict | None = None   # True or {"layer_position": z0 (A)}
     dftbplus: str = "25.1"                # "dev": references from the development build
                                           # ($DFTBPLUS_DEV), for what 25.1 does not have
+    # milestone M6f-4a: analysis outputs; {"atom_energies", "net_populations", "cm5",
+    # "esp": {"points" (A)} | {"grid": {"spacing" (A), "origin" (A), "points"}},
+    # "eigenvectors", "band_out" (compare band.out), "compat" (DFTB+'s E/N for D3)}
+    analysis: dict | None = None
 
     @property
     def corrections(self) -> bool:
@@ -182,7 +186,7 @@ class Case:
     def track_scc(self) -> bool:
         """References keep the SCC error of every iteration and pydftb must take the same
         number of iterations (M6f cases)."""
-        return self.scc_start or self.overrides or self.corrections
+        return self.scc_start or self.overrides or self.corrections or self.analysis is not None
 
     @property
     def scc_start(self) -> bool:
@@ -506,6 +510,18 @@ TOL_CORR = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "n_scc": 0, "scc_er
             "e_halogen": 1e-10}
 UD_HALOGEN = {**UD_3OB, "Cl": UD_3OB["O"], "Br": UD_3OB["O"], "N": UD_3OB["O"]}   # type copies
                                                                                # of O: test only
+# M6f-4a: analysis outputs.  detailed.out prints the atom-resolved energies and net populations
+# with 8 decimals (1e-8); CM5 charges (results.tag) and the potentials (autotest.tag) have full
+# precision; eigenvec.out's Mulliken weights 6 decimals (compared summed over degenerate
+# levels, per level); band.out 4 decimals (eV)
+TOL_ANALYSIS = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "spins": 1e-6, "n_scc": 0,
+                "scc_errors": 1e-4}
+TOL_ANALYSIS_ONLY = {"atom_energies": 1e-8, "net_populations": 1e-8,
+                "cm5": 1e-9, "esp": 1e-9, "esp_file": 1e-9, "eigvec": 6e-7,
+                "band_out": 1.01e-4, "band_occ": 1.01e-5, "detailed": 0}
+TOL_ANALYSIS = {**TOL_ANALYSIS, **TOL_ANALYSIS_ONLY}
+ESP3 = [[0.0, 0.0, 2.5], [1.0, -1.5, 0.3], [-2.0, 0.5, -1.0]]           # Angstrom
+ATOM_E = {"atom_energies": True}
 
 
 def solvation_model(spec):
@@ -1192,5 +1208,82 @@ CASES = [
          stress_fd=((0, 0), (1, 1), (2, 2), (0, 1)), torch=False,
          tol={**TOL_CORR, "stress": 1e-9},
          note="layer at 5 A, two molecules given one period lower (folded)"),
+]
+CASES += [
+    # --- analysis outputs (milestone M6f-4a), NumPy only ---
+    Case("ch3oh_analysis", _meoh, torch=False, tol=TOL_ANALYSIS,
+         analysis={"atom_energies": True, "net_populations": True, "cm5": True,
+                   "esp": {"points": ESP3}, "eigenvectors": True, "band_out": True},
+         note="every M6f-4a output of a molecule"),
+    Case("water_dimer_dftb3_d4_h5_atom", _water_dimer, h5=True, dispersion=D4_3OB,
+         dftb3={"third_order": "full", "hubbard_derivs": UD_3OB}, torch=False,
+         tol=TOL_ANALYSIS, analysis=ATOM_E,
+         note="full third order, D4 (three-body terms a third to each atom), H5"),
+    Case("ch3oh_d3_atom", _meoh, dispersion=D3BJ_3OB, torch=False, tol=TOL_ANALYSIS,
+         analysis={"atom_energies": True, "compat": True},
+         note="DFTB+ spreads the D3 library's energy evenly (E/N): compared with the compat "
+              "switch; pydftb resolves it by atom pairs"),
+    Case("water_dimer_sk_atom", _water_dimer,
+         dispersion=lambda labels: sk_per_atom(labels, skip=(3,)), torch=False,
+         tol=TOL_ANALYSIS, analysis=ATOM_E),
+    Case("ch3oh_simple_d3_atom", _meoh,
+         dispersion={"model": "simpledftd3", "s8": 0.5883, "a1": 0.5719, "a2": 3.6017},
+         torch=False, tol=TOL_ANALYSIS, analysis=ATOM_E),
+    Case("water_box_uff_atom", _water_box, dispersion={"model": "lennardjones"},
+         ewald_tolerance=1e-12, scc_tol=1.7e-10, torch=False, tol=TOL_ANALYSIS, analysis=ATOM_E,
+         note="the r^-6 Ewald sum per atom (real-space pairs, reciprocal and self terms)"),
+    Case("water_box_d4_atom", _water_box, dispersion=D4_3OB_2BODY_Q0, ewald_tolerance=1e-12,
+         scc_tol=1.7e-10, torch=False, tol=TOL_ANALYSIS, analysis=ATOM_E),
+    Case("o2_triplet_field_atom", _o2,
+         spin={"unpaired_electrons": 2, "spin_constants": {"O": -0.028}}, efield=FIELD,
+         torch=False, tol={**TOL_ANALYSIS, **TOL_ENV},
+         analysis={"atom_energies": True, "eigenvectors": True, "band_out": True}),
+    Case("h2o_pc_esp", _water, point_charges=PC3, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_ENV, **TOL_DFTBP_FD},
+         analysis={"atom_energies": True, "esp": {"points": ESP3}},
+         note="the potential's external column (point charges)"),
+    Case("h2o_site_atom", _water, site_potentials=SITES, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_ENV, **TOL_DFTBP_FD},
+         analysis={"atom_energies": True, "net_populations": True}),
+    Case("h2o_onsite3rd_atom", _water,
+         dftb3={"third_order": "onsite", "hubbard_derivs": UD_3OB}, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_DFTBP_FD}, analysis=ATOM_E,
+         note="on-site third order (DFTB+ books it in E_SCC, pydftb in e_3rd)"),
+    Case("cu4co_plusu_atom", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_BLOCK}, analysis={"atom_energies": True, "cm5": True}),
+    Case("ch3oh_ons_atom", _meoh, onsite=ONS, scc_tol=2.5e-10, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_BLOCK}, analysis=ATOM_E),
+    Case("oh_noncolinear_soc_atom", _oh, filling=("fermi", 300.0), noncolinear=NC_OH,
+         spin_orbit={"xi": {"O": [0.0, 0.01]}}, scc_tol=3e-10, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_PAULI},
+         analysis={"atom_energies": True, "eigenvectors": True, "band_out": True},
+         note="dual spin-orbit energy per atom; two-component eigenvec.out"),
+    Case("h2o_gbsa_atom", _water, solvation=GBSA_WATER, torch=False,
+         tol={**TOL_ANALYSIS, **TOL_ENV, **TOL_DFTBP_FD},
+         analysis={"atom_energies": True, "cm5": True}),
+    Case("meoh_water_halogen_atom", lambda: _meoh_water(3.0), labels=_relabel(a1="Cl"),
+         typed={"C": "C", "H": "H", "O": "O", "Cl": "O"}, halogen={},
+         dftb3={"third_order": "full", "hubbard_derivs": UD_HALOGEN, "h_damping": 4.0},
+         scc_tol=1e-9, torch=False, tol={**TOL_ANALYSIS, **TOL_CORR}, analysis=ATOM_E,
+         note="the halogen correction, half of each pair, only in the total energies"),
+    Case("water_box_analysis", _water_box, ewald_tolerance=1e-12, scc_tol=1.7e-10, torch=False,
+         tol=TOL_ANALYSIS,
+         analysis={"atom_energies": True, "net_populations": True, "cm5": True,
+                   "esp": {"grid": {"spacing": [1.5, 1.5, 1.5], "origin": [0.0, 0.0, 0.0],
+                                    "points": [3, 2, 2]}}, "eigenvectors": True},
+         note="periodic: Ewald SCC per atom, CM5 with images, a potential grid"),
+    Case("cuo_chain_k422_analysis", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         ewald_tolerance=1e-12, torch=False, tol=TOL_ANALYSIS,
+         analysis={"atom_energies": True, "net_populations": True, "cm5": True,
+                   "eigenvectors": True, "band_out": True},
+         note="k-points: complex eigenvec.out, band.out"),
+    Case("water_slab_dipole_analysis", _water_layer, kgrid=(2, 2, 1), dipole_correction=True,
+         ewald_tolerance=1e-12, scc_tol=1e-9, dftbplus="dev", torch=False,
+         stress_fd=((0, 0), (1, 1), (2, 2), (0, 1)), tol={**TOL_ANALYSIS, **TOL_CORR,
+                                                          "stress": 1e-9},
+         analysis={"atom_energies": True, "esp": {"points": [[1.0, 2.0, 3.0], [2.0, 1.0, 12.0],
+                                                             [0.5, 0.5, 18.0]]}},
+         note="the dipole correction in the SCC energies and the potential (development "
+              "DFTB+)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

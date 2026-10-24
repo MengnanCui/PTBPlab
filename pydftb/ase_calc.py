@@ -9,12 +9,14 @@ forces come back with ASE's constants (``ase.units``), exactly as
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 
 import numpy as np
 from ase import units
 from ase.calculators.calculator import (CalculationFailed, Calculator, all_changes,
                                         kptdensity2monkhorstpack)
 
+from .analysis import Analysis
 from .bands import States, eigenstates
 from .calculator import DFTB, SCCControl
 from .casida import Casida
@@ -55,6 +57,26 @@ def _dipole_correction_au(spec):
     if isinstance(spec, dict) and spec.get("layer_position") is not None:
         return {**spec, "layer_position": float(spec["layer_position"]) / BOHR}
     return spec
+
+
+def _analysis_au(spec):
+    """``analysis`` with the electrostatic potential's points, grid and softening from
+    Angstrom to Bohr (fractional coordinates stay)."""
+    a = Analysis.make(spec)
+    if a is None or a.esp is None:
+        return a
+    esp = dict(a.esp)
+    frac = esp.get("fractional", False)
+    if "softening" in esp:
+        esp["softening"] = float(esp["softening"]) / BOHR
+    if "points" in esp and not frac:
+        esp["points"] = np.asarray(esp["points"], float) / BOHR
+    if "grid" in esp and not frac:
+        grid = dict(esp["grid"])
+        grid["spacing"] = np.asarray(grid["spacing"], float) / BOHR
+        grid["origin"] = np.asarray(grid["origin"], float) / BOHR
+        esp["grid"] = grid
+    return replace(a, esp=esp)
 
 
 @contextlib.contextmanager
@@ -137,9 +159,13 @@ class PyDFTB(Calculator):
     Milestone M6f-3: ``h5`` (the H5 hydrogen-bond correction), ``halogen_correction`` (DFTB3)
     and ``dipole_correction`` (slabs; {"layer_position": z0} in Angstrom) as in
     :class:`pydftb.DFTB`.
+    Milestone M6f-4a: ``analysis`` as in :class:`pydftb.DFTB` (the electrostatic potential's
+    points, grid and softening in Angstrom); with atom-resolved energies ``energies`` (eV,
+    ``atoms.get_potential_energies()``) are the total energy per atom, summing to ``energy``;
+    the rest is in ``calc.raw.analysis`` (atomic units).
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
-                              "magmom", "magmoms", "dipole"]
+                              "magmom", "magmoms", "dipole", "energies"]
 
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool | None = None,
                  smearing=None, temperature: float | None = None, scc: bool = True,
@@ -161,7 +187,7 @@ class PyDFTB(Calculator):
                  read_charges=None, fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None, **kwargs):
+                 dipole_correction=None, analysis=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -194,7 +220,8 @@ class PyDFTB(Calculator):
                                 reference_occupations=reference_occupations,
                                 truncate_sk_range=_truncation_au(truncate_sk_range), h5=h5,
                                 halogen_correction=halogen_correction,
-                                dipole_correction=_dipole_correction_au(dipole_correction))
+                                dipole_correction=_dipole_correction_au(dipole_correction),
+                                analysis=_analysis_au(analysis))
         self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
@@ -404,6 +431,9 @@ class PyDFTB(Calculator):
             self.results["stress"] = (-r.stress * units.Hartree / units.Bohr ** 3).flat[[0, 4, 8, 5, 2, 1]]
         if r.dipole is not None:
             self.results["dipole"] = r.dipole * units.Bohr
+        if (r.analysis is not None and r.analysis.atom_energies is not None
+                and not self.excited):                                   # M6f-4a
+            self.results["energies"] = r.analysis.atom_energies["total"] * units.Hartree
         magmoms = np.zeros(len(labels)) if r.magmoms is None else r.magmoms
         self.results["magmoms"] = magmoms
         self.results["magmom"] = (float(magmoms.sum()) if magmoms.ndim == 1
