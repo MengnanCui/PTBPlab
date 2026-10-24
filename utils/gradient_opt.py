@@ -82,10 +82,13 @@ class Evaluator:
         self.steps = steps
         self.log_path = log_path or os.path.abspath(GRAD_FILE)
         self.history = History()
+        # parameters per type (M5b): (r0_w, r0_d) of every parameter set
+        self.typed = bool(getattr(loss, "typed", False))
+        self.names = loss.types.dimension_names() if self.typed else ["r0_w", "r0_d"]
         if not os.path.exists(self.log_path):
-            from utils.loss_grad import GRAD_HEADER
+            from utils.loss_grad import GRAD_HEADER, grad_header
             with open(self.log_path, "w") as fh:
-                fh.write(GRAD_HEADER + "\n")
+                fh.write((grad_header(self.names) if self.typed else GRAD_HEADER) + "\n")
 
     def __call__(self, x) -> Evaluation:
         from utils.loss_grad import GradRequest
@@ -94,15 +97,17 @@ class Evaluator:
         req = GradRequest(self.steps)
         self.loss.grad_request = req
         try:
-            f = float(self.loss.Loss_EnergyGeometry([float(x[0]), float(x[1])]))
+            f = float(self.loss.Loss_EnergyGeometry([float(v) for v in x]))
         finally:
             self.loss.grad_request = None
             os.chdir(cwd)
         res = req.result
         g = None
         if res is not None and res.grad is not None:
-            g = np.array([res.grad["r0_w"], res.grad["r0_d"]], dtype=float)
-        ev = Evaluation(x, f, g, res, req.directory_name(*x))
+            g = np.array([res.grad[n] for n in self.names], dtype=float)
+        name = (self.loss.types.directory_name(x, 6) if self.typed
+                else req.directory_name(*x))
+        ev = Evaluation(x, f, g, res, name)
         self.history.evaluations.append(ev)
         if res is not None:
             with open(self.log_path, "a") as fh:
@@ -208,6 +213,8 @@ def seed(loss, cov_radius):
     from ase.data import chemical_symbols
 
     from utils.parameters_set import get_PTBP
+    if getattr(loss, "typed", False):                 # M5b: every parameter set's start
+        return loss.types.seed()
     symbols = sorted({chemical_symbols[int(z)] for a in loss.dft_input for z in a.numbers})
     if len(symbols) == 1 and symbols[0] in get_PTBP():
         p = get_PTBP()[symbols[0]]
@@ -221,13 +228,13 @@ def optimize_gradient(loss, cov_radius, maxiter: int = 20, steps=None, x0=None):
     torch_one_thread()
     lo, hi = bounds(loss, cov_radius)
     x0 = seed(loss, cov_radius) if x0 is None else x0
-    print(f"[gradient] projected BFGS from r0_w={x0[0]}, r0_d={x0[1]} in "
-          f"[{lo[0]:.3f}, {hi[0]:.3f}] x [{lo[1]:.3f}, {hi[1]:.3f}], maxiter {maxiter}")
+    print(f"[gradient] projected BFGS from {list(map(float, x0))} in the box "
+          f"{[(round(a, 3), round(b, 3)) for a, b in zip(lo, hi)]}, maxiter {maxiter}")
     ev = Evaluator(loss, steps)
     t0 = time.perf_counter()
     best, hist = projected_bfgs(ev, x0, lo, hi, maxiter=maxiter, history=ev.history)
     best = lowest(ev.history.evaluations, best)    # also one without a gradient, as BO
-    print(f"[gradient] {hist.message}: best r0_w={best.x[0]:.6f}, r0_d={best.x[1]:.6f}, "
+    print(f"[gradient] {hist.message}: best {[round(float(v), 6) for v in best.x]}, "
           f"mu={best.f:.10g} after {len(ev.history.evaluations)} evaluations "
           f"({time.perf_counter() - t0:.0f} s)")
     return _result(best, ev.history.evaluations, "gradient", hist)
@@ -243,14 +250,15 @@ def optimize_bo_grad(loss, cov_radius, checkpoint_saver, n_calls: int, maxiter: 
     if ok and failed(f_bo):          # dataset/reaction: a failed step (97-99) can be BO's
         f_bo, x_bo = min(ok, key=lambda v: v[0])          # minimum; start from a real one
         x_bo, f_bo = list(map(float, x_bo)), float(f_bo)
-    print(f"[bo_grad] BO best r0_w={x_bo[0]:.6f}, r0_d={x_bo[1]:.6f}, mu={f_bo:.10g}; "
+    print(f"[bo_grad] BO best {[round(v, 6) for v in x_bo]}, mu={f_bo:.10g}; "
           f"{maxiter} gradient step(s) from there")
     torch_one_thread()
     lo, hi = bounds(loss, cov_radius)
     ev = Evaluator(loss, steps)
     _, hist = projected_bfgs(ev, x_bo, lo, hi, maxiter=maxiter, history=ev.history)
     best = lowest(ev.history.evaluations)
-    bo_dir = f"opt_{x_bo[0]:.3f}_{x_bo[1]:.3f}"
+    bo_dir = (loss.types.directory_name(x_bo) if getattr(loss, "typed", False)
+              else f"opt_{x_bo[0]:.3f}_{x_bo[1]:.3f}")
     if best is None or best.f >= f_bo:
         best_x = SimpleNamespace(x=np.array(x_bo), f=f_bo, directory=bo_dir)
     else:

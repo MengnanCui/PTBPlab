@@ -42,6 +42,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    help="Core budget (as `ptbp optimize --ncores`). Default: auto.")
     p.add_argument('--multi-element', nargs='+', default=None, metavar='E', dest='multi_element',
                    help="Elements to optimise in a multi-element dataset.")
+    p.add_argument('--switch', nargs=4, action='append', default=None,
+                   metavar=('ELEMENT', 'LABELS', 'CENTRE', 'WIDTH'), dest='switch',
+                   help="Switched types, as `ptbp optimize --switch` (M5b): hotcent computes "
+                        "the tables of every pair of type labels.")
     p.add_argument('--probe', action='store_true',
                    help="Measure this machine's speed first (about 1 s; cached per machine) "
                         "and look for GPUs pydftb could use.")
@@ -82,9 +86,19 @@ def run(args: argparse.Namespace) -> int:
         return 2
     structures = ase.io.read(path, ':')
     bolt = bolt_for(structures, mode, args.eos_points, args.multi_element)
+    labels = None
+    if getattr(args, 'switch', None):                     # M5b: the tables of the type labels
+        from utils.typemodel import TypeModel, parse_switch_args
+        try:
+            labels = TypeModel.from_dataset(
+                structures, declarations=parse_switch_args(args.switch)).element_of
+        except ValueError as err:
+            print(f"ptbp plan: {err}")
+            return 2
+    # M5b: every pair of types gets its tables (--multi_element no longer restricts them)
     workload = workload_from_dataset(structures, bolt, kpts_density=args.kpts,
                                      eos_points=args.eos_points, engine=args.engine, mode=mode,
-                                     opt_elem=args.multi_element or ())
+                                     **({} if labels is None else {'labels': labels}))
     backend = accelerators = None
     if args.engine == 'pydftb' and getattr(args, 'pydftb_backend', 'numpy') == 'torch':   # M4d
         import importlib.metadata

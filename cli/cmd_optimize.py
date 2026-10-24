@@ -105,8 +105,27 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    help="Parameters to optimise. Default: r0_w r0_d sigma_rep.")
     p.add_argument('--multi-element', nargs='+', default=None, metavar='E',
                    dest='multi_element',
-                   help="Element symbol(s) whose params are jointly optimised; "
-                        "others are held at PTBP defaults.")
+                   help="Element symbol(s) whose params are optimised; "
+                        "others are held at PTBP's published parameters.")
+    p.add_argument('--shared-parameters', action='store_true', default=None,
+                   dest='shared_parameters',
+                   help="One (r0_w, r0_d, sigma_rep) for all elements, as before M5b. Default: "
+                        "one set per element (per type).")
+    p.add_argument('--switch', nargs=4, action='append', default=None,
+                   metavar=('ELEMENT', 'LABELS', 'CENTRE', 'WIDTH'), dest='switch',
+                   help="Split ELEMENT into types that switch smoothly with the coordination "
+                        "number (pydftb's M5a): LABELS comma-separated in order of increasing "
+                        "coordination number (e.g. Cu2,Cu), CENTRE and WIDTH of every switching "
+                        "window (comma-separated, CN units). Fixed hyperparameters; each type "
+                        "gets its own r0_w, r0_d, sigma_rep. Needs --engine pydftb. Repeatable.")
+    p.add_argument('--types', default=None, metavar='JSON', dest='types',
+                   help="Switched types as JSON (the YAML key `types`): a list of "
+                        "{\"element\", \"labels\", \"centre\", \"width\"[, \"cutoff\" (Bohr), "
+                        "\"start\"]}; same as --switch.")
+    p.add_argument('--type-start', nargs=3, action='append', default=None,
+                   metavar=('LABEL', 'R0_W', 'R0_D'), dest='type_start',
+                   help="Starting point of a type's radii (Bohr). Default: PTBP's table, else "
+                        "r_cov x (3, 5). Repeatable.")
     p.add_argument('--superposition', default='density',
                    choices=['density', 'potential'],
                    help="Density vs potential superposition. Default: density.")
@@ -177,6 +196,13 @@ def _write_summary(run_dir: Path, args: argparse.Namespace,
     except Exception as e:
         print(f"[run-folder] summary.json write failed (non-fatal): {e}",
               file=sys.stderr)
+
+
+def _type_declarations(args: argparse.Namespace) -> list:
+    """Switched types (M5b) from --switch and the YAML key ``types``, as declarations."""
+    from utils.typemodel import load_declarations, parse_switch_args
+    return (load_declarations(getattr(args, 'types', None))
+            + parse_switch_args(getattr(args, 'switch', None)))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -256,6 +282,15 @@ def run(args: argparse.Namespace) -> int:
         legacy_argv += ['--E0s', args.E0s]
     if args.multi_element:
         legacy_argv += ['--multi_element', *args.multi_element]
+    if getattr(args, 'shared_parameters', None):                    # M5b
+        legacy_argv += ['--shared_parameters']
+    declarations = _type_declarations(args)
+    args.types, args.switch = (declarations or None), None      # ptbp_run.yaml keeps them
+    if declarations:
+        import json
+        legacy_argv += ['--types', json.dumps(declarations)]
+    for item in getattr(args, 'type_start', None) or []:
+        legacy_argv += ['--type_start', *[str(v) for v in item]]
     if args.postprocess_only:
         legacy_argv += ['--postprocess_only']
     if getattr(args, 'grad_maxiter', None) is not None:

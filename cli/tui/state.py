@@ -37,6 +37,8 @@ class SetupState:
     eos_points: int = 11
     parameters: List[str] = field(default_factory=lambda: ['r0_w', 'r0_d', 'sigma_rep'])
     multi_element: List[str] = field(default_factory=list)
+    shared_parameters: bool = False      # one parameter set for all elements (before M5b)
+    switch_types: str = ''               # switched types (M5b): "Cu:Cu2,Cu:11.0:1.0[; ...]"
     superposition: str = 'density'
     engine: str = 'dftbplus'             # dftbplus / pydftb
     ncores: str = 'auto'                 # cores of the parallel BO step: N or auto
@@ -76,6 +78,11 @@ def assemble_optimize_yaml(state: SetupState) -> dict:
         out['n_calls'] = state.n_calls
     if state.multi_element:
         out['multi_element'] = list(state.multi_element)
+    if state.shared_parameters:                          # M5b: else one set per element
+        out['shared_parameters'] = True
+    if state.switch_types.strip():
+        from utils.typemodel import parse_switch_text
+        out['types'] = parse_switch_text(state.switch_types)
     if str(state.ncores).strip().lower() not in ('', 'auto'):
         out['ncores'] = int(state.ncores)
     if state.engine == 'pydftb' and state.pydftb_device not in ('', 'cpu'):

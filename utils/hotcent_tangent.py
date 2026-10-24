@@ -88,17 +88,35 @@ def same_files(a: str, b: str) -> bool:
     return all(filecmp.cmp(os.path.join(a, n), os.path.join(b, n), shallow=False) for n in na)
 
 
-def run_hotcent(hp_settings: dict, confinement, outdir: str, workers: int = 1) -> float:
+def run_hotcent(hp_settings: dict, confinement, outdir: str, workers: int = 1,
+                only=None, base_dir: str | None = None) -> float:
     """hotcent for ``confinement = (confinement_r0, confinement_p)`` into ``outdir`` as the
     BO step runs it (sharded rows, or the reference implementation where the step uses
-    it); returns the wall time."""
+    it); returns the wall time.
+
+    ``only`` (parameters per type, M5b): compute just the tables that involve these labels
+    and copy every other SKF file from ``base_dir`` (the step's own files, at the same
+    parameters for the other types): a type's radii change only its own tables."""
     from utils import hotcent_parallel
     from utils.hotpy import hotpy
     os.makedirs(outdir, exist_ok=True)
     hp = hotpy()
     hp.set_variables(confinement[0], confinement[1], xc=hp_settings["xc"],
-                     superposition=hp_settings["superposition"])
+                     superposition=hp_settings["superposition"],
+                     elements=hp_settings.get("elements"))
     t0 = time.perf_counter()
+    if only is not None:
+        only = set(only)
+        with contextlib.redirect_stdout(io.StringIO()):
+            hotcent_parallel.generate_all(hp, hp_settings["superposition"], [],
+                                          hp_settings.get("label", "ptbp"), workers=workers,
+                                          outdir=outdir, only=only)
+        for path in glob.glob(os.path.join(base_dir, "*.skf")):
+            name = os.path.basename(path)
+            a, b = name[:-4].split("-", 1)
+            if a not in only and b not in only:
+                shutil.copy2(path, os.path.join(outdir, name))
+        return time.perf_counter() - t0
     with contextlib.redirect_stdout(io.StringIO()):
         if os.environ.get("PTBP_HOTCENT_REFERENCE") or not hotcent_parallel.sharding_supported():
             cwd = os.getcwd()
@@ -183,6 +201,65 @@ def compute(confinement, hp_settings: dict, base_dir: str, labels, r0_w: float, 
                                    "r0_d")
                 out["r0_d"] = Tangent("r0_d", h_d, **diff)
         out["r0_d"].seconds = time.perf_counter() - t0
+    finally:
+        if not keep:
+            shutil.rmtree(work, ignore_errors=True)
+    return out
+
+
+def compute_types(model, x, hp_settings: dict, base_dir: str, steps=DEFAULT_STEPS,
+                  workers: int = 1, work_dir: str | None = None, keep: bool = False,
+                  probe_key=None) -> dict:
+    """Tangents of every outer parameter of a parameter-per-type run (M5b): {name: Tangent},
+    names as ``model.dimension_names()`` (r0_w_<set>, r0_d_<set>, ...).
+
+    Each direction moves the radii of one parameter set (its types) and recomputes only the
+    tables of those types; the other files are the step's own (``base_dir``), so their
+    difference is exactly zero.  r0_d is probed once per set and run setting as in
+    :func:`compute`."""
+    h_w, h_d = (float(s) for s in steps)
+    x = [float(v) for v in x]
+    labels = model.labels
+    hp = dict(hp_settings, elements=model.element_of)
+    work = work_dir or os.path.join(base_dir, "tangent")
+    os.makedirs(work, exist_ok=True)
+    names = model.dimension_names()
+    out = {}
+
+    def conf(k, c, delta):
+        y = list(x)
+        y[2 * k + c] += delta
+        return model.confinement(y)
+
+    try:
+        for k, pset in enumerate(model.sets):
+            only = set(pset.labels)
+            for c, (h, name) in enumerate(((h_w, names[2 * k]), (h_d, names[2 * k + 1]))):
+                t0 = time.perf_counter()
+                plus = os.path.join(work, f"{name}_plus")
+                key = None if probe_key is None else (probe_key, pset.name)
+                if c == 1 and key is not None and _PROBES.get(key) is True:
+                    out[name] = Tangent(name, 0.0, zero=True, probed=True)
+                    out[name].seconds = time.perf_counter() - t0
+                    continue
+                run_hotcent(hp, conf(k, c, h), plus, workers, only=only, base_dir=base_dir)
+                if c == 1 and same_files(base_dir, plus):          # r0_d does not matter
+                    out[name] = Tangent(name, 0.0, zero=True, probed=True)
+                    if key is not None:
+                        _PROBES[key] = True
+                    out[name].seconds = time.perf_counter() - t0
+                    continue
+                if c == 1 and key is not None:
+                    _PROBES[key] = False
+                minus = os.path.join(work, f"{name}_minus")
+                run_hotcent(hp, conf(k, c, -h), minus, workers, only=only, base_dir=base_dir)
+                if same_files(plus, minus):
+                    out[name] = Tangent(name, h, zero=True)
+                else:
+                    diff = _difference(skf_parameters(plus, labels), skf_parameters(minus, labels),
+                                       h, name)
+                    out[name] = Tangent(name, h, **diff)
+                out[name].seconds = time.perf_counter() - t0
     finally:
         if not keep:
             shutil.rmtree(work, ignore_errors=True)

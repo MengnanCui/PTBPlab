@@ -27,6 +27,11 @@ temperature/order actually used is checked in ``dftb_pin.hsd``).
 on PyTorch, on the CPU or a GPU (``pydftb.backend.devices``); the default NumPy/CPU/float64
 leaves every calculation as before.  On a GPU the DFTB stage runs in this process, one
 structure after the other (:func:`is_gpu`).
+
+Several types of one element (milestone M5b, :func:`set_type_switching`): pydftb mixes them
+by the atoms' coordination numbers (pydftb's M5a); the atoms keep their element symbols.  DFTB+
+through ASE writes the element symbols only, so it refuses such runs.  Without switches every
+calculator is created exactly as before.
 """
 from __future__ import annotations
 
@@ -109,6 +114,31 @@ def settings() -> dict:
     return dict(_SETTINGS)
 
 
+# type switching (M5b): process-wide like the settings (forked workers inherit it), kept out of
+# _SETTINGS so that settings() and what is derived from it do not change without switches
+_TYPE_SWITCHING: tuple = ()
+DFTBPLUS_SWITCHING_ERROR = (
+    "several types of one element (type switching, M5b) need --engine pydftb: DFTB+ through ASE "
+    "writes only element symbols and gives every atom one fixed type; parameters per element "
+    "without declared types work with both engines")
+
+
+def set_type_switching(switches=()) -> tuple:
+    """Set the type switches (``pydftb.typeswitch.TypeSwitch`` objects or dicts) of every pydftb
+    calculation of this process; () switches them off."""
+    global _TYPE_SWITCHING
+    if switches:
+        from pydftb.typeswitch import check_switches
+        _TYPE_SWITCHING = tuple(check_switches(list(switches)))
+    else:
+        _TYPE_SWITCHING = ()
+    return _TYPE_SWITCHING
+
+
+def type_switching() -> tuple:
+    return _TYPE_SWITCHING
+
+
 def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | None = None):
     """ASE calculator for one structure.
 
@@ -123,6 +153,8 @@ def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | Non
     """
     engine = engine or dftb_args.get("engine") or _SETTINGS["engine"]
     if engine == "dftbplus":
+        if _TYPE_SWITCHING:
+            raise ValueError(DFTBPLUS_SWITCHING_ERROR)
         from utils.calculator import _dftbplus_ase_calculator
         return _dftbplus_ase_calculator(mole, dftb_args, filling=dftbplus_filling_kwargs())
     if engine == "pydftb":
@@ -222,6 +254,8 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
     if _SETTINGS["pydftb_backend"] != "numpy":       # M4d; the default calls stay as they were
         backend = dict(backend=_SETTINGS["pydftb_backend"], device=_SETTINGS["pydftb_device"],
                        dtype=_SETTINGS["pydftb_dtype"])
+    if _TYPE_SWITCHING:                              # M5b; without switches the call is as before
+        backend["type_switching"] = list(_TYPE_SWITCHING)
     return PyDFTB(dftb_args.get("slater_p", "./"),
                   kpts=kspec, time_reversal=not isinstance(kspec, dict),
                   smearing=pydftb_smearing(),

@@ -78,16 +78,21 @@ class hotpy():
         self.slator_p = slator_p
         self.xc = xc
         self.superposition = superposition
-    
+        self.elements = {}
 
-    def set_variables(self, 
+
+    def set_variables(self,
                       confinement_r0: dict,
                       confinement_p: dict,
                       xc: str,
                       superposition: str,
                       workdir: str='./',
                       slator_p: float='./',
+                      elements: dict | None = None,
     ):
+        """``elements``: {type label: element symbol} when the keys of ``confinement_r0`` are
+        type labels (milestone M5b, e.g. ``Cu2``); the atoms are then computed for the element
+        with the type's confinement and the files named after the labels."""
         self.confinement_r0 = confinement_r0
         self.confinement_p = confinement_p
         self.symbols = list(confinement_r0.keys())
@@ -95,7 +100,16 @@ class hotpy():
         self.slator_p = slator_p
         self.xc = xc
         self.superposition = superposition
-     
+        self.elements = dict(elements or {})
+
+    def element_of(self, label: str) -> str:
+        """Element symbol of a key of confinement_r0 (a type label or the symbol itself)."""
+        return getattr(self, 'elements', {}).get(label, label)
+
+    def labelled(self) -> bool:
+        """Whether some key of confinement_r0 is a type label other than its element symbol."""
+        return any(self.element_of(s) != s for s in self.symbols)
+
     def get_orbit(self, valence_shell:str) -> tuple:
                 """
                 Parser valence_shell string occupation, valances, orbits
@@ -384,6 +398,13 @@ class hotpy():
         from utils import hotcent_parallel
         from utils.parallel import current_plan
         if os.environ.get("PTBP_HOTCENT_REFERENCE") or not hotcent_parallel.sharding_supported():
+            if self.labelled():
+                raise RuntimeError(
+                    "type labels other than element symbols (M5b) need PTBP's hotcent driver "
+                    "(utils.hotcent_parallel), which supports hotcent 2.1.0; the reference "
+                    "implementation names the files after the elements"
+                    + (" (unset PTBP_HOTCENT_REFERENCE)" if os.environ.get("PTBP_HOTCENT_REFERENCE")
+                       else ""))
             return self.full_hotcent_reference(superposition, opt_elem, label)
         plan = current_plan()
         workers = plan.stage("hotcent").workers if plan is not None else 1
