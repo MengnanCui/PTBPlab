@@ -43,6 +43,7 @@ import utils.data as data
 from utils.hotpy import hotpy
 from utils.loss import Loss 
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
+from utils.bo_plots import save_bo_plots
 hp = hotpy()
 
 # os.system('export ASE_DFTB_COMMAND="/home/mengnancui/Software/dftbplus/dftbplus-23.1.x86_64-linux/bin/dftb+" > PREFIX.out')
@@ -211,15 +212,7 @@ Boltzmann factor: {bolt_f.tolist()}
             # so we draw a plain matplotlib convergence curve from
             # res.func_vals instead.
             if ptbp_args.optimizer == 'bo':
-                plot_convergence(res)
-                plt.savefig('convergence.png', dpi=300)
-                plt.clf()
-
-                eval = plot_evaluations(res, bins=20)
-                eval[0][0].figure.savefig('eval.png', dpi=300, bbox_inches='tight')
-
-                obje = plot_objective(res, sample_source='result')
-                obje[0][0].figure.savefig('obj.png', dpi=300, bbox_inches='tight')
+                save_bo_plots(res)
             else:
                 # Generic best-so-far convergence curve usable for any optimiser.
                 vals = list(res.func_vals)
@@ -345,15 +338,7 @@ Boltzmann factor: {bolt_f.tolist()}
             r0_best, p_best = res.x
 
             os.chdir(p)
-            plot_convergence(res)
-            plt.savefig('convergence.png', dpi=300)
-            plt.clf()
-
-            eval = plot_evaluations(res, bins=20)
-            eval[0][0].figure.savefig('eval.png', dpi=300, bbox_inches='tight')
-
-            obje = plot_objective(res, sample_source='result')
-            obje[0][0].figure.savefig('obj.png', dpi=300, bbox_inches='tight')
+            save_bo_plots(res)
 
 
             best_folder = path / ptbp_args.results_dir / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
