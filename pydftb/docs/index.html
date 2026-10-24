@@ -43,8 +43,8 @@
       <li>对照中发现并记录了 DFTB+ 自身的几处问题：U 接近时 γ 公式数值崩溃（M2b）、原生 D4 的三处错误（M2d），k 点权重有舍入时绝缘体的费米能级被放到导带底（M2e），以及 SOC 下约化的 k 网格算错磁矩（M6a）、只有 s 壳层的 +U 组崩溃（M6b）、GB 溶剂中的 CM5 修正算了两次、外场的应力在非立方晶胞中错误（M6c），设置 <code>StateOfInterest</code> 后输出的“总能量”仍是基态能量、Casida 的两个求解器在部分占据 d 能级的 Cu<sub>4</sub>CO 上都失败（M6d），激发态的力在外场、点电荷、H–X 阻尼、能量窗口、按壳层自旋常数五种组合下不是能量的导数、<code>DynamicsT0</code> 在自旋极化时的力错误（M6e），非共线自旋读电荷重启时因“未读的 <code>InitialSpins</code>”停止（M6f-1），带电周期晶胞的应力不是能量的应变导数、<code>IndependentKFilling</code> 遇到共线自旋时崩溃（M6f-2），卤素修正在开关区间内力和应力的符号错、激发态的力与 XL-BOMD 的梯度漏了 H5、偶极修正没有应力项且晶格检查只看 a<sub>3</sub>（M6f-3），默认的 Ewald 精度让按原子的能量差 5e-8、s-dftd3 库的 D3 能量被平均分给每个原子、ESP 网格旋转时文件头写错、D3H5 的 H–H 排斥在短晶胞中重复计算（M6f-4a）。</li>
     </ul>
     <ul class="figures">
-      <li><span class="num">217 + 24</span><span class="lbl">DFTB+ 参考算例（单点 + 优化/MD），全部通过</span></li>
-      <li><span class="num">880 + 224</span><span class="lbl">离线测试：pydftb + PTBP（conda 环境）</span></li>
+      <li><span class="num">236 + 24</span><span class="lbl">DFTB+ 参考算例（单点 + 优化/MD），全部通过</span></li>
+      <li><span class="num">957 + 227</span><span class="lbl">离线测试：pydftb + PTBP（conda 环境）</span></li>
       <li><span class="num">&lt; 1e-7</span><span class="lbl">PTBP 损失函数与 DFTB+ 的相对差</span></li>
       <li><span class="num">5.4×</span><span class="lbl">PTBP 的一个 BO 步，4 核（pydftb，对 M3 之前）</span></li>
     </ul>
@@ -120,7 +120,10 @@ pydftb dynamics --check                                    # 结构优化与 MD�
 pydftb refgen --regenerate &lt;算例名&gt;                         # 需要 dftb+，重写参考 JSON
 pydftb refgen --live &lt;算例名&gt;                               # 与新跑的 dftb+ 直接比较
 python -m pydftb.validation.make_f_set                     # 重新生成 f 轨道测试参数（需要 hotcent）
-pydftb gpu-check --device cpu --quick                      # GPU 自检脚本，在 CPU 上检查脚本本身</code></pre>
+pydftb gpu-check --device cpu --quick                      # GPU 自检脚本，在 CPU 上检查脚本本身
+python -m pytest --pyargs pydftb.tests                     # 装好的 pydftb 自带的测试（仓库外也能跑）
+ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines pydftb \
+    --compare-serial --workdir /tmp/parity                 # G1：损失 0.9198547924，1 核与自动逐位相同</code></pre>
       <h3>代码与数据在哪里</h3>
       <ul>
         <li>引擎：<code>pydftb/calculator.py</code>（四段式：<code>_setup</code>、<code>_scc</code>、<code>_energies</code>、<code>_gradient</code>）；ASE 接口 <code>pydftb/ase_calc.py</code>；PySCF 风格接口 <code>pydftb/api.py</code>。</li>

@@ -57,6 +57,10 @@ pydftb also installs and works without PTBP (`pip install ./pydftb`; see `pydftb
 Verified working combination (May 2026, macOS arm64, Python 3.11):
 `ase 3.28.0`, `scikit-optimize 0.10.2`, `pylibxc 7.0.0`, `hotcent 2.0.1`,
 `dftbplus 25.1` (nompi).
+Also verified (October 2026, Linux x86_64, conda-forge, Python 3.11, with the two
+packages installed as `pip install -e ./pydftb -e .`): `ase 3.29.0`,
+`scikit-optimize 0.10.2`, `pylibxc 7.1.2`, `hotcent 2.1.0`, `dftbplus 25.1` (nompi),
+`numpy 2.4.6`, `scipy 1.17.1`, optionally `torch 2.14.1` (CPU).
 
 ### Notes
 
