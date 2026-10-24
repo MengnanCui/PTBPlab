@@ -25,6 +25,7 @@ SKF_SETS = {
     "orbit": os.path.join(DATA, "skf", "orbit"),
     "orbit_poly": os.path.join(DATA, "skf", "orbit_poly"),   # make_poly_set.py
     "hotcent_gdo": os.path.join(DATA, "skf", "hotcent_gdo"), # make_f_set.py (f orbitals)
+    "cu_types": os.path.join(DATA, "skf", "cu_types"),       # make_cu_types_set.py (M5a)
 }
 REF_DIR = os.path.join(DATA, "ref")
 MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0, "Gd": 3}
@@ -164,6 +165,11 @@ class Case:
     dipole_correction: bool | dict | None = None   # True or {"layer_position": z0 (A)}
     dftbplus: str = "25.1"                # "dev": references from the development build
                                           # ($DFTBPLUS_DEV), for what 25.1 does not have
+    # milestone M5a: smooth type switching in the discrete limit, the fields of a TypeSwitch
+    # ({"element", "types", "centre", "width", "cutoff"}): the labels are the fixed types the
+    # switch gives (weights 0 or 1), DFTB+ runs them; pydftb also runs the switch, which must
+    # give bitwise the explicit labels' results ("switch" deviation)
+    type_switching: dict | None = None
 
     @property
     def corrections(self) -> bool:
@@ -506,6 +512,53 @@ TOL_CORR = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "n_scc": 0, "scc_er
             "e_halogen": 1e-10}
 UD_HALOGEN = {**UD_3OB, "Cl": UD_3OB["O"], "Br": UD_3OB["O"], "N": UD_3OB["O"]}   # type copies
                                                                                # of O: test only
+# M5a: smooth type switching, discrete limit (the cu_types set: Cu = PTBP's Cu, Cu2 = looser
+# orbitals; make_cu_types_set.py).  Default counting window 2.904-3.432 A: the first fcc shell
+# counts 1, the second 0, so the coordination numbers are integers; "switch" is the deviation of
+# pydftb with the switch from pydftb with the explicit labels (bitwise: 0)
+SWITCH_SLAB = {"element": "Cu", "types": ("Cu2", "Cu"), "centre": 10.5, "width": 1.0}
+SWITCH_CLUSTER = {"element": "Cu", "types": ("Cu2", "Cu"), "centre": 8.5, "width": 3.0}
+TOL_TYPES = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "switch": 0.0}
+
+
+def _cu_slab111():
+    """Cu(111), 2 x 2 x 4 layers, 10 A of vacuum: surface atoms CN 9, inner atoms CN 12."""
+    from ase.build import fcc111
+    a = fcc111("Cu", size=(2, 2, 4), a=3.61, vacuum=5.0, periodic=True)
+    a.rattle(0.03, seed=11)
+    return a
+
+
+def _cu13():
+    """The 13-atom cuboctahedron: the 12 outer atoms CN 5, the centre CN 12."""
+    from ase.cluster import Octahedron
+    a = Octahedron("Cu", 3, cutoff=1, latticeconstant=3.61)
+    a.rattle(0.04, seed=12)
+    return a
+
+
+def _switch_labels(spec):
+    """Type labels of the discrete limit of a switch: each atom's type of weight 1 (an error if
+    a weight lies strictly between 0 and 1)."""
+    def labels(atoms):
+        from ..typeswitch import TypeSwitch
+        sw = TypeSwitch.make(spec)
+        periodic = bool(atoms.pbc.any())
+        elements = atoms.get_chemical_symbols()
+        cn = sw.coordination_numbers(elements, atoms.positions / BOHR,
+                                     atoms.cell.array / BOHR if periodic else None,
+                                     atoms.pbc if periodic else None)
+        w, _ = sw.weights(cn)
+        out = []
+        for el, ww in zip(elements, w):
+            if el != sw.element:
+                out.append(el)
+                continue
+            if not set(np.unique(ww)) <= {0.0, 1.0}:
+                raise ValueError("a weight between 0 and 1: not the discrete limit")
+            out.append(sw.types[int(np.argmax(ww))])
+        return out
+    return labels
 
 
 def solvation_model(spec):
@@ -1192,5 +1245,15 @@ CASES = [
          stress_fd=((0, 0), (1, 1), (2, 2), (0, 1)), torch=False,
          tol={**TOL_CORR, "stress": 1e-9},
          note="layer at 5 A, two molecules given one period lower (folded)"),
+    # ---- M5a: smooth type switching in the discrete limit (every weight exactly 0 or 1): DFTB+
+    # runs the fixed type labels the switch gives; pydftb also runs the switch with the element
+    # labels, bitwise the same (NumPy only) -----------------------------------------------------
+    Case("cu_slab_types_k441", _cu_slab111, skf_set="cu_types", kgrid=(4, 4, 1),
+         filling=("fermi", 500.0), labels=_switch_labels(SWITCH_SLAB),
+         type_switching=SWITCH_SLAB, torch=False, tol=TOL_TYPES,
+         note="Cu(111) slab: surface atoms (CN 9) Cu2, inner atoms (CN 12) Cu; stress"),
+    Case("cu13_types", _cu13, skf_set="cu_types", filling=("fermi", 300.0),
+         labels=_switch_labels(SWITCH_CLUSTER), type_switching=SWITCH_CLUSTER, torch=False,
+         tol=TOL_TYPES, note="cuboctahedron: the 12 outer atoms (CN 5) Cu2, the centre (CN 12) Cu"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

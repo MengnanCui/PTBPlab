@@ -73,3 +73,29 @@ a3b7f24f9c20c0e04e5e0214b27f4c28b33ad3218d829134e3ee7410dcd73826  Gd-O.skf
 85601a91821131131037583c9bfd05e26842d15e6a7fab55a8d85706848c5a35  O-Gd.skf
 d0011939f2ef459da31b00294df7a090bbfb37bd455a17e7e67e3089536936c8  O-O.skf
 ```
+
+## `cu_types/` — two parameter sets of Cu (`Cu`, `Cu2`), for smooth type switching (milestone M5a)
+
+Generated with `python -m pydftb.validation.make_cu_types_set` (the script holds every setting;
+a second run gives byte-identical files):
+
+- hotcent 2.1.0 (git `685bf7de3297d7b7465e217a6c62a6cec6e02043`), pylibxc 7.1.2, conda-forge
+- PTBP's recipe (`utils/hotpy.py`): PBE, scalar-relativistic atoms, self-consistent power
+  confinement (p = 2) of the valence subshells (r0_w) and of the density (r0_d), density
+  superposition, grid 0.4 + 0.02 n Bohr (700 points); PTBP's table values for the on-site
+  energies, Hubbard values and occupations, so both types have the same on-site data
+- `Cu`: r0_w 2.749, r0_d 12.036 Bohr (PTBP's published Cu confinement); `Cu2`: r0_w 3.0,
+  r0_d 12.036 Bohr (looser orbitals)
+- Cross files `Cu-Cu2.skf` and `Cu2-Cu.skf`: both directions computed with the wave-function
+  range of both atoms, heteronuclear format (no on-site line), as hotcent would do for two
+  elements (hotcent 2.1 treats two atoms of one symbol as one atom)
+- Repulsive: physrep's spline (`tools/physrep.py`, k_xc = 0) with sigma_rep 0.42 (`Cu`) and 0.45
+  (`Cu2`), the cross pair with both atom sizes. For testing only, not a physical
+  parametrisation.
+
+```
+7ed900b3e4f703d541aee10b0d0df5048092204ba9495fb92cb71c1406b3c4af  Cu-Cu.skf
+d6fc694312fd27cc6dd4e9cb9983132176e7742bdfe325a0d6ef97e36bc201f0  Cu-Cu2.skf
+6e6959c48fe270ec0e792fdebc6c00f3fd47e9f18bb8a636e78ba37ef5ff0198  Cu2-Cu.skf
+5e51be114fd91dd2877193f953e57df2a5a6e8dc154c0916048cf88501a168a6  Cu2-Cu2.skf
+```

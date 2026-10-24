@@ -116,11 +116,14 @@ def missing_requirement(doc: dict) -> str | None:
 
 def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "eigh",
                fd_delta: float | None = None, engine: bool = False, k_threads=1,
-               backend=None, device=None, dtype=None, casida_solver: str = "auto", **options):
+               backend=None, device=None, dtype=None, casida_solver: str = "auto",
+               switching: bool = False, **options):
     """Run pydftb for a case.  ``skdir`` defaults to the (compressed) test set.
     ``engine``: also return the pydftb.DFTB object (for band structures).
     ``backend``/``device``/``dtype``: the array backend (milestone M4, default NumPy);
     ``casida_solver``: the eigensolver of a Casida case (M6d);
+    ``switching``: run the case's type switch (M5a): the switched element's atoms given by its
+    symbol, the SK set with all its types;
     ``options``: other DFTB settings that replace the case's (e.g. ``scc_tol``)."""
     tmp = None
     if skdir is None and case.typed:
@@ -131,7 +134,16 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     try:
         params = ParamSet(skdir, max_l=inp["max_l"], shell_resolved=case.shell_resolved)
         labels = inp["labels"]
-        sk = params.skset(labels)
+        switch = None
+        if switching:                                     # M5a: element labels, all the types
+            from ..system import element_of_label
+            from ..typeswitch import TypeSwitch
+            switch = TypeSwitch.make(case.type_switching)
+            sk = params.skset(list(labels) + list(switch.types))
+            labels = [switch.element if element_of_label(lab) == switch.element else lab
+                      for lab in labels]
+        else:
+            sk = params.skset(labels)
         periodic = inp["cell_angstrom"] is not None
         kpts = None
         if periodic and inp["kpoints"] is not None:
@@ -145,6 +157,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     **environment_options(case), **casida_options(case, casida_solver),
                     **scc_start_options(case), **fill_options(case, labels),
                     **corrections_options(case))
+        if switch is not None:
+            opts["type_switching"] = [switch]
         q_init = options.pop("q_init", None)
         calc = DFTB(sk, **{**opts, **options})
         if q_init is None and case.read_charges is not None and "charges_file" in inp:
@@ -543,7 +557,9 @@ def regenerate(names=None, threads: int = 1):
                          **({"h5": case.h5, "halogen": case.halogen,
                              "dipole_correction": case.dipole_correction,
                              "stress_fd": case.stress_fd, "dftbplus": case.dftbplus}
-                            if case.corrections else {})},
+                            if case.corrections else {}),
+                         **({"type_switching": case.type_switching}
+                            if case.type_switching else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -741,6 +757,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.corrections:
         dev.update(_compare_corrections(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
                                         **backend))
+    if case.type_switching:                                           # M5a
+        dev.update(_compare_switching(case, inp, res, solver=solver, fd_delta=fd_delta,
+                                      **backend))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -752,11 +771,40 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
                                               "exc_table", "spx", "exc_state", "exc_charges",
                                               "exc_dipole", "forces_dftbp", "n_scc",
                                               "scc_errors", "charges_file", "e_fr",
-                                              "n_electrons", "fermi_level", "e_halogen")
+                                              "n_electrons", "fermi_level", "e_halogen",
+                                              "switch")
                   if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
+
+
+SWITCH_FIELDS = ("energy", "free_energy", "e_band", "e_scc", "e_rep", "ts", "fermi", "forces",
+                 "stress", "charges", "q_orbital", "q_in", "q_out")
+
+
+def _compare_switching(case: Case, inp: dict, res, **run) -> dict:
+    """M5a: pydftb with the case's type switch (element labels) against pydftb with the explicit
+    labels: the largest difference of the result fields, the eigenvalues and the SCC iterations
+    (bitwise the same: 0.0; inf when a weight is not that of the atom's label)."""
+    sw = run_pydftb(case, inp, switching=True, **run)
+    worst = 0.0
+    pairs = [(getattr(res, k), getattr(sw, k)) for k in SWITCH_FIELDS]
+    pairs += list(zip(res.eigenvalues or [], sw.eigenvalues or []))
+    for a, b in pairs:
+        if a is None and b is None:
+            continue
+        a, b = np.asarray(a), np.asarray(b)
+        if a.shape != b.shape:
+            return {"switch": np.inf}
+        if not np.array_equal(a, b):
+            worst = max(worst, float(np.abs(a - b).max()) or np.inf)
+    if sw.n_scc != res.n_scc or len(sw.eigenvalues or []) != len(res.eigenvalues or []):
+        worst = np.inf
+    for k, lab in enumerate(inp["labels"]):
+        if lab in sw.type_weights and sw.type_weights[lab][k] != 1.0:
+            worst = np.inf
+    return {"switch": worst}
 
 
 SCC_ERROR_FLOOR = 1e-7       # M6f-1: printed SCC errors compared above this (8 digits printed)
@@ -1088,6 +1136,9 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             if "stress_dftbp" in d:
                 parts.append(f"DFTB+'s own stress {d['stress_dftbp']:.1e} (vs stress_fd)")
             print(f"{'':26s}   Corrections: " + ", ".join(parts))
+        if "switch" in d:                                  # M5a
+            print(f"{'':26s}   Type switching: largest difference from the explicit labels "
+                  f"{d['switch']:.1e} (bitwise: 0)")
     return all_ok
 
 

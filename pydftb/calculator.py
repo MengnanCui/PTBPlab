@@ -61,6 +61,8 @@ from .solvers import SOLVERS, _density
 from .skf import SKSet
 from . import spinorbit as so
 from .thirdorder import ThirdOrder
+from . import typeswitch as _typeswitch                 # M5a
+from .hamiltonian import build_mixed_pairs              # M5a
 
 
 @dataclass
@@ -138,6 +140,8 @@ class DFTBResult:
     e_halogen: float = 0.0               # halogen correction (DFTB+ "Halogen correction energy")
     e_dipole_corr: float | None = None   # dipole correction 2 pi D^2 / V, a part of e_scc (as in
                                          # DFTB+, which does not print it)
+    # M5a: smooth type switching, {type label: (n_atom,) weights} for every type of every switch
+    type_weights: dict | None = None
 
     @property
     def e_total(self) -> float:
@@ -223,6 +227,7 @@ class _Setup:
     solv: "object | None" = None                 # implicit solvation (M6c)
     halogenx: "_corrections.HalogenTerms | None" = None    # halogen correction (M6f-3)
     dipole_corr: "_corrections.DipoleSetup | None" = None  # dipole correction (M6f-3)
+    switching: "_typeswitch.TypeMixing | None" = None      # type weights (M5a)
 
     @property
     def kw_dev(self):
@@ -420,6 +425,16 @@ class DFTB:
                           layer at {"layer_position": z0} (Bohr; default -h/2) in the vacuum along
                           z, E = 2 pi D^2 / V in E_SCC (``DFTBResult.e_dipole_corr``); periodic,
                           neutral, the slab normal along z; with the stress term DFTB+ lacks.
+    type_switching : smooth switching between parameter sets of one element (milestone M5a): a
+                          :class:`pydftb.typeswitch.TypeSwitch` (or a dict of its fields) or a list
+                          of them, one per element.  Every atom of a switched element (given to
+                          :meth:`calculate` as the element symbol) mixes the element's type labels
+                          with weights from its coordination number: H0, S and the repulsive are
+                          mixed, forces and stress include the weights' derivatives;
+                          ``DFTBResult.type_weights`` holds the weights.  All types must be in
+                          ``sk`` with equal basis, on-site energies, Hubbard values, occupations
+                          and masses (and equal per-label options); NumPy only, not with Casida
+                          or XL-BOMD.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -453,7 +468,7 @@ class DFTB:
                  fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None):
+                 dipole_correction=None, type_switching=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -584,6 +599,13 @@ class DFTB:
         self.halogen_correction = bool(halogen_correction)
         self.dipole_correction = _corrections.DipoleCorrection.make(dipole_correction)
         self._check_corrections()
+        # smooth switching between the parameter sets of an element (M5a)
+        self.type_switching = None
+        if type_switching is not None:
+            specs = (type_switching if isinstance(type_switching, (list, tuple))
+                     else [type_switching])
+            self.type_switching = _typeswitch.check_switches(specs)
+            self._check_type_switching()
         self.force_evaluation = str(force_evaluation).lower()
         if self.force_evaluation not in FORCE_EVALUATIONS:
             raise ValueError(f"force_evaluation must be one of {FORCE_EVALUATIONS}, "
@@ -610,6 +632,9 @@ class DFTB:
         if self.backend.is_torch and self.casida is not None:
             raise ValueError("Casida excitations are implemented for the NumPy backend only "
                              "(milestone M6d)")
+        if self.backend.is_torch and self.type_switching is not None:
+            raise ValueError("type switching is implemented for the NumPy backend only "
+                             "(milestone M5a)")
         if self.backend.is_torch and self.numpy_only_options:
             raise ValueError(f"{', '.join(self.numpy_only_options)}: implemented for the NumPy "
                              "backend only (milestone M6f)")
@@ -695,6 +720,34 @@ class DFTB:
             if why:
                 raise ValueError(f"the dipole correction {why}")
 
+    def _check_type_switching(self):
+        """Type switching (M5a): every type in the SK set, with the same basis, on-site energies,
+        Hubbard values, occupations and masses as the other types of its element, the same
+        per-label options, hetero-label files without an on-site line; not with Casida."""
+        sk, switches = self.sk, self.type_switching
+        missing = sorted({t for sw in switches for t in sw.types} - set(sk.elements))
+        if missing:
+            raise ValueError(f"type switching: the SK set has no type {missing} (it needs every "
+                             "type of every switch, e.g. ParamSet.skset with all type labels)")
+        problems = _typeswitch.unequal_type_quantities(sk, switches)
+        problems += _typeswitch.unequal_options(
+            {"hubbard_derivs": self.hubbard_derivs, "spin_constants": self.spin_constants,
+             "spin_orbit": self.spin_orbit, "plus_u": self.plus_u,
+             "onsite_corrections": self.onsite_corrections}, switches)
+        if problems:
+            raise ValueError("type switching needs equal basis, on-site energies, Hubbard values "
+                             "(and Ud, W, xi, DFTB+U), occupations and masses for all types of an "
+                             "element; these differ: " + "; ".join(problems))
+        bad = _typeswitch.onsite_line_files(sk, switches)
+        if bad:
+            raise ValueError("type switching: these hetero-label files start with an on-site line "
+                             "(written as homonuclear, e.g. by hotcent for two atoms of one "
+                             f"symbol) and would be misread: {bad}; remove that line "
+                             "(pydftb.skf.write_typed_copies does)")
+        if self.casida is not None:
+            raise ValueError("Casida excitations and excited-state forces do not support type "
+                             "switching (milestone M5a)")
+
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
         why = None
@@ -758,6 +811,8 @@ class DFTB:
             out.append("halogen_correction")
         if getattr(self, "dipole_correction", None) is not None:
             out.append("dipole_correction")
+        if getattr(self, "type_switching", None) is not None:     # M5a
+            out.append("type_switching")
         return out
 
     @property
@@ -861,6 +916,9 @@ class DFTB:
             res.n_ef = self._reservoir_term(setup, res)
         if self.reference_occupations is not None:
             res.q0_atom = ops.segment_sum(setup.q0, setup.site_atom, len(setup.species))
+        if self.type_switching is not None:                             # M5a
+            res.type_weights = _typeswitch.result_weights(self.type_switching, setup.switching,
+                                                          len(setup.species))
         rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()
@@ -895,6 +953,8 @@ class DFTB:
     def _charge_layout(self, species):
         """Basis, charge site of every orbital, channel representation ("q", "ud", "pauli")
         and block terms (or None) of the mixing vector of these atoms."""
+        if self.type_switching is not None:                  # M5a: the engine's labels
+            species = _typeswitch.internal_species(self.type_switching, species)
         basis = Basis.build(species, self.sk)
         site_of_orb = self._sites(basis)[0]
         rep = "pauli" if self.pauli else "ud" if self.spin else "q"
@@ -1016,6 +1076,8 @@ class DFTB:
         """DFTB+'s conditions for XL-BOMD (initprogram): SCC, Fermi filling, a dynamics force
         evaluation; no spin, DFTB+U, onsite corrections, external fields or charges, solvation;
         the legacy on-site third order fails in DFTB+'s energy (scc.F90)."""
+        if self.type_switching is not None:
+            raise ValueError("XL-BOMD does not support type switching (milestone M5a)")
         why = None
         if not self.scc:
             why = "needs SCC"
@@ -1220,10 +1282,22 @@ class DFTB:
         if cell is not None:
             cell = np.asarray(cell, float)
             pbc = np.ones(3, bool) if pbc is None else np.asarray(pbc, bool)
+        mix = None
+        if self.type_switching is not None:          # M5a: type weights, the engine's labels
+            species, mix = _typeswitch.setup(self.type_switching, species, pos, cell, pbc,
+                                             forces)
         basis = Basis.build(species, sk)
         norb = basis.norb
-        pb = build_pairs(species, pos, cell, pbc, sk, basis, derivatives=forces,
-                         fd_delta=self.fd_delta)
+        if mix is not None:                          # M5a: mixed H0/S blocks
+            pb, mix.blocks = build_mixed_pairs(species, pos, cell, pbc, sk, basis, mix.candidates,
+                                               mix.column, mix.weights, derivatives=forces,
+                                               fd_delta=self.fd_delta, keep=mix.active)
+            if matrices:
+                mix.rep = _typeswitch.mixed_repulsive(sk, self.repulsive, mix, pos, cell, pbc,
+                                                      grad=forces)
+        else:
+            pb = build_pairs(species, pos, cell, pbc, sk, basis, derivatives=forces,
+                             fd_delta=self.fd_delta)
         eps0 = onsite_energies(basis, sk)
         site_of_orb, site_atom, hub, q0 = self._sites(basis)
         periodic = cell is not None and np.any(pbc)
@@ -1307,7 +1381,7 @@ class DFTB:
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
                       pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
-                      dipole_corr=dipole_corr)
+                      dipole_corr=dipole_corr, switching=mix)
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -1987,6 +2061,10 @@ class DFTB:
         if st.block is not None:                         # block potentials' dS part (M6b)
             coef_s = coef_s + self._block_force_coefficient(st, sc)
         grad, gp = self._add_pair_terms(st, grad, p_e, coef_s)
+        sw = None
+        if st.switching is not None and st.switching.active.any():    # M5a: weights' gradient
+            sw = _typeswitch.weight_gradient(st.switching, pb, p_e, coef_s, virial)
+            grad = grad + sw[0]
         natom = len(st.pos)
         dq, _ = self._charge_and_magnetisation(st, sc.q_out)
         if xl:
@@ -2034,6 +2112,8 @@ class DFTB:
             w = w + st.halogenx.virial
         if st.dipole_corr is not None:
             w = w + st.dipole_corr.virial(dq_atom)
+        if sw is not None:                                           # M5a
+            w = w + sw[1]
         return grad, 0.5 * (w + w.T)
 
     @staticmethod
@@ -2176,6 +2256,8 @@ class DFTB:
         return nl, out
 
     def _repulsive_energy(self, st: _Setup) -> float:
+        if st.switching is not None:                 # M5a: mixed, computed in the setup
+            return st.switching.rep.energy
         nl, terms = self._repulsive_pairs(st)
         e_tot = 0.0
         for m, rep in terms:
@@ -2185,6 +2267,9 @@ class DFTB:
 
     def _repulsive_gradient(self, st: _Setup):
         """Repulsive dE/dR (n_atom, 3) and virial (3, 3)."""
+        if st.switching is not None:                 # M5a: mixed, at fixed weights
+            rep = st.switching.rep
+            return rep.gradient.copy(), rep.virial.copy()
         grad = np.zeros_like(st.pos)
         w = np.zeros((3, 3))
         nl, terms = self._repulsive_pairs(st)
