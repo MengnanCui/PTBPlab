@@ -7,7 +7,7 @@ parameters that hit numerical weak spots, parallel set-ups that oversubscribe th
 machine, results returned from unconverged SCC loops.  It only reports; nothing is
 changed and DFTB+ is not run.
 
-    python -m pydftb.advisor RUN_DIR [--json] [--fail-on warning]
+    pydftb advisor RUN_DIR [--json] [--fail-on warning]     # or python -m pydftb.advisor
 
     from pydftb.advisor import advise
     run, findings = advise("run_dir")

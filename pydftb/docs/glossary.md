@@ -162,7 +162,7 @@
 | 探测（probe） | `ptbp plan --probe` 用约 0.7 秒跑三个小的矩阵运算，得出本机比标定机器快多少，按机器（CPU 型号、核心数、NumPy 和 BLAS 版本）缓存，之后的估计都按这个比例换算。 |
 | HSD | DFTB+ 输入文件的格式：`标签 = 值`、`标签 = 方法 { ... }`、`标签 [单位] = 值`，块里也可以直接写数据行。`dftb_in.hsd` 是用户写的输入，`dftb_pin.hsd` 是 DFTB+ 处理后实际用的输入（含默认值和旧版本转换的结果）。 |
 | IgnoreUnprocessedNodes | DFTB+ 的解析选项：打开后，DFTB+ 不认识或没读到的节点只在屏幕上警告一下就被跳过；不开时 DFTB+ 报错退出。ASE 写的输入默认打开，PTBP 的展宽块因此被悄悄忽略（M3d 的 P03）。 |
-| 配置顾问 | `python -m pydftb.advisor 运行目录`（M3d）：读 DFTB+ 的输入、实际生效的输入、屏幕输出和 SKF，按规则报告“写了却不是那个意思”的设置，附上行号和建议；只读，不改任何东西。PTBP 用 DFTB+ 时自动检查一次。 |
+| 配置顾问 | `pydftb advisor 运行目录`（M3d）：读 DFTB+ 的输入、实际生效的输入、屏幕输出和 SKF，按规则报告“写了却不是那个意思”的设置，附上行号和建议；只读，不改任何东西。PTBP 用 DFTB+ 时自动检查一次。 |
 | 规则（顾问） | 顾问的一条检查，编号如 P01（解析器）、H01（参数）、T01（线程）、D02（色散）。每条都来自一个对照中踩过的坑或实测，`--explain 编号` 给出说明。 |
 | 预期（顾问） | 在 PTBP 的历史输入下本来就该出现、不要改的发现：已发表的参数就是在这些设置下拟合的，改了结果就不可比。 |
 | σ_rep 搜索 | PTBP 每个 BO 步对排斥势参数 σ_rep 做的一维搜索：网格 11 点、Nelder–Mead 细化、再 L-BFGS-B，共约 74 次评估；每次都重算全部结构的排斥能和力，并拟合状态方程。 |
@@ -172,7 +172,7 @@
 | PyTorch | 一个支持 GPU 和自动求导的 Python 数值库，pydftb 的第二个后端（M4a 起，可选安装）。 |
 | 后端（backend） | pydftb 做数组运算用的库：NumPy（默认）或 PyTorch。`DFTB(backend="torch", device=..., dtype=...)` 把每轮 SCC 中最重的部分（k 点折叠、本征分解、密度矩阵、布居）放到 torch 上，其余仍用 NumPy（M4a）。 |
 | 设备（device） | torch 做运算的硬件：`cpu`、`cuda`（NVIDIA，AMD 的 ROCm 版也用这个名字）、`mps`（Apple）、`xpu`（Intel）。 |
-| golden 检查 | 改动 NumPy 路径时的验收工具（`python -m pydftb.validation.golden --base 提交`）：在工作区和旧提交里各跑一遍同样的计算，逐字节比较所有结果和中间量，必须完全相同。 |
+| golden 检查 | 改动 NumPy 路径时的验收工具（`pydftb golden --base 提交`）：在工作区和旧提交里各跑一遍同样的计算，逐字节比较所有结果和中间量，必须完全相同。 |
 | torch 的线程数与 MKL | torch 自带一份静态链接的 MKL，threadpoolctl 看不到它。只改 OpenMP 的线程数会让 MKL 仍按原来的线程数开并行区；在多线程跑过 torch 的父进程 fork 出的子进程里，这会卡死。所以 pydftb 总是用 `torch.set_num_threads` 设线程数（M4a）。 |
 | 自动求导 | 程序在计算结果的同时，自动算出结果对每个输入参数的导数。pydftb 的 `pydftb.autodiff`（M4b）给出能量、力、电荷等对 SK 表、U、排斥势系数和坐标的导数。 |
 | 变分（驻定） | 自洽收敛后，Mermin 自由能 F 对密度的一阶变化为零：密度稍微不准，F 只差二阶小量。所以求 F 对参数的导数时，可以把密度当作常数。 |
@@ -199,7 +199,7 @@
 | ROCm | AMD GPU 的计算平台。ROCm 版的 torch 里 AMD GPU 也叫 `cuda`；本征分解等由 hipSOLVER 或 MAGMA 完成，批量计算的速度与 NVIDIA 不同（M4d）。 |
 | MPS | Apple M 系列芯片的 GPU 接口。没有 float64，所以 pydftb 在 MPS 上只能用 float32，float64 的部分（S 的 Cholesky 分解、求和）放在 CPU 上（M4d）。 |
 | 能力探测 | 第一次用 MPS、XPU 时，用 2×2 的小矩阵试一下 float64、复数、Cholesky、本征分解能不能运行，按结果决定哪些步骤留在 CPU，而不依赖可能过时的支持列表（M4d）。 |
-| GPU 自检脚本 | `python -m pydftb.validation.gpu_check`：在用户的 GPU 上重算 DFTB+ 参考算例、与 CPU 对照、检查确定性和自动求导，并计时；任何一项正确性检查失败都以非零状态退出（M4d）。 |
+| GPU 自检脚本 | `pydftb gpu-check`：在用户的 GPU 上重算 DFTB+ 参考算例、与 CPU 对照、检查确定性和自动求导，并计时；任何一项正确性检查失败都以非零状态退出（M4d）。 |
 | fork 与 CUDA | fork 复制出的子进程不能再使用父进程已经初始化的 CUDA。所以 PTBP 用 GPU 时 DFTB 阶段在主进程里逐个结构计算，探测 GPU 放在单独启动的子进程里（M4d）。 |
 | Davidson 方法 | 求大矩阵最低几个本征值的迭代法：在一个逐步扩大的子空间里对角化，每步用残差除以 (θ − 对角元) 作为新方向（对角元作预条件）。Casida 矩阵是对角阵加一个低秩的耦合，Davidson 往往十来步就收敛，比 ARPACK 的 Lanczos 快得多（M6d）。 |
 | ARPACK、Stratmann | DFTB+ 解 Casida 方程的两种迭代求解器。ARPACK 是通用的隐式重启 Lanczos 库；Stratmann 是专为 TD-DFT 设计的子空间方法，同时处理 A+B 与 A−B。两者的收敛精度都是单精度量级（M6d）。 |

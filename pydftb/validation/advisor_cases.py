@@ -8,6 +8,9 @@ The SKF copies keep the lines the advisor reads (format line, on-site line, the 
 section) but not the tables.
 
     python -m pydftb.validation.advisor_cases --regenerate [CASE ...]   # needs dftb+
+
+It writes into the package's ``tests/data/advisor``: run it in a git checkout, not in an
+installed copy of pydftb.
 """
 from __future__ import annotations
 

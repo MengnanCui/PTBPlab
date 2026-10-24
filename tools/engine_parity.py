@@ -7,19 +7,20 @@ with each engine, so the comparison does not depend on the optimiser's path.
 
 Example (run inside the conda environment with hotcent, pylibxc and dftb+)::
 
-    python tools/engine_parity.py dft/dft.xyz --mode dataset \\
+    ptbp parity dft/dft.xyz --mode dataset \\
         --points 3.0,6.0 4.5,9.0 --workdir /tmp/parity
 
-Prints, per point, the loss of each engine, the relative difference and the
-time spent in the DFTB part of the pipeline.
+(``python tools/engine_parity.py ...`` in a checkout is the same.)  Prints, per point,
+the loss of each engine, the relative difference and the time spent in the DFTB part of
+the pipeline.  Without ``--workdir`` the runs go to ``./engine_parity``.
 
 ``--ncores 1 4`` evaluates every point once per core budget (the parallel plan of
 ``cli/run.py``: the M3c recommender), and prints the measured stage times next to the
 plan's estimates; ``--compare-serial`` (= ``--ncores 1 auto``) also checks that the
 losses are bitwise equal and the files of the BO step byte-identical::
 
-    python tools/engine_parity.py dft/dft.xyz --mode energygeometry \
-        --points 2.749,12.036 --engines pydftb --compare-serial
+    ptbp parity dft/dft.xyz --mode energygeometry \\
+        --points 2.749,12.036 --engines pydftb --compare-serial --workdir /tmp/parity
 """
 from __future__ import annotations
 
@@ -33,7 +34,8 @@ from math import floor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if __name__ == "__main__":      # run as a script: make PTBP's packages next to tools/ importable
+    sys.path.insert(0, str(ROOT))
 
 # files of a BO step that must not depend on the core budget
 STEP_FILES = ("dft_final.xyz", "dftb_band.xyz", "search_index.txt", "dftb_full.xyz")
@@ -84,8 +86,9 @@ def build_loss(dataset: Path, mode: str, workdir: Path, eos_points: int):
     return loss, cov_radius
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main(argv=None, prog=None):
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dataset", type=Path)
     ap.add_argument("--mode", default="dataset", choices=["dataset", "energygeometry", "reaction"])
     ap.add_argument("--eos-points", type=int, default=11)

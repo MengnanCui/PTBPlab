@@ -80,7 +80,7 @@
 
 ## 3. 对照时踩过的坑
 
-标有【顾问 Xnn】的条目已做成 DFTB+ 配置顾问的规则（`python -m pydftb.advisor`，M3d）。
+标有【顾问 Xnn】的条目已做成 DFTB+ 配置顾问的规则（`pydftb advisor`，M3d）。
 
 1. **ParserVersion。**【顾问 P01、P02】 解析器版本低于 14 时，DFTB+ 会把 `MethfesselPaxton { Order = n }` 悄悄改成 n−1（`dftbplus/oldcompat.F90`），而 ASE 写的是版本 1。pydftb 的对照工具固定写 14。
 2. **数值求导方式。** DFTB+ 的 `Differentiation = Richardson {}` 在这些 SKF 上反而比默认差分更不准：水分子的力误差从 1.2e-6 升到 1.2e-5 Ha/Bohr。原因可能是它的步长较大，跨过了插值多项式更换窗口的格点。因此参考数据使用默认差分。

@@ -1,0 +1,45 @@
+# pydftb as a package of its own (P1).  This directory is both the package and the project
+# root: ``package-dir`` maps the package ``pydftb`` to ".", so the sources stay where they are
+# (importable as ``pydftb`` from the repository root, as before).
+#
+#   pip install ./pydftb          # from the repository root; extras: ./pydftb[torch,dispersion]
+#   pip install -e ./pydftb       # editable (never --config-settings editable_mode=compat)
+#
+# The packages are listed explicitly: automatic discovery would add docs/, bench/, the test
+# data folders and build/ as namespace packages.  bench/ (scripts that use PTBP) and docs/
+# stay out of the wheel.  No [tool.pytest.*] table here: it would move pytest's rootdir for
+# ``pytest pydftb/tests`` run from the repository root.
+
+[build-system]
+requires = ["setuptools>=77"]   # PEP 639 license metadata
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydftb"
+dynamic = ["version"]
+description = "A readable, from-scratch SCC-DFTB engine (NumPy; optional PyTorch backend)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["numpy", "scipy>=1.15", "ase>=3.23", "threadpoolctl"]
+
+[project.optional-dependencies]
+torch = ["torch>=2.14"]           # torch backend, GPUs, pydftb.autodiff (tested 2.14.1)
+dispersion = ["dftd3", "dftd4"]   # D3/D4 dispersion; conda: dftd3-python, dftd4-python
+test = ["pytest"]
+
+[project.scripts]
+pydftb = "pydftb.cli:main"
+
+[tool.setuptools]
+package-dir = {"pydftb" = "."}
+packages = ["pydftb", "pydftb.advisor", "pydftb.autodiff", "pydftb.backend",
+            "pydftb.tests", "pydftb.validation"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+"pydftb.tests" = ["data/**/*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pydftb.__version__"}

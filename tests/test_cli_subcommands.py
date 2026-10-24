@@ -113,6 +113,41 @@ def test_postprocess_run_dir_without_result_pkl_errors(tmp_path):
     assert rc == 2  # result.pkl missing
 
 
+def test_parity_hands_its_arguments_to_engine_parity():
+    """`ptbp parity ...` reaches tools/engine_parity.main unchanged, before argparse."""
+    from cli.main import dispatch
+
+    calls = []
+
+    def fake_main(argv=None, prog=None):
+        calls.append((argv, prog))
+        return 3
+
+    argv = ['--help', 'dft/dft.xyz', '--points', '2.749,12.036', '--workdir', '/tmp/x']
+    with patch('tools.engine_parity.main', side_effect=fake_main):
+        assert dispatch(['parity', *argv]) == 3
+    assert calls == [(argv, 'ptbp parity')]
+
+
+def test_parity_help_is_the_tools_own(capsys):
+    from cli.main import dispatch
+    with pytest.raises(SystemExit) as info:
+        dispatch(['parity', '--help'])
+    assert info.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith('usage: ptbp parity') and '--compare-serial' in out
+
+
+def test_parameterize_main_routes_parity_to_dispatch():
+    import parameterize
+
+    routed = []
+    with patch('cli.main.dispatch', side_effect=lambda argv: routed.append(list(argv)) or 0), \
+         patch.object(sys, 'argv', ['ptbp', 'parity', 'dft/dft.xyz']):
+        assert parameterize.main() == 0
+    assert routed == [['parity', 'dft/dft.xyz']]
+
+
 def test_parameterize_main_routes_legacy_to_run_py():
     """Anything that's not a known subcommand should fall through to the
     legacy `cli/run.py` runner."""

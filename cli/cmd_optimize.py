@@ -96,7 +96,7 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                         "Default: %(default)s.")
     p.add_argument('--device', default='cpu', metavar='DEV',
                    help="torch device for --pydftb-backend torch: cpu, auto, cuda, cuda:1, mps, "
-                        "xpu. Check a GPU first: python -m pydftb.validation.gpu_check. "
+                        "xpu. Check a GPU first: pydftb gpu-check. "
                         "Default: %(default)s.")
     p.add_argument('--dtype', default='float64', choices=['float64', 'float32'],
                    help="precision for --pydftb-backend torch. Default: %(default)s.")

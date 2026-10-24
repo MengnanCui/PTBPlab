@@ -14,10 +14,12 @@ Calculations:
 * PTBP's settings (``utils/engines.py``): Cu cells with Monkhorst-Pack grids, the
   0.01 Bohr finite-difference forces, shell-resolved SCC, one and two k-threads.
 
-    python -m pydftb.validation.golden --base 65115d1           # all
-    python -m pydftb.validation.golden --base 65115d1 --quick   # a subset (about 1/4)
+    pydftb golden --base 65115d1           # all  (= python -m pydftb.validation.golden ...)
+    pydftb golden --base 65115d1 --quick   # a subset (about 1/4)
 
-Nothing platform-specific is stored: both sides are computed on the spot.
+Nothing platform-specific is stored: both sides are computed on the spot.  It needs a git
+checkout of PTBPlab (``pydftb/`` at its top level), where the base commit is added as a git
+worktree under ``--root``; an installed copy of pydftb (site-packages) cannot run it.
 """
 from __future__ import annotations
 
@@ -184,6 +186,22 @@ def _git(*args, cwd=REPO) -> str:
                           text=True).stdout.strip()
 
 
+def checkout_problem() -> str | None:
+    """Why golden cannot run from this copy of pydftb, or None.  It needs ``REPO`` (the
+    folder above the package) to be the top level of a git checkout that tracks
+    ``pydftb/``: an installed copy has site-packages there."""
+    try:
+        top = _git("rev-parse", "--show-toplevel")
+        _git("ls-files", "--error-unmatch", "pydftb/__init__.py")
+    except (OSError, subprocess.CalledProcessError):
+        top = None
+    if top is not None and os.path.realpath(top) == os.path.realpath(REPO):
+        return None
+    return (f"needs a git checkout of PTBPlab with pydftb/ at its top level, but this pydftb "
+            f"is {os.path.join(REPO, 'pydftb')} (an installed copy?); run it in a clone: "
+            f"cd PTBPlab && python -m pydftb golden --base COMMIT")
+
+
 def worktree(base: str, root: str) -> str:
     """A detached worktree of ``base`` under ``root`` (reused when it already exists)."""
     sha = _git("rev-parse", "--short", base)
@@ -264,8 +282,8 @@ def new_calculations(base: dict, work: dict) -> list:
     return sorted(set(work) - set(base))
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv=None, prog=None) -> int:
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True, help="commit to compare with (e.g. 65115d1)")
     ap.add_argument("--quick", action="store_true", help="about a quarter of the cases")
@@ -276,6 +294,10 @@ def main(argv=None) -> int:
                     help="names of fields that may exist on one side only (new or renamed "
                          "internals, e.g. dev)")
     a = ap.parse_args(argv)
+    problem = checkout_problem()
+    if problem:
+        print(f"golden: {problem}", file=sys.stderr)
+        return 2
     base_tree = worktree(a.base, a.root)
     out_b = os.path.join(a.root, "golden_base.pkl")
     out_w = os.path.join(a.root, "golden_work.pkl")

@@ -1,7 +1,7 @@
 # pydftb
 
 A from-scratch, readable SCC-DFTB engine in Python, validated against DFTB+.
-It lives inside PTBPlab as an independent sub-package.
+It lives inside PTBPlab and installs as a package of its own, with the `pydftb` command.
 
 - **Why it exists:** [`docs/WHY.md`](docs/WHY.md)
 - **Roadmap and DFTB+ feature checklist:** [`docs/ROADMAP.md`](docs/ROADMAP.md)
@@ -9,7 +9,39 @@ It lives inside PTBPlab as an independent sub-package.
 - **Development docs (HTML, open in a browser):** [`docs/index.html`](docs/index.html): every stage's design notes and report, key results first, development details folded
 - **Glossary** (Chinese, plain language): [`docs/glossary.md`](docs/glossary.md)
 - **Prototype research report** (performance experiments): [`RESEARCH.md`](RESEARCH.md)
-- **License:** MIT, like the rest of PTBPlab (see [`LICENSE`](../LICENSE)). The optional D3/D4 dispersion packages (`dftd3`, `dftd4`) are LGPL-3.0 and are only imported at run time.
+- **License:** MIT, like the rest of PTBPlab (see [`LICENSE`](LICENSE)). The optional D3/D4 dispersion packages (`dftd3`, `dftd4`) are LGPL-3.0 and are only imported at run time.
+
+## Installation
+
+pydftb needs Python 3.10 or later, NumPy, SciPy, ASE and threadpoolctl.  From a checkout of
+PTBPlab:
+
+```bash
+pip install ./pydftb                     # or "./pydftb[torch,dispersion]"; -e ./pydftb to edit it
+pydftb --help                            # the command-line tools (table below)
+python -m pytest --pyargs pydftb.tests   # the offline tests, from any folder (needs pytest)
+```
+
+Extras: `torch` (the PyTorch backend, GPUs and `pydftb.autodiff`; GPU builds from
+pytorch.org) and `dispersion` (the D3/D4 libraries; on conda-forge `dftd3-python` and
+`dftd4-python`).  DFTB+ is only needed to regenerate the references or to compare live.
+PTBP depends on pydftb: `pip install ./pydftb .` installs both.  A checkout also works
+without installing, as before (`PYTHONPATH=.` at the repository root).
+
+| Command | What it does |
+|---|---|
+| `pydftb advisor RUN_DIR` | checks a DFTB+ input and run for known pitfalls |
+| `pydftb refgen --check` | pydftb against the frozen DFTB+ references (`--live`, `--regenerate` need dftb+) |
+| `pydftb dynamics --check` | optimisations and MD against DFTB+'s drivers |
+| `pydftb gpu-check` | the GPU self-check (needs torch) |
+| `pydftb gradcheck --check` | `pydftb.autodiff` against finite differences (needs torch) |
+| `pydftb golden --base COMMIT` | the NumPy path bitwise unchanged since COMMIT (in a git checkout) |
+
+`pydftb COMMAND --help` lists a command's options, and `python -m pydftb COMMAND` is the same
+command.  The module forms keep working (`python -m pydftb.validation.refgen --check`,
+`python -m pydftb.advisor RUN_DIR`, ...).  The `--regenerate` modes, `make_f_set`,
+`make_poly_set` and `advisor_cases` write into the package's `tests/data`: run them in a
+checkout, not in an installed copy.
 
 ## Quick start
 
@@ -332,7 +364,7 @@ BFGS(atoms).run(fmax=0.01)
 ```
 
 Comparisons with DFTB+'s `GeometryOptimisation` and `VelocityVerlet`:
-`python -m pydftb.validation.dynamics --check`; details in
+`pydftb dynamics --check`; details in
 [`docs/reports/M2f-opt-md.html`](docs/reports/M2f-opt-md.html).
 
 ### Threads over k-points
@@ -376,13 +408,13 @@ has 3 million atom pairs within it and pydftb needs about 2.2 GB (DFTB+ 0.3 GB);
 
 ### DFTB+ configuration advisor
 
-`python -m pydftb.advisor RUN_DIR` reads a DFTB+ run -- `dftb_in.hsd`, and if present
+`pydftb advisor RUN_DIR` reads a DFTB+ run -- `dftb_in.hsd`, and if present
 `dftb_pin.hsd` (what DFTB+ really used), the screen output and the SKF files -- and reports
 the pitfalls found while validating pydftb against DFTB+, with the file and line of the
 evidence and advice.  It only reads; DFTB+ is not needed.
 
 ```text
-$ python -m pydftb.advisor run/
+$ pydftb advisor run/
 [P01] warning old ParserVersion: DFTB+ rewrites the input  (dftb_in.hsd:46)
     ParserVersion = 1: on the way to version 14, ShellResolvedSCC = Yes is added ...;
     Differentiation = FiniteDiff { Delta = 0.01 } is added ...
@@ -408,7 +440,8 @@ algebra of every SCC iteration on a torch device: the folding to k-points, the C
 factor of S, the eigensolver, the density matrices, the Mulliken populations, the traces of
 the energy and the real-space densities of the forces.  Geometry, parameters, gamma, the
 mixer and the Fermi level stay NumPy; results come back as NumPy arrays and floats.  torch is
-optional (`pip install "torch>=2.14" --index-url https://download.pytorch.org/whl/cpu`);
+optional (the `torch` extra, or the CPU build:
+`pip install "torch>=2.14" --index-url https://download.pytorch.org/whl/cpu`);
 `import pydftb` never imports it.
 
 ```python
@@ -451,7 +484,7 @@ and stress without differentiating the eigensolver.  `mode="implicit"` attaches 
 fixed point by the implicit function theorem, so the charges, eigenvalues, Fermi levels,
 forces and stress have full derivatives too (forces use DFTB+'s finite-difference kernel
 when `fd_delta` is set, as PTBP runs).  Against central differences of the engine
-(`python -m pydftb.validation.gradcheck --check`, 11 cases, 346 comparisons) the median
+(`pydftb gradcheck --check`, 11 cases, 346 comparisons) the median
 relative deviation is 2e-9.  The l1 = l2 integrals that both files A-B and B-A store, and
 equal Hubbard U values, only have derivatives along directions that move them together.
 With Methfessel-Paxton smearing and DFTB+'s TS, F is not variational: mode "hf" refuses dF
@@ -490,9 +523,9 @@ branches that move work to the CPU give the same bits as the plain path, and und
 **not measured**.  To check a GPU:
 
 ```bash
-python -m pydftb.validation.gpu_check --json gpu_check.json      # first GPU, everything
-python -m pydftb.validation.gpu_check --device cuda:1 --dtype both --json gpu_check.json
-python -m pydftb.validation.gpu_check --quick                    # a subset, a few minutes
+pydftb gpu-check --json gpu_check.json      # first GPU, everything
+pydftb gpu-check --device cuda:1 --dtype both --json gpu_check.json
+pydftb gpu-check --quick                    # a subset, a few minutes
 ```
 
 It recomputes the frozen DFTB+ references on the device and compares them with torch on the
@@ -505,13 +538,14 @@ send the JSON back.  See [`docs/reports/M4d-devices.html`](docs/reports/M4d-devi
 ## Tests and validation
 
 ```bash
-PYTHONPATH=. pytest pydftb/tests                    # offline, uses frozen DFTB+ references
-python -m pydftb.validation.refgen --check          # table of deviations from DFTB+
-python -m pydftb.validation.refgen --regenerate     # needs dftb+; rewrites the references
-python -m pydftb.validation.refgen --live           # fresh comparison with dftb+
-python -m pydftb.validation.dynamics --check        # optimisation and MD vs DFTB+'s drivers
-python -m pydftb.validation.refgen --check --backend torch    # the same on the torch backend
-python -m pydftb.validation.golden --base COMMIT    # NumPy path bitwise unchanged since COMMIT
-python -m pydftb.validation.gradcheck --check       # pydftb.autodiff vs finite differences
-python -m pydftb.validation.gpu_check --device cpu --quick    # the GPU self-check, on the CPU
+python -m pytest --pyargs pydftb.tests   # offline, uses frozen DFTB+ references (any folder)
+PYTHONPATH=. pytest pydftb/tests          # the same at the repository root, without installing
+pydftb refgen --check                     # table of deviations from DFTB+
+pydftb refgen --regenerate                # needs dftb+; rewrites the references (in a checkout)
+pydftb refgen --live                      # fresh comparison with dftb+
+pydftb dynamics --check                   # optimisation and MD vs DFTB+'s drivers
+pydftb refgen --check --backend torch     # the same on the torch backend
+pydftb golden --base COMMIT               # NumPy path bitwise unchanged since COMMIT (checkout)
+pydftb gradcheck --check                  # pydftb.autodiff vs finite differences
+pydftb gpu-check --device cpu --quick     # the GPU self-check, on the CPU
 ```

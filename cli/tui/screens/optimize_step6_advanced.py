@@ -47,7 +47,7 @@ class OptimizeStep6Advanced(Screen):
             ),
             Static("pydftb device (pydftb only): cpu = NumPy (default); cuda, cuda:1, mps "
                    "(float32), xpu or auto = PyTorch on that device (check a GPU first: "
-                   "python -m pydftb.validation.gpu_check):"),
+                   "pydftb gpu-check):"),
             Input(value="cpu", id="device"),
             Horizontal(
                 Button("Back", id="btn-back"),

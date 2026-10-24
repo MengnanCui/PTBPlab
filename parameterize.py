@@ -1,6 +1,7 @@
 """User-facing entry point for the PTBP toolkit.
 
-After `pip install -e .` this is wired up as the `ptbp` console script.
+After `pip install ./pydftb .` (or `pip install -e ./pydftb -e .`) this is
+wired up as the `ptbp` console script.
 
 Two CLI surfaces coexist:
 
@@ -9,6 +10,7 @@ Two CLI surfaces coexist:
     ptbp gen H O --params PTBP
     ptbp optimize my_data.xyz --mode dataset --n-calls 30
     ptbp postprocess run_2026-05-05_22-30/
+    ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --workdir /tmp/parity
 
 2. **Legacy flat CLI** (deprecated; kept for backwards compat with
    existing examples/ scripts and external usage):
@@ -26,7 +28,7 @@ import runpy
 import sys
 from pathlib import Path
 
-NEW_SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan'}
+NEW_SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity'}
 
 
 def main() -> int:
