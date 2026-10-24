@@ -1,6 +1,6 @@
 """Create the ``cu_types`` test set: two parameter sets of copper, ``Cu`` and ``Cu2``, and the
 cross files ``Cu-Cu2.skf`` and ``Cu2-Cu.skf``, for smooth switching between the parameter sets
-of one element (milestone M5a, :mod:`pydftb.types`).
+of one element (milestone M5a, :mod:`pydftb.typeswitch`).
 
 Both types follow PTBP's recipe (``utils/hotpy.py``): PBE, scalar-relativistic atoms with
 self-consistent power confinement (p = 2) of every valence subshell (r0_w) and of the density
@@ -10,7 +10,7 @@ and S tables and their repulsives, as types made by PTBP do:
 
 * ``Cu``: PTBP's published confinement of Cu (r0_w 2.749, r0_d 12.036 Bohr);
 * ``Cu2``: looser orbitals (r0_w 3.0, r0_d 12.036 Bohr): integrals 2-20 % larger at 3-5.5
-  Bohr, fcc lattice constant 3.77 instead of 3.65 A, 0.03-0.05 Ha per atom less bound.
+  Bohr, fcc lattice constant 3.82 instead of 3.69 A, 0.036 Ha per atom less bound.
 
 hotcent 2.1 assumes one atom per element: for two atoms with the same symbol it computes one
 direction only, takes the wave-function range of the first atom, and writes the files under the
@@ -32,7 +32,8 @@ as well.
 
     python -m pydftb.validation.make_cu_types_set     # needs hotcent and pylibxc
 
-Deterministic; for testing only, not a physical parametrisation.
+Deterministic; for testing only, not a physical parametrisation.  It writes into the
+package's ``tests/data/skf``: run it in a git checkout, not in an installed copy of pydftb.
 """
 from __future__ import annotations
 

@@ -136,7 +136,7 @@ atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])   # 窗口与截
       <ul>
         <li><strong>标签</strong>：被切换元素的原子在 <code>calculate</code> 中必须给元素名；给类型标签（<code>"Cu2"</code>）时报错，因为类型由权重决定。引擎内部用切换的“参考类型”（元素名在类型中时就是它，否则是第一种类型）作为这些原子的标签，基组、on-site、U、按标签的选项都按它查；同一元素各类型的值必须相同（给多种类型时逐一比较）。</li>
         <li><strong>可以组合</strong>：SCC 与非 SCC，k 点，应力，DFTB3、H–X 阻尼、H5，共线自旋、非共线自旋与自旋轨道（两分量），DFTB+U 与 onsite 修正，外场、点电荷、位点势，溶剂，色散，卤素修正，偶极修正，固定费米能级与独立 k 点填充，<code>fd_delta</code>，各求解器与 k 点线程，能带与电荷文件。它们对 H0、S 的依赖都已经在 dS 的系数里，权重的导数直接用这个系数。</li>
-        <li><strong>拒绝</strong>（ValueError）：torch 后端与 <code>pydftb.autodiff</code>（加入 <code>numpy_only_options</code>）；Casida 激发与激发态的力；XL-BOMD；类型之间 on-site、U、Ud、W、ξ、DFTB+U、占据数、基组或质量不同；类型不在 SK 集中；异标签文件带 on-site 行；窗口重叠或宽度 ≤ 0。</li>
+        <li><strong>拒绝</strong>（ValueError）：torch 后端与 <code>pydftb.autodiff</code>（加入 <code>numpy_only_options</code>）；Casida 激发与激发态的力；XL-BOMD；分析输出（M6f-4a 的 <code>analysis</code>，合并 M6f-4a 时加入：其中原子分辨的排斥能按未混合的标签对求和）；类型之间 on-site、U、Ud、W、ξ、DFTB+U、占据数、基组或质量不同；类型不在 SK 集中；异标签文件带 on-site 行；窗口重叠或宽度 ≤ 0。</li>
         <li><strong>结果</strong>：<code>DFTBResult.type_weights</code>，每种类型一个 (n<sub>atom</sub>,) 数组（别的元素为 0）；不用切换时为 None。</li>
       </ul>
     </section>
@@ -209,7 +209,7 @@ atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])   # 窗口与截
           <ul>
             <li>PTBP 的拟合（M5b：类型的约束参数、窗口的选择）与电池算例（等数据）；</li>
             <li>类型之间 on-site 能、U 等不同（拒绝；要做就得混合它们并处理三阶的等 U 规则与 γ 表）；</li>
-            <li>torch 后端、自动求导、Casida、XL-BOMD 的切换版本；</li>
+            <li>torch 后端、自动求导、Casida、XL-BOMD、分析输出的切换版本；</li>
             <li>CN 以外的描述符（接口留了位置：权重只依赖每个原子的一个标量）。</li>
           </ul>
         </li>
@@ -225,7 +225,7 @@ atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])   # 窗口与截
   </main>
 
   <footer class="doc-foot">
-    <nav aria-label="翻页"><a href="../reports/M6f3-corrections.html">← M6f-3 完成报告</a><a href="../reports/M5a-type-switching.html">M5a 完成报告 →</a></nav>
+    <nav aria-label="翻页"><a href="../reports/M6f4a-analysis.html">← M6f-4a 完成报告</a><a href="../reports/M5a-type-switching.html">M5a 完成报告 →</a></nav>
     <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
   </footer>
 </div>
