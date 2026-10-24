@@ -38,25 +38,40 @@ class DispersionTerms(NamedTuple):
     energy: float
     gradient: np.ndarray | None      # (n_atom, 3) dE/dR
     virial: np.ndarray | None        # (3, 3) dE/d(strain)
+    atoms: np.ndarray | None = None  # (n_atom,) energy of every atom, on request (M6f-4a)
 
 
 def _sum_terms(*terms: DispersionTerms) -> DispersionTerms:
     energy = sum(t.energy for t in terms)
+    atoms = None if any(t.atoms is None for t in terms) else sum(t.atoms for t in terms)
     if any(t.gradient is None for t in terms):
-        return DispersionTerms(energy, None, None)
-    return DispersionTerms(energy, sum(t.gradient for t in terms), sum(t.virial for t in terms))
+        return DispersionTerms(energy, None, None, atoms)
+    return DispersionTerms(energy, sum(t.gradient for t in terms), sum(t.virial for t in terms),
+                           atoms)
 
 
-def _pair_terms(i, j, vec, d, e, de, natom, grad) -> DispersionTerms:
-    """Pair energy e(d) and de/dd over ordered pairs (each pair is listed twice)."""
+def _pair_terms(i, j, vec, d, e, de, natom, grad, atoms=False) -> DispersionTerms:
+    """Pair energy e(d) and de/dd over ordered pairs (each pair is listed twice).
+    ``atoms``: also the energy of every atom, half of each of its pairs (as DFTB+)."""
     energy = 0.5 * float(np.sum(e))
+    per_atom = None
+    if atoms:
+        per_atom = np.zeros(natom)
+        np.add.at(per_atom, i, 0.5 * e)
     if not grad:
-        return DispersionTerms(energy, None, None)
+        return DispersionTerms(energy, None, None, per_atom)
     g = (0.5 * de / d)[:, None] * vec            # dE/d(vec) of each ordered pair
     gradient = np.zeros((natom, 3))
     np.add.at(gradient, i, -g)
     np.add.at(gradient, j, g)
-    return DispersionTerms(energy, gradient, g.T @ vec)
+    return DispersionTerms(energy, gradient, g.T @ vec, per_atom)
+
+
+def _zero_terms(natom, grad, atoms) -> DispersionTerms:
+    per_atom = np.zeros(natom) if atoms else None
+    if grad:
+        return DispersionTerms(0.0, np.zeros((natom, 3)), np.zeros((3, 3)), per_atom)
+    return DispersionTerms(0.0, None, None, per_atom)
 
 
 def _periodicity(cell, pbc):
@@ -93,8 +108,17 @@ class Dispersion:
         return new
 
     def evaluate(self, labels, pos, cell=None, pbc=None, grad: bool = True,
-                 charge: float = 0.0) -> DispersionTerms:
+                 charge: float = 0.0, atoms: bool | str = False) -> DispersionTerms:
+        """Energy, gradient and virial; ``atoms`` adds the energy of every atom (True: pairs
+        half to each atom, three-body terms a third to each; "dftbplus": as DFTB+, which
+        spreads the D3 library's energy evenly, E/N)."""
         raise NotImplementedError
+
+    def atom_energies(self, labels, pos, cell=None, pbc=None, charge: float = 0.0,
+                      dftbplus: bool = False) -> np.ndarray:
+        """The energy of every atom (milestone M6f-4a), summing to the energy."""
+        return self.evaluate(labels, pos, cell, pbc, grad=False, charge=charge,
+                             atoms="dftbplus" if dftbplus else True).atoms
 
 
 # ----------------------------------------------------------------------------
@@ -137,13 +161,15 @@ def _reciprocal_vectors(cell: np.ndarray, gcut: float) -> np.ndarray:
 
 
 def ewald_r6(pos, cell, c6, grad: bool = True, rcut_min: float = 0.0,
-             tol: float = TOL_DISPERSION) -> DispersionTerms:
+             tol: float = TOL_DISPERSION, atoms: bool = False) -> DispersionTerms:
     """E = -1/2 sum_ij sum_L' C6_ij / |r_j + L - r_i|^6 of a 3D periodic system.
 
     Ewald splitting with DFTB+'s parameters (``dftb/dispcommon.F90``): eta is the
     optimal Ewald eta / sqrt(2), the real- and reciprocal-space cutoffs make the
     error estimates drop below ``tol``.  ``rcut_min`` enlarges the real-space
-    cutoff (Slater-Kirkwood does).  ``c6`` is the (n_atom, n_atom) matrix.
+    cutoff (Slater-Kirkwood does).  ``c6`` is the (n_atom, n_atom) matrix.  ``atoms``: also
+    the energy of every atom, as DFTB+'s addDispEGr_per_atom: half of each real-space pair,
+    the reciprocal sum and the self terms of its row.
     """
     natom = len(pos)
     vol = abs(np.linalg.det(cell))
@@ -154,8 +180,7 @@ def ewald_r6(pos, cell, c6, grad: bool = True, rcut_min: float = 0.0,
     c6sum = float(np.abs(c6).sum())
     pi15 = math.pi ** 1.5
     if c6sum == 0.0:
-        zero = DispersionTerms(0.0, np.zeros((natom, 3)), np.zeros((3, 3)))
-        return zero if grad else DispersionTerms(0.0, None, None)
+        return _zero_terms(natom, grad, atoms)
 
     def real_error(r):
         return pi15 * c6sum / vol * eta * (r ** -4 + 1.0 / (r * r * eta * eta)
@@ -175,7 +200,7 @@ def ewald_r6(pos, cell, c6, grad: bool = True, rcut_min: float = 0.0,
     cij = c6[i, j]
     e = -cij * ex * (1.0 + x2 + 0.5 * x2 * x2) / d ** 6
     de = cij * ex * (((x2 + 3.0) * x2 + 6.0) * x2 + 6.0) / d ** 7
-    real = _pair_terms(i, j, vec, d, e, de, natom, grad)
+    real = _pair_terms(i, j, vec, d, e, de, natom, grad, atoms)
 
     # reciprocal space: -pi^1.5/(24V) sum_G |G|^3 h(b) S(G), b = |G| eta / 2
     gvec = _reciprocal_vectors(cell, gcut)
@@ -193,12 +218,17 @@ def ewald_r6(pos, cell, c6, grad: bool = True, rcut_min: float = 0.0,
     e_self = float(np.trace(c6)) / (12.0 * eta ** 6)
     e_g0 = -pi15 * float(c6.sum()) / (6.0 * vol * eta ** 3)
     energy = real.energy + e_rec + e_self + e_g0
+    per_atom = None
+    if atoms:
+        per_atom = (real.atoms - pref * ((cs * c6c + sn * c6s) @ wg)
+                    + np.diag(c6) / (12.0 * eta ** 6) - pi15 * c6.sum(1) / (6.0 * vol * eta ** 3))
     if not grad:
-        return DispersionTerms(energy, None, None)
+        return DispersionTerms(energy, None, None, per_atom)
     g_rec = 2.0 * pref * (((sn * c6c - cs * c6s) * wg) @ gvec)
     t = 3.0 * gl * (math.sqrt(math.pi) * erfc(bb) - ebb / bb)
     w_rec = -e_rec * np.eye(3) + pref * (gvec * (sg * t)[:, None]).T @ gvec
-    return DispersionTerms(energy, real.gradient + g_rec, real.virial + w_rec - e_g0 * np.eye(3))
+    return DispersionTerms(energy, real.gradient + g_rec, real.virial + w_rec - e_g0 * np.eye(3),
+                           per_atom)
 
 
 # ----------------------------------------------------------------------------
@@ -261,7 +291,7 @@ class LennardJones(Dispersion):
         vals = np.array([self.parameters[lab] for lab in labels], float).reshape(-1, 2)
         return vals[:, 0], vals[:, 1]
 
-    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0):
+    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0, atoms=False):
         pbc = _native_pbc(cell, pbc, "LennardJones")
         pos = np.asarray(pos, float)
         dist, depth = self.site_parameters(labels)
@@ -273,15 +303,15 @@ class LennardJones(Dispersion):
             rcut = (c6.max() / TOL_DISPERSION) ** (1.0 / 6.0)
             i, j, _, vec, d = neighbor_list(pos, None, None, rcut)
             e, de = self._pair(i, j, d, dij, rij, c6, c12, with_r6=True)
-            return _pair_terms(i, j, vec, d, e, de, len(pos), grad)
+            return _pair_terms(i, j, vec, d, e, de, len(pos), grad, atoms)
         cell = np.asarray(cell, float)
         # r^-12 and the wall in real space (cutoff with a 100x tighter tolerance, as
         # DFTB+); every -c6/R^6, also inside the wall, comes from the Ewald sum
         rcut = (c12.max() / (TOL_DISPERSION * 1e-2)) ** (1.0 / 12.0)
         i, j, _, vec, d = neighbor_list(pos, cell, pbc, rcut)
         e, de = self._pair(i, j, d, dij, rij, c6, c12, with_r6=False)
-        return _sum_terms(_pair_terms(i, j, vec, d, e, de, len(pos), grad),
-                          ewald_r6(pos, cell, c6, grad))
+        return _sum_terms(_pair_terms(i, j, vec, d, e, de, len(pos), grad, atoms),
+                          ewald_r6(pos, cell, c6, grad, atoms=bool(atoms)))
 
     @staticmethod
     def _pair(i, j, d, dij, rij, c6, c12, with_r6):
@@ -355,7 +385,7 @@ class SlaterKirkwood(Dispersion):
         rows = np.arange(len(labels))
         return table[rows, k], table[rows, 6 + k], table[:, 12]
 
-    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0):
+    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0, atoms=False):
         pbc = _native_pbc(cell, pbc, "SlaterKirkwood")
         pos = np.asarray(pos, float)
         cell = None if pbc is None else np.asarray(cell, float)
@@ -371,20 +401,19 @@ class SlaterKirkwood(Dispersion):
         h0 = np.where(pair_on, 3.0 / r0 ** 7, 0.0)
         natom = len(pos)
         if not pair_on.any():
-            zero = DispersionTerms(0.0, np.zeros((natom, 3)), np.zeros((3, 3)))
-            return zero if grad else DispersionTerms(0.0, None, None)
+            return _zero_terms(natom, grad, atoms)
         if pbc is None:
             rcut = (c6.max() / TOL_DISPERSION) ** (1.0 / 6.0)
             i, j, _, vec, d = neighbor_list(pos, None, None, rcut)
             e, de = self._pair(c6[i, j], h0[i, j], d, corr=0.0)
-            return _pair_terms(i, j, vec, d, e, de, natom, grad)
+            return _pair_terms(i, j, vec, d, e, de, natom, grad, atoms)
         # pure -C6/R^6 by Ewald, then the damping where 1 - f^4 >= TOL_DISP_DAMP
         rmax = r0[pair_on].max()
         damp_cut = rmax * (-math.log(1.0 - (1.0 - TOL_DISP_DAMP) ** 0.25) / 3.0) ** (1.0 / 7.0)
         i, j, _, vec, d = neighbor_list(pos, cell, pbc, damp_cut)
         e, de = self._pair(c6[i, j], h0[i, j], d, corr=-1.0)
-        return _sum_terms(ewald_r6(pos, cell, c6, grad, rcut_min=damp_cut),
-                          _pair_terms(i, j, vec, d, e, de, natom, grad))
+        return _sum_terms(ewald_r6(pos, cell, c6, grad, rcut_min=damp_cut, atoms=bool(atoms)),
+                          _pair_terms(i, j, vec, d, e, de, natom, grad, atoms))
 
     @staticmethod
     def _pair(c6, h0, d, corr):
@@ -420,11 +449,18 @@ def library_versions() -> dict:
     return out
 
 
-def _library_terms(result: dict, grad: bool) -> DispersionTerms:
+def _library_terms(result: dict, grad: bool, model=None, param=None) -> DispersionTerms:
+    """``model``, ``param``: also the energy of every atom, the rows of the library's pairwise
+    energies (two-body pairs half to each atom, three-body terms a third to each)."""
+    per_atom = None
+    if model is not None:
+        pw = model.get_pairwise_dispersion(param)
+        per_atom = (np.asarray(pw["additive pairwise energy"]).sum(1)
+                    + np.asarray(pw["non-additive pairwise energy"]).sum(1))
     if not grad:
-        return DispersionTerms(float(result["energy"]), None, None)
+        return DispersionTerms(float(result["energy"]), None, None, per_atom)
     return DispersionTerms(float(result["energy"]), np.array(result["gradient"]),
-                           np.array(result["virial"]))
+                           np.array(result["virial"]), per_atom)
 
 
 _DAMPING = {"beckejohnson": "bj", "bj": "bj", "rational": "bj",
@@ -438,7 +474,7 @@ HH_R0 = 2.35 / BOHR
 HH_CUTOFF = 10.0
 
 
-def hh_repulsion(numbers, pos, cell=None, pbc=None, grad=True) -> DispersionTerms:
+def hh_repulsion(numbers, pos, cell=None, pbc=None, grad=True, atoms=False) -> DispersionTerms:
     """E = sum over H-H pairs within 10 Bohr of k [1 - 1/(1 + exp(-e (R/r0 - 1)))]."""
     natom = len(pos)
     i, j, _, vec, d = neighbor_list(np.asarray(pos, float), cell,
@@ -448,7 +484,7 @@ def hh_repulsion(numbers, pos, cell=None, pbc=None, grad=True) -> DispersionTerm
     ex = np.exp(-HH_E * (d / HH_R0 - 1.0))
     e = HH_K * ex / (1.0 + ex)
     de = -HH_K * HH_E * ex / (HH_R0 * (1.0 + ex) ** 2)
-    return _pair_terms(i, j, vec, d, e, de, natom, grad)
+    return _pair_terms(i, j, vec, d, e, de, natom, grad, atoms)
 
 
 class DFTD3(Dispersion):
@@ -490,7 +526,11 @@ class DFTD3(Dispersion):
         return lib.ModifiedZeroDampingParam(s6=self.s6, s8=self.s8, s9=s9, rs6=self.sr6,
                                             rs8=1.0, alp=self.alpha6, bet=self.beta)
 
-    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0):
+    # DFTB+ spreads the energy of its D3 library evenly over the atoms (getEnergies, E/N);
+    # its native SimpleDftD3 is resolved by atom pairs
+    _dftbplus_even = True
+
+    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0, atoms=False):
         lib = _interface("dftd3", "DFT-D3")
         pbc = _periodicity(cell, pbc)
         pos = np.asarray(pos, float)
@@ -498,10 +538,14 @@ class DFTD3(Dispersion):
         model = lib.DispersionModel(numbers, pos, None if pbc is None else np.asarray(cell, float),
                                     pbc)
         model.set_realspace_cutoff(self.cutoff, self.cutoff_cn, self.cutoff_cn)
-        terms = _library_terms(model.get_dispersion(self._param(lib), grad=grad), grad)
+        param = self._param(lib)
+        terms = _library_terms(model.get_dispersion(param, grad=grad), grad,
+                               model if atoms else None, param)
         if self.hhrepulsion:
             terms = _sum_terms(terms, hh_repulsion(numbers, pos, None if pbc is None else cell,
-                                                   pbc, grad))
+                                                   pbc, grad, bool(atoms)))
+        if atoms == "dftbplus" and self._dftbplus_even:
+            terms = terms._replace(atoms=np.full(len(pos), terms.energy / len(pos)))
         return terms
 
 
@@ -513,6 +557,8 @@ class SimpleDFTD3(DFTD3):
     ``cutoff_cn``).  Settings the library cannot reproduce (s10 != 0,
     WeightingFactor != 4) are refused.
     """
+
+    _dftbplus_even = False
 
     def __init__(self, s8, a1, a2, s6=1.0, s10=0.0, cutoff_inter=64.0, cutoff_cn=40.0,
                  weighting_factor=4.0, atomic_numbers: dict | None = None):
@@ -560,7 +606,7 @@ class DFTD4(Dispersion):
         self.weighting_factor = float(weighting_factor)
         self.charge_steepness, self.charge_scale = float(charge_steepness), float(charge_scale)
 
-    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0):
+    def evaluate(self, labels, pos, cell=None, pbc=None, grad=True, charge=0.0, atoms=False):
         lib = _interface("dftd4", "DFT-D4")
         pbc = _periodicity(cell, pbc)
         model_opts = {}
@@ -572,7 +618,8 @@ class DFTD4(Dispersion):
                                     **model_opts)
         param = lib.DampingParam(s6=self.s6, s8=self.s8, s9=self.s9, a1=self.a1, a2=self.a2,
                                  alp=self.alpha)
-        return _library_terms(model.get_dispersion(param, grad=grad), grad)
+        return _library_terms(model.get_dispersion(param, grad=grad), grad,
+                              model if atoms else None, param)
 
 
 # ----------------------------------------------------------------------------

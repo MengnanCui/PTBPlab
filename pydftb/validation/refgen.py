@@ -156,7 +156,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     **pauli_options(case, labels), **block_options(case, labels),
                     **environment_options(case), **casida_options(case, casida_solver),
                     **scc_start_options(case), **fill_options(case, labels),
-                    **corrections_options(case))
+                    **corrections_options(case), **analysis_options(case))
         if switch is not None:
             opts["type_switching"] = [switch]
         q_init = options.pop("q_init", None)
@@ -215,6 +215,30 @@ def corrections_options(case: Case) -> dict:
             dc = {**dc, "layer_position": float(dc["layer_position"]) / BOHR}
         out["dipole_correction"] = dc
     return out
+
+
+ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors")
+
+
+def analysis_options(case: Case) -> dict:
+    """:class:`pydftb.DFTB` options of an M6f-4a case: its analysis with the electrostatic
+    potential's points and grid in Bohr ("band_out" and "compat" are for the comparison)."""
+    if not case.analysis:
+        return {}
+    spec = {k: v for k, v in case.analysis.items() if k in ANALYSIS_KEYS}
+    esp = spec.get("esp")
+    if esp and not esp.get("fractional"):
+        esp = dict(esp)
+        if "points" in esp:
+            esp["points"] = (np.asarray(esp["points"], float) / BOHR).tolist()
+        if "grid" in esp:
+            esp["grid"] = {**esp["grid"],
+                           "spacing": (np.asarray(esp["grid"]["spacing"], float) / BOHR).tolist(),
+                           "origin": (np.asarray(esp["grid"]["origin"], float) / BOHR).tolist()}
+        if "softening" in esp:
+            esp["softening"] = float(esp["softening"]) / BOHR
+        spec["esp"] = esp
+    return {"analysis": spec}
 
 
 def corrections_ase_options(case: Case) -> dict:
@@ -394,6 +418,7 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
                   scc_tol=case.scc_tol, threads=threads, charge=case.charge,
                   binary=dftbplus_binary(case),
+                  **({"analysis": case.analysis} if case.analysis else {}),
                   **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
                       "autotest": True} if case.casida else {}),
                   **({"fermi": fermi_hsd(case)} if case.fermi else {}))
@@ -558,6 +583,7 @@ def regenerate(names=None, threads: int = 1):
                              "dipole_correction": case.dipole_correction,
                              "stress_fd": case.stress_fd, "dftbplus": case.dftbplus}
                             if case.corrections else {}),
+                         **({"analysis": case.analysis} if case.analysis else {}),
                          **({"type_switching": case.type_switching}
                             if case.type_switching else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
@@ -585,7 +611,10 @@ def regenerate(names=None, threads: int = 1):
                                                       "e_plus_u", "e_onsite", "e_ls",
                                                       "e_force_related",
                                                       "number_of_electrons", "fermi_levels")
-                          or case.corrections and k in ("scc_errors", "e_3rd", "e_halogen")},
+                          or case.corrections and k in ("scc_errors", "e_3rd", "e_halogen")
+                          or case.analysis and k in ("scc_errors", "e_3rd", "e_spin", "spins",
+                                                     "e_ls", "e_plus_u", "e_onsite", "e_ext",
+                                                     "e_solv", "e_halogen", "analysis")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -757,6 +786,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.corrections:
         dev.update(_compare_corrections(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
                                         **backend))
+    if case.analysis:
+        dev.update(_compare_analysis(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
+                                     **backend))
     if case.type_switching:                                           # M5a
         dev.update(_compare_switching(case, inp, res, solver=solver, fd_delta=fd_delta,
                                       **backend))
@@ -773,7 +805,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
                                               "scc_errors", "charges_file", "e_fr",
                                               "n_electrons", "fermi_level", "e_halogen",
                                               "switch")
-                  if k in dev))
+                  if k in dev)
+          and all(dev[k] <= tol[k] for k in ANALYSIS_DEV if k in dev))
     return {"case": doc["case"], "dev": dev, "ok": ok, "wall": wall, "n_scc": res.n_scc,
             "result": res,
             "n_scc_ref": ref.get("n_scc"), "natoms": len(inp["labels"])}
@@ -871,6 +904,119 @@ def _compare_corrections(case: Case, inp: dict, ref: dict, res, **run) -> dict:
             dev["forces_dftbp"] = float(np.abs(compat.forces - np.array(ref["forces"])).max())
     if "stress_fd" in ref and ref.get("stress") is not None:
         dev["stress_dftbp"] = float(np.abs(res.stress - np.array(ref["stress"])).max())
+    return dev
+
+
+ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "eigvec",
+                "band_out", "band_occ", "detailed")
+
+
+def _degenerate_groups(e, tol: float = 1e-6):
+    """(start, stop) of runs of levels closer than ``tol`` (Hartree)."""
+    groups, start = [], 0
+    for i in range(1, len(e) + 1):
+        if i == len(e) or e[i] - e[i - 1] > tol:
+            groups.append((start, i))
+            start = i
+    return groups
+
+
+def _numbers_close(mine: list, theirs: list) -> tuple[int, float]:
+    """(lines whose text differs apart from the numbers, largest number difference) of two
+    texts given as lists of lines."""
+    import re
+    num = re.compile(r"[-+]?\d+\.\d+(?:E[-+]?\d+)?")
+    if len(mine) != len(theirs):
+        return max(len(mine), len(theirs)), 0.0
+    bad, worst = 0, 0.0
+    for x, y in zip(mine, theirs):
+        if x == y:
+            continue
+        if num.sub("#", x) != num.sub("#", y) or len(x) != len(y):
+            bad += 1
+            continue
+        worst = max(worst, max(abs(float(p) - float(q))
+                               for p, q in zip(num.findall(x), num.findall(y))))
+    return bad, worst
+
+
+def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
+    """Deviations of an M6f-4a case: the atom-resolved energies (largest over DFTB+'s four
+    blocks; with "compat" pydftb's DFTB+-style E/N of the D3 library), net populations and
+    hybridisation ratios, CM5 charges, the potentials (Hartree/e, autotest.tag) and ESP.dat's
+    text (layout exactly, numbers within ``esp_file``), the eigenvectors' Mulliken weights
+    summed over degenerate levels (per level), band.out (layout exactly, eV and occupations)
+    and the detailed.out blocks of :func:`pydftb.dftbplus_io.detailed_tables` (layout)."""
+    from .. import dftbplus_io as io
+    a, r = res.analysis, ref["analysis"]
+    dev = {}
+    if "atom_energies" in r:
+        mine = a.atom_energies
+        if case.analysis.get("compat"):
+            DFTB._atom_energy_compat = True
+            try:
+                compat = run_pydftb(case, inp, **run)
+            finally:
+                DFTB._atom_energy_compat = False
+            mine = compat.analysis.atom_energies
+            res = compat
+        dev["atom_energies"] = max(float(np.abs(mine[k] - np.array(v)).max())
+                                   for k, v in r["atom_energies"].items())
+    if "net_populations" in r:
+        dev["net_populations"] = max(
+            float(np.abs(a.net_populations - np.array(r["net_populations"])).max()),
+            float(np.abs(a.hybridisation - np.array(r["hybridisation"])).max()))
+    if "cm5" in r:
+        dev["cm5"] = float(np.abs(a.cm5_charges - np.array(r["cm5"])).max())
+    with tempfile.TemporaryDirectory(prefix="pydftb_ana_") as tmp:
+        if "esp" in r:
+            d = float(np.abs(a.esp.internal - np.array(r["esp"]["internal"])).max())
+            if r["esp"]["external"] is not None:
+                d = max(d, float(np.abs(a.esp.external - np.array(r["esp"]["external"])).max()))
+            dev["esp"] = d
+            io.write_esp(os.path.join(tmp, "ESP.dat"), a.esp)
+            with open(os.path.join(tmp, "ESP.dat")) as fh:
+                bad, worst = _numbers_close(fh.read().splitlines(), r["esp"]["file"])
+            dev["esp_file"] = bad + worst / HARTREE         # V -> Hartree/e for the tolerance
+        if "band_out" in r:
+            io.write_band_out(os.path.join(tmp, "band.out"), res)
+            with open(os.path.join(tmp, "band.out")) as fh:
+                mine_lines = fh.read().splitlines()
+            bad, _ = _numbers_close(mine_lines, r["band_out"])
+            e_dev = occ_dev = 0.0
+            for x, y in zip(mine_lines, r["band_out"]):
+                tx, ty = x.split(), y.split()
+                if len(tx) == 3 and tx[0] != "KPT":
+                    e_dev = max(e_dev, abs(float(tx[1]) - float(ty[1])))
+                    occ_dev = max(occ_dev, abs(float(tx[2]) - float(ty[2])))
+            dev["band_out"] = bad + e_dev
+            dev["band_occ"] = bad + occ_dev
+    if "eigvec" in r:
+        weights = [np.array(w) for w in r["eigvec"]["weights"]]
+        worst, iv = 0.0, 0
+        for e, w in zip(res.eigenvalues, a.mulliken_weights):
+            w = np.asarray(w)
+            for lo, hi in _degenerate_groups(np.asarray(e)):
+                mine = w[..., lo:hi].sum(-1)                # (n_orb) or (4, n_orb)
+                theirs = sum(weights[iv + j] for j in range(lo, hi))
+                if mine.ndim == 2:
+                    theirs = theirs.T
+                worst = max(worst, float(np.abs(mine - theirs).max()) / (hi - lo))
+            iv += len(e)
+        dev["eigvec"] = worst
+    if r.get("detailed_blocks"):
+        mine = io.detailed_tables(res).strip("\n").split("\n\n")
+        theirs = [b.strip("\n") for b in r["detailed_blocks"]]
+        bad = 0
+        for block in theirs:
+            title = block.splitlines()[0]
+            match = [m for m in mine if m.splitlines()[0] == title]
+            if not match:
+                bad += 1
+                continue
+            b, worst = _numbers_close(match[0].splitlines(), block.splitlines())
+            bad += b
+        dev["detailed"] = bad
     return dev
 
 
@@ -1125,6 +1271,9 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             ef = f", |dE_f| {d['fermi_level']:.1e} Ha" if "fermi_level" in d else ""
             print(f"{'':26s}   Filling: |dE_FR| {d.get('e_fr', 0.0):.1e} Ha, "
                   f"|dN| {d.get('n_electrons', 0.0):.1e}{ef}{sd}")
+        if case.analysis:                                 # M6f-4a
+            parts = [f"{k} {d[k]:.1e}" for k in ANALYSIS_DEV if k in d]
+            print(f"{'':26s}   Analysis: " + ", ".join(parts))
         if case.corrections and ("e_halogen" in d or "stress_dftbp" in d
                                  or ("forces_dftbp" in d and not case.casida)):   # M6f-3
             parts = []

@@ -31,6 +31,7 @@ from ase.data import chemical_symbols
 
 from . import solvation_data as data
 from .constants import BOHR, KB_HARTREE, KCAL_MOL
+from .neighbors import neighbor_list
 
 AA_BOHR = 1.0 / BOHR                       # DFTB+ AA__Bohr
 AMBIENT_TEMPERATURE = 298.15               # K
@@ -337,6 +338,22 @@ class SolvationTerms:
             e += self.gb.total_shift()
         return e
 
+    def atom_energies(self, dq_atom) -> np.ndarray:
+        """:meth:`energy` atom by atom, as DFTB+ (milestone M6f-4a): the surface term of
+        every atom, 1/2 q_A (B q)_A with the hydrogen-bond term s_A h_A q_A^2, and the free
+        energy shift spread evenly."""
+        n = len(self.pos)
+        e = np.zeros(n)
+        if self.gamma is not None:
+            e = e + self.sasa * self.gamma
+        if self.gb is not None:
+            q = self._charges(dq_atom)
+            e = e + 0.5 * q * (self.bmat @ q)
+            if self.hb is not None:
+                e = e + self.sasa * self.hb * q * q
+            e = e + self.gb.total_shift() / n
+        return e
+
     def gradient(self, dq_atom) -> np.ndarray:
         """dE/dr_A at fixed charges (n_atom, 3)."""
         n = len(self.pos)
@@ -588,6 +605,24 @@ def cm5_pair_parameter(z1: int, z2: int) -> float:
     if (z2, z1) in _CM5_PAIRS:
         return -_CM5_PAIRS[(z2, z1)]
     return data.CM5_PARAMETERS[z1 - 1] - data.CM5_PARAMETERS[z2 - 1]
+
+
+def cm5_charges(pos, labels, numbers, cm5: CM5, cell=None, pbc=None) -> np.ndarray:
+    """The CM5 correction c_i of the analysis output (milestone M6f-4a), the image pairs of a
+    periodic cell included (within the cut-off; pairs of one type are skipped, as DFTB+, and
+    with them an atom's own images); without a cell the same as :func:`cm5_correction`."""
+    if cell is None:
+        return cm5_correction(pos, labels, numbers, cm5)[0]
+    rad = _radii(data.ATOMIC_RADII, cm5.radii, labels, numbers, "atomic radius")
+    i, j, _, _, d = neighbor_list(np.asarray(pos, float), cell, pbc, cm5.cutoff)
+    lab = np.asarray(labels, dtype=object)
+    keep = lab[i] != lab[j]
+    i, j, d = i[keep], j[keep], d[keep]
+    z = np.asarray(numbers)
+    pab = np.array([cm5_pair_parameter(a, b) for a, b in zip(z[i], z[j])])
+    c = np.zeros(len(pos))
+    np.add.at(c, i, np.exp(-cm5.alpha * (d - rad[i] - rad[j])) * pab)
+    return 2.0 * c if cm5.double_count else c
 
 
 def cm5_correction(pos, labels, numbers, cm5: CM5):

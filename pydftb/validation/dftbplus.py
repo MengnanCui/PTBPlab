@@ -178,6 +178,107 @@ def corrections_block(h5=None, halogen=None, dipole=None, labels=()) -> str:
     return "".join(f"{ln}\n" for ln in lines)
 
 
+def analysis_block(spec) -> str:
+    """HSD lines of the Analysis block for a case's ``analysis`` (milestone M6f-4a):
+    ``AtomResolvedEnergies``, ``WriteNetCharges``, ``CM5``, ``ElectrostaticPotential``
+    (points or grid in Angstrom, or fractional) and ``WriteEigenvectors`` as text."""
+    if not spec:
+        return ""
+    lines = []
+    if spec.get("atom_energies"):
+        lines.append("  AtomResolvedEnergies = Yes")
+    if spec.get("net_populations"):
+        lines.append("  WriteNetCharges = Yes")
+    cm5 = spec.get("cm5")
+    if cm5 is True:
+        lines.append("  CM5 {}")
+    elif cm5:
+        lines.append("  CM5 {")
+        if "alpha" in cm5:
+            lines.append(f"    Alpha [AA^-1] = {_f(cm5['alpha'])}")
+        if "cutoff" in cm5:
+            lines.append(f"    Cutoff [AA] = {_f(cm5['cutoff'])}")
+        if cm5.get("radii"):
+            lines.append("    Radii [AA] = Values {")
+            lines += [f"      {lab} = {_f(r)}" for lab, r in cm5["radii"].items()]
+            lines.append("    }")
+        lines.append("  }")
+    esp = spec.get("esp")
+    if esp:
+        mod = "F" if esp.get("fractional") else "Angstrom"
+        lines.append("  ElectrostaticPotential {")
+        if "points" in esp:
+            lines.append(f"    Points [{mod}] = {{")
+            lines += [f"      {_f(x)} {_f(y)} {_f(z)}" for x, y, z in esp["points"]]
+            lines.append("    }")
+        else:
+            g = esp["grid"]
+            lines += [f"    Grid [{mod}] {{",
+                      "      Spacing = " + " ".join(_f(x) for x in g["spacing"]),
+                      "      Origin = " + " ".join(_f(x) for x in g["origin"]),
+                      "      GridPoints = " + " ".join(str(int(n)) for n in g["points"])]
+            if "directions" in g:
+                lines.append("      Directions = " + " ".join(_f(x) for row in g["directions"]
+                                                             for x in row))
+            lines.append("    }")
+        if "softening" in esp:
+            lines.append(f"    Softening [Angstrom] = {_f(esp['softening'])}")
+        lines.append("  }")
+    if spec.get("eigenvectors"):
+        lines += ["  WriteEigenvectors = Yes", "  EigenvectorsAsText = Yes"]
+    return "".join(f"{ln}\n" for ln in lines)
+
+
+def parse_analysis(workdir, det: str, spec: dict) -> dict:
+    """The analysis outputs of a DFTB+ run (M6f-4a) for the reference files: the four
+    atom-resolved energy blocks and the net populations (detailed.out, 8 decimals), the CM5
+    charges (results.tag), the potentials (autotest.tag, full precision, and ESP.dat's text),
+    band.out's levels and text, the Mulliken weights of eigenvec.out and the text of the
+    detailed.out blocks."""
+    from pydftb import dftbplus_io as io
+    out, blocks = {}, []
+    if spec.get("atom_energies"):
+        energies = {}
+        for title in ("electronic", "repulsive", "total", "dispersion"):
+            m = re.search(rf"^(Atom resolved {title} energies *\n(?:\s+\d+\s+\S+ H\s+\S+ eV\n)+)",
+                          det, re.M)
+            if m:
+                rows = m.group(1).splitlines()[1:]
+                energies[title] = [float(r.split()[1]) for r in rows]
+                blocks.append(m.group(1))
+        out["atom_energies"] = energies
+    if spec.get("net_populations"):
+        m = re.search(r"^( Atomic net \(on-site\) populations and hybridisation ratios\n.*\n"
+                      r"(?:\s+\d+\s+\S+\s+\S+\n)+)", det, re.M)
+        rows = m.group(1).splitlines()[2:]
+        out["net_populations"] = [float(r.split()[1]) for r in rows]
+        out["hybridisation"] = [float(r.split()[2]) for r in rows]
+        blocks.append(m.group(1))
+    tag = parse_results_tag(os.path.join(workdir, "results.tag"))
+    if spec.get("cm5"):
+        out["cm5"] = np.ravel(tag["cm5_atomic_charges"]).tolist()
+        m = re.search(r"^( CM5 corrected atomic gross charges \(e\)\n.*\n(?:\s+\d+\s+\S+\n)+)",
+                      det, re.M)
+        blocks.append(m.group(1))
+    if spec.get("esp"):
+        auto = parse_results_tag(os.path.join(workdir, "autotest.tag"))
+        with open(os.path.join(workdir, "ESP.dat")) as fh:
+            text = fh.read()
+        out["esp"] = {"internal": np.ravel(auto["internal_efield"]).tolist(),
+                      "external": (np.ravel(auto["external_efield"]).tolist()
+                                   if "external_efield" in auto else None),
+                      "file": text.splitlines()}
+    if spec.get("band_out"):
+        with open(os.path.join(workdir, "band.out")) as fh:
+            out["band_out"] = fh.read().splitlines()
+    if spec.get("eigenvectors"):
+        kind, vecs = io.read_eigenvec_out(os.path.join(workdir, "eigenvec.out"))
+        out["eigvec"] = {"kind": kind, "headers": [h for h, _ in vecs],
+                         "weights": [w.tolist() for _, w in vecs]}
+    out["detailed_blocks"] = blocks
+    return out
+
+
 def spin_block(opts, labels=None, shell_resolved_scc=False) -> str:
     """HSD for pydftb's spin options (unpaired_electrons, relax_total_spin, spin_constants).
 
@@ -845,10 +946,12 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         repulsive="skf", richardson=False, charge=0.0, extra_ham="", threads=1,
         timing=False, workdir=None, keep=False, klines=None, read_charges=False,
         convergent_only=True, extra_analysis="", driver="", extra_top="", forces=True,
-        autotest=False, extra_options="", fermi=None, binary=None) -> dict:
+        autotest=False, extra_options="", fermi=None, binary=None, analysis=None) -> dict:
     """Run DFTB+ and return energies (Ha), forces (Ha/Bohr), charges, eigenvalues (Ha,
     (n_spin, n_k, n_level)), metadata; ``scc_errors``: the "SCC error" of every iteration
-    as printed (M6f).  ``binary``: another DFTB+ executable (M6f-3: the development build)."""
+    as printed (M6f).  ``binary``: another DFTB+ executable (M6f-3: the development build).
+    ``analysis``: a case's analysis spec (M6f-4a): its HSD lines are added and ``res["analysis"]``
+    holds :func:`parse_analysis`."""
     binary = binary or DFTBPLUS
     if not (binary and os.path.exists(binary)):
         raise FileNotFoundError(f"dftb+ binary not found ({binary!r}); set $DFTBPLUS")
@@ -857,6 +960,9 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
     try:
         write_gen(os.path.join(workdir, "geo.gen"), labels, np.asarray(pos_ang),
                   None if cell_ang is None else np.asarray(cell_ang))
+        if analysis:
+            extra_analysis = extra_analysis + analysis_block(analysis)
+            autotest = autotest or bool(analysis.get("esp"))
         hsd = make_hsd(skdir, max_l, cell_ang is not None, kpts, scc, filling, shell_resolved,
                        scc_tol, max_scc, repulsive, richardson, charge, extra_ham, timing,
                        klines, read_charges, convergent_only, extra_analysis, driver,
@@ -912,6 +1018,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
             res["e_force_related"] = float(np.atleast_1d(tag["forcerelated_energy"])[0])
         if "number_of_electrons" in tag:      # per spin channel with collinear spin
             res["number_of_electrons"] = np.atleast_1d(tag["number_of_electrons"]).astype(float)
+        if analysis:                          # M6f-4a
+            res["analysis"] = parse_analysis(workdir, det, analysis)
         ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)
         res["version"] = ver.group(1) if ver else "unknown"
         # one line each (\s would also match the newlines of Casida's Stratmann progress table)

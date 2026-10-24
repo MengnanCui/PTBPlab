@@ -317,6 +317,21 @@ class DipoleSetup:
         """E = 1/2 sum_A dq_A V_A = 2 pi D^2 / V (DFTB+ books it in E_SCC)."""
         return 2.0 * np.pi * self.dipole(dq_atom) ** 2 / self.volume
 
+    def atom_energies(self, dq_atom) -> np.ndarray:
+        """1/2 dq_A V_A of every atom (DFTB+ addEnergyPerAtom; milestone M6f-4a)."""
+        return 0.5 * np.asarray(dq_atom, float) * self.potential(dq_atom)
+
+    def heights(self, points) -> np.ndarray:
+        """z_f - z_c of arbitrary points, folded as the atoms are."""
+        u = np.asarray(points, float) @ self.normal
+        z0, h = self.layer_position, self.period
+        return np.mod(u - z0, h) + z0 - (z0 + 0.5 * h)
+
+    def point_potential(self, points, dq_atom) -> np.ndarray:
+        """V at arbitrary points, the potential the atoms feel (DFTB+ getPotential, used by
+        its electrostatic potential output)."""
+        return 4.0 * np.pi / self.volume * self.dipole(dq_atom) * self.heights(points)
+
     def gradient(self, dq_atom) -> np.ndarray:
         """dE/dR at fixed charges: (4 pi / V) D dq_A n."""
         dq_atom = np.asarray(dq_atom, float)

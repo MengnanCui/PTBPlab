@@ -437,6 +437,28 @@ class BlockTerms:
                     e_ons += 0.5 * float(np.sum(self._onsite_skew(k, skew[k]) * skew[k]))
         return e_u, e_ons
 
+    def atom_energies(self, blocks, skew=None) -> tuple[np.ndarray, np.ndarray]:
+        """The terms of :meth:`energies` atom by atom, (E_U, E_onsite) of every atom of the
+        structure, zero for atoms without blocks (milestone M6f-4a; DFTB+ ``getEnergy``/
+        ``getEons`` with per-atom output)."""
+        n = len(self.basis.species)
+        e_u, e_ons = np.zeros(n), np.zeros(n)
+        for k, q in enumerate(blocks):
+            a = self.atoms[k]
+            for _, idx, uj in self.u_groups[k]:
+                ix = np.ix_(idx, idx)
+                e_u[a] -= 0.25 * uj * sum(float(np.sum(q[s][ix] ** 2)) for s in range(len(q)))
+                if skew is not None:
+                    e_u[a] -= 0.25 * uj * sum(float(np.sum(skew[k][s][ix] ** 2))
+                                              for s in range(len(q)))
+                if self.fll:
+                    e_u[a] += 0.5 * uj * float(np.trace(q[0][ix]))
+            if self.ons[k] is not None:
+                e_ons[a] += 0.5 * float(np.sum(self._onsite_shift(k, q) * q))
+                if skew is not None:
+                    e_ons[a] += 0.5 * float(np.sum(self._onsite_skew(k, skew[k]) * skew[k]))
+        return e_u, e_ons
+
     # ---- matrices ---------------------------------------------------------------------
     def shift(self, smat, blocks, skew: bool = False):
         """1/2 (S B + B S) for the block-diagonal B of ``blocks`` ((n_a, n_a) per atom, real

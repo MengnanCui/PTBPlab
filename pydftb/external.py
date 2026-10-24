@@ -187,6 +187,19 @@ class ExternalTerms:
         """The point charges' energy (part of DFTB+'s "Energy SCC")."""
         return 0.0 if self.v_pc is None else float(dq_atom @ self.v_pc)
 
+    def atom_energies(self, dq_atom, dn_net=None) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`energy_ext` and :meth:`energy_pc` atom by atom (milestone M6f-4a): the
+        field and gross terms dq_A V_A, the net term (N_A - q0_A) V_A, the point charges
+        dq_A V^pc_A (not halved, as DFTB+'s addEnergyPerAtom)."""
+        e_ext = np.zeros(len(self.pos))
+        for v in (self.v_field, self.v_gross):
+            if v is not None:
+                e_ext = e_ext + dq_atom * v
+        if self.v_net is not None:
+            e_ext = e_ext + dn_net * self.v_net
+        e_pc = np.zeros(len(self.pos)) if self.v_pc is None else dq_atom * self.v_pc
+        return e_ext, e_pc
+
     # ---- derivatives -------------------------------------------------------------
     def gradient(self, dq_atom) -> np.ndarray:
         """Explicit dE/dr_A at fixed charges (n_atom, 3); the S-derivative part comes with

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6f-4a 分析输出设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6f-4a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6f-4a · 设计文档</p>
+    <h1>分析输出：按原子的能量、布居、CM5、静电势与输出文件</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd><code>067fed0</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6f4a-analysis.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6f 的第四块分成两半，这是前一半：DFTB+ <code>Analysis</code> 一节中不需要局域化或激发态的输出。<strong>按原子分解的能量</strong>（<code>AtomResolvedEnergies</code>）、<strong>净布居与杂化比</strong>（<code>WriteNetCharges</code>）、<strong>CM5 电荷</strong>、<strong>静电势</strong>（<code>ElectrostaticPotential</code>），以及 <strong>eigenvec.out/.bin 与 band.out</strong> 两种文件。只做 NumPy 引擎；不开分析时逐位不变。Pipek–Mezey 局域化、键分析与 Casida 跃迁电荷是后一半（M6f-4b）。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节）：
+        <ul>
+          <li>按原子的能量只写进 detailed.out，四个块（电子、排斥、总能量，有色散时还有色散），每个原子 8 位小数；总能量块的和是 “Total energy”，不是 Mermin 自由能；</li>
+          <li>各项的拆法：H0 按 Mulliken 方式把 ρ<sub>μν</sub>H0<sub>νμ</sub> 记给 μ 所在的原子（异核块各一半），SCC 是 ½Δq<sub>A</sub>(γΔq)<sub>A</sub>（周期体系含 Ewald 的常数项），排斥势、卤素每对各一半，色散按原子对，在位的项（+U、onsite、LS）记给本原子；</li>
+          <li>静电势用输出电荷的点电荷近似，分子用软化的 1/r，周期体系用 Ewald；文件中两栏都是物理电势（V）。</li>
+        </ul>
+      </li>
+      <li><strong>探针中的发现</strong>（第二节）：
+        <ul>
+          <li>DFTB+ 默认的 <code>EwaldTolerance = 1e-9</code> 让水盒子的 E<sub>H0</sub> 差 7.9e-8、按原子的能量差 5.2e-8；收紧到 1e-12 后与 pydftb 一致到 8 位小数的舍入（4.9e-9）。周期算例的参考都收紧 Ewald；</li>
+          <li>s-dftd3 库的 D3（含 D3H5 的 H–H 排斥）DFTB+ 平均分给每个原子（E/N），没有物理意义；D4 按原子对（两体每对一半、三体每个原子三分之一），与 dftd4 库 <code>get_pairwise_dispersion</code> 的行和一致到 4.9e-9。pydftb 默认对 D3 也按原子对分配，测试用的开关复现 E/N；</li>
+          <li>静电势、本征向量与 band.out 都按源码的格式复现：分子散点差 7e-16 a.u.，周期网格差 4e-10 V，本征向量的 Mulliken 权重（简并组求和）差 ≤ 7e-7（文件只有 6 位小数）；</li>
+          <li>DFTB+ 的问题：ESP 网格的 <code>Directions</code> 不是单位阵时，文件头的原点和步长矢量写错；点恰好落在原子的周期像上时自身项处理不一致；D3H5 的 H–H 排斥把同一原子 ±L 两个像各算一次（晶胞短于 10 Bohr 时能量偏大）。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的接口</strong>（第三节）：<code>DFTB(analysis=True | dict | Analysis(...))</code>，结果在 <code>r.analysis</code>；文件由 <code>dftbplus_io</code> 的写出函数生成（<code>write_band_out</code>、<code>write_eigenvectors</code>、<code>write_esp</code>、<code>detailed_tables</code>）；ASE 计算器提供 <code>get_potential_energies()</code>。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">19</span><span class="lbl">DFTB+ 参考算例（其中 1 个用开发版）</span></li>
+      <li><span class="num">5.2e-8</span><span class="lbl">DFTB+ 默认 Ewald 精度下水盒子按原子能量的误差（Ha）；收紧后 4.9e-9</span></li>
+      <li><span class="num">E/N</span><span class="lbl">DFTB+ 对 s-dftd3 的 D3 色散的按原子分配：总量平均分</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码为 DFTB+ 的 041e723（<code>dftbplus/main.F90</code>、<code>dftb/getenergies.F90</code>、<code>dftb/scc.F90</code>、<code>dftb/coulomb.F90</code>、<code>dftb/dispcommon.F90</code>、<code>extlibs/sdftd3.F90</code>、<code>solvation/born.F90</code>、<code>solvation/cm5.F90</code>、<code>dftb/elstatpot.F90</code>、<code>dftbplus/mainio.F90</code>、<code>dftbplus/parser.F90</code>）。这些部分与 25.1 相同；所有规则都用 25.1 的二进制确认过（第二节）。</p>
+
+      <h3>按原子分解的能量</h3>
+      <p>输入 <code>Analysis { AtomResolvedEnergies = Yes }</code>。各项都用最后一轮的输出电荷（DFTB+ 默认 <code>RecomputeAfterDensity</code>），与总能量相同。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>项</th><th>按原子的拆法</th><th>记在</th></tr></thead>
+        <tbody>
+          <tr><td>H0</td><td>Σ<sub>μ∈A</sub> Σ<sub>ν</sub> Σ<sub>k</sub> w<sub>k</sub> Re[ρ<sub>μν</sub>(k) H0<sub>νμ</sub>(k)]，即 Mulliken 式的拆法：在位块全归 A，A–B 两块各一半；自旋相加</td><td>电子</td></tr>
+          <tr><td>SCC</td><td>½Δq<sub>A</sub>(γΔq)<sub>A</sub>（壳层分辨时对壳层求和）；周期体系 γ 含 Ewald 的 −π/(Vα²) 与 −2α/√π；点电荷 Δq<sub>A</sub>V<sup>pc</sup><sub>A</sub>（不减半）；只 onsite 的三阶 (U<sup>d</sup><sub>A</sub>/6)Δq<sub>A</sub><sup>3</sup>；偶极修正 ½Δq<sub>A</sub>V<sup>dc</sup><sub>A</sub></td><td>电子</td></tr>
+          <tr><td>完整三阶</td><td>⅓Δq<sub>A</sub>·∂E<sub>3</sub>/∂q<sub>A</sub>（E<sub>3</sub> 是 Δq 的三次齐次式，求和等于 E<sub>3</sub>）</td><td>电子</td></tr>
+          <tr><td>自旋</td><td>½m<sub>l</sub>(Wm)<sub>l</sub> 对 A 的壳层求和（非共线时 m 是三个方向）</td><td>电子</td></tr>
+          <tr><td>LS</td><td>onsite 模型：A 的在位块 Tr(ρ<sub>AA</sub>H<sub>SO</sub>)；dual 模型：A 的对偶块布居与 Λ 的收缩</td><td>电子</td></tr>
+          <tr><td>DFTB+U、onsite 修正</td><td>A 的块布居的二次式</td><td>电子</td></tr>
+          <tr><td>外加势</td><td>Δq<sub>A</sub>(R<sub>A</sub>·E + V<sup>gross</sup><sub>A</sub>) + (q<sup>net</sup><sub>A</sub> − q0<sub>A</sub>)V<sup>net</sup><sub>A</sub></td><td>电子</td></tr>
+          <tr><td>GB 溶剂</td><td>½q′<sub>A</sub>(Bq′)<sub>A</sub>（含氢键项）+ SASA<sub>A</sub> + ΔG<sub>shift</sub>/N；q′ 是 GB 用的电荷（Mulliken 或 CM5）</td><td>电子</td></tr>
+          <tr><td>排斥势</td><td>每对各一半</td><td>排斥</td></tr>
+          <tr><td>色散</td><td>UFF、Slater–Kirkwood、SimpleDftD3、D4 两体：每对各一半；周期 r<sup>−6</sup> 的倒空间与自能项按原子（行和）；D4 三体：每个原子 ⅓；<strong>s-dftd3 库的 D3（含 D3H5）与 MBD/TS：E/N 平均分</strong></td><td>色散</td></tr>
+          <tr><td>卤素修正</td><td>每对各一半</td><td>只在总能量</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>电子 = H0 + SCC + 自旋 + DFTB+U + LS + 外加 + 完整三阶 + onsite + 溶剂；总能量 = 电子 + 排斥 + 色散 + 卤素；Σ 总能量 = “Total energy”。</li>
+        <li>输出只在 detailed.out：<code>Atom resolved electronic energies</code>、<code>Atom resolved repulsive energies</code>、<code>Atom resolved total energies</code>，有色散时 <code>Atom resolved dispersion energies </code>（标题末尾有空格）；每行 <code>(I5, F16.8, A, F16.6, A)</code>，Hartree 与 eV；单项不按原子打印，没有 tag。</li>
+        <li>注意 DFTB+ 的 E<sub>SCC</sub> 含只 onsite 的三阶，detailed.out 里不另印 “Energy 3rd”；pydftb 一直把它放在 <code>e_3rd</code>。按原子的电子与总能量不受影响；pydftb 的分项与自己的总量对应。</li>
+      </ul>
+
+      <h3>净布居与杂化比</h3>
+      <p><code>MullikenAnalysis { WriteNetCharges = Yes }</code>（只在 <code>MullikenAnalysis = Yes</code> 时读）。q<sup>net</sup><sub>A</sub> = Σ<sub>μ∈A</sub> ρ<sub>μμ</sub>(R = 0) = Σ<sub>μ∈A</sub> Σ<sub>k</sub> w<sub>k</sub> Re ρ<sub>μμ</sub>(k)（自旋求和），杂化比 = 1 − q<sup>net</sup><sub>A</sub>/q0<sub>A</sub>。块标题 <code> Atomic net (on-site) populations and hybridisation ratios</code>，列头 <code> Atom       Population         Hybrid.</code>，行 <code>(I5, 1X, F16.8, F16.8)</code>，没有 tag。DFTB+ 只要分配了 q<sup>net</sup>（例如 <code>AtomSitePotential { Net }</code>）就打印这一块。</p>
+
+      <h3>CM5 电荷</h3>
+      <p><code>MullikenAnalysis { CM5 { Alpha = 2.474 Å⁻¹; Radii = AtomicRadii {...}; Cutoff = 30 Bohr } }</code>。q<sup>CM5</sup><sub>A</sub> = (q0<sub>A</sub> − q<sub>A</sub>) + Σ<sub>B</sub> D<sub>Z<sub>A</sub>Z<sub>B</sub></sub> exp[−α(R<sub>AB</sub> − r<sub>A</sub> − r<sub>B</sub>)]，跳过同一物种（类型标签）的原子对，这也去掉了原子自己的周期像；元素由物种名解析。周期体系的近邻表含 30 Bohr 内的像。detailed.out <code> CM5 corrected atomic gross charges (e)</code>，列头 <code> Atom           Charge</code>，行 <code>(I5, 1X, F16.8)</code>；results.tag <code>cm5_atomic_charges</code>（全精度）。注：GB 溶剂的 CM5 在 25.1 中把每对算了两次（M6c 已写明），分析输出用的是半表，不加倍。</p>
+
+      <h3>静电势</h3>
+      <p><code>ElectrostaticPotential { OutputFile = "ESP.dat"; AppendFile; Points = {...} | Grid {Spacing; Origin; GridPoints; Directions}; Softening = 1e-6 }</code>。</p>
+      <ul>
+        <li>电荷：输出电荷的原子单极子 q0 − q（不含 γ 的展宽，不分壳层）。分子 φ(r) = Σ<sub>A</sub>(q0<sub>A</sub> − q<sub>A</sub>)/√(|r − R<sub>A</sub>|² + ε²)；周期体系 Ewald：实空间 erfc(α|x|)/√(|x|² + ε²)（软化只在分母），|x| &lt; 1e-5 Bohr 的项跳过；倒空间同 γ；减 π/(Vα²)·Σq；点与中心晶胞的原子重合时再减 2α/√π。α 与 G 矢量来自 SCC 的 Ewald。</li>
+        <li>偶极修正的势加在内部一栏；外部一栏 = 点电荷 + 外场（物理电势 −E·r，r 不折叠），只在有外场或点电荷时出现。</li>
+        <li>文件中两栏都写 −(DFTB+ 内部的势) × 27.2113845 = 物理电势（V）；autotest.tag 的 <code>internal_efield</code>、<code>external_efield</code> 是同样符号的原子单位。</li>
+        <li>网格的点 p<sub>ijk</sub> = A·(i s<sub>1</sub> + o<sub>1</sub>, j s<sub>2</sub> + o<sub>2</sub>, k s<sub>3</sub> + o<sub>3</sub>)，A 的列是归一化的 <code>Directions</code>；<strong>第三个下标变化最快</strong>。周期体系可以用分数坐标（修饰符 <code>F</code>，此时不读 Directions）。</li>
+        <li>拒绝：非 SCC；改变静电场的溶剂模型（GB、COSMO；只有 SASA 可以）；xTB；同时给或都不给 Points 与 Grid；非周期体系用分数坐标。<code>AppendFile</code> 只在几何优化或 MD 时读。</li>
+        <li>ESP.dat：首行 <code>('# ', L2, 3I6, 1x, I0)</code>（有无外部一栏、网格的点数（散点时为 0）、总点数）；网格再写四行 <code>(A,3E20.12)</code>：原点与三个步长矢量（Å）；列标题；数据行网格 <code>(2E20.12)</code> 或 <code>(E20.12)</code>，散点 <code>(3E12.4,2E20.12)</code> 或 <code>(3E12.4,E20.12)</code>（坐标为 Å）。</li>
+      </ul>
+
+      <h3>本征向量文件与 band.out</h3>
+      <ul>
+        <li>两者都来自最后一次对角化，即由最后一轮输入电荷构成的 H（pydftb 的 <code>sc.h</code>，探针确认其本征值与 <code>sc.evals</code> 逐位相同）。</li>
+        <li><strong>eigenvec.out</strong>（<code>WriteEigenvectors = Yes; EigenvectorsAsText = Yes</code>）：首行 <code>Coefficients and Mulliken populations of the atomic orbitals</code> 后空一行。
+          <ul>
+            <li>实数（分子与 Γ 点）：每个本征向量一行 <code>('Eigenvector:',I4,4X,'(',A,')'/)</code>（up/down）；</li>
+            <li>复数（k 点）：<code>(A,I4,4X,A,I4,4X,'(',A,')'/)</code>，即 <code>K-point:    1    Eigenvector:    1    (up)</code>；</li>
+            <li>Pauli：首行后加列头 <code>   Atom   Orb         up spin coefficients   down spin coefficients    charge    x         y         z</code> 与空行，每个本征向量 <code>K-point: … Eigenvector: …</code>（没有自旋名，后面不空行）；</li>
+            <li>每个轨道一行：原子的第一个轨道 <code>(I5,1X,A2,2X,A)</code>（序号、物种、壳层名），其余 <code>(10X,A)</code>；壳层名 s、p_、d_、f_ 接轨道名（p：y z x；d：xy yz z2 xz x2-y2；f：y(3x2-y2) xyz yz2 z3 xz2 z(x2-y2) x(x2-3y2)），同一 l 的第二个壳层加序号（s2）；数值从第 23 列起：实数 <code>F10.6,1X,F10.6</code>（系数、Mulliken 权重 c<sub>μ</sub>(Sc)<sub>μ</sub>），复数 <code>'(',F10.6,',',F10.6,1X,')',1X,F10.6</code>（权重 Re[c<sub>μ</sub>*(Sc)<sub>μ</sub>]），Pauli 两个分量与四个权重（电荷、x、y、z）；每个原子后空一行。</li>
+          </ul>
+        </li>
+        <li><strong>eigenvec.bin</strong>：流式二进制，一个 int32 的 runId（DFTB+ 随机生成，供 waveplot 与 detailed.xml 核对），然后按 k 最快、自旋其次逐列写本征向量（实数或复数的 real(8)）。</li>
+        <li><strong>band.out</strong>（<code>WriteBandOut = Yes</code>，默认开）：先自旋后 k；块头是 gfortran 表控输出的 <code>KPT … SPIN … KWEIGHT …</code>，每行 <code>(I6, F12.4, F9.5)</code>（eV、占据数：无自旋时含因子 2，不乘 k 权重），块后空一行；Pauli 一个块 2N 个态。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为</h2>
+      <p>DFTB+ 25.1，参数 <code>ptbp_hcocu</code>，SCC 容差 1e-10，用现有的 25 个算例加上分析输出。探针脚本与输出在 scratchpad 的 <code>m6f4/</code>。</p>
+
+      <h3>P12：四个块、各项的和、SCC 的余量</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>25 个算例：分子、周期 Γ 与 k 点、DFTB3、只 onsite 的三阶、共线与非共线自旋、SOC、+U、onsite、外场、点电荷、位势、GB、卤素、H5、六种色散</td><td>四个块都在；Σ电子 − E<sub>el</sub>、Σ排斥 − E<sub>rep</sub>、Σ总量 − E<sub>total</sub> 都 ≤ 1e-8（8 位小数的舍入）；总量 − 电子 − 排斥 − 色散 ≤ 1e-8，只有卤素算例差 3.2e-3（卤素只进总量）；GB 的溶剂能在电子块中</td></tr>
+          <tr><td>pydftb 的 H0、SCC、三阶、自旋按上表拆分</td><td>分子与 k 点链与 DFTB+ 的电子块差 ≤ 8.3e-9；水盒子差 <strong>5.2e-8</strong>（见 P13）</td></tr>
+          <tr><td>色散的分配</td><td>D3（BJ 与零阻尼三体）各原子完全相同（spread 0）；UFF、SK、SimpleDftD3、D4 各原子不同</td></tr>
+          <tr><td>文件</td><td>写了 eigenvec.out、eigenvec.bin、band.out、ESP.dat；results.tag 只多了 <code>cm5_atomic_charges</code>；autotest.tag 多了 <code>internal_efield</code></td></tr>
+          <tr><td>SCC 的余量（最后两轮误差与阈值之比）</td><td>多数算例 ≥ 2.9；偏小的：水盒子 4.9/1.7、OH 非共线 278/1.5、甲醇 onsite 1.4/3.4、卤素 2.9/4.7。新算例按通用做法另选容差</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>P13：Ewald 精度、色散、静电势、本征向量</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>测试</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>水盒子，<code>EwaldTolerance</code> 1e-9 → 1e-12 → 1e-15</td><td>E −30.2776739374 → −30.2776738059 → −30.2776738058；1e-12 时 E<sub>H0</sub>、E<sub>SCC</sub> 与 pydftb 的 10 位小数相同。按原子的电子能量差 5.2e-8 → <strong>4.9e-9</strong>。<code>cases.py</code> 早有这一条注释（Ewald 1e-9 让水盒子的本征值差 ~1e-7 Ha），旧算例 <code>water_box_gamma</code> 的容差是 1e-6</td></tr>
+          <tr><td>UFF（分子、周期）、SK、SimpleDftD3、D4（分子含三体、周期两体）</td><td>每对一半与周期 r<sup>−6</sup> 的按原子拆法、dftd3/dftd4 库 <code>get_pairwise_dispersion</code> 的行和（加性 + 非加性），与 DFTB+ 的色散块差 ≤ 4.9e-9</td></tr>
+          <tr><td>s-dftd3 的 D3（BJ；零阻尼加三体）</td><td>DFTB+ 每个原子都是 E/N（差 ≤ 4.5e-9）；按原子对的分配与之差 1.3e-4</td></tr>
+          <tr><td>静电势：甲醇三个散点</td><td>φ = Σ(q0 − q)/√(d² + ε²) 与 autotest.tag 的 <code>internal_efield</code> 差 6.7e-16，与 ESP.dat（V）差 6.6e-13</td></tr>
+          <tr><td>静电势：水盒子 3 × 2 × 2 网格（Ewald 1e-12）</td><td>按第三个下标最快排列时差 4.3e-10 V；按第一个下标最快差 7.5 V。文件头：原点与三个步长矢量（Å）</td></tr>
+          <tr><td>本征值与 band.out（甲醇、O<sub>2</sub> 三重态、CuO 链 4 × 2 × 2、OH 非共线 + SOC）</td><td>重新对角化 <code>sc.h</code> 的本征值与 <code>sc.evals</code> 逐位相同；四舍五入到 4 位小数（eV）后与 band.out 相同（CuO 链有一个值差最后一位 1e-4，舍入边界）</td></tr>
+          <tr><td>本征向量的 Mulliken 权重</td><td>实数 c(Sc)、复数 Re[c*(Sc)]、Pauli 四个分量，在简并组内求和后与 eigenvec.out 差 ≤ 7.0e-7（6 位小数）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>源码中的问题（不影响参考算例）</h3>
+      <ul>
+        <li><strong>ESP 网格的文件头</strong>：点是 A·(…+ o)，但写出的原点是未旋转的 o；步长矢量写成 <code>axes_ * spread(spacing, 2, 3)</code>，按行而不是按列乘步长。<code>Directions</code> 是单位阵（且三个步长任意）时正确；分数坐标的网格同样按行乘。pydftb 写正确的值；参考算例用单位方向。</li>
+        <li><strong>点落在原子的周期像上</strong>：实空间跳过该项，但只在点与中心晶胞的原子重合时才减 2α/√π，两种情况结果不同。pydftb 两种情况都去掉自身项（写明）。</li>
+        <li><strong>D3H5 的 H–H 排斥</strong>（<code>extlibs/sdftd3.F90</code> 的 <code>addHHRepulsion</code>）：半近邻表中同一原子的 ±L 两个像都在，能量各加一次（应力乘了 ½，能量没有）。晶胞短于截断 10 Bohr 时能量偏大。pydftb 的 <code>hh_repulsion</code> 用全表，每对一半，正确。按原子的 E/N 分配也包含这一偏差。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>from pydftb import DFTB, Analysis
+calc = DFTB(sk, analysis=True)          # 按原子的能量、净布居、CM5（都很便宜）
+calc = DFTB(sk, analysis=Analysis(atom_energies=True, net_populations=True, cm5=True,
+                                  esp={"points": pts},          # Bohr，(M, 3)
+                                  eigenvectors=True))
+calc = DFTB(sk, kpts=(k, w), analysis={"esp": {"grid": {"spacing": (2.8, 2.8, 2.8),
+                                                         "origin": (0, 0, 0), "points": (3, 2, 2)}}})
+r = calc.calculate(labels, pos, cell, pbc)
+a = r.analysis
+a.atom_energies["total"]            # (n_atom,)，Σ = r.energy；还有 electronic、repulsive、
+                                    # dispersion、halogen 与各分项 h0、scc、third_order、spin、
+                                    # spin_orbit、plus_u、onsite、external、solvation
+a.net_populations, a.hybridisation  # (n_atom,)
+a.cm5_charges                       # (n_atom,)，e
+a.esp.internal, a.esp.external      # (M,)，Hartree/e（物理电势）；a.esp.points (M, 3) Bohr
+a.eigenvectors, a.mulliken_weights  # 每个 (自旋, k) 块
+
+from pydftb import dftbplus_io as io
+io.write_band_out("band.out", r)
+io.write_eigenvectors("eigenvec", r, text=True)    # eigenvec.out；text=False 写 eigenvec.bin
+io.write_esp("ESP.dat", a.esp)
+print(io.detailed_tables(r))                       # detailed.out 格式的分析块
+
+atoms.calc = PyDFTB(skdir, analysis=True)
+atoms.get_potential_energies()                     # eV，Σ = get_potential_energy()</code></pre>
+      <ul>
+        <li><strong>选项</strong>：<code>analysis=True</code> 等于 <code>Analysis(atom_energies=True, net_populations=True, cm5=True)</code>；字典的键同 <code>Analysis</code> 的参数。
+          <ul>
+            <li><code>cm5</code>：<code>True</code> 或 <code>{"alpha": 1/Bohr, "radii": {标签: Bohr}, "cutoff": Bohr}</code>（与 GB 溶剂的 <code>solvation.CM5</code> 同一个类）；</li>
+            <li><code>esp</code>：<code>{"points": (M, 3)}</code> 或 <code>{"grid": {"spacing", "origin", "points", "directions"}}</code>，可加 <code>"fractional": True</code>（周期体系，分数坐标）与 <code>"softening"</code>（默认 1e-6 Bohr）；</li>
+            <li><code>eigenvectors</code>：保存本征向量与 Mulliken 权重（N² × 块数的内存，只在要写文件时开）。</li>
+          </ul>
+        </li>
+        <li><strong>拆法</strong>：照 DFTB+（第一节的表）。唯一的例外是 s-dftd3 库的 D3：pydftb 用库的 <code>get_pairwise_dispersion</code> 按原子对分配（两体每对一半，三体每个原子 ⅓，同 D4），D3H5 的 H–H 排斥每对一半；DFTB+ 的 E/N 由测试专用的类属性 <code>DFTB._atom_energy_compat</code> 复现。</li>
+        <li><strong>限制</strong>：
+          <ul>
+            <li>只在 NumPy 引擎中，<code>analysis</code> 加入 <code>numpy_only_options</code>；torch 后端与 <code>pydftb.autodiff</code> 报错；</li>
+            <li>XL-BOMD（影子能量）不能按原子分解，报错；Casida 时分析的是基态（同 DFTB+）；</li>
+            <li>静电势需要 SCC，拒绝 GB 溶剂（同 DFTB+；只有 SASA 可以）。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>新文件 <code>analysis.py</code></strong>：
+            <ul>
+              <li><code>Analysis</code>（冻结的数据类，<code>make(spec)</code> 解析 True、字典、对象）与结果类 <code>AnalysisResult</code>、<code>ESPResult</code>；</li>
+              <li><code>evaluate(calc, st, sc, res)</code>：按选项算各项，只读 <code>_Setup</code>、<code>_SCCState</code> 与结果，不改它们；</li>
+              <li><code>atom_energies(calc, st, sc, res)</code>：H0 与 LS 的轨道拆法（共线照 <code>_trace</code> 的密度，Pauli 用 <code>so.components</code> 的电荷分量）；SCC 用 <code>coulomb.energy_shift</code> 的势逐点相乘；三阶 ⅓Δq·v<sub>3</sub>；自旋；块势调用新函数 <code>BlockTerms.atom_energies</code>（逐原子，与 <code>energies</code> 同公式，后者不动）；外加势、点电荷、偶极修正、溶剂各加一个按原子的方法；排斥势照 <code>_repulsive_energy</code> 的原子对按 i 累加一半；色散调用 <code>Dispersion.atom_energies</code>；卤素已有 <code>HalogenTerms.atom_energies</code>；</li>
+              <li>净布居复用 <code>DFTB._net_populations</code>；CM5 复用 <code>solvation.cm5_correction</code>，周期体系换成 30 Bohr 的 <code>neighbor_list</code>（新参数 <code>cell</code>、<code>pbc</code>，不给时走原来的代码）；</li>
+              <li><code>electrostatic_potential(points, dq_atom, pos, coulomb, softening, dipole=None)</code>：分子直接求和；周期体系实空间用 <code>neighbors.cross_pairs</code>，倒空间与常数项用 <code>Coulomb</code> 的 α、G、gfac，与 <code>external._pc_potential</code> 角色对调；外部一栏用 <code>ExternalTerms</code> 的点电荷（模糊宽度同 DFTB+）与 −E·r；</li>
+              <li>本征向量：照 <code>_casida_ground_state</code> 用 <code>ops.eigh</code> 重新对角化 <code>sc.h</code>（k 点逐个，Pauli 用 <code>pauli.s2</code>），给出 Mulliken 权重。</li>
+            </ul>
+          </li>
+          <li><strong><code>dispersion.py</code></strong>：<code>Dispersion.atom_energies(labels, pos, cell, pbc, charge)</code>；对势类用 <code>_pair_terms</code> 的原子对按 i 累加 ½e，<code>ewald_r6_atoms</code> 照 <code>ewald_r6</code> 拆成按原子的三部分；D3/D4/SimpleD3 用库的 <code>get_pairwise_dispersion</code> 行和，<code>compat=True</code> 时 D3 返回 E/N。<code>evaluate</code> 与 <code>ewald_r6</code> 原样不动。</li>
+          <li><strong><code>calculator.py</code></strong>：<code>DFTB(analysis=None)</code>，检查组合，加入 <code>numpy_only_options</code>；<code>_run</code> 在 <code>_energies</code> 之后（M6f-2 设 <code>n_ef</code>、<code>q0_atom</code> 的地方）只在 <code>self.analysis</code> 不为 None 时调用 <code>analysis.evaluate</code>；<code>DFTBResult.analysis</code>（默认 None）。测试专用的类属性 <code>_atom_energy_compat</code>。</li>
+          <li><strong><code>dftbplus_io.py</code></strong>：<code>write_band_out</code>、<code>write_eigenvectors</code>（文本与二进制）、<code>write_esp</code>、<code>detailed_tables</code>，沿用 <code>ld_*</code> 表控格式函数，先写 <code>.tmp</code> 再 <code>os.replace</code>；读回用的 <code>read_band_out</code>、<code>read_esp</code>（测试与验证工具用）。</li>
+          <li><strong><code>ase_calc.py</code></strong>：<code>PyDFTB(analysis=...)</code>（ESP 的点与网格 Å → Bohr）；有按原子的能量时 <code>results["energies"]</code>（eV），<code>implemented_properties</code> 加 <code>energies</code>。</li>
+          <li><strong>验证工具</strong>：
+            <ul>
+              <li><code>cases.py</code>：<code>Case.analysis</code>（字典，同 <code>Analysis</code>，另有 <code>"compat"</code>）；</li>
+              <li><code>dftbplus.py</code>：<code>make_hsd</code> 写 <code>Analysis</code> 的新键（<code>WriteBandOut</code>、<code>WriteEigenvectors</code>、<code>EigenvectorsAsText</code>、<code>AtomResolvedEnergies</code>、<code>MullikenAnalysis { WriteNetCharges; CM5 {} }</code>、<code>ElectrostaticPotential {…}</code>），<code>run()</code> 解析四个能量块、净布居、CM5、ESP.dat、band.out、eigenvec.out 的权重、autotest.tag 的 <code>internal_efield</code>/<code>external_efield</code>；</li>
+              <li><code>refgen.py</code>：<code>_compare_analysis</code>，新键加进 <code>refgen.compare</code> 的显式列表。</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <h3>DFTB+ 参考算例</h3>
+        <p>按原子的能量只能比 8 位小数（容差 1e-8）；周期算例 <code>EwaldTolerance = 1e-12</code>。SCC 轮数必须相同。</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>算例</th><th>内容</th><th>比较</th></tr></thead>
+          <tbody>
+            <tr><td><code>ch3oh_analysis</code></td><td>全部 4a 输出，ESP 三个散点</td><td>四个能量块；净布居 1e-8；<code>cm5_atomic_charges</code> 1e-9；<code>internal_efield</code> 1e-9；本征向量权重（简并组求和）2e-6；band.out 逐行（eV 差 ≤ 1e-4）</td></tr>
+            <tr><td><code>water_dimer_dftb3_d4_h5_atom</code></td><td>完整三阶、D4（三体 ⅓）、H5</td><td>电子、色散、总能量</td></tr>
+            <tr><td><code>ch3oh_d3_atom</code></td><td>s-dftd3 的 D3（BJ）</td><td>compat 复现 E/N；默认按原子对（Σ 不变）</td></tr>
+            <tr><td><code>water_dimer_sk_atom</code>、<code>ch3oh_simple_d3_atom</code></td><td>SK、SimpleDftD3</td><td>色散块</td></tr>
+            <tr><td><code>water_box_uff_atom</code>、<code>water_box_d4_atom</code></td><td>周期 r<sup>−6</sup> 的按原子拆法；周期 D4 两体</td><td>色散块</td></tr>
+            <tr><td><code>o2_triplet_field_atom</code></td><td>共线自旋、外场</td><td>按原子能量；本征向量（up/down）</td></tr>
+            <tr><td><code>h2o_pc_esp</code></td><td>点电荷</td><td>按原子能量；ESP 的外部一栏 <code>external_efield</code></td></tr>
+            <tr><td><code>h2o_site_atom</code></td><td>gross 与 net 位势（净布居块也会打印）</td><td>按原子能量、净布居</td></tr>
+            <tr><td><code>h2o_onsite3rd_atom</code></td><td>只 onsite 的三阶（DFTB+ 记在 SCC 里）</td><td>按原子能量</td></tr>
+            <tr><td><code>cu4co_plusu_atom</code>、<code>ch3oh_ons_atom</code></td><td>+U；onsite 修正</td><td>按原子能量</td></tr>
+            <tr><td><code>oh_noncolinear_soc_atom</code></td><td>LS（dual）、非共线</td><td>按原子能量；Pauli 的 eigenvec.out 权重</td></tr>
+            <tr><td><code>h2o_gbsa_atom</code></td><td>GB 溶剂</td><td>按原子能量</td></tr>
+            <tr><td><code>meoh_water_halogen_atom</code></td><td>卤素</td><td>按原子能量（卤素只进总量）</td></tr>
+            <tr><td><code>water_box_analysis</code></td><td>周期 Γ：Ewald 的按原子 SCC、周期 CM5、ESP 网格</td><td>四个能量块、CM5、<code>internal_efield</code> 与 ESP.dat 文本</td></tr>
+            <tr><td><code>cuo_chain_k422_analysis</code></td><td>k 点：复数 eigenvec.out、band.out、净布居</td><td>权重、band.out、按原子能量</td></tr>
+            <tr><td><code>water_slab_dipole_analysis</code></td><td>偶极修正进入按原子的 SCC 与 ESP 的内部一栏</td><td>开发版</td></tr>
+          </tbody>
+        </table></div>
+        <h3>自洽测试（<code>tests/test_analysis.py</code>）</h3>
+        <ul>
+          <li>每个分项按原子求和等于对应的结果字段（<code>e_band</code>、<code>e_scc</code>、<code>e_3rd</code>、<code>e_spin</code>、<code>e_ls</code>、<code>e_plus_u</code>、<code>e_onsite</code>、<code>e_ext</code>、<code>e_solv</code>、<code>e_rep</code>、<code>e_disp</code>、<code>e_halogen</code>），total 之和等于 <code>energy</code>；</li>
+          <li>ESP：分子对直接求和；中性周期晶胞与 Ewald 的 α 无关（换 α 重算）；网格与等价散点相同；分数坐标网格与笛卡尔网格相同；</li>
+          <li>写出的 band.out、eigenvec.out/.bin、ESP.dat 能读回；格式与 DFTB+ 的文件逐行比较（参考目录里冻结的文本）；</li>
+          <li>平移、整体旋转（按原子能量不变）；不开分析时结果中没有 analysis，与以前逐位相同；</li>
+          <li>拒绝项：torch、自动求导、XL-BOMD、ESP 非 SCC、ESP 加 GB。</li>
+        </ul>
+        <h3>门槛</h3>
+        <p>与以往相同：golden 两个环境对上一个提交逐位相同（<code>--allow-new analysis</code>）；<code>refgen --check</code>、<code>dynamics --check</code>；三个环境的 pydftb 测试；PTBP 测试；<code>engine_parity</code>。</p>
+      </div>
+    </details>
+
+    <section id="limits">
+      <h2>六、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>MBD/TS 色散、COSMO、xTB 的分析输出（pydftb 没有这些模型）；</li>
+            <li>DFTB+ 的 E/N 作为默认（只在测试中复现）；</li>
+            <li>detailed.xml 与 waveplot 的输入；</li>
+            <li>新功能的 torch 与自动求导版本。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>8 位小数的舍入使按原子的能量只能比到 1e-8；更严格的检验靠各分项求和等于总量（pydftb 内部 1e-12）；</li>
+            <li>周期算例必须收紧 Ewald，否则 DFTB+ 自己的误差（5e-8）超过容差；</li>
+            <li>本征向量的相位与简并组内的旋转任意：只比较简并组内求和的权重；</li>
+            <li>默认路径：新代码只在 <code>analysis</code> 不为 None 时走，golden 逐位比较。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6f3-corrections.html">← M6f-3 完成报告</a><a href="../reports/M6f4a-analysis.html">M6f-4a 完成报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -424,6 +424,8 @@ def test_refusals(sk, tmp_path):
         DFTB(sk, hubbard={"Cu": 0.3}, type_switching=SW_MOL)
     with pytest.raises(ValueError, match="Casida"):
         DFTB(sk, casida={"n_excitations": 2}, type_switching=SW_MOL)
+    with pytest.raises(ValueError, match="analysis outputs"):
+        DFTB(sk, analysis=True, type_switching=SW_MOL)
     with pytest.raises(ValueError, match="XL-BOMD does not support type switching"):
         DFTB(sk, type_switching=SW_MOL, force_evaluation="dynamics").calculate(
             ["Cu"] * 6, _cu6(), scc_control=SCCControl(), xl=True)
