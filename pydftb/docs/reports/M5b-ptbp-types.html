@@ -223,11 +223,11 @@ types:
       <div class="table-wrap"><table>
         <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
         <tbody>
-          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td><!--G-TESTS-->待填</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>254 通过，7 失败，1 跳过（合并主线后）；7 个失败都是 <code>tests/test_tui_smoke.py</code> 的界面冒烟测试，基础提交同样失败；新增的 <code>tests/test_types.py</code> 27 项全部通过（DFTB+ 的用例也运行了）</td></tr>
           <tr><td>G1</td><td><code>ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines pydftb --compare-serial</code></td><td>0.9198547924；1 核与自动核数逐位相同（损失与 5 个文件）；两个运行目录共 34 个文件与基础提交的导出副本逐字节相同</td></tr>
           <tr><td>共用参数</td><td>reaction 示例 11 次 BO：基础提交（默认）对 <code>--shared-parameters</code>，同一路径</td><td>结果文件逐字节相同（每步的 par/log、SKF、DFTB+ 输出、result.pkl、检查点）；预期的差别只有 <code>dftb_full.xyz</code> 中 N<sub>3</sub>Na 的元素列（Hill 修正；与“基础 + Hill 修正”逐字节相同）、<code>ptbp_run.yaml</code> 一行、耗时；孤立原子的 DFTB+ 输出中随机种子与计时行每次运行都不同</td></tr>
-          <tr><td>pydftb 测试</td><td><code>pytest pydftb/tests</code>（conda；pydftb 未改动）</td><td>1005 通过，174 跳过（torch 参考算例中只有 NumPy 的物理，与主线相同）</td></tr>
-          <tr><td>合并主线后</td><td><!--G-MERGE-WHAT-->待填</td><td><!--G-MERGE-->待填</td></tr>
+          <tr><td>pydftb 测试</td><td><code>pytest pydftb/tests</code>（conda；pydftb 未改动）</td><td>合并前 1005 通过，174 跳过（torch 参考算例中只有 NumPy 的物理，与主线相同）</td></tr>
+          <tr><td>合并主线后</td><td>合并 <code>claude/inspiring-ride-zax2o7</code> 到 <code>9af4d3b</code>（M5a 文档、M6f-5、M6g-1：只改 pydftb 与文档，不涉及 PTBP 的文件），没有冲突；重跑 PTBP 测试、G1 与 pydftb 测试</td><td>PTBP 测试见上；G1 仍为 0.9198547924，1 核与自动核数逐位相同，34 个文件与基础提交逐字节相同；pydftb 1069 通过，201 跳过</td></tr>
         </tbody>
       </table></div>
     </section>
@@ -278,7 +278,7 @@ types:
           <ul>
             <li><code>ROADMAP.md</code> 的 M5 一行：在 “M5a ✅ …” 之后加 “M5b ✅（PTBP 按类型拟合：参数按类型记账，类型默认就是元素，多元素数据集默认每个元素各一套 r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub>（优化器 2N 维，σ<sub>rep</sub> 内层 N 维搜索：共用 σ 的一维搜索 → 各参数集的格子 → 联合 L-BFGS-B，格子还能改进时再来一轮），<code>--shared-parameters</code> 复现共用一套（逐字节相同），单元素不变；reaction 示例（B<sub>2</sub>N<sub>2</sub> + N<sub>3</sub>Na）按元素的损失比共用一套低 60%；可声明同一元素的几个类型，用 M5a 的平滑切换（hotcent 两个方向的交叉表、无 on-site 行、按标签命名，physrep 按标签并按权重混合，只用 pydftb）；罚项为各参数集罚项的几何平均，损失版本 3；梯度优化器支持按元素的参数（2N 个方向，σ 向量的折点用乘子修正），切换时报错；修正 <code>--multi_element</code>（现为只拟合列出的元素）与 <code>dftb_full.xyz</code> 的 Hill 顺序；Cu 两类型示范见报告）”；文档列加 <code>design/M5b-ptbp-types.html</code>、<code>reports/M5b-ptbp-types.html</code>。</li>
             <li><code>glossary.md</code>：<strong>类型（PTBP）</strong>（参数的记账单位：一个标签及其元素；默认每个元素一个类型；同一元素的几个类型按配位数平滑切换）；<strong>参数集</strong>（一组 r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub> 及使用它的类型；默认每个类型一个，<code>--shared-parameters</code> 时所有元素一个）；<strong>共用参数</strong>（M5b 之前多元素数据集的做法）。</li>
-            <li><code>index.html</code>：M5b 的设计与报告链接，M5b 一行的状态改为已完成；首页离线测试数 “1005 + 227” → “1005 + 254”（新增 <code>tests/test_types.py</code> 27 项）；M5a 那一段末尾的“PTBP 一侧的按类型拟合（M5b）接着做”与“下一步”中的 M5b 改为已完成。</li>
+            <li><code>index.html</code>：M5b 的设计与报告链接，M5b 一行的状态改为已完成；首页离线测试数中 PTBP 的 227 → 254（新增 <code>tests/test_types.py</code> 27 项；合并时 pydftb 为 1069）；M5a 那一段末尾的“PTBP 一侧的按类型拟合（M5b）接着做”与“下一步”中的 M5b 改为已完成。</li>
             <li>根目录 <code>README.md</code>（PTBP）：<code>ptbp optimize</code> 的新选项一段：默认每个元素一套参数、<code>--shared-parameters</code>、<code>--switch</code>/YAML <code>types</code>（只用 pydftb）、<code>--type-start</code>、<code>--multi-element</code> 的新含义；多元素数据集的结果与 M5b 之前不同。<code>pydftb/README.md</code> 不需要改。</li>
             <li><code>WHY.md</code> 第 4 节：PTBP 一侧的拟合已有（M5b），电池算例待做。</li>
             <li><code>dftbplus_map.md</code>：坑的列表可补一条 “不用多项式排斥（<code>PolynomialRepulsive = No</code>）时 DFTB+ 拒绝没有样条排斥的 SKF（‘No spline repulsive found’），hotcent 写出的表要先写上样条才能算孤立原子的参考能量（M5b）”。</li>
