@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5a 类型平滑切换报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M5a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5a · 完成报告</p>
+    <h1>同一元素多套参数之间的平滑切换</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-24</dd></div>
+      <div><dt>提交</dt><dd><code>226a5c1</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M5a-type-switching.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在可以让一个元素的原子在它的几套参数（类型标签，如 <code>Cu</code> 与 <code>Cu2</code>）之间按配位数平滑切换：每个原子带一组权重，H0、S 与排斥能按权重混合，能量、力、应力一致，周期体系与 MD 都能用。这是引擎机制；PTBP 的拟合一侧（M5b）与电池算例以后再做。只在 NumPy 引擎中；不用切换时逐位不变。</p>
+    <ul>
+      <li><strong>离散极限对 DFTB+ 25.1</strong>：权重恰为 0/1 的两个几何（Cu(111) 平板的表层与内层、13 原子立方八面体的外层与中心）用对应的固定类型标签跑 DFTB+：能量差 ≤ 2.2e-11 Ha，SCC 轮数相同；力差 1.5e-7 来自 DFTB+ 用差分求 H0/S 的导数（用它的步长时 2.9e-11）。同一几何上 pydftb 用切换与用显式标签<strong>逐位相同</strong>（能量、力、应力、布居、本征值、SCC 轮数）。</li>
+      <li><strong>切换区内的自洽</strong>（DFTB+ 做不了）：力对能量的 4 点差分 ≤ 5.0e-10 Ha/Bohr（8 种物理组合：SCC、非 SCC、DFTB3 + 共线自旋、非共线 + 自旋轨道、DFTB+U、固定费米能级、外场、轨道分辨 SCC；三种类型），周期体系的力 4.4e-10、维里 4.6e-9 Ha（|W| 达 9.3 Ha）；权重项占力的大部分（Cu<sub>6</sub> 中 0.106/0.154 Ha/Bohr），所以检验是实在的。原子的 CN 穿过窗口时能量与力连续（窗口边上的能量跳变 ≤ 2.5e-14 Ha，对应移动 2e-7 Bohr 的 F·ds）。</li>
+      <li><strong>MD</strong>：原子不断进出切换窗口（1 ps 内 78–220 次）的 NVE（ASE 速度 Verlet）中，守恒量 F + E<sub>kin</sub> 的误差按 dt² 收敛，漂移 ≤ 6e-3 eV/ps（不切换 2.9e-3），和不切换时同一量级（第四节）。</li>
+      <li><strong>探针中的发现</strong>：异标签文件若带 on-site 行，DFTB+ 不报错而能量错 3.1e-2 Ha（pydftb 拒绝）；hotcent 2.1 不能处理同一元素的两种约束（生成脚本绕过）；按任务书命名的 <code>types.py</code> 会遮住标准库（改名 <code>typeswitch.py</code>）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">2</span><span class="lbl">离散极限的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">0</span><span class="lbl">切换与显式标签之差（逐位）</span></li>
+      <li><span class="num">5e-10</span><span class="lbl">切换区内力与能量差分之差（Ha/Bohr）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、离散极限：与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、切换区内：自洽检查与 MD</a></li>
+      <li><a href="#behaviour">五、行为说明</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步与活文档的补充</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>typeswitch.py</code>（新）</td><td>
+              <ul>
+                <li><code>smoothstep</code>：S(x) = 6x<sup>5</sup> − 15x<sup>4</sup> + 10x<sup>3</sup> 与 S′，x 截到 [0, 1]，值也截到 [0, 1]（x 略小于 1 时舍入使 S 高出 1 约 2e-16）；</li>
+                <li><code>TypeSwitch(element, types, centre, width, cutoff)</code>（冻结的数据类，<code>make</code> 也收字典）：检查元素、类型标签（≥ 2 种、不重复、属于该元素、不含文件名里的禁用字符）、窗口（个数、宽度 &gt; 0、不重叠）、计数窗口（0 &lt; r<sub>on</sub> &lt; r<sub>off</sub>，或按元素的字典）；<code>reference</code>（引擎内部用的参考类型）、<code>windows</code>、<code>weights(cn)</code> → (w, dw/dCN)、<code>windows_of(neighbour)</code>、<code>coordination_numbers(...)</code> → CN 与梯度所需的原子对 (i, j, r, f′/r)；</li>
+                <li><code>check_switches</code>（每个元素一个）、<code>internal_species</code>（被切换元素的原子必须给元素名，内部换成参考类型）、<code>setup</code> → <code>TypeMixing</code>（权重矩阵 (n<sub>atom</sub>, n<sub>label</sub>)、dw/dCN、CN、候选类型、CN 原子对，以及后面填入的保留块与排斥能）；</li>
+                <li><code>mixed_repulsive</code> → <code>RepulsiveTerms</code>（能量、固定权重的梯度与维里、dE/dw）：按有非零权重的标签排序遍历类型对，与 <code>DFTB._repulsive_pairs</code> 同序；</li>
+                <li><code>weight_gradient</code>：保留的未加权块与力代码的 ρ<sub>e</sub>、c<sub>e</sub> 缩并得 dE/dw，加排斥能的部分，乘 dw/dCN，经 CN 原子对得到梯度与维里；</li>
+                <li>检查：<code>unequal_type_quantities</code>（基组、on-site、U、占据数、质量）、<code>unequal_options</code>（按标签的选项）、<code>onsite_line_files</code>（异标签文件第二行有 10 或 13 个数）；<code>result_weights</code>。</li>
+              </ul>
+            </td></tr>
+            <tr><td><code>hamiltonian.py</code></td><td><code>build_mixed_pairs</code>（新）：按内部标签分组，组内对每个类型对只算权重乘积非零的原子对，块由 <code>_type_pair_blocks</code> 计算（<code>build_pairs</code> 中 <code>blocks()</code> 的原样复制），乘权重后累加，导数（复步或 DFTB+ 的差分）同样；需要时返回窗口内原子所在原子对的未加权块与元素下标。<code>build_pairs</code> 未改动。</td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li><code>DFTB(type_switching=…)</code>：解析，<code>_check_type_switching</code>（类型都在 SK 集中、相等性、选项、带 on-site 行的异标签文件、拒绝 Casida 与分析输出），加入 <code>numpy_only_options</code>，torch 后端给出 M5a 的报错；</li>
+                <li><code>_setup</code>：<code>typeswitch.setup</code> 给出内部标签与权重，<code>build_mixed_pairs</code> 给出混合的块（新分支；原来的 <code>build_pairs</code> 调用原样放在 else 中），混合排斥能在 setup 中算一次；新字段 <code>_Setup.switching</code>；</li>
+                <li><code>_repulsive_energy</code>、<code>_repulsive_gradient</code>：有切换时取 setup 的结果；<code>_gradient</code>：<code>_add_pair_terms</code> 之后加权重的梯度，维里同样；</li>
+                <li><code>_run</code>：<code>DFTBResult.type_weights</code>（新字段）；<code>_charge_layout</code> 映射标签（电荷文件）；<code>_check_xl</code> 拒绝。</li>
+              </ul>
+              默认参数走原来的代码。</td></tr>
+            <tr><td><code>ase_calc.py</code></td><td><code>PyDFTB(type_switching=…)</code>：SK 集由内部标签与所有类型组成（类型中没有元素名时也不需要 <code>Cu-Cu.skf</code>）；参考布居按内部标签取。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>make_cu_types_set.py</code>（新）：生成 <code>cu_types</code>（4 个文件，0.5 MB，第二次运行逐字节相同），<code>PROVENANCE.md</code> 加一节；</li>
+                <li><code>cases.py</code>：SKF 集 <code>cu_types</code>；<code>Case.type_switching</code>（放在最后）；几何 <code>_cu_slab111</code>、<code>_cu13</code>；<code>_switch_labels</code>（由切换算出离散标签，权重不是 0/1 时报错）；<code>SWITCH_SLAB</code>、<code>SWITCH_CLUSTER</code>、<code>TOL_TYPES</code>；两个算例接在 <code>CASES</code> 末尾，<code>torch=False</code>；</li>
+                <li><code>refgen.py</code>：<code>run_pydftb(..., switching=True)</code>；<code>_compare_switching</code>（与显式标签逐位比较结果字段、本征值、SCC 轮数与权重，偏差记为 <code>switch</code>，容差 0）；参考 JSON 的 settings 记下切换。</li>
+              </ul>
+            </td></tr>
+            <tr><td>测试</td><td>2 个参考 JSON；<code>tests/test_type_switching.py</code>（22 项）；<code>test_reference.py</code> 的差分步长对照加上平板算例。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb import DFTB, ParamSet
+from pydftb.typeswitch import TypeSwitch
+
+sw = TypeSwitch("Cu", types=("Cu2", "Cu"),     # 按 CN 从小到大：低配位 Cu2，块体 Cu
+                centre=10.5, width=1.0)        # 窗口 [10, 11]；三种类型时 centre、width 各给两个
+                                               # cutoff=(r_on, r_off) Bohr，或 {"O": (r_on, r_off)}
+sk = ParamSet(skdir).skset(["Cu", "Cu2"])      # 所有类型都要在 SK 集中（含 Cu-Cu2、Cu2-Cu）
+calc = DFTB(sk, kpts=k, type_switching=[sw])
+r = calc.calculate(["Cu"] * n, pos, cell, pbc)  # 被切换元素的原子只给元素名
+r.type_weights["Cu2"]                          # 每个原子的 Cu2 权重
+sw.coordination_numbers(["Cu"] * n, pos, cell, pbc)   # 选窗口前先看 CN
+
+atoms.calc = PyDFTB(skdir, kpts=(4, 4, 1), type_switching=[sw])   # 截断用 Bohr</code></pre>
+      <ul>
+        <li><strong>类型文件</strong>：同一元素的各类型必须有相同的 on-site 能、U、占据数、基组与质量（PTBP 的类型满足）；异标签文件（<code>Cu-Cu2.skf</code>）用异核格式，不能带 on-site 行（hotcent 写出的同符号文件带这一行，要去掉；<code>validation/make_cu_types_set.py</code> 给出完整的做法）。</li>
+        <li><strong>按标签的选项</strong>（<code>hubbard_derivs</code>、<code>spin_constants</code>、<code>spin_orbit</code>、<code>plus_u</code>、<code>onsite_corrections</code>、<code>hubbard</code>）按参考类型查：元素名在类型中时就是它（上例中 <code>"Cu"</code>），否则是第一种类型；给了多种类型时值必须相同。</li>
+        <li><strong>可以组合</strong>：SCC 与非 SCC、k 点、应力、DFTB3、阻尼、H5、共线与非共线自旋、自旋轨道、DFTB+U、onsite 修正、外场、点电荷、位点势、溶剂、色散、卤素与偶极修正、固定费米能级、独立 k 点填充、<code>fd_delta</code>、各求解器、能带、电荷文件。<strong>拒绝</strong>：torch 后端、<code>pydftb.autodiff</code>、Casida（含激发态的力）、XL-BOMD、分析输出（M6f-4a 的 <code>analysis</code>，合并时加入，见第八节）。</li>
+        <li><strong>窗口怎么选</strong>：权重只在 CN 落在窗口内、并且有近邻处在计数窗口 (r<sub>on</sub>, r<sub>off</sub>) 内时才随几何变化。默认计数窗口（1.1–1.3 倍共价半径之和）把 fcc 金属的第一壳层计 1、第二壳层计 0，CN 为整数，切换只发生在配位真正改变的地方；要让热振动下的键长也参与，就把计数窗口放在键长上。窗口越窄、类型差别越大，切换区的力变化越快，MD 的步长要相应减小（第四节）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、离散极限：与 DFTB+ 的对照</h2>
+      <p>参数为新做的 <code>cu_types</code>（<code>Cu</code>：PTBP 发表的约束 r0<sub>w</sub> 2.749、r0<sub>d</sub> 12.036；<code>Cu2</code>：r0<sub>w</sub> 3.0；排斥能为 physrep，σ<sub>rep</sub> 0.42 与 0.45）。DFTB+ 跑切换给出的固定类型标签（Type2FileNames）；“切换”一列是 pydftb 用切换与用显式标签之差，对 <code>eigh</code>、<code>batched</code> 与带 DFTB+ 差分步长的 <code>batched</code> 三种设置都检查（golden 也跑这三种）。括号里是用 DFTB+ 的差分步长（2<sup>−13</sup> Bohr）时的值。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>|ΔE| Ha</th><th>|ΔF| Ha/Bohr</th><th>|Δq| e</th><th>|Δσ|</th><th>SCC 轮数</th><th>切换</th></tr></thead>
+        <tbody>
+<tr><td><code>cu_slab_types_k441</code></td><td>Cu(111) 2×2×4，10 Å 真空，扰动 0.03 Å；窗口 [10, 11]：表层 8 个原子（CN 9）<code>Cu2</code>、内层 8 个（CN 12）<code>Cu</code>；k 4×4×1，500 K</td><td>2.2e-11</td><td>1.5e-07（2.9e-11）</td><td>1.9e-09</td><td>3.9e-10（3.1e-11）</td><td>16/16</td><td>0</td></tr>
+<tr><td><code>cu13_types</code></td><td>13 原子立方八面体，扰动 0.04 Å；窗口 [7, 10]：外层 12 个（CN 5）<code>Cu2</code>、中心（CN 12）<code>Cu</code>；300 K</td><td>1.7e-11</td><td>5.1e-09（5.8e-13）</td><td>1.8e-13</td><td>—</td><td>17/17</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>力差 1.5e-7 完全来自 DFTB+ 的差分导数：用它的步长时降到 2.9e-11，平板因此也加入了 <code>test_dftbplus_finite_difference_emulation</code>。</li>
+        <li>“切换 0”包括能量各项、费米能级、力、应力、电荷、轨道布居、混合向量、所有 k 点的本征值、SCC 轮数，以及权重正是显式标签（每个原子在自己的类型上为 1）。另外，同一团簇加 DFTB3 与共线自旋、平板在 Γ 点（周期像在同一矩阵元上相加）也逐位相同（测试）。</li>
+        <li>逐位相同的原因：权重为 0/1 时每个原子对只有一个类型对的权重非零，块的计算与 <code>build_pairs</code> 完全相同（批次无关，设计 P5），1.0 × x 与 0 + x 都是精确的；混合块的元素按内部标签分组，排列与显式标签不同，但所有下游运算要么逐元素、要么在原子对内按块的顺序求和、要么作用于按近邻表排列的原子对；排斥能按相同的标签对顺序求和。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、切换区内：自洽检查与 MD</h2>
+      <h3>力与应力是能量的导数</h3>
+      <p>Cu<sub>6</sub>（八面体扰动 0.12 Å），计数窗口 4.6–5.4 Bohr、切换窗口 [2.2, 4.2]：6 个原子的权重都在 0 与 1 之间。力对 4 点差分（h = 1e-4 Bohr，SCC 容差 1e-12），18 个坐标全查：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>组合</th><th>max |ΔF| Ha/Bohr</th><th>SCC 轮数</th></tr></thead>
+        <tbody>
+          <tr><td>SCC（300 K）</td><td>3.7e-10</td><td>11</td></tr>
+          <tr><td>非 SCC</td><td>4.4e-10</td><td>1</td></tr>
+          <tr><td>DFTB3（Ud 相同）+ 共线自旋（W 矩阵，2 个未配对电子）</td><td>2.1e-10</td><td>28</td></tr>
+          <tr><td>非共线自旋 + 自旋轨道（dual，ξ<sub>d</sub> = 0.01）</td><td>4.4e-10</td><td>52</td></tr>
+          <tr><td>DFTB+U（d 壳层 0.15 Ha）</td><td>5.0e-10</td><td>20</td></tr>
+          <tr><td>固定费米能级（力对 E<sub>FR</sub>）</td><td>3.3e-10</td><td>31</td></tr>
+          <tr><td>外电场</td><td>3.1e-10</td><td>12</td></tr>
+          <tr><td>轨道分辨 SCC</td><td>4.1e-10</td><td>21</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>权重项的大小</strong>：Cu<sub>6</sub> 中力的最大分量 0.154 Ha/Bohr，其中权重项 0.106（排斥能的部分 0.052）；所以差分一致到 5e-10 是对权重项的实在检验。</li>
+        <li><strong>三种类型</strong>（<code>Cu2</code> → <code>Cu</code> → <code>Cu3</code>，<code>Cu3</code> 是 Cu2 的副本，两个相邻窗口都有原子）：力一致到 1e-8 以内（测试）。</li>
+        <li><strong>周期体系</strong>：扰动并剪切的 4 原子 fcc 晶胞，计数窗口 4.4–5.3 Bohr 穿过第一壳层，k 2×2×2：12 个力分量 4.4e-10；6 个维里分量对 4 点应变差分（h = 1e-5）4.6e-9，而 |W| 达 9.3 Ha，其中权重项 9.9 Ha。陡的切换使两点应变差分的 h² 误差达 1e-6（h 减半误差降为 1/4），所以用 4 点。</li>
+        <li>一个原子的 fcc 晶胞（CN 全部来自它自己的周期像）：力为 0，维里对差分 7e-10。</li>
+      </ul>
+      <h3>能量连续</h3>
+      <p>Cu<sub>4</sub> 四面体加一个盖在面上的原子，沿面法线拉出 1.7 Bohr：它的 CN 从 3 降到 0，穿过窗口 [0.5, 2.5]（三个键依次穿过计数窗口 5.0–6.0 Bohr）。路径上 18 个点（避开 SK 格点 ±1e-3 Bohr）的斜率与 4 点差分之差 ≤ 3.7e-10；在窗口两个边上相距 2e-7 Bohr 的两点，能量之差与 F·ds 之差 ≤ 2.5e-14 Ha，力之差 ≤ 6.8e-9；路径两端（权重 0/1）与固定标签逐位相同。</p>
+      <h3>MD</h3>
+      <p>热的 Cu<sub>6</sub>（初速 900 K），ASE 速度 Verlet，1 ps，守恒量 F + E<sub>kin</sub>（300 K 的费米展宽下力是自由能的梯度）。“温和”的切换：计数窗口 4.2–6.0 Bohr、切换窗口 [2, 4]；“陡”的：4.6–5.4 Bohr、[2.7, 3.7]。穿越次数是原子进出窗口（权重在 0/1 与分数之间变化）的次数。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>运行</th><th>dt fs</th><th>ptp eV</th><th>标准差 eV</th><th>线性漂移 eV/ps</th><th>穿越</th><th>平均温度 K</th></tr></thead>
+        <tbody>
+          <tr><td>不切换</td><td>1.0</td><td>4.2e-3</td><td>1.0e-3</td><td>+2.9e-3</td><td>—</td><td>1657</td></tr>
+          <tr><td>不切换</td><td>0.5</td><td>1.4e-3</td><td>3.0e-4</td><td>−4.3e-4</td><td>—</td><td>1655</td></tr>
+          <tr><td>温和</td><td>1.0</td><td>8.3e-3</td><td>1.6e-3</td><td>+1.0e-3</td><td>78</td><td>2588</td></tr>
+          <tr><td>温和</td><td>0.5</td><td>2.3e-3</td><td>3.7e-4</td><td>+4.5e-4</td><td>78</td><td>2592</td></tr>
+          <tr><td>陡</td><td>1.0</td><td>3.2e-2</td><td>4.0e-3</td><td>−6.1e-3</td><td>192</td><td>3243</td></tr>
+          <tr><td>陡</td><td>0.5</td><td>6.5e-3</td><td>7.2e-4</td><td>−6.6e-4</td><td>220</td><td>3325</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>三种运行的线性漂移都在 6e-3 eV/ps 以下（不切换 2.9e-3），dt 减半时标准差降为 1/3.3（不切换）、1/4.4（温和）、1/5.5（陡），即按 dt² 下降：力是守恒量的梯度，原子进出窗口时也没有跳变（陡的运行 1 ps 内穿越约 200 次）。切换的运行在同样的 dt 下波动大一些，因为切换区的力变化更快（测试参数两种类型每原子差约 1 eV，在 1–2 个 CN 单位与不到 1 Bohr 内切换）；dt 减半后两种切换的波动都低于不切换时 dt = 1 fs 的水平。</li>
+        <li>切换的运行温度更高：两种类型的势能面不同，扰动的起始几何放出的势能也不同（陡的运行 3300 K，团簇已近熔化，仍然守恒）。</li>
+        <li>测试中的 60 fs 版本检查：原子进出窗口 ≥ 4 次，dt 减半时波动降到 1/2.5 以下，波动不超过不切换时的 4 倍。</li>
+      </ul>
+    </section>
+
+    <section id="behaviour">
+      <h2>五、行为说明</h2>
+      <ul>
+        <li><strong>DFTB+ 不会发现异标签文件中多出的 on-site 行</strong>：把 <code>Cu-Cu.skf</code>（带 on-site 行）复制成 <code>Cu-Cu2.skf</code>、<code>Cu2-Cu.skf</code>，DFTB+ 照算，Cu<sub>13</sub> 的能量 −28.2991 而正确值为 −28.2682（差 3.1e-2 Ha）：第二行被当作质量与多项式行，表整体错位。hotcent 2.1 对同一符号的两个原子正好写出这样的文件。pydftb 同样按标签决定格式，所以对切换的类型对做检查，遇到就拒绝并说明怎么改。</li>
+        <li><strong>hotcent 2.1 与同一元素的两种约束</strong>：符号相同时只算一个方向、只取第一个原子的波函数范围（范围小的原子在前时积分被截断）、按符号命名文件。<code>make_cu_types_set.py</code> 的 <code>CrossTable</code> 两个方向都算并取两个原子的范围（与 hotcent 处理两种元素相同），文件按异核格式写出、按标签命名；所得 Cu-Cu2 与 Cu2-Cu 的 ssσ 逐位相同。</li>
+        <li><strong>PTBP 发表的 σ<sub>rep</sub> 与现在的表</strong>：用 PTBP 发表的 Cu σ<sub>rep</sub> 0.299 时，Cu<sub>6</sub> 的 MD 塌缩（最短原子距 2.24 → 1.1 Å，势能一路下降）：二聚体在 1.4 Å 以上没有极小，压缩到 a = 2.8 Å 的 fcc 比平衡态还低。0.299 与现在生成的表不配套：PTBP 自己在发表的 r0 上按现在的做法（自洽约束，仓库自带的数据）搜索得到 σ<sub>rep</sub> = 0.403（<code>engine_parity</code> 的日志），与这里用的 0.42 相近（二聚体极小 2.2 Å，实验 2.22 Å）。所以这与切换无关，只说明测试参数要配套。</li>
+        <li><strong>标签</strong>：被切换元素的原子在 <code>calculate</code> 中只给元素名，给类型标签时报错；类型中没有元素名时（如 <code>Cu_a</code>、<code>Cu_b</code>），引擎用第一种类型作参考，结果与同样内容的 <code>Cu</code>/<code>Cu2</code> 逐位相同（测试）。没有被切换元素的原子时走原来的路径，<code>type_weights</code> 全为 0。</li>
+        <li><strong>性能</strong>（36 原子的 Cu(111) 平板，k 2×2×1，力与应力，SCC 都是 17 轮）：不切换 2.14 s；权重全为 0/1 时 2.04 s，与显式标签的 2.11 s 相同（差别在噪声内）；36 个原子都在窗口内时 2.64 s，其中建块 0.19 → 0.62 s（每个原子对要算 4 个类型对），力 0.06 → 0.18 s（权重项）。只有窗口内原子所在的原子对多算、多存块。</li>
+        <li><strong>模块名</strong>：<code>pydftb/types.py</code> 在 <code>pydftb/</code> 目录中运行 Python 时遮住标准库的 <code>types</code>（Python 3.13 下 <code>import enum</code> 失败），所以叫 <code>typeswitch.py</code>。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6f-3 的记录提交 <code>5b90f55</code> 逐字节比较（<code>--allow-new type_weights switching</code>，正是新增的结果字段与 setup 字段）</td><td>conda 环境 679 次计算、154,150 个量，最小环境 637 次、146,089 个量，逐位相同（比 M6f-3 报告的 639/600 多出的是当时还新的 M6f-3 算例）；新算例的 6 次计算（2 个单点 × 3 种求解设置）只在工作树中，不比较</td></tr>
+          <tr><td>参考</td><td><code>refgen --check</code>，<code>dynamics --check</code></td><td>219 个单点全部通过（其中新增 2 个，切换偏差为 0）；24 个优化/MD 全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 905 个通过、145 个跳过；最小环境 672 个通过、257 个跳过；最小环境 + torch 870 个通过、180 个跳过。比 M6f-3 多出的与新测试一致：<code>test_type_switching.py</code> 22 项（最小环境中 torch 的拒绝测试跳过）、2 个参考算例（torch 参数化按设计跳过）、平板的差分步长对照</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>224 个通过，7 个已知的界面冒烟测试失败（<code>tests/test_tui_smoke.py</code>，与之前相同），1 个跳过</td></tr>
+          <tr><td>PTBP 结果</td><td><code>tools/engine_parity.py --compare-serial</code>，发表点</td><td>energygeometry 损失 0.9198547924（与 M6f-3 相同），1 核与自动核数逐位相同（损失与 5 个文件；PTBP 不用切换）</td></tr>
+          <tr><td>合并主线后复核</td><td>开发期间主线前进到 <code>ec178bc</code>（M6f-4a、P1 打包及其文档），合并三次：<code>0f55f5d</code>（与 M6f-4a 在四个文件中都加了字段、选项与分支，两边都保留；加上分析输出的拒绝）、<code>364d57f</code>（P1，无冲突）、<code>b7bcaca</code>（只有活文档）。在合并后的分支上重跑全部门槛；golden 对 <code>ec178bc</code>，其余在 <code>364d57f</code> 上（加最后一个提交中 <code>make_cu_types_set.py</code> 的文档字符串，代码与最终相同）</td><td>golden：conda 736 次计算、169,286 个量，最小环境 682 次、158,042 个量，逐位相同（多出的是 M6f-4a 的算例；新算例的 6 次不比较）；refgen 238 个单点、dynamics 24 个全部通过（切换偏差仍为 0）；pydftb 测试 conda 982 个通过、164 个跳过，最小环境 741/284，最小环境 + torch 941/205，比主线多出的与合并前相同（+25/+2、+24/+3、+25/+2）；PTBP 227 个通过（7 个已知失败，1 个跳过）；engine_parity 0.9198547924，1 核与自动核数逐位相同。中间一轮（对 <code>87b0b00</code>）也全部通过</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>模块名</strong>：任务书写的是 <code>pydftb/types.py</code>，实际为 <code>pydftb/typeswitch.py</code>（设计 P8：前者遮住标准库）。</li>
+        <li><strong>测试参数的排斥能</strong>：设计时 <code>Cu</code> 用 PTBP 的 σ<sub>rep</sub> 0.299、<code>Cu2</code> 用 0.42；MD 测试中团簇塌缩（第五节），改为 0.42 与 0.45，两个参考算例按最终的参数集重新生成。<code>Cu</code> 的 r0<sub>w</sub>、r0<sub>d</sub> 仍是 PTBP 发表的值。</li>
+        <li><strong>应力的差分</strong>：设计中是 1e-5 应变的两点差分；切换陡时两点差分的 h² 误差达 1e-6（h 减半误差降为 1/4），改为 4 点差分。</li>
+        <li><strong>连续性的检查</strong>：最初想用力的数值积分（梯形、Simpson）对能量差，但 SK 表的插值在格点处导数不连续，积分误差到 1e-5，分不出真正的跳变；改为路径上逐点的差分、窗口边上的两侧比较与两端的逐位比较。</li>
+        <li><strong>补充</strong>：设计中没有的 <code>onsite_line_files</code> 检查（来自探针 P7′）、<code>TypeSwitch.reference</code>（按标签的选项按它查，元素名是类型之一时就用元素名）、按元素选择近邻的计数窗口字典。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步与活文档的补充</h2>
+      <ul>
+        <li><strong>M5b</strong>（PTBP 一侧）：类型的约束参数与排斥能的拟合（每种类型 r0<sub>w</sub>、r0<sub>d</sub>、σ<sub>rep</sub>，或类型之间共享一部分），窗口按参考结构的 CN 分布选；排斥能要与同一做法的表一起拟合（第五节）。PTBP 的梯度（M4c）用 <code>pydftb.autodiff</code>，而切换目前只在 NumPy 引擎中：若 M5b 要对类型参数求梯度，需要给 autodiff 加上混合块与权重项。电池示范等数据。</li>
+        <li><strong>分析输出与切换</strong>：合并 M6f-4a 时发现它的原子分辨能量中排斥能按 <code>_repulsive_pairs</code> 的标签对求和，有切换时会用参考类型的排斥能，所以先整体拒绝。放开的做法：<code>mixed_repulsive</code> 同时给出每个原子的排斥能（½ Σ w w V 分给两端的原子），<code>analysis.atom_energies</code> 有切换时用它。净布居与静电势只用到混合后的矩阵与电荷；本征向量文件中被切换的原子会标成参考类型；CM5 按标签取半径（可按标签覆盖）并只数标签不同的原子对（同一元素的项本来为 0），要逐项核对。放开时各加一个离散极限下与显式标签比较的测试。整体拒绝是为了以后新增的分析输出不会静默地按参考类型计算。</li>
+        <li><strong>建议加入活文档</strong>（合并时由主线更新）：
+          <ul>
+            <li><code>ROADMAP.md</code> 的 M5 一行（按主线 <code>ec178bc</code> 的写法）：把 “M5a pydftb 中按环境平滑切换类型（开发中）” 换成 “M5a ✅（同一元素多套参数的平滑切换，引擎机制：每个被切换元素的原子按配位数 CN（紧支撑的五次台阶计数函数）在它的类型之间取权重（C² 的切换窗口，窗口外恰为 0/1），H0、S 与排斥能按权重混合，力与应力含权重的导数；要求各类型 on-site、U、占据数、基组相同；可与周期体系、应力、DFTB3、自旋、SOC、+U、外场、溶剂等同用，NumPy 引擎；离散极限的 2 个 DFTB+ 参考算例（Cu 平板与 Cu<sub>13</sub>）能量差 ≤ 2.2e-11 Ha、SCC 轮数相同，切换与显式标签逐位相同；切换区内力与能量差分一致到 5e-10，MD 守恒；发现异标签 SKF 中多出的 on-site 行使 DFTB+ 静默地算错 3.1e-2 Ha，hotcent 2.1 不能处理同一元素的两种约束）”，其余（M5b 的计划、电池示范）不变；文档列加 <code>design/M5a-type-switching.html</code>，<code>reports/M5a-type-switching.html</code>。</li>
+            <li><code>glossary.md</code>：<strong>类型切换</strong>（一个元素的原子按环境在几套参数之间平滑过渡，权重是配位数的光滑函数；DFTB+ 每个原子只能有一种类型）；<strong>配位数（CN）</strong>已有（D3/D4），补一句：M5a 用紧支撑的计数函数（近于 r<sub>on</sub> 计 1，远于 r<sub>off</sub> 计 0）求 CN，由它决定类型的权重；<strong>切换窗口</strong>（CN 的一个区间，其中权重从一种类型过渡到下一种，区间外恰为 0 或 1）；<strong>参考类型</strong>（被切换元素的原子在引擎内部用的标签，按标签的选项按它查）。</li>
+            <li><code>dftbplus_map.md</code>：功能表加一行 “类型平滑切换（M5a）| <code>typeswitch.py</code>，<code>hamiltonian.py: build_mixed_pairs</code>，<code>calculator.py</code>（<code>_check_type_switching</code>、<code>_Setup.switching</code>、<code>DFTBResult.type_weights</code>）| DFTB+ 没有（每个原子固定一种类型，<code>Type2FileNames</code>）| — | 离散极限就是 DFTB+ 的固定类型标签”；坑 82（合并 M6f-4a 后的下一个编号）：“异标签 SKF（<code>Cu-Cu2.skf</code>）若带 on-site 行，DFTB+ 按物种名当作异核文件读，第二行变成质量与多项式行、表错位，不报错（Cu<sub>13</sub> 差 3.1e-2 Ha）；hotcent 2.1 对同一符号的两个原子写出的正是这种文件，还只算一个方向、只取第一个原子的波函数范围（M5a）”。</li>
+            <li><code>index.html</code>：M5a 的设计与报告链接，首页的数字 236 + 24 → 238 + 24（参考算例）、957 + 227 → 982 + 227（conda 环境的测试）；<code>WHY.md</code> 第 4 节：注明引擎机制已有（M5a），拟合与电池算例待做；两个 README：<code>type_switching</code> 的一行用法；可考虑在 <code>pydftb/__init__.py</code> 中导出 <code>TypeSwitch</code>（如 M6f-4a 导出 <code>Analysis</code>；本次未改，留给主线与 README 一起改）；M6f-4a 报告的页脚加 “M5a 设计 →”（本设计文档的页脚已改为 “← M6f-4a 完成报告”）。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M5a-type-switching.html">← M5a 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>M5a</span>
+  </footer>
+</div>
+</body>
+</html>

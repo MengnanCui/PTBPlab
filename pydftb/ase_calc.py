@@ -28,6 +28,7 @@ from .kpoints import monkhorst_pack, reduce_time_reversal
 from .occupations import Smearing
 from .parallel import as_kthreads
 from .params import ParamSet
+from .typeswitch import check_switches, internal_species
 from .xlbomd import XLBOMD, Integrator
 
 
@@ -163,6 +164,10 @@ class PyDFTB(Calculator):
     points, grid and softening in Angstrom); with atom-resolved energies ``energies`` (eV,
     ``atoms.get_potential_energies()``) are the total energy per atom, summing to ``energy``;
     the rest is in ``calc.raw.analysis`` (atomic units).
+    Milestone M5a: ``type_switching`` (:class:`pydftb.typeswitch.TypeSwitch` objects or dicts;
+    cut-offs in Bohr, like the other model parameters): the atoms of a switched element mix its
+    type labels by their coordination numbers, as in :class:`pydftb.DFTB`; the SK set holds all
+    the types; the weights of the last calculation are ``raw.type_weights``.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole", "energies"]
@@ -187,7 +192,7 @@ class PyDFTB(Calculator):
                  read_charges=None, fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None, analysis=None, **kwargs):
+                 dipole_correction=None, analysis=None, type_switching=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved)
         self.kpts_spec = kpts
@@ -222,6 +227,11 @@ class PyDFTB(Calculator):
                                 halogen_correction=halogen_correction,
                                 dipole_correction=_dipole_correction_au(dipole_correction),
                                 analysis=_analysis_au(analysis))
+        self.type_switching = None                    # M5a
+        if type_switching is not None:
+            self.type_switching = check_switches(
+                type_switching if isinstance(type_switching, (list, tuple)) else [type_switching])
+            self.engine_opts["type_switching"] = self.type_switching
         self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
         self.electric_field = electric_field          # V/Angstrom (M6c)
         self.point_charges = point_charges            # Angstrom, e
@@ -276,7 +286,11 @@ class PyDFTB(Calculator):
     def _engine(self, atoms):
         """pydftb.DFTB for these atoms, its type labels and SK set."""
         labels = self.labels or atoms.get_chemical_symbols()
-        sk = self.params.skset(labels)
+        if self.type_switching is not None:           # M5a: the engine's labels, every type
+            sk = self.params.skset(internal_species(self.type_switching, labels)
+                                   + [t for sw in self.type_switching for t in sw.types])
+        else:
+            sk = self.params.skset(labels)
         disp = self.dispersion
         if disp is not None:
             disp = disp.with_elements({lab: int(z) for lab, z in zip(labels, atoms.numbers)})
@@ -421,6 +435,8 @@ class PyDFTB(Calculator):
             self.results["energy"] = r.energy * units.Hartree
             # force-consistent: F - sum_s N_s E_f,s with a fixed Fermi level (M6f), else F
             self.results["free_energy"] = r.e_force_related * units.Hartree
+        if self.type_switching is not None:               # M5a: the engine's labels
+            labels = internal_species(self.type_switching, labels)
         q0 = (r.q0_atom if r.q0_atom is not None          # custom reference occupations (M6f)
               else np.array([sk.occupation[lab].sum() for lab in labels]))
         self.results["charges"] = q0 - r.charges

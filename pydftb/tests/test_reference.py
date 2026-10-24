@@ -38,7 +38,7 @@ def test_against_dftbplus_reference(path, backend):
 @pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep", "li_bcc_k666_node",
                                   "ch3oh_loose_scc", "water_dimer_dftb3_loose_scc",
                                   "cuo_chain_spin_loose_scc", "gdo2_dftb3_shell", "gdo_spin",
-                                  "gdo_rocksalt_k444"])
+                                  "gdo_rocksalt_k444", "cu_slab_types_k441"])
 def test_dftbplus_finite_difference_emulation(name):
     """With DFTB+'s finite-difference step pydftb reproduces DFTB+ forces and stress exactly:
     the residual (~1e-6 Ha/Bohr for water, 1.2e-8 Ha/Bohr^3 for the Li stress) is DFTB+'s

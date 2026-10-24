@@ -144,6 +144,117 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
     return pb
 
 
+def _type_pair_blocks(v, sk: SKSet, a: str, b: str):
+    """H0 and S blocks of pairs a -> b (type labels) for the bond vectors ``v``: the operations
+    of :func:`build_pairs`' ``blocks``, in the same order (so the values are bitwise the same)."""
+    shells_a, shells_b = sk.shells(a), sk.shells(b)
+    d = np.sqrt((v * v).sum(1))
+    rot = bond_frames(v)
+    dm = rotation_blocks(rot, max(max(shells_a), max(shells_b)))
+    fab, fba = sk.files[(a, b)], sk.files[(b, a)]
+    iab = fab.evaluate(d, full=False)
+    iba = fba.evaluate(d, full=False)
+    cab, cba = fab.colmap, fba.colmap
+    hb = sk_block(v, iab, iba, shells_a, shells_b, 0, dm, cab, cba)
+    sb = sk_block(v, iab, iba, shells_a, shells_b, N_INTEGRALS, dm, cab, cba)
+    return hb, sb
+
+
+def build_mixed_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis, candidates: dict,
+                      column: dict, weights: np.ndarray, derivatives: bool = False,
+                      fd_delta: float | None = None, keep: np.ndarray | None = None):
+    """:func:`build_pairs` for atoms whose parameters are mixtures of type labels (milestone
+    M5a, :mod:`pydftb.typeswitch`): the block of the pair A-B is sum_tu w_A,t w_B,u B^tu(R) over
+    the candidate labels t of A and u of B (``candidates[species label]``, weight column
+    ``column[label]`` of ``weights`` (n_atom, n_labels)), its derivative w.r.t. the bond vector
+    likewise (weights fixed).  Pairs are grouped by ``species`` (labels of equal basis); every
+    type pair is computed with build_pairs' operations on the pairs where w_A,t w_B,u != 0, so
+    with weights 0 and 1 the values are build_pairs' (bitwise).
+
+    Returns the PairBlocks and, with ``derivatives`` and ``keep`` (n_atom bool), the raw
+    type-pair blocks of the pairs with an atom in ``keep``: a list of (column of t, column of u,
+    pair indices, element indices, h, s), h and s flattened like the elements of ``pb.h``."""
+    i, j, shift, vec, dist = neighbor_list(pos, cell, pbc, sk.cutoff)
+    rows, cols, pidx, hv, sv, dhv, dsv, groups, kept = [], [], [], [], [], [], [], [], []
+    spec = np.array(species)
+    elems = sorted(set(species))
+    offset = 0
+    for a in elems:
+        for b in elems:
+            mask = (spec[i] == a) & (spec[j] == b)
+            sel = np.nonzero(mask)[0]
+            if len(sel) == 0:
+                continue
+            groups.append((a, b, sel))
+            na, nb = sk.norb(a), sk.norb(b)
+            hb = np.zeros((len(sel), na, nb))
+            sb = np.zeros((len(sel), na, nb))
+            dh = np.zeros((len(sel), na, nb, 3)) if derivatives else None
+            ds = np.zeros((len(sel), na, nb, 3)) if derivatives else None
+            v_all = vec[sel]
+            w_i, w_j = weights[i[sel]], weights[j[sel]]
+            touch = None if (keep is None or not derivatives) else keep[i[sel]] | keep[j[sel]]
+            for t in candidates[a]:
+                for u in candidates[b]:
+                    c = w_i[:, column[t]] * w_j[:, column[u]]
+                    sub = np.nonzero(c)[0]
+                    if len(sub) == 0:
+                        continue
+                    v = v_all[sub]
+                    bh, bs = _type_pair_blocks(v, sk, t, u)
+                    cc = c[sub][:, None, None]
+                    hb[sub] += cc * bh
+                    sb[sub] += cc * bs
+                    if derivatives:
+                        bdh = np.empty(bh.shape + (3,))
+                        bds = np.empty(bs.shape + (3,))
+                        for k in range(3):
+                            if fd_delta is None:
+                                vc = v.astype(complex)
+                                vc[:, k] += 1j * COMPLEX_STEP
+                                hc, sc = _type_pair_blocks(vc, sk, t, u)
+                                bdh[..., k] = hc.imag / COMPLEX_STEP
+                                bds[..., k] = sc.imag / COMPLEX_STEP
+                            else:
+                                vp, vm = v.copy(), v.copy()
+                                vp[:, k] += fd_delta
+                                vm[:, k] -= fd_delta
+                                (hp, sp_), (hm, sm) = (_type_pair_blocks(vp, sk, t, u),
+                                                       _type_pair_blocks(vm, sk, t, u))
+                                bdh[..., k] = (hp - hm) / (2.0 * fd_delta)
+                                bds[..., k] = (sp_ - sm) / (2.0 * fd_delta)
+                        dh[sub] += cc[..., None] * bdh
+                        ds[sub] += cc[..., None] * bds
+                    if touch is not None:
+                        kk = np.nonzero(touch[sub])[0]
+                        if len(kk):
+                            loc = sub[kk]
+                            elem = (offset + loc[:, None] * (na * nb)
+                                    + np.arange(na * nb)[None, :]).ravel()
+                            kept.append((column[t], column[u], sel[loc], elem, bh[kk].ravel(),
+                                         bs[kk].ravel()))
+            if derivatives:
+                dhv.append(dh.reshape(-1, 3))
+                dsv.append(ds.reshape(-1, 3))
+            r0 = basis.offsets[i[sel]]
+            c0 = basis.offsets[j[sel]]
+            rr = (r0[:, None, None] + np.arange(na)[None, :, None]) + 0 * np.arange(nb)[None, None, :]
+            cc_ = (c0[:, None, None] + np.arange(nb)[None, None, :]) + 0 * np.arange(na)[None, :, None]
+            rows.append(rr.ravel())
+            cols.append(cc_.ravel())
+            pidx.append(np.repeat(sel, na * nb))
+            hv.append(hb.ravel())
+            sv.append(sb.ravel())
+            offset += len(sel) * na * nb
+    cat = lambda x, dt: np.concatenate(x) if x else np.zeros(0, dt)    # noqa: E731
+    pb = PairBlocks(i, j, shift, vec, dist, cat(rows, int), cat(cols, int), cat(pidx, int),
+                    cat(hv, float), cat(sv, float), groups=groups)
+    if derivatives:
+        pb.dh = np.concatenate(dhv) if dhv else np.zeros((0, 3))
+        pb.ds = np.concatenate(dsv) if dsv else np.zeros((0, 3))
+    return pb, kept
+
+
 def pair_values(pb: PairBlocks, sk: SKSet, vec, tables=None, fd_delta: float | None = None):
     """H0/S values of every pair element of ``pb`` (the order of ``pb.h``) for the bond
     vectors ``vec`` (n_pair, 3), NumPy or torch (milestone M4b), interpolated from
