@@ -18,7 +18,7 @@
     <dl class="meta">
       <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
       <div><dt>日期</dt><dd>2026-10-24</dd></div>
-      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>提交</dt><dd><code>4faff15</code></dd></div>
       <div><dt>配套</dt><dd><a href="../design/M6f5-selected-shells.html">设计文档</a></dd></div>
     </dl>
   </header>
@@ -140,11 +140,11 @@ atoms.calc = PyDFTB(skdir, selected_shells={"Cu": ("sd", "p")})          # s、d
       <div class="table-wrap"><table>
         <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
         <tbody>
-          <tr><td>G0：golden</td><td>与合并 M5a 后的文档提交 <code>22964a7</code> 逐字节比较；<code>--allow-new shell_local</code>（<code>Basis</code> 新增的内部字段，没有新的结果字段）</td><td>@@GOLDEN@@</td></tr>
-          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>@@REFS@@</td></tr>
-          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>@@PYTEST@@</td></tr>
-          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>@@PTBP@@</td></tr>
-          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>@@G1@@</td></tr>
+          <tr><td>G0：golden</td><td>与合并 M5a 后的文档提交 <code>22964a7</code> 逐字节比较；<code>--allow-new shell_local</code>（<code>Basis</code> 新增的内部字段，没有新的结果字段）</td><td>conda 772 个计算、183826 个字段，最小环境 718 个计算、172423 个字段，都逐位相同（8 个新算例不在比较之列）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>256 个算例全部通过；torch 74 个通过，182 个按设计跳过（只有 NumPy 的物理，含 8 个新算例）；24 条动力学轨迹全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1027 个通过 / 182 个跳过；最小环境 785 / 303；torch 986 / 223</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>227 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
         </tbody>
       </table></div>
     </section>
