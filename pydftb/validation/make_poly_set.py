@@ -2,7 +2,8 @@
 polynomial repulsive coefficients, to validate ``repulsive="polynomial"``
 (DFTB+ ``PolynomialRepulsive = SetForAll { Yes }``).
 
-Deterministic; run ``python -m pydftb.validation.make_poly_set`` to rebuild.
+Deterministic; run ``python -m pydftb.validation.make_poly_set`` to rebuild.  It writes into
+the package's ``tests/data/skf``: run it in a git checkout, not in an installed copy.
 """
 import gzip
 import os

@@ -1,12 +1,14 @@
 """Frozen DFTB+ reference data: generate, check offline, or compare live.
 
-    python -m pydftb.validation.refgen --regenerate   # needs dftb+; writes JSON
-    python -m pydftb.validation.refgen --check        # pydftb vs frozen JSON (no dftb+)
-    python -m pydftb.validation.refgen --live         # pydftb vs a fresh dftb+ run
+    pydftb refgen --regenerate   # needs dftb+; writes JSON
+    pydftb refgen --check        # pydftb vs frozen JSON (no dftb+)
+    pydftb refgen --live         # pydftb vs a fresh dftb+ run
 
-Each JSON file stores the exact input (labels, Angstrom coordinates, cell,
-k-points, settings, the HSD text), the DFTB+ version and the reference
-results, so the offline check is reproducible without DFTB+.
+(``python -m pydftb.validation.refgen ...`` is the same.)  Each JSON file stores the exact
+input (labels, Angstrom coordinates, cell, k-points, settings, the HSD text), the DFTB+
+version and the reference results, so the offline check is reproducible without DFTB+.
+``--regenerate`` writes into the package's ``tests/data/ref``: run it in a git checkout
+(``pydftb/tests/data/ref``), not in an installed copy.
 """
 from __future__ import annotations
 
@@ -1305,8 +1307,9 @@ def live(names=None):
               f"{np.abs(res.forces - ref['forces']).max():9.1e} {t_py:6.2f} {ref['wall']:7.2f}")
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main(argv=None, prog=None):
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--regenerate", action="store_true", help="run dftb+ and write reference JSON")
     g.add_argument("--check", action="store_true", help="compare pydftb with the frozen JSON")

@@ -1,4 +1,5 @@
-"""``python -m pydftb.advisor PATH``: check a DFTB+ run directory (or a dftb_in.hsd).
+"""``pydftb advisor PATH`` (or ``python -m pydftb.advisor PATH``): check a DFTB+ run
+directory (or a dftb_in.hsd).
 
 Exit status: 0 no finding at or above ``--fail-on`` (default: error), 1 there is one,
 2 usage error or no input, 3 the input could not be read.
@@ -14,8 +15,8 @@ from .report import render_json, render_text
 from .rules import RULES, SEVERITIES
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m pydftb.advisor",
+def main(argv=None, prog=None) -> int:
+    ap = argparse.ArgumentParser(prog=prog or "python -m pydftb.advisor",
                                  description="Check a DFTB+ input and run for known pitfalls "
                                              "(report only; nothing is changed).")
     ap.add_argument("path", nargs="?", help="run directory or dftb_in.hsd")

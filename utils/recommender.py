@@ -393,7 +393,7 @@ def _torch_stage(plan: Plan, backend: dict) -> None:
     plan.share_stages = {plan.ncores: dict(plan.stages)}
     plan.estimates = {k: v for k, v in plan.estimates.items() if k in ("speed", "memory_available")}
     plan.notes.append("no time estimate with a GPU (the cost model knows CPUs only); "
-                      "python -m pydftb.validation.gpu_check measures the device")
+                      "pydftb gpu-check measures the device")
 
 
 def gpu_suggestion(workload: Workload, backend: dict | None, accelerators: dict | None) -> str:
@@ -406,7 +406,7 @@ def gpu_suggestion(workload: Workload, backend: dict | None, accelerators: dict 
         ["Apple GPU (mps)"] if accelerators.get("mps") else [])
     if not names:
         return ""
-    return (f"GPU available ({names[0]}): check it with python -m pydftb.validation.gpu_check, "
+    return (f"GPU available ({names[0]}): check it with pydftb gpu-check, "
             f"then try --pydftb_backend torch --device auto; the DFTB stage then runs serially on "
             f"the GPU, which pays only if the check shows it faster than the {workload.engine} "
             f"processes on the CPU for these {workload.n} structures")

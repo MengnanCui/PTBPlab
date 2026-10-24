@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ptbp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Density functional Tight-binding theory Parameterization (PTBP)."
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+# pydftb is a package of its own (pydftb/pyproject.toml).  PEP 508 has no portable relative
+# path, so install both from a checkout: pip install ./pydftb .   (dev: pip install -e ./pydftb -e .)
 dependencies = [
+    "pydftb>=0.1.0.dev0",   # not ">=0.1": that excludes the pre-release 0.1.0.dev0
     "ase>=3.22",
     "scikit-optimize>=0.10",
     "scipy",
@@ -25,10 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# pydftb extras (the core engine only needs numpy, scipy and ase)
-torch = ["torch>=2.14"]           # torch backend: GPU / autodiff (milestone M4; tested 2.14.1)
-dispersion = ["dftd3", "dftd4"]   # D3/D4 dispersion (M2d); conda: dftd3-python, dftd4-python
-mpi = ["mpi4py"]                  # multi-node task farming (milestone M3)
+# pydftb's extras, passed through (the engine itself needs numpy, scipy, ase, threadpoolctl)
+torch = ["pydftb[torch]"]             # torch backend: GPU / autodiff (milestone M4; tested 2.14.1)
+dispersion = ["pydftb[dispersion]"]   # D3/D4 dispersion (M2d); conda: dftd3-python, dftd4-python
+mpi = ["mpi4py"]                      # multi-node task farming (milestone M3)
 dev = ["pytest"]
 
 # pylibxc, hotcent, dftbplus are NOT on PyPI — install via conda-forge
@@ -43,8 +46,8 @@ py-modules = ["parameterize"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*", "utils*", "tools*", "pydftb*"]
-exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*", "pydftb.tests*"]
+include = ["cli*", "utils*", "tools*"]
+exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*", "pydftb*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "pydftb/tests"]

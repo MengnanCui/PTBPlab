@@ -1,9 +1,11 @@
 """GPU self-check of pydftb (milestone M4d): correctness and timings on your device.
 
-    python -m pydftb.validation.gpu_check                          # the first GPU, everything
-    python -m pydftb.validation.gpu_check --device cuda:1 --json gpu_check.json
-    python -m pydftb.validation.gpu_check --quick                  # a subset, a few minutes
-    python -m pydftb.validation.gpu_check --device cpu --quick     # the script itself, no GPU
+    pydftb gpu-check                          # the first GPU, everything
+    pydftb gpu-check --device cuda:1 --json gpu_check.json
+    pydftb gpu-check --quick                  # a subset, a few minutes
+    pydftb gpu-check --device cpu --quick     # the script itself, no GPU
+
+(``python -m pydftb.validation.gpu_check ...`` is the same.)
 
 Correctness (exit status 1 if any check fails):
 
@@ -459,8 +461,8 @@ def run(device: str = "auto", dtypes=("float64",), quick: bool = False, timing: 
     return report
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv=None, prog=None) -> int:
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--device", default="auto", help="auto (default), cuda, cuda:1, mps, xpu, cpu")
     ap.add_argument("--dtype", default="float64", choices=["float64", "float32", "both"])
