@@ -12,16 +12,22 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     optimizer:      # bo / parallel_bo / pso / gradient / bo_grad
     grad_maxiter:   # int (gradient optimisers)
     hotcent_fd_step: # list of float, Bohr (gradient optimisers)
-    n_calls:        # int
+    n_calls:        # int; omitted: 11 for up to 2 optimised dimensions (one parameter set),
+                    #   10 + 5 x dims above (two elements: 30); a value here always wins
     n_particles:    # int
     E0s:            # dict {atomic_number: eV} or string '{"6": -37.8}'
     eos_points:     # int
     xc:             # str
     kpt_density:    # float
     parameters:     # list[str]
-    multi_element:  # list[str]: only these elements are fitted, the others keep PTBP's table
-    shared_parameters: # bool: one (r0_w, r0_d, sigma_rep) for all elements (before M5b)
-    types:          # list of {element, labels, centre, width[, cutoff, start]}: switched types (M5b)
+    multi_element:  # list[str]: only these elements are fitted, the others keep the
+                    #   (r0_w, r0_d, sigma_rep) PTBP published
+    shared_parameters: # bool: one (r0_w, r0_d, sigma_rep) for all elements (before M5b);
+                    #   default false: one set per element, the loss's penalty the geometric
+                    #   mean of the sets' penalties
+    types:          # list of {element, labels, centre, width[, cutoff, start]}: switched types
+                    #   (M5b, pydftb only); with mode energygeometry a type may get no data (a
+                    #   warning is printed): prefer reaction or dataset
     type_start:     # list of [label, r0_w, r0_d]: starting points of types
     superposition:  # density / potential
     confinement:    # selfconsistent / perturbative (hotcent's confinement scheme)
@@ -135,7 +141,9 @@ def write_effective(args: argparse.Namespace, run_dir: Path) -> None:
 
     Writing this every successful run lets the user re-run with `--config
     ptbp_run.yaml` and gives `ptbp postprocess RUN_DIR` everything it
-    needs without extra CLI flags.
+    needs without extra CLI flags.  An n_calls left to its default is not
+    written: the default depends on the optimised dimensions, so re-running
+    the file gives the same number again.
     """
     import yaml
     out = {}

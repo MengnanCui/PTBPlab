@@ -7,8 +7,10 @@ converts exactly:
 
     y_new = y_old * r0_penalty(r0_w, r0_d, radius) / r0_penalty(r0_w, r0_d, 0.5)
 
-Failed evaluations (the markers 97, 98, 99) are left as they are.  The original file
-is kept as ``<checkpoint>.v1.pkl``; ``<checkpoint>.meta.json`` records the new scale.
+Failed evaluations (the markers 97, 98, 99) are left as they are: a run that resumes the
+converted checkpoint recognises them by these values and gives them its failure value (twice
+the worst successful loss, M5b-2).  The original file is kept as ``<checkpoint>.v1.pkl``;
+``<checkpoint>.meta.json`` records the new scale.
 
     python tools/rescale_checkpoint.py run/checkpoint.pkl --radius 2.494438
 """

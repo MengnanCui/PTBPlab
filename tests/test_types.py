@@ -605,14 +605,15 @@ def test_loss_per_element_is_the_pure_loss_and_writes_the_step(tmp_path, monkeyp
     assert len(lines) > 30 and all(len(v.split(",")) == 2 * 3 + 5 for v in lines)
     full = ase.io.read(step_dir / "dftb_full.xyz", ":")
     assert [a.get_chemical_symbols() for a in full] == [a.get_chemical_symbols() for a in dft]
-    assert mu not in (97, 98, 99)                      # not the failure value
+    assert loss.last_failed is False and loss.worst_success == mu      # not a failure
 
 
 @linux
 def test_loss_per_element_when_a_type_has_no_tables(tmp_path, monkeypatch):
     """hotcent made no tables for O (as for Na at extreme radii in the reaction example): the
-    structures with O fail in the DFTB stage, and the loss is that of the others, as before
-    M5b (no repulsive is written for the missing files)."""
+    structures with O fail in the DFTB stage.  Since M5b-2 the point is a failure (M5b scored it
+    on the other structures, a loss biased low): before any success its loss is 1000 per
+    structure in dataset mode, the step stops after the DFTB stage, par.out has the failure line."""
     eng.configure(engine="pydftb")
     monkeypatch.setattr(L.hotpy, "full_hotcent",
                         lambda self, superposition, opt_elem=(), label="ptbp":
@@ -625,11 +626,11 @@ def test_loss_per_element_when_a_type_has_no_tables(tmp_path, monkeypatch):
     mu = float(loss.Loss_EnergyGeometry(x))
     d = tmp_path / "results" / model.directory_name(x)
     assert (d / "search_index.txt").read_text().strip() == "3"         # the H2 structure
-    assert "Spline" in (d / "H-H.skf").read_text() and not list(d.glob("O-*.skf"))
-    assert mu not in (97, 98, 99)
-    monkeypatch.chdir(d)
-    step = LG.StepData.from_files(loss, x=x)
-    assert float(LG.mu(step, loss.last_sigma)).hex() == mu.hex()
+    assert mu == L.NO_SUCCESS_FAILURE * len(dft) == 6000.0
+    assert loss.last_failed is True and loss.is_failure(x) and loss.worst_success is None
+    assert not (d / "dftb_full.xyz").exists()                          # no sigma search
+    par = [float(v) for v in (tmp_path / "par.out").read_text().split(",")]
+    assert par[2] == par[5] == 0.4321 and par[-1] == mu                # the failure line
 
 
 @linux
@@ -654,7 +655,7 @@ def test_loss_per_element_on_dftbplus_with_tables_without_repulsive(tmp_path, mo
                   opt_elem=[], path=tmp_path, types=model)
     x = [2.2, 4.0, 2.6, 5.4]
     mu = float(loss.Loss_EnergyGeometry(x))
-    assert mu not in (97, 98, 99)                      # not the failure value
+    assert loss.last_failed is False and loss.worst_success == mu      # not a failure
     d = tmp_path / "results" / model.directory_name(x)
     assert all("Spline" in (d / f"{a}-{b}.skf").read_text() for a in "HO" for b in "HO")
     monkeypatch.chdir(d)

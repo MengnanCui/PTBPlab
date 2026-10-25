@@ -5,8 +5,11 @@ bounds, from BO's seed.  ``--optimizer bo_grad``: BO with ``--n_calls``, then at
 ``--grad_maxiter`` (default 5) gradient steps from its best point.  Every evaluation is
 the loss PTBP computes (written to par.out/log.out as for BO) plus its gradient
 (:mod:`utils.loss_grad`), recorded in ``grad.out``.  An evaluation without a gradient
-(a failed loss, whose value is 97-99, or no derivative there) counts as a rejected step.
-The result is the lowest loss evaluated, as for BO, failed losses excluded.
+(a failed loss, or no derivative there) counts as a rejected step.  The result is the
+lowest loss evaluated, as for BO, failed losses excluded.  A failed loss is the one the
+Loss records as failed (``Loss.last_failed``, ``Loss.failed_indices``; since M5b-2 its value
+is twice the worst successful loss so far, which the value alone cannot tell); a loss that
+records nothing (stand-ins, results of before M5b-2) fails when its value is 97, 98 or 99.
 
 The results have the attributes cli/run.py uses (``x``, ``fun``, ``x_iters``,
 ``func_vals``), plus ``best_dir`` (the directory of the best evaluation) and ``grads``.
@@ -21,13 +24,22 @@ from types import SimpleNamespace
 import numpy as np
 
 GRAD_FILE = "grad.out"
-FAILED = (97.0, 98.0, 99.0)       # what Loss.EnergyGeometry returns for a failed step
+FAILED = (97.0, 98.0, 99.0)       # what Loss.EnergyGeometry returned for a failed step before M5b-2
 
 
 def failed(mu) -> bool:
-    """A failed loss: PTBP returns a random integer 97-99 (a real loss is not an exact
-    integer; in the dataset and reaction modes it can be larger)."""
+    """A failure value of before M5b-2: PTBP returned a random integer 97-99 (a real loss is
+    not an exact integer; in the dataset and reaction modes it can be larger).  Since M5b-2 the
+    Loss records its failures (:func:`loss_failed`); this is the fallback for losses that do
+    not (stand-ins) and for results written before."""
     return float(mu) in FAILED
+
+
+def loss_failed(loss, mu) -> bool:
+    """Whether the evaluation that ``loss`` just returned ``mu`` for failed: the Loss's record
+    (``last_failed``, M5b-2), else the old failure values (:func:`failed`)."""
+    flag = getattr(loss, "last_failed", None)
+    return failed(mu) if flag is None else bool(flag)
 
 
 @dataclass
@@ -37,17 +49,19 @@ class Evaluation:
     g: np.ndarray | None          # None: no gradient (failure)
     result: object = None         # utils.loss_grad.GradResult
     directory: str = ""
+    failed: bool | None = None    # the Loss's record (M5b-2); None: by the old values 97-99
 
     @property
     def ok(self) -> bool:
-        """A value with a gradient.  A failed loss (97-99) has none: the value alone
-        cannot tell, real losses can be larger."""
+        """A value with a gradient.  A failed loss has none: its value alone cannot tell
+        (2 x the worst successful loss since M5b-2, 97-99 before)."""
         return self.g is not None and np.isfinite(self.f) and bool(np.all(np.isfinite(self.g)))
 
     @property
     def valid(self) -> bool:
         """A loss value, with or without a gradient (not a failed step)."""
-        return bool(np.isfinite(self.f)) and not failed(self.f)
+        bad = failed(self.f) if self.failed is None else self.failed
+        return bool(np.isfinite(self.f)) and not bad
 
 
 @dataclass
@@ -107,7 +121,8 @@ class Evaluator:
             g = np.array([res.grad[n] for n in self.names], dtype=float)
         name = (self.loss.types.directory_name(x, 6) if self.typed
                 else req.directory_name(*x))
-        ev = Evaluation(x, f, g, res, name)
+        flag = getattr(self.loss, "last_failed", None)       # M5b-2: the Loss's record
+        ev = Evaluation(x, f, g, res, name, failed=None if flag is None else bool(flag))
         self.history.evaluations.append(ev)
         if res is not None:
             with open(self.log_path, "a") as fh:
@@ -246,9 +261,18 @@ def optimize_bo_grad(loss, cov_radius, checkpoint_saver, n_calls: int, maxiter: 
     from utils.dftb_stage import torch_one_thread
     res = loss.Bayesian_optimization(cov_radius, checkpoint_saver, n_calls)
     x_bo, f_bo = list(map(float, res.x)), float(res.fun)
-    ok = [(f, x) for x, f in zip(res.x_iters, res.func_vals) if not failed(f)]
-    if ok and failed(f_bo):          # dataset/reaction: a failed step (97-99) can be BO's
-        f_bo, x_bo = min(ok, key=lambda v: v[0])          # minimum; start from a real one
+    recorded = getattr(loss, "failed_indices", None)      # M5b-2: the Loss's record
+    if recorded is None:                                  # else the old values 97-99
+        bad = [i for i, f in enumerate(res.func_vals) if failed(f)]
+    else:
+        bad = list(recorded)
+    ok = [(f, x) for i, (x, f) in enumerate(zip(res.x_iters, res.func_vals)) if i not in bad]
+    best = int(np.argmin(res.func_vals)) if len(res.func_vals) else -1
+    # a failed step can be BO's minimum (before M5b-2: 97-99 in dataset/reaction mode; since:
+    # a failure before the first success that is below the later successes): start from the
+    # lowest real loss
+    if ok and best in bad:
+        f_bo, x_bo = min(ok, key=lambda v: v[0])
         x_bo, f_bo = list(map(float, x_bo)), float(f_bo)
     print(f"[bo_grad] BO best {[round(v, 6) for v in x_bo]}, mu={f_bo:.10g}; "
           f"{maxiter} gradient step(s) from there")
