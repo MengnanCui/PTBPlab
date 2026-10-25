@@ -30,9 +30,11 @@ def test_against_dftbplus_reference(path, backend):
                     "environment M6c, excitations M6d, SCC start and mixers M6f)")
     r = refgen.compare(doc, backend=backend)
     assert r["ok"], f"{doc['case']}: deviations {r['dev']} exceed {doc['tolerances']}"
-    # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path
+    # same mixer (DFTB+ modified Broyden) and Fermi search -> same SCC path, unless the case
+    # says otherwise (the development build's DFTB3 SCC takes another path)
     if r["n_scc_ref"] is not None:
-        assert abs(r["n_scc"] - r["n_scc_ref"]) <= 1, (r["n_scc"], r["n_scc_ref"])
+        allowed = max(1, doc["tolerances"].get("n_scc", 1))
+        assert abs(r["n_scc"] - r["n_scc_ref"]) <= allowed, (r["n_scc"], r["n_scc_ref"])
 
 
 @pytest.mark.parametrize("name", ["h2o", "h2o_nonscc", "water_dimer_polyrep", "li_bcc_k666_node",
