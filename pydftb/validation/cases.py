@@ -178,6 +178,15 @@ class Case:
     # shells taken from several SK files; the file labels' files come from ``typed``
     # (write_typed_copies), DFTB+ gets them listed pair by pair (SlaterKosterFiles)
     selected_shells: dict | None = None
+    # milestone M6g-2: ``fd_delta``: pydftb's H0/S derivatives as DFTB+'s central differences
+    # with this step (Bohr; DFTB+'s default FiniteDiff is 2^-13) for the coordinate response
+    # and the Hessian; ``hessian``: a second DFTB+ run with Driver = SecondDerivatives
+    # {"delta", "atoms", "moved_atoms" (0-based), "polarisability": bornderiv.out,
+    # "modes": DFTB+'s modes on its Hessian ({"remove": RemoveTranslation/Rotation})}, compared
+    # with pydftb's second_derivatives (and normal_modes); with the analysis
+    # "coord_derivatives" also pydftb's analytic Born charges against DFTB+'s differences
+    fd_delta: float | None = None
+    hessian: dict | None = None
 
     @property
     def corrections(self) -> bool:
@@ -422,6 +431,10 @@ GBSA_WATER = {
     "hbond": {"H": -7.172800544988973e-02, "C": -2.548469535762511e-03,
               "N": -1.976849501504001e-02, "O": -8.462476828587280e-03}}
 TOL_ENV = {"energy": 1e-6, "forces": 1e-6, "charges": 1e-6, "pc_forces": 1e-6, "dipole": 1e-6}
+
+
+def _co2():
+    return molecule("CO2")
 
 
 def _h2co():
@@ -1518,5 +1531,84 @@ CASES += [
     Case("o2_triplet_kernel", _o2, spin=O2_SPIN, torch=False, tol=TOL_RESP, analysis=KERNEL),
     Case("cu4co_kernel_3000K", _cu4co, filling=("fermi", 3000.0), torch=False, tol=TOL_RESP,
          analysis=KERNEL, note="metallic: the Fermi-level move keeps every column's sum zero"),
+]
+
+
+# ---- milestone M6g-2: coordinate derivatives (Born charges), SecondDerivatives, modes -------
+# pydftb with DFTB+'s difference step for dH0, dS (FD_DFTBP) so that the matrices and forces are
+# DFTB+'s; "dqdx": dN/dx per orbital (e/Bohr, DFTB+'s dqdx), "born": the Born charges (DFTB+'s
+# borncharges = -born), "coord_text": the detailed.out blocks and dBand_dx.out (d eps/dx in
+# eV/Bohr, 6 significant digits); "born_fd": pydftb's analytic Born
+# charges against DFTB+'s finite differences of the dipole (delta 1e-4: an O(delta^2) error);
+# "hessian" (Ha/Bohr^2), "hess_born" (d mu/dx), "hess_dpol" (d alpha/dx): pydftb's
+# second_derivatives against DFTB+'s; "hess_text": hessian.out, born.out, bornderiv.out and the
+# detailed.out block (whose 6 decimals may round either way: 2e-6); "modes_freq" (Hartree),
+# "modes_int" (relative, vibrational groups only),
+# "modes_vec" (normalised displacements of the non-degenerate vibrational modes, up to sign).
+# Both codes converge the SCC to 1e-12 (SCC_DX): central differences with delta = 1e-4 multiply
+# the noise of forces and dipoles by 5000
+FD_DFTBP = 2.0 ** -13
+SCC_DX = 1e-12
+TOL_COORD = {"dqdx": 1e-10, "born": 1e-10, "coord_text": 1e-4, "born_fd": 1e-7,
+             "hessian": 1e-7, "hess_born": 5e-8, "hess_dpol": 1e-6, "hess_text": 2e-6,
+             "modes_freq": 1e-7, "modes_int": 1e-5, "modes_vec": 1e-4}
+TOL_DX = {**TOL_RESP, **TOL_COORD, "forces": 1e-9}
+COORD = {"coord_derivatives": True}
+COORD_FD = {"coord_derivatives": True, "dftbplus_coord": False}   # DFTB+ refuses or errs
+DX = dict(scc_tol=SCC_DX, fd_delta=FD_DFTBP, torch=False)
+CASES += [
+    # analytic coordinate derivatives against DFTB+ 25.1's CoordDerivatives
+    Case("h2o_dx", _water, **DX, tol=TOL_DX, analysis=COORD, hessian={},
+         note="Born charges and dq/dx; the hessian run's differences check them too"),
+    Case("h2o_dx_nonscc", _water, scc=False, **DX, tol=TOL_DX, analysis=COORD,
+         note="non-SCC: the bare response"),
+    Case("h2o_dx_shell", _water, shell_resolved=True, **DX, tol=TOL_DX, analysis=COORD),
+    Case("ch3oh_dx", _meoh, **DX, tol=TOL_DX, analysis=COORD),
+    Case("h2co_dx", _h2co, **DX, tol=TOL_DX, analysis=COORD),
+    Case("h2o_dx_pol", _water, **DX, tol=TOL_DX, analysis={**COORD, **POL},
+         note="both analyses: DFTB+ 25.1 writes the polarisability blocks first"),
+    Case("ch3oh_dx_dftb3", _meoh, dftb3=DFTB3_3OB, dftbplus="dev", **DX,
+         tol={**TOL_DX, "n_scc": 10, "scc_errors": 1.0}, analysis=COORD,
+         note="full third order: 25.1 leaves its terms out (1.4e-2), the development build has "
+              "them; the development build's SCC takes another path (fewer iterations)"),
+    # DFTB+ refuses or gets them wrong: its finite-difference Born charges as the reference
+    Case("h2o_dx_field", _water, efield=FIELD, **DX, tol=TOL_DX, analysis=COORD_FD,
+         hessian={},
+         note="DFTB+ leaves the field's position derivative out (Born charges off by 1.7e-2)"),
+    Case("h2o_dx_pc", _water, point_charges=PC3, **DX, tol=TOL_DX, analysis=COORD_FD,
+         hessian={}, note="DFTB+ leaves the point charges' position derivative out"),
+    Case("o2_triplet_dx", _o2, spin=O2_SPIN, **DX, tol=TOL_DX, analysis=COORD_FD, hessian={},
+         note="collinear spin: DFTB+ refuses (O2's Born charges vanish by symmetry; the Hessian "
+              "is checked)"),
+    Case("h2o_cation_dx", _water, charge=1.0, spin={"unpaired_electrons": 1,
+                                                    "spin_constants": W_SPIN},
+         **DX, tol=TOL_DX, analysis=COORD_FD, hessian={},
+         note="spin polarised and polar: DFTB+ refuses; Born charges sum to +1"),
+    Case("cu4co_dx_3000K", _cu4co, filling=("fermi", 3000.0), **DX, tol=TOL_DX,
+         analysis={**COORD_FD, "perturbation": {"filling_tol": 1e-15}}, hessian={},
+         note="metallic (Fermi-level move): DFTB+ refuses; every partly filled level (DFTB+'s "
+              "window of M6g-1 leaves out 4.7e-7 of the Born charges)"),
+    Case("co2_dx", _co2, **DX, tol=TOL_DX, analysis=COORD_FD, hessian={},
+         note="degenerate levels: DFTB+ refuses"),
+    # SecondDerivatives (and modes)
+    Case("h2o_hess_pol", _water, **DX, tol=TOL_DX,
+         hessian={"polarisability": True, "modes": {"remove": False}},
+         note="Hessian, Born charges and polarisability derivatives; modes without "
+              "projection (the H-H distance is 4.6e-6 Bohr from an SK grid point: the "
+              "differences see the interpolation's derivative jump, the same in both codes)"),
+    Case("h2o_hess_projected", _water, **DX, tol=TOL_DX,
+         hessian={"polarisability": True, "modes": {"remove": True}},
+         note="modes with translations and rotations projected out"),
+    Case("h2o_hess_partial", _water, **DX, tol=TOL_DX,
+         hessian={"atoms": [0, 1, 2], "moved_atoms": [1, 2]},
+         note="partial Hessian: hessian.out.2-3 (DFTB+ also leaves an empty hessian.out)"),
+    Case("h2o_hess_nonscc", _water, scc=False, **DX, tol=TOL_DX, hessian={}),
+    Case("ch3oh_hess_dftb3", _meoh, dftb3=DFTB3_3OB, **DX, tol=TOL_DX,
+         hessian={"modes": {"remove": True}}),
+    Case("water_box_hess", _water_box, ewald_tolerance=1e-12, **DX, tol=TOL_DX, hessian={},
+         note="periodic: no dipole derivatives (DFTB+ writes meaningless ones)"),
+    Case("co2_hess_pol", _co2, **DX, tol=TOL_DX,
+         hessian={"polarisability": True, "modes": {"remove": True}},
+         note="linear molecule: five rigid motions, degenerate bending modes"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

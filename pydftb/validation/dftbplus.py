@@ -46,6 +46,8 @@ DFTBPLUS = os.environ.get("DFTBPLUS", shutil.which("dftb+") or "/opt/mm/dftb/bin
 # dptools sources (DFTB+ tools/dptools/src), for dp_dos when freezing DOS curves; dptools is
 # LGPL and not part of pydftb, it is only run while regenerating references
 DPTOOLS = os.environ.get("DPTOOLS")
+# DFTB+'s modes program (M6g-2: vibrational modes of a SecondDerivatives Hessian)
+MODES = os.environ.get("DFTBPLUS_MODES", shutil.which("modes") or "/opt/mm/dftb/bin/modes")
 PARSER_VERSION = 14
 
 
@@ -188,7 +190,9 @@ def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
     (``WriteBondPopulation``, ``WriteBondEnergy``, ``WriteBondOrder``; DFTB+ after 25.1);
     M6g-1: ``Polarisability`` and ``ResponseKernel`` (frequencies in Hartree) with the response
     converged tightly (``PerturbSccTol = 1e-11``, ``MaxPerturbIter = 1000``, SCC only; DFTB+
-    reads ``PerturbEta`` only with a finite frequency)."""
+    reads ``PerturbEta`` only with a finite frequency); M6g-2: ``CoordDerivatives = Yes``
+    (unless ``"dftbplus_coord": False``: cases whose reference is DFTB+'s finite-difference Born
+    charges, where its analytic ones are refused or wrong)."""
     if not spec:
         return ""
     lines = []
@@ -266,7 +270,10 @@ def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
             lines.append("    FrequencyRange = " + " ".join(_f(x) for x in opts["frequency_range"]))
         lines.append("  }")
         finite = finite or any(float(w) != 0.0 for w in freqs) or opts.get("frequency_range")
-    if spec.get("polarisability") or spec.get("response_kernel"):
+    coord = bool(spec.get("coord_derivatives")) and spec.get("dftbplus_coord", True)
+    if coord:                                                            # M6g-2
+        lines.append("  CoordDerivatives = Yes")
+    if spec.get("polarisability") or spec.get("response_kernel") or coord:
         pert = spec.get("perturbation") or {}
         if scc:
             lines += ["  PerturbSccTol = 1e-11", "  MaxPerturbIter = 1000"]
@@ -274,6 +281,7 @@ def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
             lines.append(f"  PerturbDegenTol = {_f(pert['degeneracy_tol'])}")
         if finite and "eta" in pert:
             lines.append(f"  PerturbEta = {_f(pert['eta'])}")
+        # filling_tol has no DFTB+ input (its window is fixed): pydftb's side only
     return "".join(f"{ln}\n" for ln in lines)
 
 
@@ -350,21 +358,23 @@ def parse_analysis(workdir, det: str, spec: dict, stdout: str = "") -> dict:
                               "file": fh.read().splitlines()}
     if bonds:
         out["bonds"] = bonds
-    if spec.get("polarisability") or spec.get("response_kernel"):         # M6g-1
+    if (spec.get("polarisability") or spec.get("response_kernel")         # M6g-1
+            or (spec.get("coord_derivatives") and spec.get("dftbplus_coord", True))):
         out["response"] = parse_response(workdir, det, tag)
     out["detailed_blocks"] = blocks
     return out
 
 
 RESPONSE_TAGS = ("staticPolResponse", "staticChargeReponse", "dEidEfield", "neFermi", "dEfdE",
-                 "dqdV", "dqnetdV", "dEidV")
+                 "dqdV", "dqnetdV", "dEidV", "dqdx", "borncharges")
 
 
 def parse_response(workdir, det: str, tag: dict) -> dict:
     """The response outputs of a DFTB+ run (M6g-1): the tags of ``RESPONSE_TAGS`` present in
     results.tag (arrays with the Fortran dimensions reversed, as :func:`parse_results_tag`),
     the detailed.out text of the kernel blocks and of the rest (density of states, charge and
-    Fermi-level derivatives, polarisabilities), and dE_band.out and dV_band.out."""
+    Fermi-level derivatives, polarisabilities), and dE_band.out and dV_band.out; M6g-2: the
+    CoordDerivatives blocks (``detailed_coord``) and dBand_dx.out."""
     out = {"tags": {k: np.asarray(tag[k]).tolist() for k in RESPONSE_TAGS if k in tag}}
     lines = det.splitlines()
     head = re.compile(r"^(Static response:|Response at omega)")
@@ -401,7 +411,12 @@ def parse_response(workdir, det: str, tag: dict) -> dict:
             main += lines[i:j + 1]
     out["detailed_kernel"] = kernel
     out["detailed_main"] = main
-    for name in ("dE_band.out", "dV_band.out"):
+    # M6g-2: 25.1's CoordDerivatives blocks (after the dipole and the polarisability), to the end
+    cstart = next((i for i, ln in enumerate(lines)
+                   if ln == " Derivatives of atomic Mulliken charges with atom positions"), None)
+    if cstart is not None:
+        out["detailed_coord"] = lines[cstart:]
+    for name in ("dE_band.out", "dV_band.out", "dBand_dx.out"):
         path = os.path.join(workdir, name)
         if os.path.exists(path):
             with open(path) as fh:
@@ -1189,7 +1204,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         if driver:
             res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", p.stdout))
             res["converged_geometry"] = "Geometry converged" in p.stdout
-            res["final_geometry"] = read_gen(os.path.join(workdir, "geo_end.gen"))
+            end = os.path.join(workdir, "geo_end.gen")     # not with SecondDerivatives (M6g-2)
+            res["final_geometry"] = read_gen(end) if os.path.exists(end) else None
             res["scc_iterations"] = [int(x) for x in re.findall(
                 r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*\n\s*\n", p.stdout, re.M)]
             if os.path.exists(os.path.join(workdir, "md.out")):
@@ -1267,3 +1283,105 @@ def run_bands(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, 
         return res
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# ---- SecondDerivatives and modes (milestone M6g-2) --------------------------------------------
+def _atom_ranges(atoms) -> str:
+    """0-based atom indices as DFTB+'s 1-based selection ("1:3" for a contiguous range)."""
+    a = sorted(int(x) + 1 for x in atoms)
+    if a == list(range(a[0], a[-1] + 1)):
+        return f"{a[0]}:{a[-1]}"
+    return " ".join(str(x) for x in a)
+
+
+def hessian_driver(spec) -> str:
+    """HSD ``Driver = SecondDerivatives`` for a case's ``hessian`` spec {"delta" (Bohr, DFTB+'s
+    default 1e-4), "atoms", "moved_atoms" (0-based; DFTB+ wants contiguous ranges)}."""
+    spec = spec or {}
+    lines = ["Driver = SecondDerivatives {"]
+    if spec.get("atoms") is not None:
+        lines.append(f"  Atoms = {_atom_ranges(spec['atoms'])}")
+    if spec.get("moved_atoms") is not None:
+        lines.append(f"  MovedAtoms = {_atom_ranges(spec['moved_atoms'])}")
+    if spec.get("delta") is not None:
+        lines.append(f"  Delta = {_f(spec['delta'])}")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def parse_second_derivatives(workdir, det: str) -> dict:
+    """The outputs of a SecondDerivatives run: ``hessian`` (results.tag hessian_numerical as
+    (rows, columns): d g_row / d x_col), ``born`` (born_mudrv_numerical, (columns, 3)),
+    ``born_derivs`` (bornderiv.out, (columns, 9) in DFTB+'s order) and the texts of hessian.out
+    (or its .a-b file), born.out, bornderiv.out and detailed.out's Born block."""
+    tag = parse_results_tag(os.path.join(workdir, "results.tag"))
+    out = {"hessian": np.asarray(tag["hessian_numerical"]).T.tolist()}
+    if "born_mudrv_numerical" in tag:
+        out["born"] = np.atleast_2d(tag["born_mudrv_numerical"]).tolist()
+    files = {}
+    for f in sorted(os.listdir(workdir)):
+        if f.split(".out")[0] in ("hessian", "born", "bornderiv") and ".out" in f:
+            with open(os.path.join(workdir, f)) as fh:
+                text = fh.read().splitlines()
+            if text:                          # DFTB+ leaves an empty hessian.out (partial)
+                files[f] = text
+    out["files"] = files
+    for f, text in files.items():
+        if f.startswith("bornderiv"):
+            out["born_derivs"] = [[float(x) for x in ln.split()] for ln in text]
+    lines = det.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.startswith(" Born charges/dipole derivatives wrt. atom positions")), None)
+    if start is not None:
+        block = [lines[start]]
+        i = start + 1
+        while i + 3 < len(lines) + 1 and i < len(lines) and lines[i].startswith("Atom "):
+            block += lines[i:i + 4]
+            i += 4
+        out["detailed_born"] = block
+    return out
+
+
+def parse_vibrations_tag(path) -> dict:
+    """vibrations.tag of ``modes``: {name: flat list of numbers}."""
+    out, key = {}, None
+    with open(path) as fh:
+        for line in fh:
+            if line[:1].isalpha():
+                key = line.split(":")[0].strip()
+                out[key] = []
+            elif key is not None:
+                out[key] += [float(x) for x in line.split()]
+    return out
+
+
+def run_modes(workdir, labels, skdir, remove: bool = False, born: bool = True,
+              born_derivs: bool = False, hessian_file: str = "hessian.out") -> dict:
+    """Run DFTB+'s ``modes`` in ``workdir`` (which holds geo.gen and the files of a
+    SecondDerivatives run).  Masses from the homonuclear SK files, written one by one
+    (``modes`` 25.1 does not read Type2FileNames); ``remove``: RemoveTranslation and
+    RemoveRotation.  Returns vibrations.tag."""
+    if not (MODES and os.path.exists(MODES)):
+        raise FileNotFoundError(f"DFTB+'s modes program not found ({MODES!r}); set "
+                                "$DFTBPLUS_MODES")
+    root = os.path.abspath(skdir)
+    lines = ['Geometry = GenFormat {', '  <<< "geo.gen"', '}',
+             'Hessian = {', f'  <<< "{hessian_file}"', '}']
+    if born:
+        lines += ['BornCharges = {', '  <<< "born.out"', '}']
+    if born_derivs:
+        lines += ['BornDerivs = {', '  <<< "bornderiv.out"', '}']
+    if remove:
+        lines += ["RemoveTranslation = Yes", "RemoveRotation = Yes"]
+    lines.append("SlaterKosterFiles {")
+    lines += [f'  {e}-{e} = "{root}/{e}-{e}.skf"' for e in dict.fromkeys(labels)]
+    lines += ["}", "DisplayModes = {", "  PlotModes = 1:-1", "  Animate = No", "}"]
+    with open(os.path.join(workdir, "modes_in.hsd"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    p = subprocess.run([MODES], cwd=workdir, capture_output=True, text=True,
+                       env=dict(os.environ, OMP_NUM_THREADS="1"))
+    if p.returncode != 0:
+        raise RuntimeError(p.stdout[-3000:] + p.stderr[-3000:])
+    out = parse_vibrations_tag(os.path.join(workdir, "vibrations.tag"))
+    out["input"] = lines
+    return out

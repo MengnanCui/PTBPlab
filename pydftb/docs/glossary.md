@@ -149,6 +149,13 @@
 | 谱求和（spectral sum） | 用未微扰的本征态展开一阶密度矩阵：对占据–空态对 (i, a) 求和，权重 (f<sub>i</sub> − f<sub>a</sub>)/(ε<sub>i</sub> − ε<sub>a</sub>)，频率相关时分母加 ±ω + iη（M6g-1）。 |
 | 费米能级的移动（金属） | 部分占据的体系受微扰时，带内项 −δ<sub>i</sub>∂ε<sub>i</sub> 改变电子数，费米能级随之移动 dE<sub>F</sub> = Σδ<sub>i</sub>∂ε<sub>i</sub>/Σδ<sub>i</sub> 以保持电子数，δ = βf(1 − f)；N<sub>F</sub> 是费米能级处的态密度（M6g-1）。 |
 | η（PerturbEta） | 频率相关响应的分母中的小虚部（默认 1e-8 Ha），避免在激发能处除以零；它让权重变成复数（M6g-1）。 |
+| 坐标导数（coordinate derivatives） | 原子位置的一阶响应：每移动一个原子的一个坐标，电荷、本征值与费米能级随之的变化（dN/dx、dε/dx、dE<sub>F</sub>/dx）。在 M6g-1 的耦合微扰 SCC 之外，还要 H0、S 对位置的导数，以及基态势、γ、外场对位置的导数（M6g-2）。 |
+| Born 电荷（Born effective charge） | 偶极对原子位移的导数 Z<sub>K,ij</sub> = ∂μ<sub>j</sub>/∂x<sub>K,i</sub>（单位 e），决定红外强度。整体平移时偶极按净电荷改变，所以 Σ<sub>K</sub>Z<sub>K</sub> = Q·I（声学求和规则）。DFTB+ 的 <code>CoordDerivatives</code> 打印的是它的相反数（M6g-2）。 |
+| Hessian | 能量对原子坐标的二阶导数矩阵 ∂²E/∂x<sub>a</sub>∂x<sub>b</sub>（Ha/Bohr²）。DFTB+ 与 pydftb 都对力做中心差分：每个坐标 ±δ，共 6N 个单点；部分 Hessian 只位移一部分原子（M6g-2）。 |
+| 简正模（normal modes） | 质量加权 Hessian（除以 √(m<sub>I</sub>m<sub>J</sub>)）的本征向量；本征值 λ 给频率 √λ，λ &lt; 0 是虚频（记为负）。用投影 P = I − VV<sup>T</sup> 去掉平移与转动后，非线性分子有 6 个零频，线性分子 5 个（M6g-2）。 |
+| 红外强度、拉曼强度 | 一个简正模引起的偶极变化 \|Σ<sub>K</sub>Z<sub>K</sub>·d<sub>K</sub>\|² 与极化率变化 Σ(Σ<sub>K</sub>∂α/∂x<sub>K</sub>·d<sub>K</sub>)²，d 是模式的位移。DFTB+ 的 <code>modes</code> 写进 vibrations.tag 的 intensities 与 scattering（M6g-2）。 |
+| 占据窗口 | 响应计算中可以改变占据的能级：DFTB+ 规定占据数大于 1e-7 且离满大于 1.2e-7。窗口外的能级当作全满或全空，金属的响应因此差约 1e-7；pydftb 的 <code>filling_tol</code> 可以收紧到精确（M6g-2）。 |
+| SK 格点跳变 | DFTB+ 在 SK 表的相邻 8 个格点上做多项式插值，越过格点时换一组点：积分连续，导数跳变。两个原子的距离正好落在格点附近时，有限差分（如数值 Hessian）会看到这个跳变（M6g-2）。 |
 | ParamSet | pydftb 中“参数从哪里来”的对象：一个 SKF 目录加上读取选项。 |
 | wheel | Python 包的标准发行文件（`.whl`）：已经排好目录的 zip 包，`pip install` 直接解压到 site-packages，不需要在安装时构建。pydftb 的 wheel 不含 `docs/` 与 `bench/`，含测试与冻结的参考数据（P1）。 |
 | sdist | 源码发行包（`.tar.gz`）：项目的源文件加构建配置，安装时先构建成 wheel。P1 检查过 sdist 构建出的 wheel 与直接构建的逐字节相同。 |

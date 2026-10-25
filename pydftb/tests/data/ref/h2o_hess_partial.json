@@ -1,0 +1,309 @@
+{
+ "schema": 1,
+ "case": "h2o_hess_partial",
+ "note": "partial Hessian: hessian.out.2-3 (DFTB+ also leaves an empty hessian.out)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "fd_delta": 0.0001220703125,
+  "hessian": {
+   "atoms": [
+    0,
+    1,
+    2
+   ],
+   "moved_atoms": [
+    1,
+    2
+   ]
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_3akpavjt/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.9132723046,
+  "free_energy": -3.9132723046,
+  "e_zero": -3.9132723046,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0233492751,
+  "e_band": -3.9756767337,
+  "fermi": -0.0826907386179074,
+  "forces": [
+   [
+    0.000727079719368032,
+    0.0921371691955841,
+    0.080733497296029
+   ],
+   [
+    -0.00026692469199266,
+    -0.00486983831981787,
+    -0.00655851359605196
+   ],
+   [
+    -0.000460155027375372,
+    -0.0872673308757663,
+    -0.074174983699977
+   ]
+  ],
+  "charges_net": [
+   -0.518377008655537,
+   0.229111188932796,
+   0.28926581972274
+  ],
+  "n_scc": 9,
+  "hessian": {
+   "hessian": [
+    [
+     0.00179310253323791,
+     0.0217458234821649,
+     -0.0245234358611595,
+     0.0689550524873785,
+     0.00766976817455833,
+     -0.00179633588789615
+    ],
+    [
+     0.0256562046201808,
+     -0.15357494175347,
+     0.130069702188457,
+     0.00375937172482355,
+     -0.417943013447178,
+     -0.351046467785485
+    ],
+    [
+     -0.021406366251045,
+     0.0908619455704252,
+     -0.136237295377262,
+     -0.00491339074891461,
+     -0.311838667786876,
+     -0.228089417666638
+    ],
+    [
+     0.00203315168824467,
+     -0.022996504471821,
+     0.0203693548242369,
+     -0.00382625159787379,
+     -0.00265972238288736,
+     0.00103703839090738
+    ],
+    [
+     -0.0231875144524746,
+     0.151219396836121,
+     -0.110949548276056,
+     0.00144170316990211,
+     0.00235554643436553,
+     0.0200876116553464
+    ],
+    [
+     0.0203760232393886,
+     -0.110771909177139,
+     0.12017561213596,
+     0.00414740908978931,
+     -0.0192978206171174,
+     0.0160617071834693
+    ],
+    [
+     -0.00382625422147499,
+     0.00125068098965828,
+     0.00415408103692362,
+     -0.0651288008895014,
+     -0.00501004579167206,
+     0.000759297496984428
+    ],
+    [
+     -0.00246869016770623,
+     0.00235554491731516,
+     -0.0191201539123664,
+     -0.00520107489472565,
+     0.415587467012882,
+     0.330958856130034
+    ],
+    [
+     0.0010303430117431,
+     0.0199099636067485,
+     0.0160616832414057,
+     0.000765981659073267,
+     0.331136488403924,
+     0.212027710483134
+    ]
+   ],
+   "born": [
+    [
+     0.223008073945638,
+     0.0412607693608957,
+     -0.0283037322923452
+    ],
+    [
+     0.0320746802309063,
+     -0.015758264774457,
+     0.126410094354323
+    ],
+    [
+     -0.0356261324243462,
+     0.218514293810201,
+     0.0460843910538022
+    ],
+    [
+     0.288154440449204,
+     0.00424292085632327,
+     -0.00776120312906414
+    ],
+    [
+     0.0121879186922719,
+     -0.00216143883263742,
+     -0.110096858931819
+    ],
+    [
+     -0.00142808590057608,
+     -0.189757226569109,
+     0.123689779824576
+    ]
+   ],
+   "files": {
+    "born.out.2-3": [
+     "    0.2230080739    0.0412607694   -0.0283037323",
+     "    0.0320746802   -0.0157582648    0.1264100944",
+     "   -0.0356261324    0.2185142938    0.0460843911",
+     "    0.2881544404    0.0042429209   -0.0077612031",
+     "    0.0121879187   -0.0021614388   -0.1100968589",
+     "   -0.0014280859   -0.1897572266    0.1236897798"
+    ],
+    "hessian.out.2-3": [
+     "    0.0017931025    0.0256562046   -0.0214063663    0.0020331517",
+     "   -0.0231875145    0.0203760232   -0.0038262542   -0.0024686902",
+     "    0.0010303430",
+     "    0.0217458235   -0.1535749418    0.0908619456   -0.0229965045",
+     "    0.1512193968   -0.1107719092    0.0012506810    0.0023555449",
+     "    0.0199099636",
+     "   -0.0245234359    0.1300697022   -0.1362372954    0.0203693548",
+     "   -0.1109495483    0.1201756121    0.0041540810   -0.0191201539",
+     "    0.0160616832",
+     "    0.0689550525    0.0037593717   -0.0049133907   -0.0038262516",
+     "    0.0014417032    0.0041474091   -0.0651288009   -0.0052010749",
+     "    0.0007659817",
+     "    0.0076697682   -0.4179430134   -0.3118386678   -0.0026597224",
+     "    0.0023555464   -0.0192978206   -0.0050100458    0.4155874670",
+     "    0.3311364884",
+     "   -0.0017963359   -0.3510464678   -0.2280894177    0.0010370384",
+     "    0.0200876117    0.0160617072    0.0007592975    0.3309588561",
+     "    0.2120277105"
+    ]
+   },
+   "detailed_born": [
+    " Born charges/dipole derivatives wrt. atom positions (e)",
+    "Atom 1",
+    "    0.223008    0.041261   -0.028304",
+    "    0.032075   -0.015758    0.126410",
+    "   -0.035626    0.218514    0.046084",
+    "Atom 2",
+    "    0.288154    0.004243   -0.007761",
+    "    0.012188   -0.002161   -0.110097",
+    "   -0.001428   -0.189757    0.123690"
+   ],
+   "geometry_steps": 12,
+   "hsd": "Driver = SecondDerivatives {\n  Atoms = 1:3\n  MovedAtoms = 2:3\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_ro3y1vg4/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n"
+  }
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-09,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "dipole": 1e-06,
+  "pc_forces": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_fr": 1e-06,
+  "n_electrons": 1e-06,
+  "fermi_level": 1e-08,
+  "pol": 1e-08,
+  "dqdE": 1e-08,
+  "dedE": 1e-08,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0001,
+  "dqdE_default": 0.0001,
+  "dqdx": 1e-10,
+  "born": 1e-10,
+  "coord_text": 0.0001,
+  "born_fd": 1e-07,
+  "hessian": 1e-07,
+  "hess_born": 5e-08,
+  "hess_dpol": 1e-06,
+  "hess_text": 2e-06,
+  "modes_freq": 1e-07,
+  "modes_int": 1e-05,
+  "modes_vec": 0.0001
+ }
+}

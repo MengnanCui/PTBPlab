@@ -138,7 +138,9 @@ The same spectral sum as DFTB+ (pairs of filled and empty levels weighted by
 Fermi level of metals), solved as a linear system instead of DFTB+'s iterations (DFTB+'s default
 `PerturbSccTol` of 1e-5 leaves 2.5e-7 in water's polarisability).  Options: "static",
 "frequencies", "frequency_range" (start, stop, step), the kernel's "rpa" (the bare response), and
-`analysis["perturbation"] = {"degeneracy_tol": 1e-9, "eta": 1e-8}`.  Also the eigenvalue and
+`analysis["perturbation"] = {"degeneracy_tol": 1e-9, "eta": 1e-8, "filling_tol": None}` (None:
+DFTB+'s window, which leaves out levels within 1e-7 of empty or full, about 1e-7 of a metal's
+response at 3000 K; 1e-15 keeps every partly filled level).  Also the eigenvalue and
 Fermi-level derivatives (dE_F/dE the physical value, DFTB+ prints it divided by the full
 filling) and `dftbplus_io.write_band_derivatives` (dE_band.out, dV_band.out).  With collinear
 spin, metals, degenerate levels, the full third order, k-points (charge response only; the
@@ -147,6 +149,46 @@ reduced and full sets agree) and dispersion.  NumPy engine only; not with non-Fe
 solvation, DFTB+U, onsite corrections, two-component spin (milestone M6g-3), the dipole
 correction or selected shells.  Details:
 [`docs/reports/M6g1-response.html`](docs/reports/M6g1-response.html).
+
+### Coordinate derivatives, Hessian and normal modes
+
+DFTB+'s `Analysis { CoordDerivatives }`, `Driver = SecondDerivatives` and its `modes` program;
+milestone M6g-2:
+
+```python
+from pydftb.vibrations import second_derivatives, normal_modes, masses_of
+
+r = DFTB(sk, analysis={"coord_derivatives": True}).calculate(labels, pos)
+c = r.analysis.coord_derivatives
+c.born                      # (n_K, 3, 3) [K, i, j] = d mu_j / d x_Ki (physical sign, e)
+c.atom                      # (n_K, 3, n_qm, n_atom) dN_B / dx_Ki (e/Bohr)
+c.eigenvalue_derivatives    # (n_K, 3, n_block, n_level) d eps / dx (Ha/Bohr)
+
+calc = DFTB(sk, analysis={"polarisability": True})        # also d alpha / dx
+sd = second_derivatives(calc, labels, pos)                # 6N + 1 calculations
+nm = normal_modes(sd.hessian, masses_of(calc, labels), pos, born=sd.dipole_derivatives,
+                  born_derivatives=sd.polarisability_derivatives,
+                  remove_translation=True, remove_rotation=True)
+nm.wavenumbers, nm.ir, nm.raman                            # cm^-1 (imaginary: negative)
+```
+
+The coordinate response builds on the polarisability's: the derivatives of H0 and S, of the
+ground state's potentials and of gamma, the third order, the H5 correction, external fields
+and point charges, with the full finite-temperature first-order density (Fermi-surface terms,
+the move of a metal's Fermi level, degenerate runs).  So it also covers what DFTB+ refuses
+(spin, metals, degenerate levels) or gets wrong (fields and point charges, whose position
+derivatives DFTB+ leaves out, and the third order in 25.1); DFTB+'s Born charges are
+-d mu / dx (`dftbplus_io.coord_derivative_tables` writes them that way).  `{"atoms": [...]}`
+displaces only some atoms.  Molecules only (as DFTB+); NumPy engine only; not with DFTB+U,
+onsite corrections or two-component spin (milestone M6g-3).  `second_derivatives` follows
+DFTB+'s order of displacements (`atoms`, `moved_atoms` for partial Hessians, `delta` 1e-4 Bohr)
+and only calls `calculate`, so it works for anything that gives forces; `normal_modes`
+follows `modes` (projection, intensities; it symmetrises the Hessian unless
+`triangle="modes"`).  DFTB+'s formats: `write_band_derivatives(path, r, "coordinate")`,
+`write_hessian`, `write_born`, `write_born_derivatives`, `write_vibrations_tag`.  Finite
+differences see the jump of the SK interpolation's derivative at grid points (water's H-H
+distance lies 4.8e-6 Bohr from one).  Details:
+[`docs/reports/M6g2-coord-hessian.html`](docs/reports/M6g2-coord-hessian.html).
 
 ### f orbitals
 

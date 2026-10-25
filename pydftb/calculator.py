@@ -771,11 +771,13 @@ class DFTB:
                              "the atom-resolved repulsive needs the mixed pairs (milestone M5a)")
 
     def _check_response(self):
-        """The response analyses (M6g-1, DFTB+ ``Polarisability``/``ResponseKernel``): DFTB+'s
+        """The response analyses (M6g, DFTB+ ``Polarisability``/``ResponseKernel``/
+        ``CoordDerivatives``): DFTB+'s
         conditions (Fermi filling, no solvation, full third order only) and the parts left for
         milestone M6g-3 (DFTB+U, onsite corrections, two-component spin)."""
         a = self.analysis
-        if a is None or (a.polarisability is False and a.response_kernel is False):
+        if a is None or (a.polarisability is False and a.response_kernel is False
+                         and a.coord_derivatives is False):
             return
         why = None
         if self.smearing.kind != "fermi":
@@ -796,7 +798,8 @@ class DFTB:
         elif getattr(self.sk, "selected", False):
             why = "not with selected shells (milestone M6f-5) yet"
         if why:
-            raise ValueError(f"the polarisability and response kernel (M6g-1) need {why}")
+            raise ValueError(f"the response analyses (polarisability, response kernel, "
+                             f"coordinate derivatives; M6g) need {why}")
 
     def _check_selected_shells(self, type_switching):
         """Shells from several SK files (SelectedShells, M6f-5): refused with the parts that take

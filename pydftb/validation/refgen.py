@@ -223,7 +223,8 @@ def corrections_options(case: Case) -> dict:
 
 ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
                  "localise", "bond_populations", "bond_energies", "bond_orders",   # M6f-4b
-                 "polarisability", "response_kernel", "perturbation")              # M6g-1
+                 "polarisability", "response_kernel", "perturbation",              # M6g-1
+                 "coord_derivatives")                                              # M6g-2
 
 
 def analysis_options(case: Case) -> dict:
@@ -390,7 +391,11 @@ def environment_hsd(case: Case) -> str:
             + dftbplus.solvation_block(case.solvation, case.rescale_fields, DATA))
 
 
-def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
+def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False) -> dict:
+    """DFTB+ for a case; ``hessian`` (M6g-2): the case's ``Driver = SecondDerivatives`` run
+    instead (the analysis replaced by the polarisability when the spec asks for bornderiv.out),
+    with :func:`dftbplus.parse_second_derivatives` and, for "modes", DFTB+'s modes on its
+    Hessian."""
     with tempfile.TemporaryDirectory(prefix="pydftb_ref_") as tmp:
         skdir = _plain_skf_dir(case, tmp)
         periodic = inp["cell_angstrom"] is not None
@@ -430,6 +435,25 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1) -> dict:
                       "autotest": True} if case.casida else {}),
                   **({"fermi": fermi_hsd(case)} if case.fermi else {}),
                   **({"selected_shells": case.selected_shells} if case.selected_shells else {}))
+        if hessian:                                   # M6g-2: SecondDerivatives (and modes)
+            spec = case.hessian or {}
+            kw.pop("analysis", None)
+            if spec.get("polarisability"):
+                kw["analysis"] = {"polarisability": True}
+            wd = os.path.join(tmp, "hessian")
+            os.makedirs(wd)
+            r = dftbplus.run(*args, driver=dftbplus.hessian_driver(spec), workdir=wd, keep=True,
+                             **kw)
+            with open(os.path.join(wd, "detailed.out")) as fh:
+                out = dftbplus.parse_second_derivatives(wd, fh.read())
+            out["geometry_steps"] = r["geometry_steps"]
+            out["hsd"] = r["hsd"]
+            if spec.get("modes") is not None:
+                out["modes"] = dftbplus.run_modes(wd, inp["labels"], skdir,
+                                                  remove=bool(spec["modes"].get("remove")),
+                                                  born="born" in out,
+                                                  born_derivs="born_derivs" in out)
+            return out
         if case.read_charges is not None:             # M6f-1: two runs
             return dftbplus.run_restart(args[0], np.array(inp["run1_positions_angstrom"]),
                                         args[1], args[2],
@@ -595,7 +619,9 @@ def regenerate(names=None, threads: int = 1):
                          **({"type_switching": case.type_switching}
                             if case.type_switching else {}),
                          **({"selected_shells": case.selected_shells}
-                            if case.selected_shells else {})},
+                            if case.selected_shells else {}),
+                         **({"fd_delta": case.fd_delta} if case.fd_delta is not None else {}),
+                         **({"hessian": case.hessian} if case.hessian is not None else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -655,6 +681,8 @@ def regenerate(names=None, threads: int = 1):
             doc["reference"]["forces_fd"] = forces_fd(case, inp, threads).tolist()
             doc["forces_fd"] = ("-dE_Mermin/dR of DFTB+ (results.tag mermin_energy), 4-point "
                                 f"central differences, h = {FD_STEP} Bohr")
+        if case.hessian is not None:                                   # M6g-2
+            doc["reference"]["hessian"] = run_dftbplus(case, inp, threads, hessian=True)
         if case.klines or case.regions or case.dp_dos:
             doc["reference"].update(_band_reference(case, ref))
             doc["band_hsd"] = ref.get("band", {}).get("hsd")
@@ -752,6 +780,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     """
     case = CASES_BY_NAME[doc["case"]]
     inp = doc["input"]
+    if fd_delta is None:                          # M6g-2: the case's DFTB+ difference step
+        fd_delta = case.fd_delta
     t0 = time.perf_counter()
     res, engine = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, engine=True,
                              casida_solver=casida_solver, **backend)
@@ -806,6 +836,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.type_switching:                                           # M5a
         dev.update(_compare_switching(case, inp, res, solver=solver, fd_delta=fd_delta,
                                       **backend))
+    if case.hessian is not None:                                      # M6g-2
+        dev.update(_compare_hessian(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
+                                    **backend))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -927,7 +960,9 @@ ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "e
                 "pm_value", "pm_initial", "pm_final", "pm_populations", "pm_file",   # M6f-4b
                 "bonds", "bonds_file", "transq", "atq_file",
                 "pol", "dqdE", "dedE", "dEf", "dos", "dqdV", "dqnet", "dedV",       # M6g-1
-                "response_text", "dqdE_default")
+                "response_text", "dqdE_default",
+                "dqdx", "born", "coord_text", "born_fd", "hessian", "hess_born",    # M6g-2
+                "hess_dpol", "hess_text", "modes_freq", "modes_int", "modes_vec")
 
 
 def _degenerate_groups(e, tol: float = 1e-6):
@@ -1077,6 +1112,8 @@ def _compare_response(r: dict, res) -> dict:
     a = res.analysis
     dev, text = {}, 0.0
     pol, ker = a.polarisability, a.response_kernel
+    if pol is None and ker is None:
+        r = dict(r, detailed_kernel=None, detailed_main=None)
     if pol is not None:
         if "staticPolResponse" in tags:                    # (n_w, i, j) = d mu_j / d E_i
             dev["pol"] = float(np.abs(np.transpose(pol.tensor, (0, 2, 1))
@@ -1123,7 +1160,31 @@ def _compare_response(r: dict, res) -> dict:
             with open(path) as fh:
                 bad, worst = _numbers_close(fh.read().splitlines(), r[name])
             text = max(text, bad + worst)
-    dev["response_text"] = text
+    cd = a.coord_derivatives                                          # M6g-2
+    if cd is not None and "dqdx" in tags:
+        ref = tags["dqdx"]                                  # (n_K, 3, s, B, mOrb)
+        mine = np.zeros(ref.shape)
+        o = 0
+        for b, n in enumerate(np.bincount(cd.orbital_atom)):
+            mine[:, :, 0, b, :n] = cd.orbital[:, :, 0, o:o + n]
+            o += n
+        dev["dqdx"] = float(np.abs(mine - ref).max())
+        dev["born"] = float(np.abs(cd.born + tags["borncharges"]).max())   # DFTB+: -born
+        coord_text = 0.0
+        if r.get("detailed_coord"):
+            mine = io.coord_derivative_tables(res, dftbplus_sign=True).splitlines()[2:]
+            bad, worst = _numbers_close(mine, r["detailed_coord"])
+            coord_text = bad + worst
+        if "dBand_dx.out" in r:
+            with tempfile.TemporaryDirectory(prefix="pydftb_dx_") as tmp:
+                path = os.path.join(tmp, "dBand_dx.out")
+                io.write_band_derivatives(path, res, "coordinate")
+                with open(path) as fh:
+                    bad, worst = _numbers_close(fh.read().splitlines(), r["dBand_dx.out"])
+            coord_text = max(coord_text, bad + worst)
+        dev["coord_text"] = coord_text
+    if pol is not None or ker is not None:
+        dev["response_text"] = text
     return dev
 
 
@@ -1474,7 +1535,7 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
             ef = f", |dE_f| {d['fermi_level']:.1e} Ha" if "fermi_level" in d else ""
             print(f"{'':26s}   Filling: |dE_FR| {d.get('e_fr', 0.0):.1e} Ha, "
                   f"|dN| {d.get('n_electrons', 0.0):.1e}{ef}{sd}")
-        if case.analysis:                                 # M6f-4a
+        if case.analysis or case.hessian is not None:     # M6f-4a, M6g-2
             parts = [f"{k} {d[k]:.1e}" for k in ANALYSIS_DEV if k in d]
             print(f"{'':26s}   Analysis: " + ", ".join(parts))
         if case.corrections and ("e_halogen" in d or "stress_dftbp" in d
@@ -1530,6 +1591,99 @@ def main(argv=None, prog=None):
                             backend=a.backend, device=a.device, dtype=a.dtype) else 1)
     else:
         live(a.cases)
+
+
+# ---- SecondDerivatives and modes (milestone M6g-2) --------------------------------------------
+VIB_MIN = 1e-5          # Hartree (2.2 cm^-1): modes above it count as vibrations for intensities
+
+
+def _ref_groups(freq) -> list:
+    """modes' groups (consecutive frequencies closer than 1e-2 cm^-1) of DFTB+'s modes."""
+    from ..constants import HARTREE_CM
+    groups = [[0]]
+    for j in range(1, len(freq)):
+        if abs(freq[j] - freq[j - 1]) * HARTREE_CM >= 1e-2:
+            groups.append([j])
+        else:
+            groups[-1].append(j)
+    return groups
+
+
+def _compare_hessian(case: Case, inp: dict, ref: dict, res, **run) -> dict:
+    """pydftb's :func:`second_derivatives` against DFTB+'s SecondDerivatives run: the Hessian,
+    the dipole and polarisability derivatives, the texts of hessian.out, born.out,
+    bornderiv.out and the detailed.out block ("hess_text"); for "modes" :func:`normal_modes`
+    (``triangle="modes"``) on pydftb's Hessian against DFTB+'s modes on DFTB+'s: all
+    frequencies, the intensities of the vibrational groups (relative to the largest), the
+    displacements of the non-degenerate vibrational modes up to sign; with the analysis
+    "coord_derivatives" the analytic Born charges against DFTB+'s differences ("born_fd")."""
+    from .. import dftbplus_io as io
+    from ..vibrations import masses_of, normal_modes, second_derivatives
+    h, spec = ref["hessian"], case.hessian or {}
+    pol = bool(spec.get("polarisability"))
+    _, calc = run_pydftb(case, inp, engine=True,
+                         analysis={"polarisability": True} if pol else None, **run)
+    labels = inp["labels"]
+    pos = np.array(inp["positions_angstrom"]) / BOHR
+    periodic = inp["cell_angstrom"] is not None
+    cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
+    sd = second_derivatives(calc, labels, pos, cell, np.ones(3, bool) if periodic else None,
+                            atoms=spec.get("atoms"), moved_atoms=spec.get("moved_atoms"),
+                            delta=spec.get("delta", 1e-4))
+    dev = {"hessian": float(np.abs(sd.hessian - np.array(h["hessian"])).max())}
+    if "born" in h and not periodic:
+        dev["hess_born"] = float(np.abs(sd.dipole_derivatives - np.array(h["born"])).max())
+    if "born_derivs" in h:
+        mine = sd.polarisability_derivatives.transpose(0, 2, 1).reshape(-1, 9)
+        dev["hess_dpol"] = float(np.abs(mine - np.array(h["born_derivs"])).max())
+    text = 0.0
+    with tempfile.TemporaryDirectory(prefix="pydftb_hess_") as tmp:
+        writers = [("hessian", io.write_hessian)]
+        if "born" in h and not periodic:
+            writers.append(("born", io.write_born))
+        if "born_derivs" in h:
+            writers.append(("bornderiv", io.write_born_derivatives))
+        for stem, write in writers:
+            path = write(os.path.join(tmp, f"{stem}.out"), sd)
+            name = os.path.basename(path)
+            with open(path) as fh:
+                bad, worst = _numbers_close(fh.read().splitlines(), h["files"].get(name, []))
+            text = max(text, bad + worst)
+    if h.get("detailed_born") and not periodic:
+        bad, worst = _numbers_close(io.born_table(sd).splitlines(), h["detailed_born"])
+        text = max(text, bad + worst)
+    dev["hess_text"] = text
+    if "modes" in h:
+        m = h["modes"]
+        remove = bool(spec["modes"].get("remove"))
+        nm = normal_modes(sd.hessian, masses_of(calc, labels), pos,
+                          born=sd.dipole_derivatives if "intensities" in m else None,
+                          born_derivatives=sd.polarisability_derivatives
+                          if "scattering" in m else None,
+                          remove_translation=remove, remove_rotation=remove, triangle="modes")
+        freq = np.array(m["frequencies"])
+        dev["modes_freq"] = float(np.abs(nm.frequencies - freq).max())
+        groups = _ref_groups(freq)
+        vib = [g for g in groups if np.abs(freq[g]).min() > VIB_MIN]
+        worst = 0.0
+        for key, mine in (("intensities", nm.ir), ("scattering", nm.raman)):
+            if key not in m or mine is None:
+                continue
+            theirs = np.array(m[key])
+            offset = 1 if key == "scattering" and remove else 0
+            scale = max(np.abs(theirs).max(), 1e-30)
+            for g in vib:
+                gi = groups.index(g) - offset
+                worst = max(worst, abs(mine[g].sum() - theirs[gi]) / scale)
+        dev["modes_int"] = worst
+        em = np.array(m["eigenmodes"]).reshape(-1, len(freq), order="F")
+        single = [g[0] for g in vib if len(g) == 1]
+        dev["modes_vec"] = (float(np.abs(np.abs(em[:, single]) - np.abs(nm.modes[:, single])).max())
+                            if single else 0.0)
+    cd = None if res.analysis is None else res.analysis.coord_derivatives
+    if cd is not None and "born" in h:
+        dev["born_fd"] = float(np.abs(cd.born.reshape(-1, 3) - np.array(h["born"])).max())
+    return dev
 
 
 if __name__ == "__main__":

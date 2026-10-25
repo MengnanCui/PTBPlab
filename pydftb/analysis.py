@@ -85,7 +85,11 @@ class Analysis:
     ``polarisability``: the electric-field response, True or {"static" (True), "frequencies"
     (Hartree), "frequency_range" (start, stop, step)}; ``response_kernel``: the response to a
     potential on each atom, the same keys and "rpa" (False); ``perturbation``:
-    {"degeneracy_tol" (1e-9 Ha), "eta" (1e-8 Ha)} of both (milestone M6g-1)."""
+    {"degeneracy_tol" (1e-9 Ha), "eta" (1e-8 Ha)} of both (milestone M6g-1) and
+    "filling_tol" (None: DFTB+'s window, which leaves out levels within 1e-7 of empty or
+    full, about 1e-7 of a metal's response at 3000 K; 1e-15 gives the exact derivative);
+    ``coord_derivatives``: the response to the displacement of every atom (Born charges,
+    charge and eigenvalue derivatives; molecules), True or {"atoms": [...]} (M6g-2)."""
     atom_energies: bool = False
     net_populations: bool = False
     cm5: bool | dict | CM5 = False
@@ -98,6 +102,7 @@ class Analysis:
     polarisability: bool | dict = False
     response_kernel: bool | dict = False
     perturbation: dict | None = None
+    coord_derivatives: bool | dict = False
 
     def __post_init__(self):
         if not (isinstance(self.cm5, (bool, dict, CM5))):
@@ -126,6 +131,8 @@ class Analysis:
             if spec is not False:
                 _response.frequencies(spec, name)
         _response.perturbation_options(self.perturbation)
+        if self.coord_derivatives is not False:                       # M6g-2
+            _response.coordinate_atoms(self.coord_derivatives)
 
     @classmethod
     def make(cls, spec) -> "Analysis | None":
@@ -140,7 +147,7 @@ class Analysis:
         if isinstance(spec, dict):
             known = {"atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
                      "localise", "bond_populations", "bond_energies", "bond_orders",
-                     "polarisability", "response_kernel", "perturbation"}
+                     "polarisability", "response_kernel", "perturbation", "coord_derivatives"}
             unknown = set(spec) - known
             if unknown:
                 raise ValueError(f"analysis: unknown keys {sorted(unknown)} (use {sorted(known)})")
@@ -224,6 +231,7 @@ class AnalysisResult:
     bond_orders: np.ndarray | None = None        # (n_atom, n_atom), Mayer
     polarisability: "_response.PolarisabilityResult | None" = None    # M6g-1
     response_kernel: "_response.ResponseKernelResult | None" = None
+    coord_derivatives: "_response.CoordDerivativesResult | None" = None   # M6g-2
 
 
 def _check_esp(spec):
@@ -416,6 +424,13 @@ def evaluate(calc, analysis: Analysis, st, sc, res, xl: bool = False) -> Analysi
         if analysis.response_kernel is not False:
             out.response_kernel = _response.response_kernel(calc, st, sc,
                                                             analysis.response_kernel, opts)
+    if analysis.coord_derivatives is not False:                       # M6g-2
+        if xl:
+            raise ValueError("the coordinate derivatives (M6g-2) are not defined for the "
+                             "XL-BOMD shadow Hamiltonian")
+        out.coord_derivatives = _response.coordinate_derivatives(
+            calc, st, sc, analysis.coord_derivatives,
+            _response.perturbation_options(analysis.perturbation))
     return out
 
 

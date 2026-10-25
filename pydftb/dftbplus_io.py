@@ -713,10 +713,11 @@ def response_tables(res, part: str | None = None, dftbplus_fermi: bool = False) 
 def write_band_derivatives(path, res, kind: str = "field") -> None:
     """DFTB+'s dE_band.out (``kind="field"``: for every direction, spin channel and k-point a
     list-directed header "DIR x KPT k SPIN s KWEIGHT w", then (I6, E16.6) rows of the level
-    derivatives with the levels in eV, per unit field in atomic units) or dV_band.out
+    derivatives with the levels in eV, per unit field in atomic units), dV_band.out
     (``kind="potential"``: per atom "ATOM n KPT ..." blocks, per unit potential in Hartree),
     of the last frequency of the field and of every frequency of the kernel (DFTB+ keeps only
-    the last frequency of atom 1)."""
+    the last frequency of atom 1), or dBand_dx.out (``kind="coordinate"``, M6g-2: "Atom n dx
+    KPT ..." blocks of d eps / dx in eV/Bohr, KWEIGHT 1)."""
     a = res.analysis
     kw = np.ones(1) if res.kweights is None else np.asarray(res.kweights, float)
     nk = len(kw)
@@ -743,6 +744,158 @@ def write_band_derivatives(path, res, kind: str = "field") -> None:
         for w in range(len(ker.frequencies)):
             for at, de in enumerate(ker.eigenvalue_derivatives[w]):
                 block(f"ATOM {at + 1} ", de)
+    elif kind == "coordinate":                           # dBand_dx.out (M6g-2)
+        cd = None if a is None else a.coord_derivatives
+        if cd is None:
+            raise ValueError("no coordinate derivatives in this result")
+        kw = np.ones(1)                                  # DFTB+ writes KWEIGHT 1
+        for k, at in enumerate(cd.atoms):
+            for i in range(3):
+                block(f"Atom {at + 1} d{_CART[i]} ", cd.eigenvalue_derivatives[k, i])
     else:
-        raise ValueError(f"kind must be 'field' or 'potential', not {kind!r}")
+        raise ValueError(f"kind must be 'field', 'potential' or 'coordinate', not {kind!r}")
     _write_text(path, "\n".join(lines) + "\n")
+
+
+# ---- coordinate derivatives and second derivatives (milestone M6g-2) ------------------------
+def _fortran_t(prefix: str, col: int, rest: str) -> str:
+    """``prefix`` then ``rest`` from column ``col`` (1-based), overwriting what is there (the
+    Fortran T edit descriptor: DFTB+'s (1X,I0,T4,...) loses digits from atom 100 on)."""
+    buf = list(prefix.ljust(col - 1))
+    buf[col - 1:] = list(rest)
+    return "".join(buf)
+
+
+def coord_derivative_tables(res, dftbplus_sign: bool = True) -> str:
+    """DFTB+ 25.1's detailed.out blocks of ``CoordDerivatives``: "Derivatives of atomic Mulliken
+    charges with atom positions" (per displaced atom K a header (A,I0,T10,A,T26,A,T42,A), then
+    per atom B the row (1X,I0,T4,3F16.8) of -dN_B/dx_K in e/Angstrom) and "Born effective
+    charges (a.u.)" (per atom three rows 3F16.8, row i the derivative along x_K,i, separated by
+    blank lines; DFTB+'s sign -d mu/dx with ``dftbplus_sign``, else the physical one)."""
+    cd = _analysis_of(res, "coord_derivatives").coord_derivatives
+    natom = cd.atom.shape[-1]
+    lines = ["", "", " Derivatives of atomic Mulliken charges with atom positions"]
+    for k, at in enumerate(cd.atoms):
+        lines.append(_fortran_t(_fortran_t(_fortran_t(f"At{at + 1}", 10, "x"), 26, "y"), 42, "z"))
+        for b in range(natom):
+            vals = -cd.atom[k, :, 0, b] / BOHR
+            lines.append(_fortran_t(f" {b + 1}", 4, "".join(f"{v:16.8f}" for v in vals)))
+        lines.append("")
+    lines += ["", " Born effective charges (a.u.)", ""]
+    sign = -1.0 if dftbplus_sign else 1.0
+    for k in range(len(cd.atoms)):
+        for i in range(3):
+            lines.append("".join(f"{sign * v:16.8f}" for v in cd.born[k, i]))
+        lines.append("")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _deriv_path(path, sd, n_rows: int) -> str:
+    """DFTB+'s file name: ``<path>.<first>-<last>`` (1-based moved atoms) for a partial matrix."""
+    if n_rows > len(sd.moved_atoms) * 3:
+        return f"{path}.{int(sd.moved_atoms[0]) + 1}-{int(sd.moved_atoms[-1]) + 1}"
+    return str(path)
+
+
+def _rows(values, per_line: int, fmt) -> list:
+    """Fortran's reuse of a format with ``per_line`` items per record."""
+    vals = list(values)
+    return ["".join(fmt(v) for v in vals[i:i + per_line]) for i in range(0, len(vals), per_line)]
+
+
+def write_hessian(path, sd) -> str:
+    """hessian.out of :func:`pydftb.vibrations.second_derivatives`: every column (one displaced
+    coordinate) as 4f16.10 records; a partial Hessian goes to ``<path>.<first>-<last>``.
+    Returns the file written."""
+    out = _deriv_path(path, sd, sd.hessian.shape[0])
+    lines = []
+    for col in range(sd.hessian.shape[1]):
+        lines += _rows(sd.hessian[:, col], 4, lambda v: f"{v:16.10f}")
+    _write_text(out, "\n".join(lines) + "\n")
+    return out
+
+
+def write_born(path, sd) -> str:
+    """born.out: d mu / d x of every displaced coordinate (3f16.10); a partial set of moved
+    atoms goes to ``<path>.<first>-<last>``."""
+    if sd.dipole_derivatives is None:
+        raise ValueError("no dipole derivatives (periodic system or dipole=False)")
+    out = _deriv_path(path, sd, 3 * len(sd.atoms))
+    lines = ["".join(f"{v:16.10f}" for v in row) for row in sd.dipole_derivatives]
+    _write_text(out, "\n".join(lines) + "\n")
+    return out
+
+
+def write_born_derivatives(path, sd) -> str:
+    """bornderiv.out: d alpha / d x of every displaced coordinate, the 3 x 3 polarisability in
+    Fortran order (9E16.8)."""
+    if sd.polarisability_derivatives is None:
+        raise ValueError("no polarisability derivatives: the calculator needs "
+                         "analysis={'polarisability': True}")
+    out = _deriv_path(path, sd, 3 * len(sd.atoms))
+    lines = ["".join(fortran_e(v, 16, 8) for v in m.T.ravel())
+             for m in sd.polarisability_derivatives]
+    _write_text(out, "\n".join(lines) + "\n")
+    return out
+
+
+def born_table(sd) -> str:
+    """The SecondDerivatives block of detailed.out: " Born charges/dipole derivatives wrt. atom
+    positions (e)", then per moved atom "Atom n" (counted from 1 over the moved atoms, as
+    DFTB+) and three rows 3F12.6."""
+    if sd.dipole_derivatives is None:
+        raise ValueError("no dipole derivatives (periodic system or dipole=False)")
+    lines = [" Born charges/dipole derivatives wrt. atom positions (e)"]
+    for k in range(len(sd.moved_atoms)):
+        lines.append(f"Atom {k + 1}")
+        lines += ["".join(f"{v:12.6f}" for v in row)
+                  for row in sd.dipole_derivatives[3 * k:3 * k + 3]]
+    return "\n".join(lines) + "\n"
+
+
+def _tag_real(x: float) -> str:
+    """E24.15E003, DFTB+'s tagged real format."""
+    x = float(x)
+    if x == 0.0:
+        return ("0." + "0" * 15 + "E+000").rjust(24)
+    mant, exp = f"{abs(x):.14E}".split("E")
+    body = "0." + mant.replace(".", "") + f"E{int(exp) + 1:+04d}"
+    return ("-" + body if x < 0 else body).rjust(24)
+
+
+def format_tag(label: str, values, kind: str = "real") -> str:
+    """One entry of a DFTB+ tag file: "label(20):kind:rank:dims", then the values in column-major
+    order, 3 x E24.15E003 (real) or 2 x I33 (integer) per line; ``values`` with the Fortran
+    array's shape."""
+    a = np.asarray(values)
+    if a.ndim == 0:
+        head, data = f"{label:<20s}:{kind}:0:", [a.item()]
+    else:
+        head = f"{label:<20s}:{kind}:{a.ndim}:" + ",".join(str(d) for d in a.shape)
+        data = a.ravel(order="F")
+    if kind == "real":
+        lines = _rows(data, 3, _tag_real)
+    elif kind == "integer":
+        lines = _rows(data, 2, lambda v: f"{int(v):33d}")
+    else:
+        raise ValueError(f"tag kind {kind!r}: 'real' or 'integer'")
+    return "\n".join([head] + lines) + "\n"
+
+
+def write_vibrations_tag(path, nm, modes=None, remove_rigid: bool = False) -> None:
+    """vibrations.tag of DFTB+'s ``modes``: saved_modes, eigenmodes, eigenmodes_scaled (the
+    ``modes`` columns, 1-based, default all), frequencies (Hartree), the infrared intensities and
+    the Raman scattering summed over degenerate groups (scattering without the first group when
+    rigid motions were removed, as ``modes``)."""
+    sel = np.arange(len(nm.frequencies)) if modes is None else np.asarray(modes, int) - 1
+    parts = [format_tag("saved_modes", sel + 1, kind="integer"),
+             format_tag("eigenmodes", nm.modes[:, sel]),
+             format_tag("eigenmodes_scaled", nm.mass_weighted[:, sel]),
+             format_tag("frequencies", nm.frequencies)]
+    if nm.ir is not None:
+        parts.append(format_tag("intensities", nm.grouped(nm.ir)))
+    if nm.raman is not None:
+        g = nm.grouped(nm.raman)
+        parts.append(format_tag("scattering", g[1:] if remove_rigid else g))
+    _write_text(path, "".join(parts))

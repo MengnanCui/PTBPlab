@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6g-2 坐标导数与 Hessian 报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6g-2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6g-2 · 完成报告</p>
+    <h1>响应性质（中）：坐标导数、Born 电荷、Hessian 与简正模</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-25</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6g2-coord-hessian.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 现在能算三样东西：</p>
+    <ul>
+      <li>DFTB+ <code>Analysis</code> 中的 <code>CoordDerivatives</code>：原子位置的一阶响应，给出电荷导数、Born 电荷、本征值与费米能级的导数；</li>
+      <li><code>Driver = SecondDerivatives</code>：对力做中心差分得到 Hessian，同时给出偶极与极化率的导数；</li>
+      <li>DFTB+ 的 <code>modes</code> 程序：简正模的频率、红外与拉曼强度。</li>
+    </ul>
+    <p class="lead">坐标响应建在 M6g-1 的响应代码上，加上 H0、S 和势对位置的导数。DFTB+ 拒绝或算错的五种情况（自旋、金属、简并、外场与点电荷、25.1 的 DFTB3），pydftb 都给出能量的正确导数。只有 NumPy 引擎；不开这些选项时逐位不变。这是 M6g 的第二块。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：20 个新的参考算例全部通过，SCC 轮数相同（DFTB3 对照开发版，轮数不同，见第三节）：
+        <ul>
+          <li>与 25.1 的 <code>CoordDerivatives</code>：电荷导数差 ≤ 2.3e-12 e/Bohr，Born 电荷 ≤ 4.2e-12，detailed.out 两块打印的数字全部相同；DFTB3 与开发版同样一致；</li>
+          <li>DFTB+ 拒绝或算错的情况：解析 Born 电荷与 DFTB+ 自己的差分 Born 电荷一致到 4.8e-8（差分的截断误差）；</li>
+          <li>数值 Hessian ≤ 1.4e-8 Ha/Bohr²（用 DFTB+ 的 SK 差分步长），偶极导数 ≤ 4.9e-8，极化率导数 ≤ 3.5e-7；</li>
+          <li><code>modes</code>：频率 ≤ 6.5e-9 Ha（1.4e-3 cm<sup>−1</sup>），强度相对差 ≤ 6.9e-8。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的行为</strong>（第五节）：
+        <ul>
+          <li><code>CoordDerivatives</code> 的 Born 电荷是 −∂μ/∂x，与 born.out 反号；</li>
+          <li>25.1 漏了 DFTB3 的项（差 1.4e-2），外场与点电荷对位置的导数两个版本都漏了（差 1.7e-2、0.12）；</li>
+          <li>只支持无自旋、无简并的绝缘体分子；</li>
+          <li>SK 表插值的导数在格点处跳变，有限差分看得到；</li>
+          <li>（实现时发现）响应的占据窗口截掉离空或离满不到 1e-7 的能级，3000 K 的金属响应因此差约 2e-7。M6g-1 的极化率也受影响；新选项 <code>filling_tol</code> 给出精确导数。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>：周期体系的坐标导数（Born 电荷要 Berry 相位，同 DFTB+）；+U、onsite 修正、非共线自旋与 SOC（M6g-3）；M6g-1 拒绝的其他组合；torch 与自动求导。数值 Hessian 只调用 <code>calculate</code>，能给力的组合都能用。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">20</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 4.2e-12</span><span class="lbl">Born 电荷与 DFTB+ 25.1 的最大差（e）</span></li>
+      <li><span class="num">5</span><span class="lbl">DFTB+ 拒绝或算错、pydftb 给出正确导数的情况</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response.py</code></td><td>
+              <ul>
+                <li><code>coordinate_derivatives</code>：对每个位移的原子 K 和方向 c：
+                  <ul>
+                    <li>H0′、S′ 取自原子对的导数块（<code>dh</code>、<code>ds</code>，系数 δ<sub>BK</sub> − δ<sub>AK</sub>），只有 K 的行非零，C<sup>T</sup>H′C 按行算；</li>
+                    <li>基态势的项 Ω = ½S′(v<sub>μ</sub> + v<sub>ν</sub>)，每个自旋通道一份；</li>
+                    <li>裸的一阶密度 X = W∘(M − ε̄N) − f̄N，W 由 M6g-1 的成对权重散布（窗口、θ 权重、带内项、简并组整组处理），加上密度不变时的 Mulliken 项 ρS′ 和金属的费米能级移动；</li>
+                    <li>电荷固定时势的导数：γ 的短程部分（含 H–X 阻尼与 H5）和 1/r、三阶的 ∂Γ/∂R、外场与点电荷的梯度；</li>
+                    <li>SCC 响应 (I − AB)x = x<sub>0</sub> + A·δV，与 M6g-1 相同的未知量；</li>
+                    <li>由此得到 Born 电荷、逐原子与逐轨道的电荷导数、本征值导数（简并组取组内块的本征值）、金属的 dE<sub>F</sub>/dx。</li>
+                  </ul>
+                </li>
+                <li>辅助函数：<code>coordinate_atoms</code>（选项 {"atoms": [...]}）、<code>static_weights</code>、<code>coulomb_jacobian</code>、<code>third_order_jacobian</code>、<code>external_jacobian</code>；<code>Response.potentials_with</code>；结果类 <code>CoordDerivativesResult</code>。</li>
+                <li><code>perturbation</code> 新增 <code>filling_tol</code>，<code>GroundState</code> 按它定窗口（第五节）。</li>
+              </ul></td></tr>
+            <tr><td><code>vibrations.py</code>（新）</td><td><code>second_derivatives</code>（DFTB+ 的位移顺序，每个位移从参考几何的电荷开始；周期体系不给偶极导数）与结果类 <code>SecondDerivatives</code>；<code>normal_modes</code>（质量加权、投影、规范、强度、合并，照 <code>modes</code>）与 <code>NormalModes</code>；<code>masses_of</code>（SKF 中的质量）。</td></tr>
+            <tr><td><code>analysis.py</code>、<code>calculator.py</code>、<code>constants.py</code></td><td><code>Analysis(coord_derivatives=True | {"atoms": [...]})</code> 与 <code>AnalysisResult.coord_derivatives</code>，XL-BOMD 时报错；<code>_check_response</code> 同样检查坐标导数；新常数 <code>HARTREE_CM</code>（DFTB+ 的 Hartree__cm = 2 Rydberg/100）。</td></tr>
+            <tr><td><code>dftbplus_io.py</code></td><td><code>coord_derivative_tables(r, dftbplus_sign=True)</code>（detailed.out 的两块）、<code>write_band_derivatives(path, r, "coordinate")</code>（dBand_dx.out）、<code>write_hessian</code>、<code>write_born</code>、<code>write_born_derivatives</code>（部分 Hessian 用 <code>.a-b</code> 文件名）、<code>born_table</code>、<code>format_tag</code>、<code>write_vibrations_tag</code>。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>dftbplus.py</code>：<code>CoordDerivatives = Yes</code> 的输入；<code>hessian_driver</code>（<code>Driver = SecondDerivatives</code>，部分 Hessian 的 <code>Atoms</code>、<code>MovedAtoms</code>）；<code>parse_second_derivatives</code>（hessian.out、born.out、bornderiv.out、results.tag 与 detailed.out）、<code>run_modes</code> 与 <code>parse_vibrations_tag</code>；tag <code>dqdx</code>、<code>borncharges</code> 与 dBand_dx.out；</li>
+                <li><code>cases.py</code>：<code>Case.fd_delta</code>（按算例的 SK 差分步长）、<code>Case.hessian</code>（另跑一次 SecondDerivatives，可带 <code>modes</code>），20 个算例；</li>
+                <li><code>refgen.py</code>：坐标导数的比较（<code>dqdx</code>、<code>born</code>、<code>coord_text</code>），<code>_compare_hessian</code>（<code>born_fd</code>、<code>hessian</code>、<code>hess_born</code>、<code>hess_dpol</code>、<code>hess_text</code>，<code>modes</code> 的频率、强度与振型）。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td><code>tests/test_vibrations.py</code>（23 项）。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb import DFTB
+from pydftb.vibrations import second_derivatives, normal_modes, masses_of
+
+r = DFTB(sk, analysis={"coord_derivatives": True}).calculate(labels, pos)
+c = r.analysis.coord_derivatives
+c.born                     # (n_K, 3, 3)：[K, i, j] = dmu_j/dx_Ki（物理符号，e）
+c.atom                     # (n_K, 3, n_qm, n_atom)：dN_B/dx_Ki（电子布居，e/Bohr）
+c.eigenvalue_derivatives   # (n_K, 3, n_block, n_level)：d eps/dx（Ha/Bohr）
+c.fermi_derivatives        # 金属：(n_K, 3, n_channel)
+
+calc = DFTB(sk, analysis={"polarisability": True})      # 带极化率时也给 d alpha/dx
+sd = second_derivatives(calc, labels, pos)              # 6N + 1 次计算
+nm = normal_modes(sd.hessian, masses_of(calc, labels), pos,
+                  born=sd.dipole_derivatives, born_derivatives=sd.polarisability_derivatives,
+                  remove_translation=True, remove_rotation=True)
+nm.wavenumbers, nm.ir, nm.raman                         # cm^-1，虚频为负</code></pre>
+      <ul>
+        <li><code>{"coord_derivatives": {"atoms": [0, 3]}}</code> 只位移这些原子（开发版 DFTB+ 的 <code>WrtAtoms</code>）。</li>
+        <li><code>{"perturbation": {"filling_tol": 1e-15}}</code>：金属的精确导数（默认用 DFTB+ 的占据窗口，第五节）。</li>
+        <li><code>second_derivatives(..., atoms=..., moved_atoms=..., delta=1e-4)</code>：部分 Hessian 的行是 <code>atoms</code> 的梯度分量、列是 <code>moved_atoms</code> 的位移坐标（同 DFTB+）。只调用 <code>calculate</code>，所以周期体系、自旋、DFTB3、外场等能给力的组合都能用。</li>
+        <li><code>normal_modes(..., triangle="modes")</code> 照 <code>modes</code> 只读 Hessian 的一半；默认先对称化。</li>
+        <li>写出 DFTB+ 格式：<code>dftbplus_io.coord_derivative_tables(r)</code>、<code>write_band_derivatives(path, r, "coordinate")</code>、<code>write_hessian(path, sd)</code>、<code>write_born(path, sd)</code>、<code>write_vibrations_tag(path, nm)</code>。</li>
+        <li>计算量：坐标导数是一次单点的 1.1–1.3 倍（水、甲醇、Cu<sub>4</sub>CO），C<sub>60</sub> 是 3.1 倍；数值 Hessian 是 6N + 1 次单点（甲醇 0.67 s）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>DFTB+ 25.1（DFTB3 对照开发版 041e723），测试参数 <code>ptbp_hcocu</code>。两边都用 SCC 容差 1e-12（差分把 SCC 误差放大约 5000 倍），pydftb 用 DFTB+ 的 SK 差分步长 <code>fd_delta</code> = 2<sup>−13</sup> Bohr，所以 H0′、S′ 与力逐项相同。基态的能量、力、电荷与 SCC 轮数照旧比较，全部在容差内。</p>
+      <h3>解析坐标导数对 DFTB+ 的 <code>CoordDerivatives</code></h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>dN/dx（e/Bohr）</th><th>Born 电荷（e）</th><th>detailed.out 的数字</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_dx</code></td><td>水，DFTB2</td><td>2.0e-12</td><td>9.4e-13</td><td>相同</td></tr>
+          <tr><td><code>h2o_dx_nonscc</code></td><td>非 SCC</td><td>1.5e-12</td><td>1.9e-12</td><td>相同</td></tr>
+          <tr><td><code>h2o_dx_shell</code></td><td>壳层分辨</td><td>1.8e-12</td><td>1.0e-12</td><td>相同</td></tr>
+          <tr><td><code>ch3oh_dx</code></td><td>甲醇</td><td>7.7e-13</td><td>1.7e-12</td><td>相同</td></tr>
+          <tr><td><code>h2co_dx</code></td><td>甲醛</td><td>2.3e-12</td><td>4.2e-12</td><td>相同</td></tr>
+          <tr><td><code>h2o_dx_pol</code></td><td>与极化率同用（25.1 先写极化率的块）</td><td>2.0e-12</td><td>9.4e-13</td><td>相同；极化率 3.5e-13</td></tr>
+          <tr><td><code>ch3oh_dx_dftb3</code></td><td>完整 DFTB3，对照开发版</td><td>7.6e-13</td><td>1.6e-12</td><td>相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>DFTB+ 的 Born 电荷反号后比较；detailed.out 的 −dN/dx（e/Å）打印 8 位小数，两边逐位相同。开发版在这个 DFTB3 算例上 SCC 走了另一条路（6 轮，pydftb 与 25.1 都是 13 轮），收敛的基态相同。</p>
+
+      <h3>DFTB+ 拒绝或算错的情况：对照它自己的差分</h3>
+      <p>这些算例另跑一次 DFTB+ 的 <code>SecondDerivatives</code>，用它的差分偶极导数（born.out）检查 pydftb 的解析 Born 电荷，并比较两边的数值 Hessian。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>DFTB+ 的问题</th><th>解析 Born 对 DFTB+ 的差分</th><th>Hessian（Ha/Bohr²）</th><th>差分偶极导数</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_dx</code></td><td>（对照：DFTB+ 也能算）</td><td>2.7e-8</td><td>9.2e-9</td><td>1.3e-9</td></tr>
+          <tr><td><code>h2o_dx_field</code></td><td>漏了外场对位置的导数（差 1.7e-2）</td><td>2.8e-8</td><td>9.2e-9</td><td>2.1e-11</td></tr>
+          <tr><td><code>h2o_dx_pc</code></td><td>漏了点电荷对位置的导数（差 0.12）</td><td>2.9e-8</td><td>9.1e-9</td><td>4.4e-11</td></tr>
+          <tr><td><code>h2o_cation_dx</code></td><td>拒绝自旋；水阳离子二重态，Born 电荷之和为 +1</td><td>3.4e-8</td><td>7.8e-9</td><td>1.2e-9</td></tr>
+          <tr><td><code>o2_triplet_dx</code></td><td>拒绝自旋（Born 电荷按对称为 0，主要比 Hessian）</td><td>3.2e-10</td><td>5.9e-9</td><td>3.7e-10</td></tr>
+          <tr><td><code>cu4co_dx_3000K</code></td><td>拒绝金属；pydftb 用 <code>filling_tol</code> = 1e-15</td><td>4.8e-8</td><td>6.6e-9</td><td>4.9e-8</td></tr>
+          <tr><td><code>co2_dx</code></td><td>拒绝任何简并</td><td>4.8e-8</td><td>7.1e-9</td><td>2.1e-10</td></tr>
+        </tbody>
+      </table></div>
+      <p>第三列的差是 DFTB+ 中心差分的截断误差 δ²/6·∂³μ（δ = 1e-4 Bohr）：解析值与差分只能一致到这个量级。Cu<sub>4</sub>CO 用 DFTB+ 默认的占据窗口时差 4.7e-7（第五节）。</p>
+
+      <h3>数值 Hessian 与 <code>modes</code></h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>Hessian</th><th>dμ/dx</th><th>dα/dx</th><th>modes：频率（Ha）、强度、振型</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_hess_pol</code></td><td>带极化率；<code>modes</code> 不投影</td><td>9.2e-9</td><td>1.3e-9</td><td>4.8e-8</td><td>6.5e-9、6.3e-9、1.6e-5</td></tr>
+          <tr><td><code>h2o_hess_projected</code></td><td>投影平移与转动</td><td>9.2e-9</td><td>1.3e-9</td><td>4.8e-8</td><td>2.2e-10、2.4e-9、3.5e-9</td></tr>
+          <tr><td><code>h2o_hess_partial</code></td><td><code>Atoms = 1:3</code>、<code>MovedAtoms = 2:3</code></td><td>4.6e-9</td><td>1.4e-9</td><td>—</td><td>—</td></tr>
+          <tr><td><code>h2o_hess_nonscc</code></td><td>非 SCC</td><td>8.2e-9</td><td>1.6e-11</td><td>—</td><td>—</td></tr>
+          <tr><td><code>ch3oh_hess_dftb3</code></td><td>DFTB3；<code>modes</code> 投影</td><td>7.7e-9</td><td>1.5e-9</td><td>—</td><td>1.5e-10、3.2e-8、6.9e-8</td></tr>
+          <tr><td><code>water_box_hess</code></td><td>周期（不比偶极导数）</td><td>1.4e-8</td><td>—</td><td>—</td><td>—</td></tr>
+          <tr><td><code>co2_hess_pol</code></td><td>线性分子、简并的弯曲模；投影</td><td>7.1e-9</td><td>2.1e-10</td><td>3.5e-7</td><td>9.6e-11、6.9e-8、7.7e-12</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>Hessian 与 dμ/dx 比较 results.tag 的全精度值，hessian.out、born.out、bornderiv.out 的文本另比数字（与 tag 同量级）。</li>
+        <li><code>modes</code> 在 DFTB+ 自己的 Hessian 上运行，pydftb 在自己的 Hessian 上算（<code>triangle="modes"</code>），所以频率差就是两个 Hessian 之差的反映。强度只比振动模（|ω| &gt; 1e-5 Ha）并相对最大值；振型去掉整体符号后比较。不投影时平移与转动的频率只有几个 cm<sup>−1</sup> 且彼此接近，振型对 Hessian 的微小差别敏感（1.6e-5）。</li>
+        <li>dα/dx 是逐个几何的极化率之差，含两边各自的响应误差，CO<sub>2</sub> 最大 3.5e-7（a.u.，数值约 10）。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <p>与差分比较时用精确的 SK 导数，几何避开 SK 格点：参考算例中的水，H–H 距离离格点只有 4.8e-6 Bohr，所以水与甲醇都先移动几个毫埃（第五节）。</p>
+      <ul>
+        <li><strong>Born 电荷对偶极的四阶差分</strong>（步长 1e-4 Bohr）：
+          <ul>
+            <li>水（DFTB2、壳层分辨、非 SCC、外场中、点电荷旁）≤ 2.4e-11；</li>
+            <li>DFTB3 的甲醇 1.3e-10；水阳离子二重态 1.5e-11；</li>
+            <li>CO<sub>2</sub>（简并）1.1e-10；Cu<sub>4</sub>CO（3000 K，<code>filling_tol</code> = 1e-15）1.5e-9，用 DFTB+ 的窗口时 4.7e-7。</li>
+          </ul>
+        </li>
+        <li><strong>电荷导数与求和规则</strong>（水负离子 300 K、水阳离子二重态）：
+          <ul>
+            <li>dN/dx 与布居的差分一致到 1e-7 以内（实际约 3e-11）；</li>
+            <li>电子数守恒 Σ<sub>B</sub>dN<sub>B</sub>/dx = 0、平移不变 Σ<sub>K</sub>dN<sub>B</sub>/dx<sub>K</sub> = 0，都到 1e-11；</li>
+            <li>声学求和规则 Σ<sub>K</sub>Z<sub>K</sub> = Q·I（Q = ∓1），到 1e-10。</li>
+          </ul>
+        </li>
+        <li><strong>本征值与费米能级</strong>：dε/dx 与本征值的差分一致到 1e-7 以内；金属的 dE<sub>F</sub>/dx 与费米能级的差分 &lt; 1e-8。</li>
+        <li><strong>与旋转无关</strong>：CO<sub>2</sub> 的简并 π 能级在组内任意旋转，Born 电荷不变（&lt; 1e-9）。</li>
+        <li><strong>选项</strong>：只位移原子 [4, 1] 时结果是完整结果的对应行（1e-12）；加色散，Born 电荷逐位相同。</li>
+        <li><strong>数值 Hessian</strong>：
+          <ul>
+            <li>甲醇的 Hessian 对称（相对 1e-6）；部分 Hessian 等于完整 Hessian 的子块（1e-9）；计算次数正好 6N + 1；</li>
+            <li>步长 1e-3、5e-4、2.5e-4 Bohr 时相邻两次的变化之比为 4.00（中心差分的 O(δ²)）；</li>
+            <li>差分偶极导数等于解析 Born 电荷（1e-6 以内）；dα/dx 等于极化率的差分。</li>
+          </ul>
+        </li>
+        <li><strong>简正模</strong>：投影后甲醇有 6 个、CO<sub>2</sub> 有 5 个零频，它们没有强度；默认的对称化与直接对角化对称化的质量加权 Hessian 一致；本征向量正交归一。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <ul>
+        <li><strong>Born 电荷的符号</strong>：<code>CoordDerivatives</code> 的 Born 电荷（tag <code>borncharges</code> 与 detailed.out）是 Σ<sub>B</sub>R<sub>B</sub>∂N<sub>B</sub>/∂x + δ·ΔN = −∂μ/∂x，而 DFTB+ 自己的偶极是 Σ(q0 − q)R，born.out 是 +∂μ/∂x：两个输出正好反号。pydftb 用物理符号，<code>coord_derivative_tables</code> 写 detailed.out 时默认照 DFTB+（<code>dftbplus_sign=True</code>）。</li>
+        <li><strong>25.1 漏了 DFTB3 的项</strong>：带完整三阶时 <code>CoordDerivatives</code> 照常运行，但三阶对位置的导数与它的线性项都没有，甲醇的 Born 电荷差 1.4e-2，不提示。开发版已修（与差分差 1.1e-8）。</li>
+        <li><strong>外场与点电荷</strong>：两个版本都漏了外势对原子位置的导数（在场中移动原子会改变它感到的势），水的 Born 电荷在 0.3 V/Å 的场中差 1.7e-2，点电荷旁差 0.12（开发版 0.077）；非 SCC 时连 ½dS·V 项也没有。</li>
+        <li><strong>拒绝的组合</strong>（25.1 的原话）：自旋（“Spin polarised calculations are not yet supported for coordinate derivative perturbations”）、金属（“… not currently supported for metallic systems”）、任何一对简并能级，包括两个空轨道（“… for high-symmetry/degenerate systems”）、周期体系（“Missing at moment”）。原因是一阶密度只用 U<sub>ji</sub> = f<sub>i</sub>(H′ − ε<sub>i</sub>S′)<sub>ji</sub>/(ε<sub>i</sub> − ε<sub>j</sub>)，没有费米面项与费米能级的移动。还要求 <code>Differentiation = FiniteDiff</code>（Richardson 报错），差分步长 1e-3 时 Born 电荷差 5.5e-5。</li>
+        <li><strong>输入与输出</strong>：
+          <ul>
+            <li>25.1 的 <code>CoordDerivatives</code> 只认逻辑值，<code>WrtAtoms</code> 只有开发版有；</li>
+            <li>tag <code>dqdx</code> 是逐轨道的 +dN（e/Bohr），detailed.out 的电荷导数块是 −dN/dx（e/Å），Born 电荷块每个原子三行、不写原子号；</li>
+            <li>标准输出的 “dEi/d (eV / AA)” 实际单位是 Ha/Å；dBand_dx.out 用 eV/Bohr；</li>
+            <li><code>SecondDerivatives</code>：只有 <code>CoordDerivatives</code>、没有 <code>Polarisability</code> 时也写 bornderiv.out，内容全是 0；部分 Hessian 写 <code>hessian.out.2-3</code>，同时留下一个空的 hessian.out；周期体系也写 born.out，只警告 “not well defined”。</li>
+          </ul>
+        </li>
+        <li><strong><code>modes</code></strong>：
+          <ul>
+            <li>不投影时用 Hessian 的上三角，投影时用下三角，Hessian 不对称时两种情况读的是不同的一半；</li>
+            <li>投影掉的平移与转动只要 λ 因舍入为正就算强度（λ 的符号是噪声），pydftb 不给它们强度；</li>
+            <li>25.1 的 <code>modes</code> 不认 <code>SlaterKosterFiles = Type2FileNames</code>，质量要逐个写 <code>X-X</code> 文件或用 <code>Masses</code>；部分 Hessian 必须是方阵。</li>
+          </ul>
+        </li>
+        <li><strong>SK 插值的格点跳变</strong>：DFTB+ 在相邻 8 个格点上做多项式插值，越过格点时换一组点，数值连续、导数跳变。参考算例中水的 H–H 距离 3.0599952 Bohr 离格点 3.06 只有 4.8e-6，步长 1e-4 的差分跨过格点：DFTB+ 自己的 Hessian 在 H–H 块不对称 1.9e-4（用精确的 SK 导数时 6.5e-3），pydftb 也一样。参考算例因此用与 DFTB+ 相同的 SK 差分步长，自洽检查用移开格点的几何。</li>
+        <li><strong>占据窗口（实现时发现）</strong>：DFTB+ 的响应只让“部分占据”的能级改变占据。<code>math/counting.F90</code> 规定占据数大于 elecTolMax（1e-7）的能级可以占据，离满大于 epsilon(1.0)（单精度 ε，1.2e-7）的能级可以空出（<code>emptyStates</code> 接受容差参数却不用）。窗口外的能级在 3000 K 时 δ = βf(1 − f) 仍有约 1e-5，被截掉后 Cu<sub>4</sub>CO 的 Born 电荷差 4.7e-7（相对 2e-7），CuO 2.5e-7。
+          <ul>
+            <li>设计以为这是差分的误差。查明的办法：换步长误差不变（2e-4、1e-4、5e-5 都是 4.72e-7）；非 SCC 时也有；本征值导数精确；30000 K 的水（能级稀疏）一致到 1e-11；把两个阈值都改为 0 后降到 1.5e-9。</li>
+            <li>M6g-1 的极化率与响应核照 DFTB+ 截断，所以与 DFTB+ 一致到 1e-11，但金属的结果同样偏离物理值约 1e-7。</li>
+            <li>pydftb 默认照 DFTB+（旧结果不变），新选项 <code>analysis["perturbation"]["filling_tol"]</code> 给一个正数时两边都用它，1e-15 包含所有部分占据的能级。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M5b 的文档提交 <code>6975850</code> 逐字节比较；<code>--allow-new coord_derivatives</code></td><td>进行中，结果在记录提交中补上</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>进行中，结果在记录提交中补上</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>进行中，结果在记录提交中补上</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>进行中，结果在记录提交中补上</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>进行中，结果在记录提交中补上</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>算例</strong>（共 20 个）：
+          <ul>
+            <li>O<sub>2</sub> 三重态与 Cu<sub>4</sub>CO 的 Hessian 不单列，由 <code>o2_triplet_dx</code>、<code>cu4co_dx_3000K</code> 附带的 SecondDerivatives 比较；<code>h2o_dx</code> 也附带一次，检查解析 Born 电荷与 DFTB+ 的差分；</li>
+            <li><code>modes</code> 不单列，附在 Hessian 算例上：<code>h2o_hess_pol</code>（不投影）、<code>h2o_hess_projected</code>、<code>ch3oh_hess_dftb3</code>、<code>co2_hess_pol</code>；</li>
+            <li>新增 <code>h2o_cation_dx</code>：O<sub>2</sub> 的 Born 电荷按对称为 0，自旋的 Born 电荷要用有极性的开壳层体系检查；</li>
+            <li><code>Case.modes</code>、<code>Case.born_fd</code> 合进 <code>Case.hessian</code>（<code>{"modes": {"remove": …}}</code>）与分析选项 <code>"dftbplus_coord": False</code>。</li>
+          </ul>
+        </li>
+        <li><strong>容差</strong>：所有算例两边的 SCC 容差 1e-12（差分把 SCC 误差放大约 5000 倍，1e-10 时 Hessian 只准到 1e-6）；Hessian 1e-7（设计 1e-8，实际 ≤ 1.4e-8）、差分偶极导数 5e-8、dα/dx 1e-6（实际 3.5e-7）、<code>modes</code> 的强度相对 1e-5、振型 1e-4；DFTB3 对开发版的 SCC 轮数容差 10。</li>
+        <li><strong>金属</strong>：设计把 Cu<sub>4</sub>CO 的 4.8e-7 归于差分误差，实际是 DFTB+ 的占据窗口（第五节）；新增 <code>filling_tol</code>，金属算例用 1e-15 后与 DFTB+ 的差分一致到 4.8e-8，与其他算例相同。</li>
+        <li><strong>接口</strong>：质量用 <code>vibrations.masses_of(calc, labels)</code>，不在 <code>DFTB</code> 上加方法；投影掉的刚体运动不给强度（<code>modes</code> 给噪声）。</li>
+        <li><strong>自洽检查的几何</strong>：水与甲醇移开 SK 格点几个毫埃（参考的水与甲醇各有一个距离离格点 4.8e-6、1.6e-4 Bohr）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6g-3</strong>：DFTB+U、onsite 修正、非共线自旋与 SOC 下的响应（极化率与坐标导数），外部点电荷的导数（开发版的 <code>ExternalChargeDerivatives</code>）。</li>
+        <li><strong>M6h</strong>：长程校正 LC/CAM（含 TD-LC）。</li>
+        <li>以后可以在坐标响应之上做解析 Hessian（DFTB+ 也没有）；大分子的坐标响应目前每个方向 O(n³)，需要时只在占据子空间里算。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6g2-coord-hessian.html">← M6g-2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>
