@@ -26,11 +26,12 @@ class OptimizeStep6Advanced(Screen):
             Input(value="r0_w r0_d sigma_rep", id="params"),
 
             Static("multi_element (space-separated; only these elements are fitted, the "
-                   "others keep PTBP's parameters; leave empty for all):"),
+                   "others keep PTBP's published parameters; leave empty for all):"),
             Input(placeholder="Cu", id="multi"),
 
-            Static("parameters: one set (r0_w, r0_d, sigma_rep) per element, or one shared "
-                   "by all elements (as before M5b):"),
+            Static("parameters: one set (r0_w, r0_d, sigma_rep) per element (the penalty is "
+                   "the geometric mean of the sets' penalties), or one shared by all elements "
+                   "(as before M5b):"),
             RadioSet(
                 RadioButton("per element", id="par-per-element"),
                 RadioButton("shared", id="par-shared"),
@@ -38,7 +39,8 @@ class OptimizeStep6Advanced(Screen):
             ),
 
             Static("switched types (pydftb only; ELEMENT:LABELS:CENTRE:WIDTH, labels by "
-                   "increasing coordination number, e.g. Cu:Cu2,Cu:11.0:1.0; empty: none):"),
+                   "increasing coordination number, e.g. Cu:Cu2,Cu:11.0:1.0; empty: none; "
+                   "prefer mode reaction or dataset: energygeometry may give a type no data):"),
             Input(placeholder="Cu:Cu2,Cu:11.0:1.0", id="switch"),
 
             Static("superposition:"),

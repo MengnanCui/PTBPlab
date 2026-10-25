@@ -37,11 +37,16 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('--n-particles', type=int, default=4, metavar='N', dest='n_particles',
                    help="Batch width (parallel_bo) or swarm size (pso). Default: 4.")
     p.add_argument('--n-calls', type=int, default=None, metavar='N', dest='n_calls',
-                   help="BO/PSO evaluations. Default: 11.")
+                   help="BO/PSO evaluations. Default: as `ptbp optimize`, 11 for up to 2 "
+                        "optimised dimensions (one parameter set), else 10 + 5 x dims.")
     p.add_argument('--ncores', default='auto', metavar='N|auto',
                    help="Core budget (as `ptbp optimize --ncores`). Default: auto.")
     p.add_argument('--multi-element', nargs='+', default=None, metavar='E', dest='multi_element',
-                   help="Elements to optimise in a multi-element dataset.")
+                   help="Elements to optimise in a multi-element dataset (the others keep "
+                        "PTBP's published parameters).")
+    p.add_argument('--shared-parameters', action='store_true', dest='shared_parameters',
+                   help="As `ptbp optimize --shared-parameters` (one parameter set for all "
+                        "elements, 2 dimensions): the default --n-calls is then 11.")
     p.add_argument('--switch', nargs=4, action='append', default=None,
                    metavar=('ELEMENT', 'LABELS', 'CENTRE', 'WIDTH'), dest='switch',
                    help="Switched types, as `ptbp optimize --switch` (M5b): hotcent computes "
@@ -86,15 +91,23 @@ def run(args: argparse.Namespace) -> int:
         return 2
     structures = ase.io.read(path, ':')
     bolt = bolt_for(structures, mode, args.eos_points, args.multi_element)
-    labels = None
-    if getattr(args, 'switch', None):                     # M5b: the tables of the type labels
-        from utils.typemodel import TypeModel, parse_switch_args
-        try:
-            labels = TypeModel.from_dataset(
-                structures, declarations=parse_switch_args(args.switch)).element_of
-        except ValueError as err:
+    from utils.typemodel import TypeModel, default_n_calls, parse_switch_args
+    labels, dims = None, 2
+    try:
+        model = TypeModel.from_dataset(
+            structures, shared=bool(getattr(args, 'shared_parameters', False)),
+            declarations=parse_switch_args(getattr(args, 'switch', None)),
+            multi_element=args.multi_element)
+    except ValueError as err:
+        if getattr(args, 'switch', None) or getattr(args, 'shared_parameters', False):
             print(f"ptbp plan: {err}")
             return 2
+        model = None                                      # the default --n-calls of 2 dimensions
+    if model is not None:
+        dims = model.n_params                             # M5b-2: the default --n-calls
+        if model.switches:                                # M5b: the tables of the type labels
+            labels = model.element_of
+    n_calls = args.n_calls if args.n_calls is not None else default_n_calls(dims)
     # M5b: every pair of types gets its tables (--multi_element no longer restricts them)
     workload = workload_from_dataset(structures, bolt, kpts_density=args.kpts,
                                      eos_points=args.eos_points, engine=args.engine, mode=mode,
@@ -112,7 +125,7 @@ def run(args: argparse.Namespace) -> int:
         from pydftb.backend.devices import probe_accelerators
         accelerators = probe_accelerators()
     plan = make_plan(budget, workload, optimizer=args.optimizer, n_particles=args.n_particles,
-                     n_calls=args.n_calls if args.n_calls is not None else 11, probe=args.probe,
+                     n_calls=n_calls, probe=args.probe,
                      backend=backend, accelerators=accelerators)
     if args.json:
         print(json.dumps(plan.to_json(), indent=2))

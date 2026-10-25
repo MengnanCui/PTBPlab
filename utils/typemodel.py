@@ -33,6 +33,32 @@ R0_W_LOW, R0_D_LOW = 2.1, 3.4        # BO bounds (Loss._bo_dimensions_and_cost):
 R0_W_SCALE, R0_D_SCALE = 7.0, 9.0    # [2.1, 7 r_cov], r0_d in [3.4, 9 r_cov]
 SIGMA_BOUNDS = (0.1, 0.8)            # sigma_rep search (Loss.Repulsion_optimization)
 TYPED_LOSS_VERSION = 3               # utils.loss.LOSS_VERSION of the per-type layout
+DEFAULT_N_CALLS = 11                 # --n-calls of before: the seed and skopt's 10 random points
+
+
+def default_n_calls(n_dims: int) -> int:
+    """``--n-calls`` when it is not given (M5b-2): 11 for up to 2 optimised dimensions (one
+    parameter set: one element, or --shared-parameters, as before); 10 + 5 x dims above, so that
+    BO gets guided steps after skopt's 10 random points (two elements, 4 dimensions: 30; three:
+    40).  An explicit value (command line, YAML) always wins."""
+    n_dims = int(n_dims)
+    return DEFAULT_N_CALLS if n_dims <= 2 else 10 + 5 * n_dims
+
+
+def energygeometry_warning(model, mode) -> str | None:
+    """The warning for several types of one element with the energygeometry loss (M5b-2), or
+    None.  The run goes on: the loss can still be used, but it may not constrain every type."""
+    if not getattr(model, "switches", None) or str(mode or "").lower() != "energygeometry":
+        return None
+    which = "; ".join(f"{sw.element}: {', '.join(sw.types)}" for sw in model.switches)
+    return ("WARNING: several types of one element (" + which + ") with the energygeometry "
+            "loss.  energygeometry compares energies only within each EOS group, and with "
+            "Boltzmann weights it drops the groups whose weight is below 0.1 (3000 K), so a type "
+            "(often the low-coordination one) may get no data and be fixed by the penalty "
+            "alone.  For type switching use a loss in which every structure enters and energies "
+            "are compared across structures: a reaction-type loss (--mode reaction, or --mode "
+            "dataset; an EOS dataset can be fitted that way too, every point then counts).  "
+            "Continuing with energygeometry.")
 
 
 def heaviest_radius(dataset, opt_elem=()) -> float:

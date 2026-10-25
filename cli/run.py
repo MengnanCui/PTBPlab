@@ -127,10 +127,29 @@ def _type_model(dft_input):
                              "bo, parallel_bo or pso with switched types")
         set_type_switching(model.switches)
     print(model.describe())
+    # M5b-2: switched types with the energygeometry loss may leave a type without data
+    from utils.typemodel import energygeometry_warning
+    warning = energygeometry_warning(model, ptbp_args.optimization_option)
+    if warning:
+        print(warning, flush=True)
     return model
 
 
-def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None):
+def _resolve_n_calls(types):
+    """--n-calls, or its default (M5b-2): 11 for up to 2 optimised dimensions, 10 + 5 x dims
+    above (utils.typemodel.default_n_calls)."""
+    from utils.typemodel import default_n_calls
+    if ptbp_args.n_calls is not None:
+        return ptbp_args.n_calls
+    dims = types.n_params if types is not None else 2
+    n = default_n_calls(dims)
+    if dims > 2:
+        print(f"[n_calls] {n} evaluations: the default for {dims} optimised dimensions "
+              f"(10 + 5 x {dims}; 11 up to 2 dimensions); --n-calls sets another number")
+    return n
+
+
+def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None, n_calls=None):
     """CPU budget and parallel plan of this run (milestone M3): chosen by the cost-model
     recommender (M3c), printed, saved as plan.json and set process-wide, so every BO
     step follows it."""
@@ -153,9 +172,10 @@ def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None):
             if importlib.util.find_spec('torch') is not None:            # a GPU to suggest?
                 from pydftb.backend.devices import probe_accelerators
                 accelerators = probe_accelerators()
+        if n_calls is None:
+            n_calls = ptbp_args.n_calls if ptbp_args.n_calls is not None else 11
         plan = make_plan(budget, workload, optimizer=ptbp_args.optimizer,
-                         n_particles=ptbp_args.n_particles,
-                         n_calls=ptbp_args.n_calls if ptbp_args.n_calls is not None else 11,
+                         n_particles=ptbp_args.n_particles, n_calls=n_calls,
                          backend=backend, accelerators=accelerators)
     except Exception as err:                    # planning must never stop a run
         print(f"[plan] cost model unavailable ({type(err).__name__}: {err}); simple rule")
@@ -244,6 +264,7 @@ if ptbp_args.optimization_option is not None:
             dft_input = ase.io.read(dft_infile, ':') if dft_infile.exists() else None
             types = _type_model(dft_input) if dft_input is not None else None
             typed = types is not None and not types.legacy        # M5b: parameters per type
+            n_calls = _resolve_n_calls(types)                     # M5b-2: default by dimensions
             with open(ptbp_args.para_file, "w") as para:
                 para.write(types.par_header() if typed else '#r0_w,r0_d,c_rep,kxc,cov_radius,mu\n')
 
@@ -289,9 +310,10 @@ Boltzmann factor: {bolt_f.tolist()}
             if typed:
                 # every pair of types gets its tables (fixed types included), so no opt_elem
                 _parallel_plan(dft_input, bolt_f11, (),
-                               labels=types.element_of if types.switches else None)
+                               labels=types.element_of if types.switches else None,
+                               n_calls=n_calls)
             else:
-                _parallel_plan(dft_input, bolt_f11, opt_elem)
+                _parallel_plan(dft_input, bolt_f11, opt_elem, n_calls=n_calls)
 
             loss = Loss(args_input=ptbp_args,
                         dft_input=dft_input,
@@ -317,10 +339,9 @@ Boltzmann factor: {bolt_f.tolist()}
                       f"best x={res.x}, fun={res.fun}, "
                       f"{len(getattr(res, 'x_iters', [])) or 0} evaluation(s).")
             else:
-                _n_calls = ptbp_args.n_calls if ptbp_args.n_calls is not None else 11
                 res = loss.optimize(cov_radius=cov_radius,
                                     checkpoint_saver=checkpoint_saver,
-                                    n_calls=_n_calls)
+                                    n_calls=n_calls)
                 # Snapshot the result so post-processing can be redone later
                 # via `--postprocess_only` without rerunning the optimiser.
                 import pickle as _pickle
@@ -339,6 +360,14 @@ Boltzmann factor: {bolt_f.tolist()}
                 print(f"[result.pkl] Snapshot of optimisation written to {_result_pkl}")
 
             print('Best parameter:\n', res.x,'\n', res.fun)
+            if loss.failed_points:                  # M5b-2: failed evaluations of this run
+                print(f"[failures] {len(loss.failed_points)} failed evaluation(s): each counts "
+                      f"2 x the worst successful loss before it (a fixed value before the first "
+                      f"success; see the [failure] lines)")
+                if loss.is_failure(res.x):
+                    print("[failures] WARNING: the lowest loss belongs to a failed evaluation "
+                          "(no evaluation succeeded with a lower loss): these parameters have "
+                          "no loss of the whole dataset")
             if typed:
                 for _lab, (_w, _d) in types.r0(res.x).items():
                     print(f"  {_lab}: r0_w = {_w:.6f}, r0_d = {_d:.6f}")

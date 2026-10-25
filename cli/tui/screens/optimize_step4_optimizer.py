@@ -26,8 +26,9 @@ class OptimizeStep4Optimizer(Screen):
             Static("Step 4 of 7  •  Optimizer", classes="step-title"),
             Static("Which outer-loop optimiser?"),
             RadioSet(*radios, id="opt-set"),
-            Static("\nTotal evaluations (n_calls):"),
-            Input(placeholder="11", id="n-calls"),
+            Static("\nTotal evaluations (n_calls; empty = the default: 11 for one parameter "
+                   "set, 10 + 5 x dims for more, e.g. 30 for two elements):"),
+            Input(placeholder="auto", id="n-calls"),
             Static("Particles / batch width (PSO + parallel_bo):"),
             Input(placeholder="4", id="n-particles"),
             Horizontal(

@@ -76,8 +76,35 @@ import utils.plot as plot
 #    optimisers, a sigma_rep per set, the penalty the geometric mean of the sets' penalties; the
 #    meta file records the types.  One parameter set for every type (one element, or
 #    --shared-parameters) keeps the loss and the meta file of version 2, bit for bit.
+# M5b-2: the meta file of either version may also hold "failed_evaluations", the indices of the
+# failed BO points in the checkpoint's history (written only when there are some).  The loss
+# version stays: successful losses are the same, only the failed points' values changed.
 LOSS_VERSION = 3
 SHARED_LOSS_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# Failed evaluations (M5b-2).  A BO point whose loss cannot be computed on the whole dataset
+# (hotcent or a DFTB run failed, some structures have no DFTB result, the loss is not finite)
+# gets twice the worst successful loss this run has seen, so that the optimisers see it as
+# worse than every real point.  Before M5b-2 it got a random integer 97-99, which is below the
+# real losses of the reaction mode (150-5000 for the B2N2 + N3Na example), and a step with some
+# structures missing was scored on the others only, which biases its loss low.
+FAILURE_FACTOR = 2.0
+# Before any success: energygeometry losses are Boltzmann-weighted averages over the EOS groups
+# (M5b's Cu runs: 0.80-166 over 40 points), 1000 is about 6x the worst; dataset/reaction losses
+# sum |dE| over the structures (the B2N2 + N3Na example, 22 structures: 147-5205, 6.7-237 per
+# structure), 1000 per structure is about 4x the worst.
+NO_SUCCESS_FAILURE = 1000.0
+# What a failed point got before M5b-2: resumed checkpoints without a record of their failures
+# (written before M5b-2) mark them with exactly these values (a real loss is never an integer).
+OLD_FAILURE_VALUES = (97.0, 98.0, 99.0)
+
+
+class LossFailure(RuntimeError):
+    """A BO point without a loss of the whole dataset (M5b-2): no structure, or only some of
+    them, have DFTB results, or the loss is not finite.  Loss.EnergyGeometry and
+    EnergyGeometryTypes turn it, as the other failures, into the failure value."""
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +230,160 @@ class Loss():
         # utils.typemodel.TypeModel (M5b); None or a layout with one parameter set for every
         # type (TypeModel.legacy): the loss of before M5b, bit for bit
         self.types = types
+        # failed evaluations (M5b-2): the worst successful loss of this run (None: no success
+        # yet), the points that failed (x as the optimisers pass it, also those of a resumed
+        # checkpoint), whether the last evaluation failed, and the failed indices of the last BO
+        self.worst_success = None
+        self.failed_points = []
+        self.last_failed = None
+        self.failed_indices = []
+        # during Bayesian_optimization: the checkpoint's meta file and the index of the next
+        # evaluation in its history, to record the failed ones there (None: no checkpoint)
+        self._bo_log = None
 
     @property
     def typed(self) -> bool:
         """Parameters per type (M5b): several parameter sets, fixed types or type switching."""
         model = getattr(self, 'types', None)
         return model is not None and not model.legacy
+
+    # ---- failed evaluations (M5b-2) ------------------------------------------------------
+    def no_success_failure_value(self) -> float:
+        """The failure value before the first success: NO_SUCCESS_FAILURE in energygeometry,
+        NO_SUCCESS_FAILURE per structure of the loss in dataset/reaction (mu_E is a sum over
+        the structures)."""
+        mode = str(getattr(self.args_input, 'optimization_option', '') or '').lower()
+        if mode in ('dataset', 'reaction'):
+            eos = max(1, int(getattr(self.args_input, 'eos_points', 1) or 1))
+            return NO_SUCCESS_FAILURE * max(1, int(len(self.dft_input) / eos) * eos)
+        return NO_SUCCESS_FAILURE
+
+    def failure_value(self) -> float:
+        """The loss of a failed evaluation: FAILURE_FACTOR (2) x the worst successful loss this
+        run has seen; before the first success, :meth:`no_success_failure_value`."""
+        worst = getattr(self, 'worst_success', None)
+        return self.no_success_failure_value() if worst is None else FAILURE_FACTOR * worst
+
+    def _record_success(self, mu) -> None:
+        mu = float(mu)
+        worst = getattr(self, 'worst_success', None)
+        self.worst_success = mu if worst is None else max(worst, mu)
+        self.last_failed = False
+        self._log_evaluation(False)
+
+    def _record_failure(self, x, error) -> float:
+        """Record the failed point ``x`` and return its loss (printed with the reason)."""
+        worst = getattr(self, 'worst_success', None)
+        mu = self.failure_value()
+        if not hasattr(self, 'failed_points'):
+            self.failed_points = []
+        self.failed_points.append(tuple(float(v) for v in x))
+        self.last_failed = True
+        how = (f"{FAILURE_FACTOR:g} x the worst successful loss so far ({worst:.10g})"
+               if worst is not None else "no successful evaluation yet: the fixed value of the "
+               f"{getattr(self.args_input, 'optimization_option', '')} mode")
+        print(f"[failure] {type(error).__name__}: the point's loss is {mu:.10g} ({how})")
+        self._log_evaluation(True)
+        return mu
+
+    def _log_evaluation(self, failed: bool) -> None:
+        """During Bayesian_optimization: the evaluations come in the order of the checkpoint's
+        history (the seed, then one per BO step; a resumed run continues after the loaded
+        points).  A failed one is written to the meta file's ``failed_evaluations`` at once,
+        before skopt's CheckpointSaver stores the point (the failure values do not tell).
+        Recorded here, not by an skopt callback: skopt pickles its callbacks into the checkpoint."""
+        log = getattr(self, '_bo_log', None)
+        if log is None:
+            return
+        index = log['next']
+        log['next'] += 1
+        if failed:
+            log['failed'].append(index)
+            with open(log['meta_path'], 'w') as fh:
+                json.dump(dict(log['meta'], failed_evaluations=list(log['failed'])), fh)
+
+    def _end_bo_log(self) -> None:
+        """After Bayesian_optimization: ``failed_indices`` = the failed evaluations of its
+        history (loaded ones included); stop recording."""
+        log = getattr(self, '_bo_log', None)
+        if log is not None:
+            self.failed_indices = sorted(log['failed'])
+        self._bo_log = None
+
+    def _note_outcome(self, x, mu, failed: bool) -> None:
+        """Record an evaluation made in another process (parallel_bo's forked workers)."""
+        if failed:
+            if not hasattr(self, 'failed_points'):
+                self.failed_points = []
+            self.failed_points.append(tuple(float(v) for v in x))
+        else:
+            worst = getattr(self, 'worst_success', None)
+            self.worst_success = float(mu) if worst is None else max(worst, float(mu))
+
+    def is_failure(self, x) -> bool:
+        """Whether the point ``x`` failed in this run (or in the checkpoint it resumed)."""
+        key = tuple(float(v) for v in x)
+        return key in set(getattr(self, 'failed_points', ()))
+
+    def _check_complete_results(self) -> None:
+        """After the DFTB stage (cwd: the step directory): every structure the stage computes
+        must have a result, else :class:`LossFailure` (M5b-2).  The stage drops the EOS groups
+        whose SKF files hotcent did not write (search_index.txt lists the others); the loss of
+        the remaining structures would be biased low (dataset/reaction: a sum over fewer
+        structures; energygeometry: the Boltzmann factors of the dropped groups stay in the
+        normalisation).  The structures past the last whole EOS group are never computed (as
+        before): they are not missing."""
+        eos = max(1, int(getattr(self.args_input, 'eos_points', 1) or 1))
+        expected = int(len(self.dft_input) / eos) * eos
+        text = Path("search_index.txt").read_text().strip()
+        kept = {int(i) for i in text.split(',')} if text else set()
+        missing = [i for i in range(expected) if i not in kept]
+        if not missing:
+            return
+        from collections import Counter
+        formulas = Counter(self.dft_input[i].get_chemical_formula() for i in missing)
+        which = ", ".join(f"{f} x{n}" for f, n in sorted(formulas.items()))
+        if len(missing) == expected:
+            raise LossFailure(f"no structure has DFTB results at these parameters ({which})")
+        raise LossFailure(f"{len(missing)} of {expected} structures have no DFTB results "
+                          f"(missing SKF files: {which}); a loss of the others would be biased "
+                          f"low, so the point counts as failed")
+
+    def _resume_failures(self, x_iters, func_vals, meta):
+        """The failed evaluations of a resumed checkpoint: (func_vals for the BO, their indices).
+
+        ``failed_evaluations`` of the meta file when it has one (M5b-2); otherwise (a checkpoint
+        written before M5b-2) the evaluations whose value is exactly 97, 98 or 99, the failure
+        values of before (a real loss is never an integer), which get the failure value of this
+        run so that the BO sees them as bad points.  The worst successful loss starts from the
+        loaded successes."""
+        recorded = meta.get("failed_evaluations") if isinstance(meta, dict) else None
+        ys = [float(v) for v in func_vals]
+        if recorded is not None:
+            failed = sorted({int(i) for i in recorded if 0 <= int(i) < len(ys)})
+            how = "recorded in the meta file"
+        else:
+            failed = [i for i, v in enumerate(ys) if v in OLD_FAILURE_VALUES]
+            how = "values 97-99: a checkpoint written before M5b-2"
+        bad = set(failed)
+        ok = [v for i, v in enumerate(ys) if i not in bad]
+        self.worst_success = max(ok) if ok else None
+        if not hasattr(self, 'failed_points'):
+            self.failed_points = []
+        self.failed_points.extend(tuple(float(v) for v in x_iters[i]) for i in failed)
+        if failed:
+            print(f"[checkpoint] {len(failed)} failed evaluation(s) ({how}): {failed}")
+        if recorded is None and failed:
+            value = self.failure_value()
+            for i in failed:
+                ys[i] = value
+            func_vals = ys
+            print(f"[checkpoint] their loss is now {value:.10g} ("
+                  + (f"{FAILURE_FACTOR:g} x the worst loaded success" if ok else
+                     "no loaded success: the fixed value") + ")")
+        if ok:
+            print(f"[checkpoint] worst successful loss so far: {self.worst_success:.10g}")
+        return func_vals, failed
 
 
     def penalty(self, r0_w: float, r0_d: float) -> float:
@@ -995,6 +1170,9 @@ class Loss():
 
             # Calculate energy/forces for the band energy part  
             self.run_calculator_seperately(dft_incopy)
+            # M5b-2: structures without DFTB results (hotcent wrote no SKF for them) make the
+            # point a failure, as when none has results
+            self._check_complete_results()
 
             # dft_subincopy_final = ase.io.read('dft_final.xyz', ':'); dftb_bandstructure_final = ase.io.read('dftb_band.xyz', ':')
             t_dftb = perf_counter()
@@ -1002,6 +1180,8 @@ class Loss():
 
         #3. Parameterization for the Repulsion term, which is parallelized respect to
             sigma_rep_best, mu = self.Repulsion_optimization(conf_parameters, 0.1, 0.8)
+            if not math.isfinite(float(mu)):                  # M5b-2: a failure, not a loss
+                raise LossFailure(f"the loss is {mu}")
             # Downstream print/plot/par.out blocks read the bare `sigma_rep`
             # name; alias it to the optimised scalar so they don't NameError.
             sigma_rep = float(np.atleast_1d(sigma_rep_best)[0])
@@ -1090,6 +1270,7 @@ class Loss():
                 print(current_plan().step_line(self.step_timings))
             if grad is not None:
                 grad.after_step(self, conf_parameters, sigma_rep, mu)
+            self._record_success(mu)
             return mu
             
 
@@ -1098,7 +1279,8 @@ class Loss():
             print("Error:", error)
             sigma_rep, kxc = [0.4321, 0.0]
             mu_E, mu_V, mu_logb, penalty = [10, 10, 10, 10]
-            mu = random.randint(97,99)
+            # M5b-2: twice the worst successful loss so far (was a random integer 97-99)
+            mu = self._record_failure([r0_w, r0_d], error)
 
             with open(self.args_input.para_file, 'a') as para:
                 para.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.7f}, {mu:25.11f}\n')
@@ -1421,11 +1603,13 @@ class Loss():
             dft_incopy = copy.deepcopy(self.dft_input)
             self.run_calculator_seperately(dft_incopy)
             t_dftb = perf_counter()
-            if not Path("search_index.txt").read_text().strip():
-                # every group lost its SKF files (hotcent failed): the failure value
-                raise RuntimeError("no structure has DFTB results at these parameters")
+            # every structure needs DFTB results (hotcent may write no tables for a type at
+            # extreme radii): none or only some is a failure (M5b-2; M5b failed on none only)
+            self._check_complete_results()
 
             svec, mu = self.Repulsion_optimization_types(x)
+            if not math.isfinite(float(mu)):                  # M5b-2: a failure, not a loss
+                raise LossFailure(f"the loss is {mu}")
             self.last_sigma = list(svec)                  # sigma_rep of every set (mu's point)
             dftb_full = self._write_typed_step(x, svec)
             t_physrep = perf_counter()
@@ -1461,13 +1645,14 @@ class Loss():
                 print(current_plan().step_line(self.step_timings))
             if grad is not None:
                 grad.after_step(self, x, svec, mu)
+            self._record_success(mu)
             return mu
 
         except(RuntimeError, AssertionError, UnboundLocalError, ase.io.formats.UnknownFileTypeError) as error:
             print("Error:", error)
             svec = [0.4321] * model.n_sigma
             mu_E, mu_V, mu_logb = 10, 10, 10
-            mu = random.randint(97,99)
+            mu = self._record_failure(x, error)        # M5b-2 (was a random integer 97-99)
             with open(self.args_input.para_file, 'a') as para:
                 para.write(model.par_line(x, svec, penalty, mu))
             with open(self.args_input.log_file, 'a') as output:
@@ -1627,6 +1812,9 @@ class Loss():
           are atomic per-line on POSIX. The per-evaluation
           `results/opt_<r0_w>_<r0_d>/` directories are unique so no
           collision there.
+        - Failed points (M5b-2): a worker's failure value is twice the worst
+          successful loss of the rounds before its own (the state it forked
+          with); the parent records every worker's outcome after the round.
         """
         from skopt import Optimizer
         import multiprocessing as mp
@@ -1649,10 +1837,10 @@ class Loss():
                 set_plan(plan.for_particle(idx))     # this BO point's share of the cores
             try:
                 val = float(cost_fn(x_arg))
-                q.put((idx, val, None))
+                q.put((idx, val, None, bool(getattr(self, 'last_failed', False))))
             except Exception:
                 import traceback as _tb
-                q.put((idx, None, _tb.format_exc()))
+                q.put((idx, None, _tb.format_exc(), False))
 
         print(f"[parallel_BO] batch_width={n_particles} (forked workers), "
               f"rounds={rounds}, total evaluations={n_particles*rounds}")
@@ -1666,8 +1854,9 @@ class Loss():
             for p in procs:
                 p.start()
             results = [None] * len(xs)
+            failures = [False] * len(xs)
             for _ in xs:
-                idx, val, err = queue.get()
+                idx, val, err, bad = queue.get()
                 if err is not None:
                     for p in procs:
                         if p.is_alive():
@@ -1675,8 +1864,11 @@ class Loss():
                     raise RuntimeError(
                         f"parallel_bo worker {idx} crashed:\n{err}")
                 results[idx] = val
+                failures[idx] = bad
             for p in procs:
                 p.join()
+            for x, y, bad in zip(xs, results, failures):    # M5b-2: the workers' outcomes
+                self._note_outcome(x, y, bad)
             opt.tell(xs, results)
             for x, y in zip(xs, results):
                 x_iters_flat.append(list(map(float, x)))
@@ -1696,14 +1888,15 @@ class Loss():
         )
 
     def _check_checkpoint_meta(self, meta_path):
-        """Refuse to resume a checkpoint whose losses were computed on another scale."""
+        """Refuse to resume a checkpoint whose losses were computed on another scale; returns
+        the meta file's record (its failed evaluations, M5b-2)."""
         meta = None
         if os.path.exists(meta_path):
             with open(meta_path) as fh:
                 meta = json.load(fh)
         if self.typed:                                       # M5b: the types must be the same
             if self.types.matches_meta(meta):
-                return
+                return meta
             raise RuntimeError(
                 f"{self.args_input.checkpoint} has "
                 + ("no record of its loss definition" if meta is None else f"loss record {meta}")
@@ -1713,7 +1906,7 @@ class Loss():
                 f"to start afresh.")
         if (meta is not None and meta.get("ptbp_loss_version") == SHARED_LOSS_VERSION
                 and abs(meta.get("penalty_radius_bohr", -1.0) - self.cov_radius) < 1e-5):
-            return
+            return meta
         found = ("no record of its loss definition (written before PTBP fixed the penalty "
                  "radius, which was always 0.5 Bohr)" if meta is None else f"loss record {meta}")
         raise RuntimeError(
@@ -1733,14 +1926,22 @@ class Loss():
 
         # if self.args_input.checkpoint.exists():
         mode = self.args_input.optimization_option.lower()
-        meta_path = f"{self.args_input.checkpoint}.meta.json"
+        # absolute (M5b-2): the failures are recorded during the evaluations, which change into
+        # their step directories; here the cwd is the run folder, as before
+        meta_path = os.path.abspath(f"{self.args_input.checkpoint}.meta.json")
+        failed_before = []                   # failed evaluations of a resumed checkpoint (M5b-2)
         if os.path.exists(self.args_input.checkpoint):
+            loaded_meta = None
             if mode in ('energygeometry', 'dataset', 'reaction'):
-                self._check_checkpoint_meta(meta_path)
+                loaded_meta = self._check_checkpoint_meta(meta_path)
             res = load(self.args_input.checkpoint)
             x0 = res.x_iters
             y0 = res.func_vals
             done = len(x0)
+            if mode in ('energygeometry', 'dataset', 'reaction'):
+                # the worst successful loss starts from the loaded successes; the failures are
+                # those the meta file records, or the values 97-99 of an older checkpoint
+                y0, failed_before = self._resume_failures(x0, y0, loaded_meta)
             # Note: when x0/y0 are passed, gp_minimize treats `n_calls` as the
             # number of *additional* fresh evaluations on top of the prior
             # ones. So `--n_calls 11` means "do 11 more BO steps", giving a
@@ -1781,25 +1982,35 @@ class Loss():
             y0 = None
             n_calls = n_calls
 
+        if self.typed:
+            meta = self.types.meta(mode)
+        else:
+            meta = {"ptbp_loss_version": SHARED_LOSS_VERSION,
+                    "penalty_radius_bohr": self.cov_radius, "mode": mode}
         with open(meta_path, 'w') as fh:
-            if self.typed:
-                json.dump(self.types.meta(mode), fh)
-            else:
-                json.dump({"ptbp_loss_version": SHARED_LOSS_VERSION,
-                           "penalty_radius_bohr": self.cov_radius, "mode": mode}, fh)
+            # M5b-2: the failed evaluations of a resumed checkpoint, only when it has some (a
+            # run without failures writes the meta file of before)
+            json.dump(dict(meta, failed_evaluations=list(failed_before)) if failed_before
+                      else meta, fh)
+        if mode in ('energygeometry', 'dataset', 'reaction'):
+            self._bo_log = {'meta_path': meta_path, 'meta': meta, 'failed': list(failed_before),
+                            'next': len(x0) if y0 is not None else 0}
 
         if self.typed and mode in ('energygeometry', 'dataset', 'reaction'):
             dimensions, lo, hi, cost_fn = self._bo_dimensions_and_cost(cov_radius)
             print("Bounds: " + ", ".join(f"{d.name}: {a} ~ {b:.6g}"
                                          for d, a, b in zip(dimensions, lo, hi)))
-            res = gp_minimize(func=cost_fn,
-                              dimensions=dimensions,
-                              n_calls=n_calls,
-                              acq_func="EI",
-                              x0=x0,
-                              y0=y0,
-                              callback=[checkpoint_saver],
-                              random_state=123)
+            try:
+                res = gp_minimize(func=cost_fn,
+                                  dimensions=dimensions,
+                                  n_calls=n_calls,
+                                  acq_func="EI",
+                                  x0=x0,
+                                  y0=y0,
+                                  callback=[checkpoint_saver],
+                                  random_state=123)
+            finally:
+                self._end_bo_log()
         elif self.args_input.optimization_option.lower() in ('energygeometry', 'dataset', 'reaction'):
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius            # Wavefunction cutoff
             r0_d_lower, r0_d_upper = 3.4, 9.0 * cov_radius            # Density function cutoff
@@ -1809,15 +2020,18 @@ class Loss():
             dr0_d   = Real(name='r0_d',  low=r0_d_lower,  high=r0_d_upper,   prior='uniform')
             dimensions = [dr0_w, dr0_d]
 
-            res = gp_minimize(func=self.Loss_EnergyGeometry,
-                            dimensions=dimensions,
-                            n_calls=n_calls,
-                            acq_func="EI",
-                            x0=x0,
-                            y0=y0,
-                            callback=[checkpoint_saver],
-                            random_state=123)
-            
+            try:
+                res = gp_minimize(func=self.Loss_EnergyGeometry,
+                                dimensions=dimensions,
+                                n_calls=n_calls,
+                                acq_func="EI",
+                                x0=x0,
+                                y0=y0,
+                                callback=[checkpoint_saver],
+                                random_state=123)
+            finally:
+                self._end_bo_log()
+
         elif self.args_input.optimization_option.lower() == 'bandstructure':
             r0_lower, r0_upper = 2.1, 7.0 * cov_radius
             p_lower, p_upper = 1.01, 11.0

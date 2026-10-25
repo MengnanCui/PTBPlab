@@ -57,15 +57,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        '--multi_element', help='Element symbols whose parameters are optimised; the other '
-                                'elements keep the parameters PTBP published (M5b)',
+        '--multi_element', help='Fit only these elements (symbols); the other elements keep '
+                                'the (r0_w, r0_d, sigma_rep) PTBP published (M5b)',
         nargs='+',
         type=str,
         default=None,
     )
     parser.add_argument(
         '--shared_parameters', help="One (r0_w, r0_d, sigma_rep) for all elements, as before "
-                                    "M5b; default: one set per element (type)",
+                                    "M5b; default: one set per element (type), the penalty "
+                                    "being the geometric mean of the sets' penalties",
         action='store_true',
         default=None,
     )
@@ -74,7 +75,9 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                         "number (M5b), as JSON: a list of {\"element\": \"Cu\", \"labels\": "
                         "[\"Cu2\", \"Cu\"], \"centre\": 11.0, \"width\": 1.0[, \"cutoff\": ..., "
                         "\"start\": {label: [r0_w, r0_d]}]}, the labels in order of increasing "
-                        "coordination number; needs --engine pydftb",
+                        "coordination number; needs --engine pydftb.  With the energygeometry "
+                        "loss a type may get no data (a warning is printed): prefer reaction "
+                        "or dataset",
         type=str,
         default=None,
     )
@@ -171,8 +174,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--n_calls', help="Total number of BO iterations (gp_minimize n_calls). "
-                          "Default: 11 for energygeometry/dataset/reaction, "
-                          "100 for bandstructure.",
+                          "Default for energygeometry/dataset/reaction: 11 for up to 2 "
+                          "optimised dimensions (one parameter set), 10 + 5 x dims above "
+                          "(two elements: 30); 100 for bandstructure.  An explicit value "
+                          "always wins.",
         type=int,
         default=None,
     )

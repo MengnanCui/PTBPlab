@@ -29,7 +29,8 @@ sys.path.insert(0, str(ROOT))
 
 
 def _timed(loss, cwd):
-    """Loss_EnergyGeometry that records (elapsed, x, mu) and returns to ``cwd``."""
+    """Loss_EnergyGeometry that records (elapsed, x, mu, failed) and returns to ``cwd``."""
+    from utils.gradient_opt import loss_failed
     trace, t0 = [], time.perf_counter()
 
     def f(x):
@@ -37,7 +38,7 @@ def _timed(loss, cwd):
             mu = float(loss.Loss_EnergyGeometry([float(x[0]), float(x[1])]))
         finally:
             os.chdir(cwd)
-        trace.append((time.perf_counter() - t0, [float(v) for v in x], mu))
+        trace.append((time.perf_counter() - t0, [float(v) for v in x], mu, loss_failed(loss, mu)))
         return mu
     return f, trace
 
@@ -65,7 +66,7 @@ def run_gradient(loss, cov_radius, maxiter, cwd):
         finally:
             os.chdir(cwd)
         trace.append((time.perf_counter() - t0, [float(v) for v in x], float(e.f),
-                      None if e.g is None else [float(v) for v in e.g]))
+                      None if e.g is None else [float(v) for v in e.g], not e.valid))
         return e
     lo, hi = GO.bounds(loss, cov_radius)
     best, hist = GO.projected_bfgs(f, GO.seed(loss, cov_radius), lo, hi, maxiter=maxiter,
@@ -73,13 +74,18 @@ def run_gradient(loss, cov_radius, maxiter, cwd):
     return trace, hist.message
 
 
-def best_so_far(trace):
-    """(elapsed, lowest loss so far) after each evaluation; failed steps (97-99, below the
-    real losses of the dataset mode) do not count."""
+def _failed(row) -> bool:
+    """A failed step: the flag at the end of the row (M5b-2), else (rows of a JSON written
+    before) the old failure values 97-99, which were below the real losses of the dataset mode."""
     from utils.gradient_opt import failed
+    return row[-1] if isinstance(row[-1], bool) else failed(row[2])
+
+
+def best_so_far(trace):
+    """(elapsed, lowest loss so far) after each evaluation; failed steps do not count."""
     out, best = [], float("inf")
     for row in trace:
-        if not failed(row[2]):
+        if not _failed(row):
             best = min(best, row[2])
         out.append((row[0], best))
     return out
@@ -87,8 +93,7 @@ def best_so_far(trace):
 
 def summary(trace):
     """(lowest real loss, its x, number of failed steps) of a run."""
-    from utils.gradient_opt import failed
-    ok = [r for r in trace if not failed(r[2])]
+    ok = [r for r in trace if not _failed(r)]
     b = min(ok, key=lambda r: r[2]) if ok else (None, None, float("nan"))
     return b[2], b[1], len(trace) - len(ok)
 

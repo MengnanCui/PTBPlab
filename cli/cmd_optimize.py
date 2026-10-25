@@ -29,7 +29,11 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
         'optimize',
         help="Optimise DFTB parameters against a DFT reference dataset.",
         description="Run the outer-loop optimiser (BO / parallel_BO / PSO) over "
-                    "(r0_w, r0_d) with the inner-loop sigma_rep brute search.",
+                    "(r0_w, r0_d) of every parameter set (by default one per element) with "
+                    "the inner-loop sigma_rep search.  The loss's penalty is the geometric "
+                    "mean of the parameter sets' penalties.  A point whose loss cannot be "
+                    "computed on the whole dataset (failed hotcent or DFTB runs, structures "
+                    "without results) gets twice the worst successful loss so far.",
     )
     p.add_argument('dataset', metavar='DATASET',
                    help="Path to the DFT reference (xyz/traj/extxyz/json).")
@@ -54,8 +58,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                         "(default: 0.04 0.2).")
     p.add_argument('--n-calls', type=int, default=None, metavar='N',
                    dest='n_calls',
-                   help="Total BO/PSO evaluations. Default: 11 for energygeometry/"
-                        "dataset/reaction, 100 for bandstructure.")
+                   help="Total BO/PSO evaluations. Default for energygeometry/dataset/"
+                        "reaction: 11 for up to 2 optimised dimensions (one parameter set), "
+                        "10 + 5 x dims above (two elements, 4 dimensions: 30); 100 for "
+                        "bandstructure. An explicit value (here or in --config) always wins.")
     p.add_argument('--n-particles', type=int, default=4, metavar='N',
                    dest='n_particles',
                    help="Population/batch width for PSO and parallel_bo. Default: 4.")
@@ -105,19 +111,23 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    help="Parameters to optimise. Default: r0_w r0_d sigma_rep.")
     p.add_argument('--multi-element', nargs='+', default=None, metavar='E',
                    dest='multi_element',
-                   help="Element symbol(s) whose params are optimised; "
-                        "others are held at PTBP's published parameters.")
+                   help="Fit only these elements (symbols); the others keep the "
+                        "(r0_w, r0_d, sigma_rep) PTBP published.")
     p.add_argument('--shared-parameters', action='store_true', default=None,
                    dest='shared_parameters',
                    help="One (r0_w, r0_d, sigma_rep) for all elements, as before M5b. Default: "
-                        "one set per element (per type).")
+                        "one set per element (per type), the penalty being the geometric mean "
+                        "of the sets' penalties.")
     p.add_argument('--switch', nargs=4, action='append', default=None,
                    metavar=('ELEMENT', 'LABELS', 'CENTRE', 'WIDTH'), dest='switch',
                    help="Split ELEMENT into types that switch smoothly with the coordination "
                         "number (pydftb's M5a): LABELS comma-separated in order of increasing "
                         "coordination number (e.g. Cu2,Cu), CENTRE and WIDTH of every switching "
                         "window (comma-separated, CN units). Fixed hyperparameters; each type "
-                        "gets its own r0_w, r0_d, sigma_rep. Needs --engine pydftb. Repeatable.")
+                        "gets its own r0_w, r0_d, sigma_rep. Needs --engine pydftb. Repeatable. "
+                        "Prefer --mode reaction or dataset: energygeometry compares energies "
+                        "only within EOS groups and drops low-weight groups, so a type may get "
+                        "no data (a warning is printed).")
     p.add_argument('--types', default=None, metavar='JSON', dest='types',
                    help="Switched types as JSON (the YAML key `types`): a list of "
                         "{\"element\", \"labels\", \"centre\", \"width\"[, \"cutoff\" (Bohr), "
