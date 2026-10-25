@@ -297,8 +297,10 @@ log line and should pass `--E0s` explicitly.
 #### Other knobs
 
 - `--n_calls N` — total Bayesian-optimisation iterations
-  (defaults: 11 for energygeometry/dataset/reaction, 100 for bandstructure).
-  In resume mode (see below) this is the number of *additional* iterations.
+  (defaults: 11 for energygeometry/dataset/reaction with one parameter set, i.e. up to 2
+  optimised dimensions, 10 + 5 × dimensions above, so 30 for two elements (M5b-2); 100 for
+  bandstructure). An explicit value (command line or YAML) always wins; `ptbp plan` uses the
+  same rule. In resume mode (see below) this is the number of *additional* iterations.
 - **Smart BO seed**. When the dataset is a single element that has an
   entry in `utils.parameters_set.get_PTBP()`, PTBP starts the BO from
   the published `(r0_w, r0_d)` for that element instead of the
@@ -526,7 +528,21 @@ ptbp optimize data.xyz --type-start N 2.4 3.6   # start of one type's radii (Boh
   smooth type switching (M5a) and need `--engine pydftb` with the NumPy backend.
 - The penalty is the geometric mean of the parameter sets' penalties.
 - Gradient optimisers work with one set per element (2N directions), not with switched types.
+- Several types of one element with `--mode energygeometry` print a warning: that loss compares
+  energies only within each EOS group and may leave a type without data; use a reaction or
+  dataset loss for type switching. `ptbp plan` also takes `--shared-parameters`.
 - Details: `pydftb/docs/reports/M5b-ptbp-types.html`.
+
+**Failed evaluations (M5b-2).** A point whose loss cannot be computed on the whole dataset
+(hotcent or a DFTB run fails, some structures have no DFTB results, or the loss is not finite)
+counts twice the worst successful loss of the run so far; before the first success it gets a
+fixed value (energygeometry 1000, dataset/reaction 1000 per structure). Before M5b-2 it got a
+random integer 97–99, below the real losses of the reaction and dataset modes, and a step with
+some structures missing was scored on the others only. The failed indices go to
+`checkpoint.pkl.meta.json` (`failed_evaluations`, only when there are some); a resumed run
+starts the worst successful loss from the loaded points, and in checkpoints written before
+M5b-2 the values exactly 97, 98 or 99 count as failures. Runs without failures are unchanged
+byte for byte. Details: `pydftb/docs/reports/M5b2-ptbp-followups.html`.
 
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
