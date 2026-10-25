@@ -417,6 +417,8 @@ PC3 = {"positions": [[3.0, 0.2, 0.1], [-2.5, 1.0, 0.5], [0.3, -2.8, 1.2]],
        "charges": [0.8, -0.6, 0.4]}
 PC_CLOSE = {"positions": [[1.2, 0.2, 0.1], [-1.1, 0.6, 0.5]], "charges": [0.8, -0.6],
             "blur": 0.8}
+PC_BOX = {"positions": (np.array(PC3["positions"]) + 2.0).tolist(), "charges": PC3["charges"],
+          "blur": 0.3}
 SITES = {"gross": {0: 0.5}, "net": {1: -0.3, 2: 0.2}}
 GB_WATER = {"model": "gb", "solvent": "water", "free_energy_shift": 0.0, "born_scale": 1.5,
             "born_offset": 0.0, "descreening": "unity"}
@@ -942,9 +944,7 @@ CASES = [
          efield={**FIELD, "strength": 0.1}, ewald_tolerance=1e-12, torch=False,
          tol={**TOL_ENV, "stress": 1e-9},
          note="k-points; a cubic cell (DFTB+'s field stress is wrong off the diagonal of others)"),
-    Case("water_box_pc", _water_box,
-         point_charges={"positions": (np.array(PC3["positions"]) + 2.0).tolist(),
-                        "charges": PC3["charges"], "blur": 0.3},
+    Case("water_box_pc", _water_box, point_charges=PC_BOX,
          ewald_tolerance=1e-12, torch=False, tol=TOL_ENV,
          note="Ewald sum over the point charges' images; no stress (as DFTB+)"),
     Case("h2o_gbsa", _water, solvation=GBSA_WATER, torch=False, tol={**TOL_ENV, **TOL_DFTBP_FD},
@@ -1610,5 +1610,79 @@ CASES += [
     Case("co2_hess_pol", _co2, **DX, tol=TOL_DX,
          hessian={"polarisability": True, "modes": {"remove": True}},
          note="linear molecule: five rigid motions, degenerate bending modes"),
+]
+
+
+# ---- milestone M6g-3a: responses with block potentials (DFTB+U, onsite corrections) and the
+# derivatives with respect to the point charges' positions.  The polarisability and the kernel
+# against DFTB+ 25.1 (it refuses +U together with onsite); the coordinate derivatives against
+# DFTB+'s finite-difference Born charges (it refuses them with block potentials); "dqdxext":
+# dN/dR of the point charges (e/Bohr) against the development build's ExternalChargeDerivatives
+# (its tag; reversed sign for periodic systems, whose Ewald derivative it takes with respect to
+# the atom), "extq_text": its detailed.out block (8 decimals in e/Angstrom)
+TOL_BRESP = {**TOL_RESP, "orbital": 1e-6, "eigenvalues": 1e-7, "moments": 1e-8}
+TOL_BDX = {**TOL_DX, "orbital": 1e-6, "eigenvalues": 1e-7, "moments": 1e-8}
+# metals with block potentials converge the SCC more slowly: the dipoles of the displaced
+# geometries carry ~1e-11 of SCC error in each code, which the central differences (2 delta =
+# 2e-4 Bohr) turn into ~5e-8 per code ("hess_born"); the last SCC step may land on either side
+# of the tolerance (one iteration, as M6b's block cases allow)
+TOL_BDX_METAL = {**TOL_BDX, "n_scc": 1, "hess_born": 1e-7}
+TOL_EXTQ = {**TOL_BRESP, "dqdxext": 1e-9, "extq_text": 2e-8}
+EXTQ = {"external_charge_derivatives": True}
+CASES += [
+    # polarisability and response kernel against DFTB+ 25.1
+    Case("cu4co_plusu_pol", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, torch=False,
+         tol=TOL_BRESP, analysis=POL,
+         note="FLL +U on the Cu d shells, metallic: the d blocks are response channels"),
+    Case("cu4co_plusu_psic_pol", _cu4co, filling=("fermi", 300.0),
+         plus_u={**U_CU, "functional": "psic"}, torch=False, tol=TOL_BRESP, analysis=POL),
+    Case("gdo_spin_plusu_pol", _gdo, shell_resolved=True, **GDO,
+         spin={"unpaired_electrons": 8, "spin_constants": W_SPIN},
+         plus_u={"groups": {"Gd": [("f", 0.2)]}}, torch=False, tol={**TOL_BRESP, "dEf": 5e-9},
+         analysis=POL,
+         note="collinear spin and an f-shell +U: up and down blocks as (q, m) channels; the "
+              "down channel's N_F = 1.6e-4 amplifies DFTB+'s response convergence "
+              "(PerturbSccTol 1e-11) in its dE_F/dE about 6000-fold (up channel: 4e-15)"),
+    Case("h2o_ons_pol", _water, onsite=ONS, torch=False, tol=TOL_BRESP,
+         analysis={"polarisability": {"frequencies": _freq(1.0, 3.0)}},
+         note="onsite corrections: every element of the atom blocks is a channel"),
+    Case("ch3oh_ons_dftb3_pol", _meoh, dftb3=DFTB3_3OB, onsite=ONS, torch=False, tol=TOL_BRESP,
+         analysis=POL),
+    Case("cuo_chain_spin_plusu_pol_k422", _cuo_chain, kgrid=(4, 2, 2), filling=("fermi", 500.0),
+         spin={"unpaired_electrons": 2, "spin_constants": W_SPIN}, plus_u=U_CU,
+         ewald_tolerance=1e-12, torch=False, tol=TOL_BRESP, analysis=POL,
+         note="periodic (charge response only), k-points (complex block elements), spin, +U"),
+    Case("cu4co_plusu_kernel", _cu4co, filling=("fermi", 300.0), plus_u=U_CU, torch=False,
+         tol=TOL_BRESP, analysis=KERNEL),
+    Case("h2o_ons_kernel", _water, onsite=ONS, torch=False, tol=TOL_BRESP, analysis=KERNEL),
+    # coordinate derivatives: DFTB+ refuses block potentials, its differences are the reference
+    Case("h2o_ons_dx", _water, onsite=ONS, **DX, tol=TOL_BDX, analysis=COORD_FD, hessian={},
+         note="the ground state's block potential enters through S' and the block populations"),
+    Case("ch3oh_ons_dx", _meoh, onsite=ONS, **DX, tol=TOL_BDX, analysis=COORD_FD, hessian={}),
+    Case("h2o_cation_plusu_dx", _water, charge=1.0,
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}, plus_u=U_O, **DX,
+         tol=TOL_BDX, analysis=COORD_FD, hessian={},
+         note="spin polarised, +U on the O p shell; Born charges sum to +1"),
+    Case("cu4co_plusu_dx_3000K", _cu4co, filling=("fermi", 3000.0), plus_u=U_CU, **DX,
+         tol=TOL_BDX_METAL, analysis={**COORD_FD, "perturbation": {"filling_tol": 1e-15}},
+         hessian={}, note="metallic (every partly filled level, as cu4co_dx_3000K)"),
+    Case("cu4co_plusu_ons_dx_3000K", _cu4co, filling=("fermi", 3000.0), plus_u=U_CU,
+         onsite=ONS, **DX, tol=TOL_BDX_METAL,
+         analysis={**COORD_FD, "perturbation": {"filling_tol": 1e-15}}, hessian={},
+         note="+U and onsite corrections together (DFTB+ refuses any response with both)"),
+    # point charges' positions against the development build's ExternalChargeDerivatives
+    Case("h2o_pc_extq", _water, point_charges=PC3, dftbplus="dev", torch=False, tol=TOL_EXTQ,
+         analysis=EXTQ),
+    Case("h2o_pc_blur_extq", _water, point_charges=PC_CLOSE, dftbplus="dev", torch=False,
+         tol=TOL_EXTQ, analysis={"external_charge_derivatives": {"charges": [1]}},
+         note="Gaussian blur, only the second charge (WrtCharges = 2)"),
+    Case("h2o_cation_pc_extq", _water, charge=1.0, point_charges=PC3,
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}, dftbplus="dev",
+         torch=False, tol=TOL_EXTQ, analysis=EXTQ, note="collinear spin"),
+    Case("ch3oh_ons_pc_extq", _meoh, onsite=ONS, point_charges=PC3, dftbplus="dev",
+         torch=False, tol=TOL_EXTQ, analysis=EXTQ, note="with onsite corrections"),
+    Case("water_box_pc_extq", _water_box, point_charges=PC_BOX, ewald_tolerance=1e-12,
+         dftbplus="dev", torch=False, tol=TOL_EXTQ, analysis=EXTQ,
+         note="periodic (Ewald): the development build's sign is reversed"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

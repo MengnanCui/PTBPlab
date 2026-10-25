@@ -306,26 +306,124 @@ class GroundState:
         return m, ca * ci.conj()
 
 
+# ---- block potentials (milestone M6g-3a) ---------------------------------------------------
+@dataclass
+class BlockChannels:
+    """The block-potential channels of a response (DFTB+U, onsite corrections; M6g-3a): the
+    elements i <= j of every atom block the potentials touch (+U: the groups' blocks, onsite:
+    the whole block).  Channel c puts V = v E_c, E_c = (E_ij + E_ji) / (1 + d_ij), into a spin
+    component; its operator 1/2 (S E_c + E_c S) has the population P_c = (2 - d_ij) Q_ij, Q the
+    dual block populations.  ``kernel`` (n_comp nb, n_comp nb) is d V_c / d Q_d of
+    :meth:`pydftb.blockpot.BlockTerms.potentials` (affine in Q: the constant parts drop)."""
+    k: np.ndarray                 # position in BlockTerms.atoms
+    mu: np.ndarray                # global orbital indices
+    nu: np.ndarray
+    local_i: np.ndarray           # indices inside the atom block
+    local_j: np.ndarray
+    n_comp: int
+    kernel: np.ndarray
+
+    @property
+    def size(self) -> int:
+        return len(self.k)
+
+    @property
+    def to_q(self) -> np.ndarray:
+        """P_c -> Q_ij: 1 on the block diagonal, 1/2 off it."""
+        return np.where(self.mu == self.nu, 1.0, 0.5)
+
+    @classmethod
+    def build(cls, bt) -> "BlockChannels":
+        k, mu, nu, li, lj = [], [], [], [], []
+        for kk, sl in enumerate(bt.slices):
+            n = sl.stop - sl.start
+            mask = np.zeros((n, n), bool)
+            for _, idx, _ in bt.u_groups[kk]:
+                mask[np.ix_(idx, idx)] = True
+            if bt.ons[kk] is not None:
+                mask[:] = True
+            for i in range(n):
+                for j in range(i, n):
+                    if mask[i, j]:
+                        k.append(kk)
+                        mu.append(sl.start + i)
+                        nu.append(sl.start + j)
+                        li.append(i)
+                        lj.append(j)
+        ncomp = {"q": 1, "ud": 2, "pauli": 4}[bt.rep]
+        nb = len(k)
+        zero = [np.zeros((ncomp, sl.stop - sl.start, sl.stop - sl.start)) for sl in bt.slices]
+        v0, _ = bt.potentials(zero)
+        kernel = np.zeros((ncomp * nb, ncomp * nb))
+        for t in range(ncomp):
+            for d in range(nb):
+                blocks = [z.copy() for z in zero]
+                blocks[k[d]][t, li[d], lj[d]] = blocks[k[d]][t, lj[d], li[d]] = 1.0
+                v, _ = bt.potentials(blocks)
+                for s in range(ncomp):
+                    kernel[s * nb:(s + 1) * nb, t * nb + d] = [
+                        v[k[c]][s, li[c], lj[c]] - v0[k[c]][s, li[c], lj[c]] for c in range(nb)]
+        return cls(np.array(k, int), np.array(mu, int), np.array(nu, int), np.array(li, int),
+                   np.array(lj, int), ncomp, kernel)
+
+    def elements(self, blk: _Block, i, a) -> np.ndarray:
+        """c_a^+ O_c c_i (channels x pairs) = 1/2 [(Sc_a)*_mu c_nu,i + (Sc_a)*_nu c_mu,i
+        + c*_mu,a (Sc_i)_nu + c*_nu,a (Sc_i)_mu] / (1 + d_mu,nu)."""
+        c, sc, mu, nu = blk.c, blk.sc, self.mu, self.nu
+        ca, ci, sa, si = c[:, a], c[:, i], sc[:, a], sc[:, i]
+        m = 0.5 * (sa[mu].conj() * ci[nu] + sa[nu].conj() * ci[mu]
+                   + ca[mu].conj() * si[nu] + ca[nu].conj() * si[mu])
+        return m / (1.0 + (mu == nu))[:, None]
+
+    def fermi_vector(self, gs: "GroundState") -> np.ndarray:
+        """d^c = sum_k w_k sum_{i in W} delta_i m^c_ii per channel (n_spin, nb): the block
+        populations' share of the Fermi-level move."""
+        out = np.zeros((gs.nspin, self.size))
+        for blk in gs.blocks:
+            win = blk.window
+            if win.size:
+                dlt = blk.weight * _delta(blk.evals[win], blk.fermi, gs.beta)
+                out[blk.spin] += np.real(self.elements(blk, win, win)) @ dlt
+        return out
+
+
+def block_channels(st) -> BlockChannels | None:
+    """The block channels of a calculation with block potentials (M6g-3a), else None."""
+    return None if st.block is None else BlockChannels.build(st.block)
+
+
 # ---- chi0 ----------------------------------------------------------------------------------
 @dataclass
 class Chi0:
     """Non-interacting response at one frequency in the up/down representation: ``orb``
     (n_spin n_orb, n_spin n_shell), the Mulliken population of every orbital of every channel
     per unit potential on a shell of a channel (full filling and Fermi-level move included);
-    ``net`` the same for the on-site populations (or None)."""
+    ``net`` the same for the on-site populations (or None).  With block channels (M6g-3a)
+    ``full`` (n_spin (n_orb + nb), n_spin (n_shell + nb)) has per spin the rows [orbital
+    populations | block populations P_c] and the columns [shell potentials | block
+    potentials], ``full_net`` the on-site populations' rows."""
     orb: np.ndarray
     net: np.ndarray | None
+    full: np.ndarray | None = None
+    full_net: np.ndarray | None = None
 
 
 def chi0(gs: GroundState, omegas, eta: float = ETA, with_net: bool = False,
-         eta_compat: bool = False) -> list:
+         eta_compat: bool = False, channels: BlockChannels | None = None) -> list:
     """Chi0 at every frequency in ``omegas`` (one pass over the pairs).  Complex weights enter
     by their real part (the eta term of complex eigenvectors cancels between k and -k); with
-    ``eta_compat`` by their conjugate (DFTB+'s sign of the term for reduced k-point sets)."""
+    ``eta_compat`` by their conjugate (DFTB+'s sign of the term for reduced k-point sets).
+    ``channels``: block potentials (M6g-3a), giving :attr:`Chi0.full`."""
     ns, no, nsh = gs.nspin, gs.norb, gs.nshell
     nw = len(omegas)
     orb = np.zeros((nw, ns, no, nsh))
     net = np.zeros((nw, ns, no, nsh)) if with_net else None
+    nb = 0 if channels is None else channels.size
+    if nb:
+        ob = np.zeros((nw, ns, no, nb))                    # orbitals x block potentials
+        bs = np.zeros((nw, ns, nb, nsh))                   # block populations x shells
+        bb = np.zeros((nw, ns, nb, nb))
+        nob = np.zeros((nw, ns, no, nb)) if with_net else None
     fill = gs.max_fill
     for blk in gs.blocks:
         i, a, same = gs.pairs(blk)
@@ -336,6 +434,7 @@ def chi0(gs: GroundState, omegas, eta: float = ETA, with_net: bool = False,
             ii, aa, ss = i[lo:lo + step], a[lo:lo + step], same[lo:lo + step]
             m, n = gs.elements(blk, ii, aa)
             msh = gs.shells(m)
+            mb = channels.elements(blk, ii, aa) if nb else None
             for w, omega in enumerate(omegas):
                 g = gs.weights(blk, ii, aa, ss, float(omega), eta) * (blk.weight * fill)
                 if np.iscomplexobj(g):
@@ -344,7 +443,41 @@ def chi0(gs: GroundState, omegas, eta: float = ETA, with_net: bool = False,
                 orb[w, blk.spin] += np.real(m.conj() @ gm)
                 if with_net:
                     net[w, blk.spin] += np.real(n @ gm)
+                if nb:
+                    gb = g[:, None] * mb.T
+                    ob[w, blk.spin] += np.real(m.conj() @ gb)
+                    bs[w, blk.spin] += np.real(mb.conj() @ gm)
+                    bb[w, blk.spin] += np.real(mb.conj() @ gb)
+                    if with_net:
+                        nob[w, blk.spin] += np.real(n @ gb)
     d_sh = np.array([gs.shells(gs.d_orb[s]) for s in range(ns)])
+    if nb:
+        d_blk = channels.fermi_vector(gs)
+        extra = []
+        for w, omega in enumerate(omegas):
+            move = gs.fermi_shift and float(omega) == 0.0
+            full = _block_diag(np.array([np.block([[orb[w, s], ob[w, s]], [bs[w, s], bb[w, s]]])
+                                         for s in range(ns)]))
+            full_net = (_block_diag(np.array([np.hstack([net[w, s], nob[w, s]])
+                                              for s in range(ns)])) if with_net else None)
+            if move:
+                rows = np.hstack([gs.d_orb, d_blk])                     # (ns, no + nb)
+                cols = np.hstack([d_sh, d_blk])                         # (ns, nsh + nb)
+                if gs.shared_fermi:
+                    full = full + fill * np.outer(rows.ravel(), cols.ravel()) / gs.dos.sum()
+                    if with_net:
+                        full_net = full_net + (fill * np.outer(gs.d_net.ravel(), cols.ravel())
+                                               / gs.dos.sum())
+                else:
+                    nr, nc = no + nb, nsh + nb
+                    for s in range(ns):
+                        if gs.dos[s] > 0.0:
+                            full[s * nr:(s + 1) * nr, s * nc:(s + 1) * nc] += (
+                                fill * np.outer(rows[s], cols[s]) / gs.dos[s])
+                            if with_net:
+                                full_net[s * no:(s + 1) * no, s * nc:(s + 1) * nc] += (
+                                    fill * np.outer(gs.d_net[s], cols[s]) / gs.dos[s])
+            extra.append((full, full_net))
     out = []
     for w, omega in enumerate(omegas):
         o = _block_diag(orb[w])
@@ -361,7 +494,7 @@ def chi0(gs: GroundState, omegas, eta: float = ETA, with_net: bool = False,
                         o[r, c] += fill * np.outer(gs.d_orb[s], d_sh[s]) / gs.dos[s]
                         if with_net:
                             nt[r, c] += fill * np.outer(gs.d_net[s], d_sh[s]) / gs.dos[s]
-        out.append(Chi0(o, nt))
+        out.append(Chi0(o, nt, *extra[w]) if nb else Chi0(o, nt))
     return out
 
 
@@ -429,13 +562,21 @@ def third_order_hessian(third, dq) -> np.ndarray:
 class Response:
     """The SCC response of one calculation at one frequency: unknowns x = (dq on the SCC
     sites, dm on the shells), (I - A B) x = A V_ext with A = chi0 (shell potentials -> x) and
-    B = K (x -> shell potentials)."""
+    B = K (x -> shell potentials).  With block channels (M6g-3a) x also holds the block
+    populations Q_c of every spin component, B their kernel, and the potentials are
+    [shells | blocks] per spin component (q, then m); without them [q shells | m shells]."""
 
-    def __init__(self, gs: GroundState, kernel, x: Chi0, scc: bool):
+    def __init__(self, gs: GroundState, kernel, x: Chi0, scc: bool,
+                 channels: BlockChannels | None = None):
         self.gs = gs
         self.x = x
+        self.channels = channels if channels is not None and channels.size else None
         kq, e, w = kernel
         nsh = gs.nshell
+        if self.channels is not None:
+            self.amat, self.bmat = self._block_matrices(kq, e, w)
+            self.scc = scc
+            return
         chi_sh = to_qm(gs, shell_rows(gs, x.orb))       # (n_qm nsh, n_qm nsh)
         nq = e.shape[1]
         if gs.nspin == 1:
@@ -452,12 +593,46 @@ class Response:
                 bmat[nsh:, nq:] = w
         self.amat, self.bmat, self.scc = amat, bmat, scc
 
-    def potentials(self, v_ext) -> np.ndarray:
-        """Total shell potentials (n_qm nsh, n_rhs) for external charge potentials per shell
-        (n_shell, n_rhs); the magnetisation part of the external potential is zero."""
+    def _block_matrices(self, kq, e, w):
+        """A and B with the block populations among the unknowns (M6g-3a)."""
+        gs, ch = self.gs, self.channels
+        ns, no, nsh, nb = gs.nspin, gs.norb, gs.nshell, ch.size
+        nq = e.shape[1]
+        nr, nc = no + nb, nsh + nb
+        self.full = full = to_qm(gs, self.x.full)       # rows [orb | blk], cols [sh | blk]
+        nunk = nq + (nsh if ns == 2 else 0) + ns * nb
+        amat = np.zeros((nunk, ns * nc))
+        amat[:nq] = e.T @ gs.shells(full[:no])
+        off = nq
+        if ns == 2:
+            amat[off:off + nsh] = gs.shells(full[nr:nr + no])
+            off += nsh
+        for s in range(ns):
+            amat[off:off + nb] = full[s * nr + no:(s + 1) * nr] * ch.to_q[:, None]
+            off += nb
+        bmat = np.zeros((ns * nc, nunk))
+        bmat[:nsh, :nq] = e @ kq
+        if ns == 2 and w is not None:
+            bmat[nc:nc + nsh, nq:nq + nsh] = w
+        boff = nq + (nsh if ns == 2 else 0)
+        for s in range(ns):
+            bmat[s * nc + nsh:(s + 1) * nc, boff:] = ch.kernel[s * nb:(s + 1) * nb]
+        return amat, bmat
+
+    def _embed(self, v_ext) -> np.ndarray:
+        """External charge potentials per shell (n_shell, n_rhs) in the potentials' layout."""
         v = np.asarray(v_ext, float)
-        if self.gs.nspin == 2:
-            v = np.vstack([v, np.zeros_like(v)])
+        if self.channels is None:
+            return np.vstack([v, np.zeros_like(v)]) if self.gs.nspin == 2 else v
+        out = np.zeros((self.gs.nspin * (self.gs.nshell + self.channels.size),) + v.shape[1:])
+        out[:self.gs.nshell] = v
+        return out
+
+    def potentials(self, v_ext) -> np.ndarray:
+        """Total potentials (n_qm nsh, n_rhs; with blocks see the class) for external charge
+        potentials per shell (n_shell, n_rhs); the other parts of the external potential are
+        zero."""
+        v = self._embed(v_ext)
         if not self.scc:
             return v
         lhs = np.eye(self.amat.shape[0]) - self.amat @ self.bmat
@@ -465,13 +640,11 @@ class Response:
         return v + self.bmat @ xsol
 
     def potentials_with(self, x0, v_ext) -> np.ndarray:
-        """Total shell potentials when, besides the external charge potentials ``v_ext``
+        """Total potentials when, besides the external charge potentials ``v_ext``
         (n_shell, n_rhs), the populations change by ``x0`` (in the unknowns' space) at fixed
         potentials (coordinate perturbations, M6g-2): (I - A B) x = x0 + A v_ext,
         v_tot = v_ext + B x."""
-        v = np.asarray(v_ext, float)
-        if self.gs.nspin == 2:
-            v = np.vstack([v, np.zeros_like(v)])
+        v = self._embed(v_ext)
         if not self.scc:
             return v
         lhs = np.eye(self.amat.shape[0]) - self.amat @ self.bmat
@@ -479,15 +652,55 @@ class Response:
         return v + self.bmat @ xsol
 
     def populations(self, v_tot, net: bool = False) -> np.ndarray:
-        """(n_qm, n_orb, n_rhs) Mulliken (or on-site) populations for total shell potentials."""
-        chi = to_qm(self.gs, self.x.net if net else self.x.orb)
+        """(n_qm, n_orb, n_rhs) Mulliken (or on-site) populations for total potentials."""
+        gs = self.gs
+        if self.channels is not None:
+            if net:
+                p = to_qm(gs, self.x.full_net) @ v_tot
+            else:
+                nr = gs.norb + self.channels.size
+                p = np.vstack([self.full[s * nr:s * nr + gs.norb]
+                               for s in range(gs.nspin)]) @ v_tot
+            return p.reshape(gs.nspin, gs.norb, p.shape[1])
+        chi = to_qm(gs, self.x.net if net else self.x.orb)
         p = chi @ v_tot
-        return p.reshape(self.gs.nspin, self.gs.norb, p.shape[1])
+        return p.reshape(gs.nspin, gs.norb, p.shape[1])
+
+    def shell_part(self, v_tot) -> np.ndarray:
+        """The shell potentials [q shells | m shells] of total potentials."""
+        if self.channels is None:
+            return v_tot
+        nsh, nc = self.gs.nshell, self.gs.nshell + self.channels.size
+        return np.concatenate([v_tot[s * nc:s * nc + nsh] for s in range(self.gs.nspin)])
+
+    def block_part(self, v_tot) -> np.ndarray | None:
+        """The block potentials (n_qm, nb, ...) of total potentials, or None."""
+        if self.channels is None:
+            return None
+        nsh, nc = self.gs.nshell, self.gs.nshell + self.channels.size
+        return np.stack([v_tot[s * nc + nsh:(s + 1) * nc] for s in range(self.gs.nspin)])
 
 
-def eigenvalue_derivatives(gs: GroundState, v_tot) -> np.ndarray:
-    """d eps of every (spin, k) block for total shell potentials (n_qm nsh,): the diagonal of
-    M = C^+ dH C, in a degenerate run the eigenvalues of its block (ascending)."""
+def _channel_potential(gs: GroundState, vb, spin: int):
+    """Block potentials of a spin channel from the spin components (q, m)."""
+    if gs.nspin == 1:
+        return vb[0]
+    return vb[0] + vb[1] if spin == 0 else vb[0] - vb[1]
+
+
+def block_matrix(channels: BlockChannels, v, norb: int) -> np.ndarray:
+    """The block-diagonal V (n_orb, n_orb) of channel potentials ``v``."""
+    out = np.zeros((norb, norb))
+    out[channels.mu, channels.nu] = v
+    out[channels.nu, channels.mu] = v
+    return out
+
+
+def eigenvalue_derivatives(gs: GroundState, v_tot, vb=None,
+                           channels: BlockChannels | None = None) -> np.ndarray:
+    """d eps of every (spin, k) block for total shell potentials (n_qm nsh,) and block
+    potentials ``vb`` (n_qm, nb; M6g-3a): the diagonal of M = C^+ dH C, in a degenerate run the
+    eigenvalues of its block (ascending)."""
     nsh = gs.nshell
     vq = v_tot[:nsh]
     vm = v_tot[nsh:] if gs.nspin == 2 else np.zeros(nsh)
@@ -495,6 +708,9 @@ def eigenvalue_derivatives(gs: GroundState, v_tot) -> np.ndarray:
     for blk in gs.blocks:
         v = (vq + (vm if blk.spin == 0 else -vm))[gs.orb_shell]
         dh = 0.5 * blk.s * (v[:, None] + v[None, :])
+        if vb is not None:
+            sv = blk.s @ block_matrix(channels, _channel_potential(gs, vb, blk.spin), gs.norb)
+            dh = dh + 0.5 * (sv + sv.conj().T)
         m = blk.c.conj().T @ dh @ blk.c
         de = np.real(np.diag(m)).copy()
         for gid in np.unique(blk.group):
@@ -505,14 +721,17 @@ def eigenvalue_derivatives(gs: GroundState, v_tot) -> np.ndarray:
     return np.array(out)
 
 
-def fermi_derivative(gs: GroundState, v_tot) -> np.ndarray:
+def fermi_derivative(gs: GroundState, v_tot, vb=None, d_blk=None) -> np.ndarray:
     """dE_F per channel (equal for a shared Fermi level): sum_k w_k sum_{i in W} delta_i M_ii
-    / sum_k w_k sum_{i in W} delta_i."""
+    / sum_k w_k sum_{i in W} delta_i; ``vb``, ``d_blk``: block potentials and the block part of
+    the Fermi vectors (M6g-3a)."""
     nsh = gs.nshell
     vq = v_tot[:nsh]
     vm = v_tot[nsh:] if gs.nspin == 2 else np.zeros(nsh)
     num = np.array([gs.shells(gs.d_orb[s]) @ (vq + (vm if s == 0 else -vm))
                     for s in range(gs.nspin)])
+    if vb is not None:
+        num = num + np.array([d_blk[s] @ _channel_potential(gs, vb, s) for s in range(gs.nspin)])
     if gs.shared_fermi:
         return np.full(gs.nspin, num.sum() / gs.dos.sum())
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -528,12 +747,29 @@ def _sum_atoms(x, orb_atom, natom):
     return out
 
 
+def _level_derivatives(gs: GroundState, resp: Response, v_col) -> np.ndarray:
+    """:func:`eigenvalue_derivatives` of one column of total potentials."""
+    if resp.channels is None:
+        return eigenvalue_derivatives(gs, v_col)
+    return eigenvalue_derivatives(gs, resp.shell_part(v_col), resp.block_part(v_col),
+                                  resp.channels)
+
+
+def _fermi_level_derivative(gs: GroundState, resp: Response, v_col) -> np.ndarray:
+    """:func:`fermi_derivative` of one column of total potentials."""
+    if resp.channels is None:
+        return fermi_derivative(gs, v_col)
+    return fermi_derivative(gs, resp.shell_part(v_col), resp.block_part(v_col),
+                            resp.channels.fermi_vector(gs))
+
+
 def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     """DFTB+'s ``Polarisability``: the response to E_x, E_y, E_z (H' from the atoms'
     coordinates) at every frequency of ``spec``."""
     omegas = frequencies(spec, "polarisability")
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
+    channels = block_channels(st)
     periodic = st.cell is not None and bool(np.any(st.pbc))
     pos = np.asarray(st.pos, float)
     v_ext = pos[gs.shell_atom]                           # (n_shell, 3)
@@ -542,14 +778,14 @@ def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     dei = []
     dfermi = np.zeros((nw, 3, gs.nspin)) if gs.metallic else None
     compat = bool(getattr(calc, "_response_eta_compat", False))
-    for w, x in enumerate(chi0(gs, omegas, opts["eta"], eta_compat=compat)):
-        resp = Response(gs, kernel, x, calc.scc)
-        v_tot = resp.potentials(v_ext)                   # (n_qm nsh, 3)
+    for w, x in enumerate(chi0(gs, omegas, opts["eta"], eta_compat=compat, channels=channels)):
+        resp = Response(gs, kernel, x, calc.scc, channels)
+        v_tot = resp.potentials(v_ext)                   # (n_qm nsh [+ blocks], 3)
         orb[w] = np.transpose(resp.populations(v_tot), (2, 0, 1))
-        dei.append(np.array([eigenvalue_derivatives(gs, v_tot[:, i]) for i in range(3)]))
+        dei.append(np.array([_level_derivatives(gs, resp, v_tot[:, i]) for i in range(3)]))
         if dfermi is not None and float(omegas[w]) == 0.0 and gs.fermi_shift:
             for i in range(3):
-                dfermi[w, i] = fermi_derivative(gs, v_tot[:, i])
+                dfermi[w, i] = _fermi_level_derivative(gs, resp, v_tot[:, i])
     atom = _sum_atoms(orb, gs.orb_atom, gs.natom)
     tensor = None if periodic else -np.einsum("Aj,wiA->wji", pos, atom[:, :, 0, :])
     return PolarisabilityResult(omegas, tensor, atom, orb, dei, dfermi,
@@ -564,6 +800,7 @@ def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     omegas = frequencies(spec, "response_kernel")
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
+    channels = block_channels(st)
     v_ext = np.eye(gs.natom)[gs.shell_atom]              # (n_shell, n_atom)
     nw, nqm = len(omegas), gs.nspin
     orb = np.zeros((nw, gs.natom, nqm, gs.norb))
@@ -571,17 +808,18 @@ def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     dei = []
     dfermi = np.zeros((nw, gs.natom, gs.nspin)) if gs.metallic else None
     compat = bool(getattr(calc, "_response_eta_compat", False))
-    for w, x in enumerate(chi0(gs, omegas, opts["eta"], with_net=True, eta_compat=compat)):
-        resp = Response(gs, kernel, x, calc.scc and not rpa)
-        v_tot = resp.potentials(v_ext)                   # (n_qm nsh, n_atom)
+    for w, x in enumerate(chi0(gs, omegas, opts["eta"], with_net=True, eta_compat=compat,
+                               channels=channels)):
+        resp = Response(gs, kernel, x, calc.scc and not rpa, channels)
+        v_tot = resp.potentials(v_ext)                   # (n_qm nsh [+ blocks], n_atom)
         orb[w] = np.transpose(resp.populations(v_tot), (2, 0, 1))
         pnet = resp.populations(v_tot, net=True)[0]      # (n_orb, n_atom), charge part
         net[w] = _sum_atoms(pnet.T, gs.orb_atom, gs.natom)
-        dei.append(np.array([eigenvalue_derivatives(gs, v_tot[:, a])
+        dei.append(np.array([_level_derivatives(gs, resp, v_tot[:, a])
                              for a in range(gs.natom)]))
         if dfermi is not None and float(omegas[w]) == 0.0 and gs.fermi_shift:
             for a in range(gs.natom):
-                dfermi[w, a] = fermi_derivative(gs, v_tot[:, a])
+                dfermi[w, a] = _fermi_level_derivative(gs, resp, v_tot[:, a])
     atom = _sum_atoms(orb, gs.orb_atom, gs.natom)
     frontier = [(blk.spin, blk.k, blk.n_filled - 1, blk.first_empty) for blk in gs.blocks]
     return ResponseKernelResult(omegas, rpa, atom, orb, net, dei, dfermi,
@@ -743,6 +981,27 @@ def external_jacobian(st) -> np.ndarray:
     return out
 
 
+def _block_change(channels: BlockChannels, bt, blk: _Block, bd: dict, xm, d_s, K: int, lo: int,
+                  hi: int) -> np.ndarray:
+    """Q_c of the bare coordinate response of one spin channel (M6g-3a): the dual block
+    populations 1/2 (d rho S + S d rho)_AA of d rho = C X C^T plus the change at fixed density
+    1/2 (rho S' + S' rho)_AA (S' only couples atom K to the others)."""
+    out = np.zeros(channels.size)
+    cx = blk.c @ xm
+    for kk, sl in enumerate(bt.slices):
+        sel = np.flatnonzero(channels.k == kk)
+        if not sel.size:
+            continue
+        t = bd["scale"] * cx[sl] @ blk.sc[sl].T
+        if sl.start == lo:                               # the displaced atom itself
+            t = t + bd["rho"][sl] @ d_s.T
+        else:
+            t = t + bd["rho"][sl, lo:hi] @ d_s[:, sl]
+        q = 0.5 * (t + t.T)
+        out[sel] = q[channels.local_i[sel], channels.local_j[sel]]
+    return out
+
+
 def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesResult:
     """DFTB+'s ``CoordDerivatives``: the response to the displacement of every atom (or of
     ``spec["atoms"]``).  For x = x_K,c: H0', S' of the pairs of atom K; the ground-state
@@ -758,16 +1017,16 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
     atoms = np.arange(natom) if sel is None else sel
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
-    x0chi = chi0(gs, [0.0])[0]
-    resp = Response(gs, kernel, x0chi, calc.scc)
+    channels = block_channels(st)
+    x0chi = chi0(gs, [0.0], channels=channels)[0]
+    resp = Response(gs, kernel, x0chi, calc.scc, channels)
     _, e_sh, _ = kernel
     pb = _pair_derivatives(calc, st)
-    ai, aj = pb.i[pb.pair_of], pb.j[pb.pair_of]
+    ai = pb.i[pb.pair_of]
     v_orb, vs_orb = calc._potentials(st, sc.q_in)
     v_orb = np.asarray(v_orb, float)
     v_chan = ([v_orb] if gs.nspin == 1 else
               [v_orb + np.asarray(vs_orb, float), v_orb - np.asarray(vs_orb, float)])
-    smat = np.asarray(st.smat_precise)[0]
     dq_in, _ = calc._charge_and_magnetisation(st, sc.q_in)
     dq_in = np.asarray(dq_in, float)
     jac = external_jacobian(st)
@@ -777,6 +1036,16 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
             jac = jac + third_order_jacobian(st, dq_in)
     offsets = np.asarray(st.basis.offsets)
     no, nsh, ns = gs.norb, gs.nshell, gs.nspin
+    vb_chan = None                                       # ground-state block potentials (M6g-3a)
+    if channels is not None:
+        vblk, _ = calc._block_potentials(st, sc.q_in)
+        comp = [np.zeros((no, no)) for _ in range(ns)]
+        for kk, sl in enumerate(st.block.slices):
+            for s in range(ns):
+                comp[s][sl, sl] = vblk[kk][s]
+        vb_chan = comp if ns == 1 else [comp[0] + comp[1], comp[0] - comp[1]]
+        nb = channels.size
+        dqb0 = np.zeros((ns, nb, 3 * len(atoms)))      # block populations Q_c per channel
     blocks = []
     for blk in gs.blocks:
         f = _theta(gs.beta * (blk.evals - blk.fermi))
@@ -809,6 +1078,9 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
             for b, (blk, bd) in enumerate(zip(gs.blocks, blocks)):
                 v = v_chan[blk.spin]
                 d_tot = d_h + 0.5 * d_s * (v[lo:hi, None] + v[None, :])
+                if vb_chan is not None:                  # 1/2 (S' V + V S') of the blocks
+                    vb = vb_chan[blk.spin]
+                    d_tot = d_tot + 0.5 * (d_s @ vb + vb[lo:hi, lo:hi] @ d_s)
                 cmat, ck = blk.c, blk.c[lo:hi]
                 dc = d_tot @ cmat
                 m = ck.T @ dc
@@ -822,6 +1094,9 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
                 q += (rk * d_s).sum(0)
                 q[lo:hi] += (rk * d_s).sum(1)
                 dq0[blk.spin, :, col] += q
+                if vb_chan is not None:
+                    dqb0[blk.spin, :, col] += _block_change(channels, st.block, blk, bd, xm,
+                                                            d_s, K, lo, hi)
                 diag = np.diag(m) - blk.evals * np.diag(nm)
                 de0[b][col] = diag
                 runs0[b].append([(m - bd["ebar"] * nm)[np.ix_(r, r)] for r in bd["runs"]])
@@ -839,14 +1114,19 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
                     ef0[s] = efnum[s] / gs.dos[s]
         for s in range(ns):
             dq0[s] += gs.max_fill * np.outer(gs.d_orb[s], ef0[s])
+        if vb_chan is not None:
+            d_blk = channels.fermi_vector(gs) * channels.to_q[None, :]
+            for s in range(ns):
+                dqb0[s] += gs.max_fill * np.outer(d_blk[s], ef0[s])
     # the SCC response: (I - A B) x = x0 + A dV, v_tot = dV + B x
     if ns == 1:
         x0 = e_sh.T @ gs.shells(dq0[0])
     else:
         x0 = np.vstack([e_sh.T @ gs.shells(dq0[0] + dq0[1]), gs.shells(dq0[0] - dq0[1])])
+    if vb_chan is not None:
+        x0 = np.vstack([x0] + ([dqb0[0]] if ns == 1 else [dqb0[0] + dqb0[1], dqb0[0] - dqb0[1]]))
     v_tot = resp.potentials_with(x0, dv)
-    chi = to_qm(gs, x0chi.orb)
-    p = (chi @ v_tot).reshape(ns, no, ncol)
+    p = resp.populations(v_tot)
     if ns == 1:
         orb = dq0 + p
     else:
@@ -856,23 +1136,34 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
     # eigenvalue derivatives: (M - e N) of the bare part plus the potential's diagonal
     nlev = max(len(blk.evals) for blk in gs.blocks)
     dei = np.zeros((len(atoms), 3, len(gs.blocks), nlev))
-    vq = v_tot[:nsh]
-    vm = v_tot[nsh:] if ns == 2 else np.zeros_like(vq)
+    v_sh = resp.shell_part(v_tot)
+    v_blk = resp.block_part(v_tot)                              # (n_qm, nb, ncol) or None
+    vq = v_sh[:nsh]
+    vm = v_sh[nsh:] if ns == 2 else np.zeros_like(vq)
     for b, (blk, bd) in enumerate(zip(gs.blocks, blocks)):
         vv = (vq + (vm if blk.spin == 0 else -vm))[gs.orb_shell]       # (n_orb, ncol)
         cs = blk.c * blk.sc                                            # c_mu,i (S c_i)_mu
         de = de0[b] + (vv.T @ cs)
+        if v_blk is not None:
+            vbc = _channel_potential(gs, v_blk, blk.spin)               # (nb, ncol)
+            lev = np.arange(len(blk.evals))
+            de = de + vbc.T @ np.real(channels.elements(blk, lev, lev))
         for col in range(ncol):
             for r, blk0 in zip(bd["runs"], runs0[b][col]):
                 ci, sci = blk.c[:, r], blk.sc[:, r]
                 mp = 0.5 * (ci.T @ (vv[:, col, None] * sci) + (vv[:, col, None] * sci).T @ ci)
+                if v_blk is not None:
+                    ii, aa = np.meshgrid(r, r, indexing="ij")
+                    me = channels.elements(blk, ii.ravel(), aa.ravel())
+                    mp = mp + np.real(vbc[:, col] @ me).reshape(len(r), len(r)).T
                 de[col, r] = np.linalg.eigvalsh(blk0 + mp)
         dei[:, :, b, :len(blk.evals)] = de.reshape(len(atoms), 3, -1)
     dfermi = None
     if gs.fermi_shift:
         dfermi = np.zeros((len(atoms), 3, ns))
         for col in range(ncol):
-            dfermi[col // 3, col % 3] = ef0[:, col] + fermi_derivative(gs, v_tot[:, col])
+            dfermi[col // 3, col % 3] = ef0[:, col] + _fermi_level_derivative(gs, resp,
+                                                                               v_tot[:, col])
     # Born charges: d mu_j / d x_K,i = delta_ij (q0 - N)_K - sum_A R_A,j dN_A / dx_K,i
     dq_out, _ = calc._charge_and_magnetisation(st, sc.q_out)
     dn_atom = np.zeros(natom)
@@ -883,3 +1174,65 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
     return CoordDerivativesResult(atoms, born, atom, orb, dei, dfermi,
                                   gs.max_fill * gs.dos if gs.metallic else None, gs.metallic,
                                   gs.orb_atom.copy())
+
+
+# ---- external charge derivatives (milestone M6g-3a) ----------------------------------------
+_EXT_KEYS = {"charges"}
+
+
+@dataclass
+class ExternalChargeDerivativesResult:
+    """Response to the displacement of the external point charges
+    (``r.analysis.external_charge_derivatives``, atomic units; DFTB+'s
+    ``ExternalChargeDerivatives`` of the development version).
+
+    ``charges``: the point charges (0-based); ``atom[j, c, q, B]`` = dN_B / dR_j,c (electron
+    populations, q = 0 charge, 1 magnetisation with collinear spin; DFTB+'s ``dqdxext`` for a
+    molecule, the opposite sign for a periodic system), ``orbital[j, c, q, mu]`` the same per
+    orbital."""
+    charges: np.ndarray
+    atom: np.ndarray
+    orbital: np.ndarray
+    orbital_atom: np.ndarray
+
+
+def external_charge_selection(spec, ncharge: int | None = None) -> np.ndarray | None:
+    """The point charges to differentiate with: all (None) for True, else {"charges": [...]}
+    (0-based; DFTB+'s ``WrtCharges`` counts from 1)."""
+    if spec is True:
+        return None
+    if not isinstance(spec, dict):
+        raise TypeError("analysis external_charge_derivatives must be True/False or a dict")
+    unknown = set(spec) - _EXT_KEYS
+    if unknown:
+        raise ValueError(f"analysis external_charge_derivatives: unknown keys {sorted(unknown)} "
+                         f"(use {sorted(_EXT_KEYS)})")
+    if "charges" not in spec:
+        return None
+    sel = np.unique(np.asarray(spec["charges"], dtype=int).ravel())
+    if sel.size == 0:
+        raise ValueError("analysis external_charge_derivatives: no charges")
+    if sel.min() < 0 or (ncharge is not None and sel.max() >= ncharge):
+        raise ValueError(f"analysis external_charge_derivatives: charge indices out of range: "
+                         f"{sel}")
+    return sel
+
+
+def external_charge_derivatives(calc, st, sc, spec, opts: dict) -> ExternalChargeDerivativesResult:
+    """dN / dR_j of the point charges: the external potential's change dV_A / dR_j on the atoms
+    is the only perturbation (H0 and S do not change), solved like the field (M6g-1)."""
+    if st.ext is None or st.ext.pc is None:
+        raise ValueError("external charge derivatives need point charges")
+    ncharge = len(st.ext.pc.charges)
+    sel = external_charge_selection(spec, ncharge)
+    charges = np.arange(ncharge) if sel is None else sel
+    gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
+    channels = block_channels(st)
+    x = chi0(gs, [0.0], channels=channels)[0]
+    resp = Response(gs, scc_kernel(calc, st, sc), x, calc.scc, channels)
+    jac = st.ext.pc_jacobian()[:, charges, :]                   # (n_atom, n_j, 3)
+    v_ext = jac[gs.shell_atom].reshape(gs.nshell, -1)          # columns (j, c)
+    orb = resp.populations(resp.potentials(v_ext))            # (n_qm, n_orb, 3 n_j)
+    orb = orb.reshape(gs.nspin, gs.norb, len(charges), 3).transpose(2, 3, 0, 1)
+    return ExternalChargeDerivativesResult(charges, _sum_atoms(orb, gs.orb_atom, gs.natom), orb,
+                                           gs.orb_atom.copy())

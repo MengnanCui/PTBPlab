@@ -1,0 +1,284 @@
+{
+ "schema": 1,
+ "case": "h2o_pc_extq",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: 041e723e, base: 25.1)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "efield": null,
+  "point_charges": {
+   "positions": [
+    [
+     3.0,
+     0.2,
+     0.1
+    ],
+    [
+     -2.5,
+     1.0,
+     0.5
+    ],
+    [
+     0.3,
+     -2.8,
+     1.2
+    ]
+   ],
+   "charges": [
+    0.8,
+    -0.6,
+    0.4
+   ]
+  },
+  "site_potentials": null,
+  "solvation": null,
+  "rescale_fields": true,
+  "charge": 0.0,
+  "analysis": {
+   "external_charge_derivatives": true
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_0h1npk9h/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  ElectricField = {\n    PointCharges = {\n      CoordsAndCharges [Angstrom] = {\n        3.0 0.2 0.1 0.8\n        -2.5 1.0 0.5 -0.6\n        0.3 -2.8 1.2 0.4\n      }\n    }\n  }\n\n}\nAnalysis {\n  ExternalChargeDerivatives = Yes\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.9177764446,
+  "free_energy": -3.9177764446,
+  "e_zero": -3.9177764446,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0203286025,
+  "e_band": -3.9771602011,
+  "fermi": -0.171003410913507,
+  "forces": [
+   [
+    0.0251518433684235,
+    0.0917442562990742,
+    0.0793757862572049
+   ],
+   [
+    -0.0120775146734257,
+    -0.00600143049501252,
+    -0.00149564526921878
+   ],
+   [
+    -0.00905028331780604,
+    -0.0882229988527391,
+    -0.0790393229366402
+   ]
+  ],
+  "charges_net": [
+   -0.545162421132243,
+   0.294604780703143,
+   0.250557640429097
+  ],
+  "point_charge_forces": [
+   [
+    -0.00266186646557701,
+    -0.000524354416775374,
+    0.00239964929414222
+   ],
+   [
+    -0.00137607117465959,
+    0.00164651744328099,
+    -0.00223714800534747
+   ],
+   [
+    1.38922630448043e-05,
+    0.00135801002217181,
+    0.000996680659859275
+   ]
+  ],
+  "dipole": [
+   -0.07223079,
+   0.10111012,
+   -0.64362861
+  ],
+  "analysis": {
+   "response": {
+    "tags": {
+     "dqdxext": [
+      [
+       [
+        -0.0129051909093611,
+        0.00683107961427146,
+        0.00607411129508961
+       ],
+       [
+        -0.00180543603795127,
+        0.0120245736016327,
+        -0.0102191375636814
+       ],
+       [
+        0.0116002485775125,
+        -0.00664618003920463,
+        -0.00495406853830784
+       ]
+      ],
+      [
+       [
+        -0.00726002862282759,
+        -0.00500041444552062,
+        0.0122604430683482
+       ],
+       [
+        0.00755412754631681,
+        -0.0104362206081035,
+        0.00288209306178667
+       ],
+       [
+        -0.0105370005743462,
+        0.0102213151939106,
+        0.000315685380435527
+       ]
+      ],
+      [
+       [
+        0.000115267845698327,
+        0.000658894081664085,
+        -0.000774161927362412
+       ],
+       [
+        0.00617106830975687,
+        -0.00946862231201524,
+        0.00329755400225836
+       ],
+       [
+        0.00531553859177872,
+        0.00445003100838131,
+        -0.00976556960016002
+       ]
+      ]
+     ]
+    },
+    "detailed_kernel": [],
+    "detailed_main": [],
+    "detailed_extq": [
+     "Derivatives of atomic charges w.r.t. coordinates of external charges",
+     "Chg#1    x               y               z",
+     "At1     -0.02438727     -0.00341178      0.02192129",
+     "At2      0.01290887      0.02272315     -0.01255946",
+     "At3      0.01147841     -0.01931137     -0.00936183",
+     "",
+     "Chg#2    x               y               z",
+     "At1     -0.01371946      0.01427523     -0.01991204",
+     "At2     -0.00944941     -0.01972160      0.01931548",
+     "At3      0.02316888      0.00544637      0.00059656",
+     "",
+     "Chg#3    x               y               z",
+     "At1      0.00021782      0.01166163      0.01004491",
+     "At2      0.00124513     -0.01789310      0.00840934",
+     "At3     -0.00146295      0.00623147     -0.01845425",
+     ""
+    ]
+   },
+   "detailed_blocks": []
+  },
+  "n_scc": 8,
+  "scc_errors": [
+   0.97409274,
+   0.63806255,
+   0.037685861,
+   0.017316997,
+   0.0063672862,
+   0.0001612785,
+   5.357834e-07,
+   5.9747762e-12
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 2e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "dipole": 1e-06,
+  "pc_forces": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_fr": 1e-06,
+  "n_electrons": 1e-06,
+  "fermi_level": 1e-08,
+  "pol": 1e-08,
+  "dqdE": 1e-08,
+  "dedE": 1e-08,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0001,
+  "dqdE_default": 0.0001,
+  "orbital": 1e-06,
+  "eigenvalues": 1e-07,
+  "moments": 1e-08,
+  "dqdxext": 1e-09,
+  "extq_text": 2e-08
+ }
+}

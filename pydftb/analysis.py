@@ -89,7 +89,10 @@ class Analysis:
     "filling_tol" (None: DFTB+'s window, which leaves out levels within 1e-7 of empty or
     full, about 1e-7 of a metal's response at 3000 K; 1e-15 gives the exact derivative);
     ``coord_derivatives``: the response to the displacement of every atom (Born charges,
-    charge and eigenvalue derivatives; molecules), True or {"atoms": [...]} (M6g-2)."""
+    charge and eigenvalue derivatives; molecules), True or {"atoms": [...]} (M6g-2);
+    ``external_charge_derivatives``: the response to the displacement of the point charges
+    (DFTB+'s ``ExternalChargeDerivatives`` of the development version), True or
+    {"charges": [...]} (0-based; M6g-3a)."""
     atom_energies: bool = False
     net_populations: bool = False
     cm5: bool | dict | CM5 = False
@@ -103,6 +106,7 @@ class Analysis:
     response_kernel: bool | dict = False
     perturbation: dict | None = None
     coord_derivatives: bool | dict = False
+    external_charge_derivatives: bool | dict = False
 
     def __post_init__(self):
         if not (isinstance(self.cm5, (bool, dict, CM5))):
@@ -133,6 +137,8 @@ class Analysis:
         _response.perturbation_options(self.perturbation)
         if self.coord_derivatives is not False:                       # M6g-2
             _response.coordinate_atoms(self.coord_derivatives)
+        if self.external_charge_derivatives is not False:             # M6g-3a
+            _response.external_charge_selection(self.external_charge_derivatives)
 
     @classmethod
     def make(cls, spec) -> "Analysis | None":
@@ -147,7 +153,8 @@ class Analysis:
         if isinstance(spec, dict):
             known = {"atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
                      "localise", "bond_populations", "bond_energies", "bond_orders",
-                     "polarisability", "response_kernel", "perturbation", "coord_derivatives"}
+                     "polarisability", "response_kernel", "perturbation", "coord_derivatives",
+                     "external_charge_derivatives"}
             unknown = set(spec) - known
             if unknown:
                 raise ValueError(f"analysis: unknown keys {sorted(unknown)} (use {sorted(known)})")
@@ -232,6 +239,7 @@ class AnalysisResult:
     polarisability: "_response.PolarisabilityResult | None" = None    # M6g-1
     response_kernel: "_response.ResponseKernelResult | None" = None
     coord_derivatives: "_response.CoordDerivativesResult | None" = None   # M6g-2
+    external_charge_derivatives: "_response.ExternalChargeDerivativesResult | None" = None
 
 
 def _check_esp(spec):
@@ -430,6 +438,13 @@ def evaluate(calc, analysis: Analysis, st, sc, res, xl: bool = False) -> Analysi
                              "XL-BOMD shadow Hamiltonian")
         out.coord_derivatives = _response.coordinate_derivatives(
             calc, st, sc, analysis.coord_derivatives,
+            _response.perturbation_options(analysis.perturbation))
+    if analysis.external_charge_derivatives is not False:             # M6g-3a
+        if xl:
+            raise ValueError("the external charge derivatives (M6g-3a) are not defined for the "
+                             "XL-BOMD shadow Hamiltonian")
+        out.external_charge_derivatives = _response.external_charge_derivatives(
+            calc, st, sc, analysis.external_charge_derivatives,
             _response.perturbation_options(analysis.perturbation))
     return out
 

@@ -224,6 +224,21 @@ class ExternalTerms:
             return None
         return self._pc_derivatives(dq_atom)[1]
 
+    def pc_jacobian(self) -> np.ndarray:
+        """d V_A / d R_j of the point charges' potential (n_atom, M, 3) (DFTB+'s
+        ``ExternalChargeDerivatives``, milestone M6g-3a): Q_j phi'(d) (r_A - R_j - T) / d per
+        pair, and for periodic systems the reciprocal part -Q_j sum_G g(G) sin(G (r_A - R_j)) G."""
+        pc, n = self.pc, len(self.pos)
+        a, c, rvec, d = self._pc_pairs()
+        _, dphi = self._pc_kernel(d, pc.blur[c])
+        out = np.zeros((n, len(pc.charges), 3))
+        np.add.at(out, (a, c), (pc.charges[c] * dphi / d)[:, None] * rvec)
+        if self.cell is not None:
+            co = self.coulomb
+            ph = (self.pos[:, None, :] - pc.positions[None, :, :]) @ co.gvec.T     # (n, M, nG)
+            out -= pc.charges[None, :, None] * ((co.gfac * np.sin(ph)) @ co.gvec)
+        return out
+
     # ---- point charges -----------------------------------------------------------
     def _pc_pairs(self):
         """Atom - point charge pairs: (atom, charge, r_A - R_j [- T], distance)."""

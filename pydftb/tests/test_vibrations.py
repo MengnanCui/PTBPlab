@@ -222,8 +222,6 @@ def test_refused():
         calc.calculate(labels, a.positions / BOHR, a.cell.array / BOHR, np.ones(3, bool))
     with pytest.raises(ValueError, match="Fermi filling"):
         _calc(_water(), {"coord_derivatives": True}, smearing=("mp", 300.0, 1))
-    with pytest.raises(ValueError, match="M6g-3"):
-        _calc(_water(), {"coord_derivatives": True}, plus_u={"O": [("p", 0.1)]})
 
 
 def test_refused_torch():

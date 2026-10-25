@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import gzip
 import hashlib
 import json
@@ -224,7 +225,8 @@ def corrections_options(case: Case) -> dict:
 ANALYSIS_KEYS = ("atom_energies", "net_populations", "cm5", "esp", "eigenvectors",
                  "localise", "bond_populations", "bond_energies", "bond_orders",   # M6f-4b
                  "polarisability", "response_kernel", "perturbation",              # M6g-1
-                 "coord_derivatives")                                              # M6g-2
+                 "coord_derivatives",                                              # M6g-2
+                 "external_charge_derivatives")                                    # M6g-3a
 
 
 def analysis_options(case: Case) -> dict:
@@ -962,7 +964,8 @@ ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "e
                 "pol", "dqdE", "dedE", "dEf", "dos", "dqdV", "dqnet", "dedV",       # M6g-1
                 "response_text", "dqdE_default",
                 "dqdx", "born", "coord_text", "born_fd", "hessian", "hess_born",    # M6g-2
-                "hess_dpol", "hess_text", "modes_freq", "modes_int", "modes_vec")
+                "hess_dpol", "hess_text", "modes_freq", "modes_int", "modes_vec",
+                "dqdxext", "extq_text")                                             # M6g-3a
 
 
 def _degenerate_groups(e, tol: float = 1e-6):
@@ -1075,14 +1078,16 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
                 file_dev = max(file_dev, bad + w)
         dev["bonds"], dev["bonds_file"] = worst, file_dev
     if "response" in r:                                               # M6g-1
+        periodic = inp["cell_angstrom"] is not None
         if case.analysis.get("eta_compat"):      # DFTB+'s eta term of reduced k-point sets
-            dev["dqdE_default"] = _compare_response(r["response"], res).get("dqdE", 0.0)
+            dev["dqdE_default"] = _compare_response(r["response"], res, periodic).get("dqdE",
+                                                                                     0.0)
             DFTB._response_eta_compat = True
             try:
                 res = run_pydftb(case, inp, **run)
             finally:
                 DFTB._response_eta_compat = False
-        dev.update(_compare_response(r["response"], res))
+        dev.update(_compare_response(r["response"], res, periodic))
     if r.get("detailed_blocks"):
         mine = io.detailed_tables(res).strip("\n").split("\n\n")
         theirs = [b.strip("\n") for b in r["detailed_blocks"]]
@@ -1099,14 +1104,16 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
     return dev
 
 
-def _compare_response(r: dict, res) -> dict:
+def _compare_response(r: dict, res, periodic: bool = False) -> dict:
     """The response analyses against DFTB+ (M6g-1), from results.tag: the polarisability of
     every frequency, the charge and eigenvalue derivatives d/dE of the last frequency (DFTB+
     keeps only those), N_F and dE_F/dE (DFTB+ prints the latter divided by the full filling),
     and the kernel's dq/dV per orbital (DFTB+'s tag pads every atom to the largest orbital
     count), net populations and eigenvalue derivatives of every frequency; "response_text":
     the detailed.out blocks, dE_band.out and (one frequency: DFTB+ rewrites the first atom's
-    part for every frequency) dV_band.out, layout exactly and numbers within the tolerance."""
+    part for every frequency) dV_band.out, layout exactly and numbers within the tolerance;
+    M6g-3a: the external charge derivatives ("dqdxext", the development build's tag, whose sign
+    is reversed for ``periodic`` systems, and "extq_text", its detailed.out block)."""
     from .. import dftbplus_io as io
     tags = {k: np.array(v) for k, v in r["tags"].items()}
     a = res.analysis
@@ -1183,6 +1190,18 @@ def _compare_response(r: dict, res) -> dict:
                     bad, worst = _numbers_close(fh.read().splitlines(), r["dBand_dx.out"])
             coord_text = max(coord_text, bad + worst)
         dev["coord_text"] = coord_text
+    ex = a.external_charge_derivatives                                # M6g-3a
+    if ex is not None and "dqdxext" in tags:
+        sign = -1.0 if periodic else 1.0                    # (n_j, 3, B) = dN_B/dR_j,c
+        dev["dqdxext"] = float(np.abs(ex.atom[:, :, 0, :] - sign * tags["dqdxext"]).max())
+        if r.get("detailed_extq"):
+            flipped = res
+            if periodic:                                    # write the development build's sign
+                flipped = dataclasses.replace(res, analysis=dataclasses.replace(
+                    a, external_charge_derivatives=dataclasses.replace(ex, atom=-ex.atom)))
+            bad, worst = _numbers_close(io.external_charge_tables(flipped).splitlines(),
+                                        r["detailed_extq"])
+            dev["extq_text"] = bad + worst
     if pol is not None or ker is not None:
         dev["response_text"] = text
     return dev

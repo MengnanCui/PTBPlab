@@ -791,6 +791,25 @@ def coord_derivative_tables(res, dftbplus_sign: bool = True) -> str:
     return "\n".join(lines) + "\n"
 
 
+def external_charge_tables(res) -> str:
+    """The development DFTB+'s detailed.out block of ``ExternalChargeDerivatives`` (M6g-3a):
+    "Derivatives of atomic charges w.r.t. coordinates of external charges", then per point
+    charge j a header (A,I0,T10,A,T26,A,T42,A) and per atom B the row (A,I0,T4,3F16.8) of
+    dN_B/dR_j in e/Angstrom (electron populations, whatever the title says), each block closed
+    by an empty record.  The development version prints the opposite sign for periodic systems
+    (its Ewald derivative is taken with respect to the atom, not the charge)."""
+    ex = _analysis_of(res, "external_charge_derivatives").external_charge_derivatives
+    natom = ex.atom.shape[-1]
+    lines = ["Derivatives of atomic charges w.r.t. coordinates of external charges"]
+    for k, j in enumerate(ex.charges):
+        lines.append(_fortran_t(_fortran_t(_fortran_t(f"Chg#{j + 1}", 10, "x"), 26, "y"), 42, "z"))
+        for b in range(natom):
+            vals = ex.atom[k, :, 0, b] / BOHR
+            lines.append(_fortran_t(f"At{b + 1}", 4, "".join(f"{v:16.8f}" for v in vals)))
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def _deriv_path(path, sd, n_rows: int) -> str:
     """DFTB+'s file name: ``<path>.<first>-<last>`` (1-based moved atoms) for a partial matrix."""
     if n_rows > len(sd.moved_atoms) * 3:

@@ -156,6 +156,8 @@
 | 红外强度、拉曼强度 | 一个简正模引起的偶极变化 \|Σ<sub>K</sub>Z<sub>K</sub>·d<sub>K</sub>\|² 与极化率变化 Σ(Σ<sub>K</sub>∂α/∂x<sub>K</sub>·d<sub>K</sub>)²，d 是模式的位移。DFTB+ 的 <code>modes</code> 写进 vibrations.tag 的 intensities 与 scattering（M6g-2）。 |
 | 占据窗口 | 响应计算中可以改变占据的能级：DFTB+ 规定占据数大于 1e-7 且离满大于 1.2e-7。窗口外的能级当作全满或全空，金属的响应因此差约 1e-7；pydftb 的 <code>filling_tol</code> 可以收紧到精确（M6g-2）。 |
 | SK 格点跳变 | DFTB+ 在 SK 表的相邻 8 个格点上做多项式插值，越过格点时换一组点：积分连续，导数跳变。两个原子的距离正好落在格点附近时，有限差分（如数值 Hessian）会看到这个跳变（M6g-2）。 |
+| 块通道（block channel） | 有 DFTB+U 或 onsite 修正时响应的新自由度：原子块中块势会碰到的一个矩阵元（i ≤ j）。它的势 V = v·E<sub>c</sub> 经 ½(SE<sub>c</sub> + E<sub>c</sub>S) 进入哈密顿量，共轭的布居是 (2 − δ<sub>ij</sub>)Q<sub>ij</sub>（Q 是对偶块布居）。χ<sub>0</sub> 的行与列加上这些通道，块核取块势对块布居的线性部分（M6g-3a）。 |
+| 点电荷导数（external charge derivatives） | 原子布居对外部点电荷位置的导数 dN<sub>B</sub>/dR<sub>j</sub>。移动点电荷只改变外势（H0、S 不变），按外场的方式求解。DFTB+ 只有开发版有（<code>ExternalChargeDerivatives</code>），周期体系的符号相反（M6g-3a）。 |
 | ParamSet | pydftb 中“参数从哪里来”的对象：一个 SKF 目录加上读取选项。 |
 | wheel | Python 包的标准发行文件（`.whl`）：已经排好目录的 zip 包，`pip install` 直接解压到 site-packages，不需要在安装时构建。pydftb 的 wheel 不含 `docs/` 与 `bench/`，含测试与冻结的参考数据（P1）。 |
 | sdist | 源码发行包（`.tar.gz`）：项目的源文件加构建配置，安装时先构建成 wheel。P1 检查过 sdist 构建出的 wheel 与直接构建的逐字节相同。 |

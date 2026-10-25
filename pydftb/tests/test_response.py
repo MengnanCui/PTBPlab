@@ -198,8 +198,7 @@ def test_default_path_unchanged():
     ({"solvation": {"model": "gbsa", "solvent": "water"}}, "solvation"),
     ({"third_order": "onsite", "hubbard_derivs": {"O": [-0.1575], "H": [-0.1857]}},
      "full third order"),
-    ({"plus_u": {"O": [("p", 0.1)]}}, "M6g-3"),
-    ({"spin_orbit": {"O": [0.0, 0.01]}, "temperature": 300.0}, "M6g-3"),
+    ({"spin_orbit": {"O": [0.0, 0.01]}, "temperature": 300.0}, "M6g-3b"),
 ])
 def test_refused(kw, what):
     with pytest.raises(ValueError, match=what):

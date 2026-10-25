@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6g-3a 块势响应与点电荷导数设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6g-3a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6g-3a · 设计</p>
+    <h1>响应性质（下·一）：+U 与 onsite 修正下的响应，对外部点电荷位置的导数</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-25</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6g3a-blocks-external.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6g-3 原计划一块做完：+U、onsite 修正、非共线自旋与 SOC 下的响应，以及开发版 DFTB+ 的 <code>ExternalChargeDerivatives</code>。量较大，按“量大时单列”拆成两块：</p>
+    <ul>
+      <li><strong>M6g-3a（本块）</strong>：DFTB+U（FLL、pSIC）与 onsite 修正进入 M6g-1、M6g-2 的三种响应（极化率、响应核、坐标导数），以及原子电荷对外部点电荷位置的导数；</li>
+      <li><strong>M6g-3b</strong>：两分量（非共线自旋、SOC 的 onsite 与 dual 两种模型）下的三种响应。</li>
+    </ul>
+    <ul>
+      <li><strong>DFTB+ 的情况</strong>（第一、二节）：
+        <ul>
+          <li>25.1 的极化率与响应核支持 +U 与 onsite，但两者同用时拒绝；坐标导数遇到任何一种都拒绝；</li>
+          <li><code>ExternalChargeDerivatives</code> 只有开发版有：分子的 tag <code>dqdxext</code> 是原子<em>电子布居</em> N 对点电荷坐标的导数 dN（e/Bohr；detailed.out 的标题写“charges”，数值同样是 dN，单位 e/Å）；周期体系（Ewald）也能算，但符号反了（倒空间与实空间的导数对原子而不是对点电荷求，见第六节）；<code>WrtCharges</code> 只对部分点电荷；</li>
+          <li>DFTB+ 的 +U、onsite、两分量极化率与它自己的差分一致到差分的精度（约 1e-6，受 detailed.out 偶极的 8 位小数限制），没有看到错误。</li>
+        </ul>
+      </li>
+      <li><strong>pydftb 的做法</strong>（第三、四节）：
+        <ul>
+          <li>块势是块布居的仿射函数 V = L(Q) + 常数。把原子块的矩阵元作为 χ<sub>0</sub> 的新通道（算符 ½(S E<sub>c</sub> + E<sub>c</sub>S)），未知量加上块布居，核取 L：与 M6g-1 的直接解法一致，不迭代；</li>
+          <li>坐标导数再加两项：基态块势的 ½(S′V + VS′)，以及密度不变时块布居的变化 ½(ρS′ + S′ρ)；</li>
+          <li>对点电荷位置的导数只是一个外势 dV<sub>A</sub>/dR<sub>j</sub>（分子与 Ewald），没有 H0、S 的变化。</li>
+        </ul>
+      </li>
+      <li><strong>原型</strong>（草稿目录 <code>m6g3/proto_block.py</code>）：静态极化率与 DFTB+ 25.1 一致，Cu<sub>4</sub>CO 的 FLL +U（300 K 的金属，α ≈ 162）3.7e-11，pSIC 1.2e-11，GdO 的共线自旋 + f 壳层 +U 1.0e-12，水与甲醇的 onsite 修正 7e-14 与 8e-13。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 3.7e-11</span><span class="lbl">原型的极化率与 DFTB+ 25.1 之差（a.u.，5 个体系）</span></li>
+      <li><span class="num">3</span><span class="lbl">接受块势的响应：极化率、响应核、坐标导数</span></li>
+      <li><span class="num">1</span><span class="lbl">新分析：对外部点电荷位置的导数（DFTB+ 只有开发版）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证计划</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#bugs">六、DFTB+ 的问题与 pydftb 的做法</a></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码为 041e723（<code>derivs/perturb.F90</code>、<code>derivs/linearresponse.F90</code>、<code>dftbplus/initprogram.F90</code>、<code>dftbplus/main.F90</code>、<code>dftbplus/parser.F90</code>），行为以 25.1 与开发版的二进制为准。</p>
+      <ul>
+        <li><strong>块势的响应</strong>：有 <code>OrbitalPotential</code>（+U）或 <code>OnsiteCorrection</code> 时，响应循环像基态一样混合块布居 dqBlockIn/dqBlockOut：
+          <ul>
+            <li>响应的输出块布居是 dρ 的对偶 Mulliken 块 ½(dρS + Sdρ)<sub>AA</sub>；</li>
+            <li>它的势是 +U 与 onsite 的块势对布居的线性部分（FLL 的常数项、onsite 的参考布居都不进入），经 ½(SV + VS) 进入 dH；</li>
+            <li>混合向量与基态相同（轨道类的和、块的非对角元），用基态的混合器迭代。</li>
+          </ul>
+        </li>
+        <li><strong>限制</strong>：+U 与 onsite 同用时报 “Onsite corrected and DFTB+U terms currently not compatible for perturbation”；坐标导数遇到 +U 或 onsite 都拒绝（<code>dxAtom</code> 中块的部分被注释掉）。</li>
+        <li><strong><code>ExternalChargeDerivatives</code></strong>（开发版，<code>dxExtCharges</code>）：对每个点电荷 j 与方向 c，外势在各原子上的导数 dV<sub>A</sub>/dR<sub>j,c</sub>（周期体系含 Ewald）作为微扰，H0、S 不变，响应循环与电场相同；输出 dqdxExt(A, c, j)。输入 <code>ExternalChargeDerivatives = Yes</code>，或 <code>{ WrtCharges = … }</code> 只对列出的点电荷（1 起）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为</h2>
+      <p>探针 P25–P28（草稿目录 <code>m6g3/</code>），测试参数 <code>ptbp_hcocu</code>，算例取自 M6b、M6c 的参考算例加上分析选项。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P25 支持</td><td>Cu<sub>4</sub>CO 的 +U（FLL、pSIC）、水与甲醇的 onsite、OH 与 O<sub>2</sub> 的非共线与 SOC、Cu<sub>4</sub>CO 的 SOC、OH 的非共线 + U、Cu<sub>4</sub>CO 的 +U + onsite；极化率、响应核、坐标导数</td><td>
+            <ul>
+              <li>极化率与响应核：除 +U + onsite 外都能算；</li>
+              <li>坐标导数：+U、onsite、非共线、SOC 全部拒绝（后两者报 “Spin polarised calculations are not yet supported …”）。</li>
+            </ul></td></tr>
+          <tr><td>P26 正确性</td><td>DFTB+ 的解析极化率对它在外场中偶极的差分（二阶 h = 1e-4，四阶 h = 1e-3）</td><td>
+            <ul>
+              <li>二阶：相对差 1.4e-6–8.7e-6（差分的 O(h²)）；</li>
+              <li>四阶：+U、onsite、两分量 4e-7–1.9e-6，没有块势与两分量的水、甲醇、Cu<sub>4</sub>CO 也是 3e-7–6e-7：下限是 detailed.out 中偶极的 8 位小数，看不到 DFTB+ 的错误。</li>
+            </ul></td></tr>
+          <tr><td>P27 输出</td><td>+U 与 onsite 的极化率与响应核</td><td>与 M6g-1 相同的 tag（<code>staticPolResponse</code>、<code>staticChargeReponse</code>、<code>dEidEfield</code>、<code>dqdV</code>、<code>dqnetdV</code>、<code>dEidV</code>，金属另有 <code>neFermi</code>、<code>dEfdE</code>）与 detailed.out 块，现有的解析与比较可以直接用。</td></tr>
+          <tr><td>P28 点电荷</td><td>水与 3 个点电荷（开发版）；周期的水盒子（Ewald）；带展宽的点电荷与 <code>WrtCharges = 2</code></td><td>
+            <ul>
+              <li>tag <code>dqdxext</code>（维度 nAtom × 3 × n<sub>电荷</sub>）：分子是电子布居的导数 dN（e/Bohr），与 pydftb 自己移动点电荷的差分一致；周期体系是 −dN（DFTB+ 自己的差分也确认，|差分 + tag| = 4.9e-6）；</li>
+              <li>detailed.out：“Derivatives of atomic charges w.r.t. coordinates of external charges”，每个点电荷一块（“Chg#j x y z”，行 “AtA”），数值与 tag 相同，单位 e/Å；</li>
+              <li>标准输出逐个位移打印 Mulliken 与净布居的导数，符号与 tag 相反；</li>
+              <li>周期体系、展宽、<code>WrtCharges</code> 都能算；也写出点电荷受的力。</li>
+            </ul></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>r = DFTB(sk, plus_u={"Cu": [("d", 0.2)]},
+         analysis={"polarisability": True, "response_kernel": True,
+                   "coord_derivatives": True}).calculate(labels, pos)
+
+calc = DFTB(sk, point_charges={"positions": R, "charges": Q},
+            analysis={"external_charge_derivatives": True})        # 或 {"charges": [0, 2]}
+e = calc.calculate(labels, pos).analysis.external_charge_derivatives
+e.charges            # 求导的点电荷（0 起）
+e.atom               # (n_j, 3, n_qm, n_atom)：dN_B/dR_j,c（电子布居，e/Bohr）
+e.orbital            # (n_j, 3, n_qm, n_orb)
+print(dftbplus_io.external_charge_tables(r))   # DFTB+ detailed.out 的块（dN，e/Å）</code></pre>
+      <ul>
+        <li><strong>块势</strong>：没有新选项。极化率、响应核、坐标导数接受 <code>plus_u</code>（FLL、pSIC）与 <code>onsite_corrections</code>，两者同用也可以（DFTB+ 拒绝），可与共线自旋、k 点（电荷响应）、DFTB3、外场同用。</li>
+        <li><strong>点电荷导数</strong>：需要 <code>point_charges</code>；分子与周期体系；与 M6g-1 一样可与共线自旋、金属、DFTB3、+U、onsite 同用；结果与 <code>coord_derivatives</code> 一样用电子布居 dN，与开发版分子的 tag 与 detailed.out 相同；周期体系开发版的符号是反的，pydftb 不照抄。</li>
+        <li><strong>拒绝</strong>：两分量（M6g-3b）以及 M6g-1 拒绝的其他组合（非 Fermi 展宽、溶剂、只 onsite 的三阶、偶极修正、每个 k 点单独填充、选定壳层、XL-BOMD、torch 与自动求导）；坐标导数仍只用于分子。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>块通道</h3>
+        <ul>
+          <li>对 <code>BlockTerms</code> 中的每个原子 k，取块势会碰到的矩阵元：+U 是各组的 idx × idx，onsite 是整个原子块；对称元素 i ≤ j 各算一个通道 c。</li>
+          <li>通道的势 V = v·E<sub>c</sub>，E<sub>c</sub> = (E<sub>ij</sub> + E<sub>ji</sub>)/(1 + δ<sub>ij</sub>)；算符 O<sub>c</sub> = ½(S E<sub>c</sub> + E<sub>c</sub>S)；共轭的布居 P<sub>c</sub> = Tr(ρO<sub>c</sub>) = (2 − δ<sub>ij</sub>)Q<sub>ij</sub>，Q 是对偶块布居 ½(ρS + Sρ)<sub>AA</sub>。</li>
+          <li>分子轨道基中的矩阵元 m<sup>c</sup><sub>ai</sub> = ½[(Sc<sub>a</sub>)*<sub>μ</sub>c<sub>νi</sub> + (Sc<sub>a</sub>)*<sub>ν</sub>c<sub>μi</sub> + c*<sub>μa</sub>(Sc<sub>i</sub>)<sub>ν</sub> + c*<sub>νa</sub>(Sc<sub>i</sub>)<sub>μ</sub>]/(1 + δ<sub>μν</sub>)；μ = ν 时就是 M6g-1 的逐轨道矩阵元。</li>
+        </ul>
+        <h3>χ<sub>0</sub> 与求解</h3>
+        <ul>
+          <li>χ<sub>0</sub> 的行是逐轨道的 Mulliken 布居与块通道的 P<sub>c</sub>，列是壳层势与块通道的势：χ<sub>0</sub>[r, c] = Σ<sub>p</sub> g<sub>p</sub> Re(conj(m<sup>r</sup><sub>p</sub>)m<sup>c</sup><sub>p</sub>)，对 M6g-1 的成对权重 g 一次累加（各频率同时）。</li>
+          <li>金属的费米能级移动仍是秩 1 修正，行、列的向量 d 加上块通道的分量 d<sup>c</sup> = Σ<sub>k</sub>w<sub>k</sub>Σ<sub>i∈W</sub>δ<sub>i</sub>m<sup>c</sup><sub>ii</sub>。</li>
+          <li>共线自旋先按 up/down 分块，再像壳层一样换成 (q, m)：块布居 Q<sup>q,m</sup> = Q<sup>↑</sup> ± Q<sup>↓</sup>，势 V<sup>↑,↓</sup> = V<sup>q</sup> ± V<sup>m</sup>。</li>
+          <li>未知量 x = (SCC 位点上的 dq，壳层上的 dm，每个自旋分量的块布居 dQ<sub>c</sub>)；B 把 x 映到势：γ（加完整三阶的 Hessian）、W，以及块核 L(dQ) = <code>potentials(dQ) − potentials(0)</code>（逐个单位块求出，L 只依赖参数，与基态无关）。</li>
+          <li>(I − AB)x = A V<sup>ext</sup>（M6g-2 的坐标微扰再加 x<sub>0</sub>），v<sub>tot</sub> = V<sup>ext</sup> + Bx，布居 = χ<sub>0</sub>v<sub>tot</sub>。</li>
+          <li>本征值导数与费米能级导数：M 加上块势 ½(S dV + dV S) 的对角元（简并组取组内块的本征值）。</li>
+          <li>响应核的净布居：χ<sub>0</sub> 的净布居行同样加上块通道的列。</li>
+        </ul>
+        <h3>坐标导数</h3>
+        <ul>
+          <li>H′ 再加基态块势的项 ½(S′V<sup>s</sup> + V<sup>s</sup>S′)（每个自旋分量 s，V 取最后一个 H 的块势），进入 M = C<sup>T</sup>H′C；</li>
+          <li>块布居的变化 dQ = ½(dρS + Sdρ)<sub>AA</sub> + ½(ρS′ + S′ρ)<sub>AA</sub>，前一项由裸的一阶密度 CXC<sup>T</sup> 的原子块求出，后一项是密度不变时的变化；它们作为 x<sub>0</sub> 的块分量；</li>
+          <li>Born 电荷的公式不变。</li>
+        </ul>
+        <h3>对点电荷位置的导数</h3>
+        <ul>
+          <li><code>ExternalTerms.pc_jacobian()</code>：dV<sub>A</sub>/dR<sub>j</sub> = Q<sub>j</sub>φ′(d)(r<sub>A</sub> − R<sub>j</sub>)/d（展宽时 φ 用 erf 的形式），周期体系另加倒空间项 −Q<sub>j</sub>Σ<sub>G</sub>g(G) sin(G·(r<sub>A</sub> − R<sub>j</sub>))G；</li>
+          <li>每个 (j, c) 一列外势（原子 A 的各壳层同值），x<sub>0</sub> = 0，与电场相同的求解；结果 dN、逐轨道 dN。</li>
+        </ul>
+        <h3>改动的位置</h3>
+        <ul>
+          <li><code>response.py</code>：块通道（<code>BlockChannels</code>）、χ<sub>0</sub> 与 <code>Response</code> 的扩展、本征值与费米能级导数、坐标导数的块项、<code>external_charge_derivatives</code> 与结果类；</li>
+          <li><code>external.py</code>：<code>pc_jacobian</code>；<code>analysis.py</code>：<code>external_charge_derivatives</code> 选项与结果；<code>calculator.py</code>：<code>_check_response</code> 放开块势（两分量仍拒绝），点电荷导数需要点电荷；</li>
+          <li><code>dftbplus_io.py</code>：<code>external_charge_tables</code>；验证工具：<code>ExternalChargeDerivatives</code> 的输入（开发版）与 tag、detailed.out 的解析与比较。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证计划</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>组</th><th>算例</th><th>DFTB+</th><th>比较</th></tr></thead>
+          <tbody>
+            <tr><td>极化率</td><td>Cu<sub>4</sub>CO 的 FLL 与 pSIC（金属）、GdO 的共线自旋 + U、水与甲醇的 onsite（含有限频率）、水的 onsite + DFTB3、CuO 链的自旋 + U（k 点，电荷响应）</td><td>25.1</td><td>同 M6g-1：α、dq/dE、dε/dE、dE<sub>F</sub>/dE、文本</td></tr>
+            <tr><td>响应核</td><td>Cu<sub>4</sub>CO 的 +U、水的 onsite</td><td>25.1</td><td>dq/dV、净布居、dε/dV、文本</td></tr>
+            <tr><td>坐标导数</td><td>水与甲醇的 onsite、Cu<sub>4</sub>CO 的 +U（3000 K，<code>filling_tol</code> = 1e-15）、GdO 的自旋 + U</td><td>25.1 的 SecondDerivatives</td><td>解析 Born 电荷对 DFTB+ 的差分 Born 电荷，数值 Hessian</td></tr>
+            <tr><td>点电荷导数</td><td>水与 3 个点电荷、带展宽且只对第 2 个、周期的水盒子、甲醇的 onsite + 点电荷</td><td>开发版</td><td><code>dqdxext</code> 与 detailed.out 的块</td></tr>
+          </tbody>
+        </table></div>
+        <h3>自洽测试</h3>
+        <ul>
+          <li>+U 与 onsite 同用（DFTB+ 拒绝）：极化率对外场中偶极的差分，坐标导数对偶极的差分；</li>
+          <li>点电荷导数对移动点电荷后电荷的差分；块通道的 χ<sub>0</sub> 对称；电荷守恒；</li>
+          <li>没有块势时 χ<sub>0</sub> 与 M6g-1 逐位相同；拒绝的组合；不开选项时逐位不变。</li>
+        </ul>
+        <h3>门槛</h3>
+        <p>golden 两个环境（<code>--allow-new external_charge_derivatives</code>）；<code>refgen --check</code> 与 torch；<code>dynamics --check</code>；pytest 三个环境；PTBP 测试；G1。</p>
+      </div>
+    </details>
+
+    <section id="bugs">
+      <h2>六、DFTB+ 的问题与 pydftb 的做法</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+</th><th>pydftb</th></tr></thead>
+        <tbody>
+          <tr><td>+U 与 onsite 同用时拒绝响应</td><td>可以同用（块核是两者之和）</td></tr>
+          <tr><td>坐标导数拒绝 +U 与 onsite</td><td>加上块势的 S′ 项与块布居的非变分项</td></tr>
+          <tr><td>点电荷导数只在开发版；tag 与 detailed.out 是 dN（标题却写“charges”），单位分别是 e/Bohr 与 e/Å</td><td>结果用 dN（与坐标导数一致），写出的块与开发版相同</td></tr>
+          <tr><td>周期体系的点电荷导数符号反了：<code>calcInvRPrimeAsymmPeriodic</code> 的实空间与倒空间导数对 r<sub>A</sub> − R<sub>j</sub> 求（即对原子），分子版 <code>calcInvRPrimeAsymmCluster</code> 才是对点电荷求</td><td>周期与分子用同一个符号（dN）；验证时把开发版周期体系的值换号再比较，并用 pydftb 自己的差分确认</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li><strong>不做</strong>：两分量（M6g-3b）；多极 DFTB；块势对点电荷导数以外的新导数。</li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>onsite 修正让每个原子的整个块都成为通道（Cu 的 sd 基 81 个元素中 45 个对称元），大体系时 χ<sub>0</sub> 的块部分变大：只在有块势的原子上建通道，按需再改成无矩阵的解法；</li>
+            <li>k 点时块矩阵元是复数，只取对称（实）部分；虚部只在 dual SOC 时出现（M6g-3b）。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M6g2-coord-hessian.html">← M6g-2 完成报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -192,7 +192,8 @@ def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
     converged tightly (``PerturbSccTol = 1e-11``, ``MaxPerturbIter = 1000``, SCC only; DFTB+
     reads ``PerturbEta`` only with a finite frequency); M6g-2: ``CoordDerivatives = Yes``
     (unless ``"dftbplus_coord": False``: cases whose reference is DFTB+'s finite-difference Born
-    charges, where its analytic ones are refused or wrong)."""
+    charges, where its analytic ones are refused or wrong); M6g-3a: ``ExternalChargeDerivatives``
+    (the development build), ``= Yes`` or ``{ WrtCharges = ... }`` (1-based) for a selection."""
     if not spec:
         return ""
     lines = []
@@ -273,7 +274,14 @@ def analysis_block(spec, periodic: bool = False, scc: bool = True) -> str:
     coord = bool(spec.get("coord_derivatives")) and spec.get("dftbplus_coord", True)
     if coord:                                                            # M6g-2
         lines.append("  CoordDerivatives = Yes")
-    if spec.get("polarisability") or spec.get("response_kernel") or coord:
+    ext = spec.get("external_charge_derivatives")                        # M6g-3a
+    if ext is True or (ext and "charges" not in ext):
+        lines.append("  ExternalChargeDerivatives = Yes")
+    elif ext:
+        lines += ["  ExternalChargeDerivatives {",
+                  "    WrtCharges = " + " ".join(str(int(j) + 1) for j in ext["charges"]),
+                  "  }"]
+    if spec.get("polarisability") or spec.get("response_kernel") or coord or ext:
         pert = spec.get("perturbation") or {}
         if scc:
             lines += ["  PerturbSccTol = 1e-11", "  MaxPerturbIter = 1000"]
@@ -359,14 +367,15 @@ def parse_analysis(workdir, det: str, spec: dict, stdout: str = "") -> dict:
     if bonds:
         out["bonds"] = bonds
     if (spec.get("polarisability") or spec.get("response_kernel")         # M6g-1
-            or (spec.get("coord_derivatives") and spec.get("dftbplus_coord", True))):
+            or (spec.get("coord_derivatives") and spec.get("dftbplus_coord", True))
+            or spec.get("external_charge_derivatives")):                  # M6g-3a
         out["response"] = parse_response(workdir, det, tag)
     out["detailed_blocks"] = blocks
     return out
 
 
 RESPONSE_TAGS = ("staticPolResponse", "staticChargeReponse", "dEidEfield", "neFermi", "dEfdE",
-                 "dqdV", "dqnetdV", "dEidV", "dqdx", "borncharges")
+                 "dqdV", "dqnetdV", "dEidV", "dqdx", "borncharges", "dqdxext")
 
 
 def parse_response(workdir, det: str, tag: dict) -> dict:
@@ -374,7 +383,9 @@ def parse_response(workdir, det: str, tag: dict) -> dict:
     results.tag (arrays with the Fortran dimensions reversed, as :func:`parse_results_tag`),
     the detailed.out text of the kernel blocks and of the rest (density of states, charge and
     Fermi-level derivatives, polarisabilities), and dE_band.out and dV_band.out; M6g-2: the
-    CoordDerivatives blocks (``detailed_coord``) and dBand_dx.out."""
+    CoordDerivatives blocks (``detailed_coord``) and dBand_dx.out; M6g-3a: the development
+    build's ExternalChargeDerivatives block (``detailed_extq``, every point charge's block up to
+    its empty line)."""
     out = {"tags": {k: np.asarray(tag[k]).tolist() for k in RESPONSE_TAGS if k in tag}}
     lines = det.splitlines()
     head = re.compile(r"^(Static response:|Response at omega)")
@@ -416,6 +427,13 @@ def parse_response(workdir, det: str, tag: dict) -> dict:
                    if ln == " Derivatives of atomic Mulliken charges with atom positions"), None)
     if cstart is not None:
         out["detailed_coord"] = lines[cstart:]
+    estart = next((i for i, ln in enumerate(lines) if ln == "Derivatives of atomic charges w.r.t. "
+                   "coordinates of external charges"), None)
+    if estart is not None:                                               # M6g-3a
+        i = estart + 1
+        while i < len(lines) and lines[i].startswith("Chg#"):
+            i = lines.index("", i) + 1
+        out["detailed_extq"] = lines[estart:i]
     for name in ("dE_band.out", "dV_band.out", "dBand_dx.out"):
         path = os.path.join(workdir, name)
         if os.path.exists(path):

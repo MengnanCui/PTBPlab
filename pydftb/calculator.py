@@ -772,12 +772,13 @@ class DFTB:
 
     def _check_response(self):
         """The response analyses (M6g, DFTB+ ``Polarisability``/``ResponseKernel``/
-        ``CoordDerivatives``): DFTB+'s
-        conditions (Fermi filling, no solvation, full third order only) and the parts left for
-        milestone M6g-3 (DFTB+U, onsite corrections, two-component spin)."""
+        ``CoordDerivatives``/``ExternalChargeDerivatives``): DFTB+'s conditions (Fermi filling,
+        no solvation, full third order only) and the part left for milestone M6g-3b
+        (two-component spin); block potentials since M6g-3a."""
         a = self.analysis
         if a is None or (a.polarisability is False and a.response_kernel is False
-                         and a.coord_derivatives is False):
+                         and a.coord_derivatives is False
+                         and a.external_charge_derivatives is False):
             return
         why = None
         if self.smearing.kind != "fermi":
@@ -787,19 +788,19 @@ class DFTB:
             why = "no implicit solvation (DFTB+: 'Solvation not currently implemented')"
         elif self.third_order == "onsite":
             why = "the full third order only (DFTB+: 'Only full 3rd order currently supported')"
-        elif self.plus_u is not None or self.onsite_corrections is not None:
-            why = "not with DFTB+U or onsite corrections yet (milestone M6g-3)"
         elif self.pauli:
-            why = "not with non-collinear spin or spin-orbit coupling yet (milestone M6g-3)"
+            why = "not with non-collinear spin or spin-orbit coupling yet (milestone M6g-3b)"
         elif self.dipole_correction is not None:
             why = "not with the dipole correction (DFTB+'s response leaves its potential out)"
         elif self.independent_k_filling:
             why = "not with independent k-point filling"
         elif getattr(self.sk, "selected", False):
             why = "not with selected shells (milestone M6f-5) yet"
+        elif a.external_charge_derivatives is not False and self.point_charges is None:
+            why = "point charges for the external charge derivatives"     # (they need SCC)
         if why:
             raise ValueError(f"the response analyses (polarisability, response kernel, "
-                             f"coordinate derivatives; M6g) need {why}")
+                             f"coordinate and external charge derivatives; M6g) need {why}")
 
     def _check_selected_shells(self, type_switching):
         """Shells from several SK files (SelectedShells, M6f-5): refused with the parts that take

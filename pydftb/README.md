@@ -145,9 +145,10 @@ Fermi-level derivatives (dE_F/dE the physical value, DFTB+ prints it divided by 
 filling) and `dftbplus_io.write_band_derivatives` (dE_band.out, dV_band.out).  With collinear
 spin, metals, degenerate levels, the full third order, k-points (charge response only; the
 finite-frequency eta term that DFTB+ keeps for time-reversal reduced k-point sets is dropped, so
-reduced and full sets agree) and dispersion.  NumPy engine only; not with non-Fermi smearing,
-solvation, DFTB+U, onsite corrections, two-component spin (milestone M6g-3), the dipole
-correction or selected shells.  Details:
+reduced and full sets agree), dispersion, DFTB+U and onsite corrections (also both together,
+which DFTB+ refuses; milestone M6g-3a: the atom blocks' elements become response channels).
+NumPy engine only; not with non-Fermi smearing, solvation, two-component spin (milestone
+M6g-3b), the dipole correction or selected shells.  Details:
 [`docs/reports/M6g1-response.html`](docs/reports/M6g1-response.html).
 
 ### Coordinate derivatives, Hessian and normal modes
@@ -179,8 +180,9 @@ the move of a metal's Fermi level, degenerate runs).  So it also covers what DFT
 (spin, metals, degenerate levels) or gets wrong (fields and point charges, whose position
 derivatives DFTB+ leaves out, and the third order in 25.1); DFTB+'s Born charges are
 -d mu / dx (`dftbplus_io.coord_derivative_tables` writes them that way).  `{"atoms": [...]}`
-displaces only some atoms.  Molecules only (as DFTB+); NumPy engine only; not with DFTB+U,
-onsite corrections or two-component spin (milestone M6g-3).  `second_derivatives` follows
+displaces only some atoms.  Also with DFTB+U and onsite corrections, which DFTB+ refuses
+(milestone M6g-3a).  Molecules only (as DFTB+); NumPy engine only; not with two-component spin
+(milestone M6g-3b).  `second_derivatives` follows
 DFTB+'s order of displacements (`atoms`, `moved_atoms` for partial Hessians, `delta` 1e-4 Bohr)
 and only calls `calculate`, so it works for anything that gives forces; `normal_modes`
 follows `modes` (projection, intensities; it symmetrises the Hessian unless
@@ -189,6 +191,26 @@ follows `modes` (projection, intensities; it symmetrises the Hessian unless
 differences see the jump of the SK interpolation's derivative at grid points (water's H-H
 distance lies 4.8e-6 Bohr from one).  Details:
 [`docs/reports/M6g2-coord-hessian.html`](docs/reports/M6g2-coord-hessian.html).
+
+### Derivatives with respect to the point charges' positions
+
+The development DFTB+'s `Analysis { ExternalChargeDerivatives }`; milestone M6g-3a:
+
+```python
+calc = DFTB(sk, point_charges={"positions": R, "charges": Q},       # Bohr
+            analysis={"external_charge_derivatives": True})        # or {"charges": [0, 2]}
+r = calc.calculate(labels, pos)
+e = r.analysis.external_charge_derivatives
+e.atom                      # (n_j, 3, n_qm, n_atom) dN_B / dR_j,c (e/Bohr)
+print(pydftb.dftbplus_io.external_charge_tables(r))   # the development DFTB+'s block
+```
+
+Moving a point charge only changes the external potential on the atoms (H0 and S stay), so it
+is solved like the field; molecules and periodic systems (Ewald), with collinear spin, metals,
+DFTB3, DFTB+U and onsite corrections.  DFTB+'s tag and detailed.out block are dN for molecules
+and -dN for periodic systems (its Ewald derivative is taken with respect to the atom); pydftb
+gives dN for both.  NumPy engine only.  Details:
+[`docs/reports/M6g3a-blocks-external.html`](docs/reports/M6g3a-blocks-external.html).
 
 ### f orbitals
 
