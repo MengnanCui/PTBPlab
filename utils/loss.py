@@ -404,15 +404,10 @@ class Loss():
 
             return forces
     def get_elements_from_dataset(self, dataset, opt_elem):
-    
-        tot_atomic_numbers = np.unique(np.array([np.unique(mole.numbers).tolist() for mole in dataset]).flatten()) 
-        atomic_numbers_exclusive = [i for i in tot_atomic_numbers if i not in opt_elem]
-        atomic_numbers = atomic_numbers_exclusive + opt_elem
-
-        atomic_symbols_exclusive = [chemical_symbols[i] for i in atomic_numbers_exclusive]
-        atomic_symbols = atomic_symbols_exclusive + [chemical_symbols[num] for num in opt_elem]
-
-        return atomic_numbers, atomic_numbers_exclusive, atomic_symbols, atomic_symbols_exclusive
+        """utils.data.get_elements_from_dataset (this was an identical copy; M5b-3 fixed both:
+        structures with different numbers of elements no longer make NumPy refuse a ragged
+        array)."""
+        return data.get_elements_from_dataset(dataset, opt_elem)
 
 
     def get_energy_per_atom(self, dft:list,dftb:list, bolt_fxx:list=None):
@@ -958,7 +953,11 @@ class Loss():
 
 
             if self.args_input.multi_element is None:
-                para_rep_tot = sigma_rep
+                # one parameter set for every element (one element, or --shared-parameters):
+                # every element of the group gets the sigma being searched, as
+                # unparallel_repulsion broadcasts it (M5b-3; a group of several elements, e.g. an
+                # EOS scan of B2N2, used to give physrep one sigma for two elements: IndexError)
+                para_rep_tot = [float(np.atleast_1d(sigma_rep)[0])] * len(atomic_subnumbers)
             else:
                 para_rep_tot = [get_PTBP()[chemical_symbols[n]]['sigma_rep'] for n in atomic_subnumbers_exclusive] + sigma_rep
 
@@ -1240,9 +1239,14 @@ class Loss():
 
 
 
-            # Plot
-            if self.args_input.optimization_option.lower() == 'energygeometry' and self.args_input.multi_element is None:
-                
+            # Plot: figures of one element's phases (labelled dimer ... fcc, at most six, the
+            # element in the legend, energies relative to the lowest energy per atom of the
+            # dataset).  EOS groups of several elements (--shared-parameters, M5b-3) get none, as
+            # with parameters per type; groups of one element each are plotted as before
+            one_element_groups = all(len(np.unique(a.numbers)) == 1 for a in dft_subincopy_final)
+            if (self.args_input.optimization_option.lower() == 'energygeometry'
+                    and self.args_input.multi_element is None and one_element_groups):
+
                 bolt_f = self.bolt_f11[floor(self.args_input.eos_points/2)::self.args_input.eos_points]
 
                 plot.plot_vs(atomic_symbols[0], [r0_w, r0_d, sigma_rep, mu], dft_incopy, dft_energy_per_atom_relative, dftb_energy_per_atom_relative, bolt_f)

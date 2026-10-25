@@ -79,8 +79,8 @@ def test_structures_without_results_are_a_failure(tmp_path, monkeypatch):
 
 def _hco_dataset():
     """H2O, OH, CH4 and CH in boxes with made-up energies and forces: every structure has two
-    elements (the code of before M5b, Loss.get_elements_from_dataset, needs element lists of one
-    length: NumPy refuses ragged arrays)."""
+    elements (before M5b-3 the code of before M5b, Loss.get_elements_from_dataset, needed element
+    lists of one length: NumPy refused the ragged array; tests/test_shared_parameters.py)."""
     rng = np.random.default_rng(7)
     base = [(["O", "H", "H"], [[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0]]),
             (["O", "H"], [[0, 0, 0], [0.98, 0, 0]]),
