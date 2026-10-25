@@ -146,9 +146,9 @@ filling) and `dftbplus_io.write_band_derivatives` (dE_band.out, dV_band.out).  W
 spin, metals, degenerate levels, the full third order, k-points (charge response only; the
 finite-frequency eta term that DFTB+ keeps for time-reversal reduced k-point sets is dropped, so
 reduced and full sets agree), dispersion, DFTB+U and onsite corrections (also both together,
-which DFTB+ refuses; milestone M6g-3a: the atom blocks' elements become response channels).
-NumPy engine only; not with non-Fermi smearing, solvation, two-component spin (milestone
-M6g-3b), the dipole correction or selected shells.  Details:
+which DFTB+ refuses; milestone M6g-3a: the atom blocks' elements become response channels) and
+two-component spin (milestone M6g-3b, below).  NumPy engine only; not with non-Fermi smearing,
+solvation, the dipole correction or selected shells.  Details:
 [`docs/reports/M6g1-response.html`](docs/reports/M6g1-response.html).
 
 ### Coordinate derivatives, Hessian and normal modes
@@ -180,9 +180,9 @@ the move of a metal's Fermi level, degenerate runs).  So it also covers what DFT
 (spin, metals, degenerate levels) or gets wrong (fields and point charges, whose position
 derivatives DFTB+ leaves out, and the third order in 25.1); DFTB+'s Born charges are
 -d mu / dx (`dftbplus_io.coord_derivative_tables` writes them that way).  `{"atoms": [...]}`
-displaces only some atoms.  Also with DFTB+U and onsite corrections, which DFTB+ refuses
-(milestone M6g-3a).  Molecules only (as DFTB+); NumPy engine only; not with two-component spin
-(milestone M6g-3b).  `second_derivatives` follows
+displaces only some atoms.  Also with DFTB+U and onsite corrections (milestone M6g-3a) and
+two-component spin (milestone M6g-3b), which DFTB+ refuses.  Molecules only (as DFTB+); NumPy
+engine only.  `second_derivatives` follows
 DFTB+'s order of displacements (`atoms`, `moved_atoms` for partial Hessians, `delta` 1e-4 Bohr)
 and only calls `calculate`, so it works for anything that gives forces; `normal_modes`
 follows `modes` (projection, intensities; it symmetrises the Hessian unless
@@ -207,10 +207,41 @@ print(pydftb.dftbplus_io.external_charge_tables(r))   # the development DFTB+'s 
 
 Moving a point charge only changes the external potential on the atoms (H0 and S stay), so it
 is solved like the field; molecules and periodic systems (Ewald), with collinear spin, metals,
-DFTB3, DFTB+U and onsite corrections.  DFTB+'s tag and detailed.out block are dN for molecules
+DFTB3, DFTB+U, onsite corrections and two-component spin (all four components; the development
+DFTB+ prints the charge part).  DFTB+'s tag and detailed.out block are dN for molecules
 and -dN for periodic systems (its Ewald derivative is taken with respect to the atom); pydftb
 gives dN for both.  NumPy engine only.  Details:
 [`docs/reports/M6g3a-blocks-external.html`](docs/reports/M6g3a-blocks-external.html).
+
+### Responses of two-component calculations
+
+Milestone M6g-3b: the polarisability, response kernel, coordinate derivatives (molecules) and
+point-charge derivatives of non-collinear spin and spin-orbit coupling (onsite and dual model),
+also with DFTB+U and onsite corrections; no new options:
+
+```python
+r = DFTB(sk, spin="noncolinear", spin_constants=w, spin_orbit={"O": [0.0, 0.01]},
+         plus_u={"O": [("p", 0.1)]}, smearing=("fermi", 300.0),
+         analysis={"polarisability": True, "coord_derivatives": True}).calculate(labels, pos)
+p = r.analysis.polarisability
+p.charge_derivatives[0]     # (3, 4, n_atom): d/dE_i of q, m_x, m_y, m_z per atom
+p.eigenvalue_derivatives[0] # (3, n_k, 2N): the spinor levels
+```
+
+Each k-point is one 2N x 2N spinor block with one Fermi level; chi0 couples the four Pauli
+components (charge and magnetisation), the kernel is gamma on the charge and the spin constants
+on each magnetisation component.  Without spin-orbit coupling a global rotation of the moments
+costs no energy: pydftb solves the response without that rotation (a bordered system; DFTB+'s
+iterations give the same, longitudinal answer for collinear moments).  With spin-orbit coupling
+an accidental zero mode (a linear molecule's electrons rotating about its axis) is left out of
+an SVD solve with a warning.  With dual spin-orbit coupling and +U or onsite corrections the
+response also has the imaginary block populations' channels: DFTB+ 25.1 leaves them out, which
+makes its polarisability wrong by 2e-5 - 1e-4 (molecules) and a periodic metal's kernel by
+75 %; `DFTB._response_skew_compat = True` (testing) reproduces DFTB+.  The coordinate
+derivatives, which DFTB+ refuses for two-component spin, include the dual model's H_SO moving
+with S.  `dftbplus_io` writes DFTB+'s formats (q/x/y/z rows; dV_band.out's zero blocks for
+spin 2-4).  NumPy engine only.  Details:
+[`docs/reports/M6g3b-two-component.html`](docs/reports/M6g3b-two-component.html).
 
 ### f orbitals
 

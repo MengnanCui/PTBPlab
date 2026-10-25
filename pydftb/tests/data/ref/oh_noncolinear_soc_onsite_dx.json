@@ -1,0 +1,421 @@
+{
+ "schema": 1,
+ "case": "oh_noncolinear_soc_onsite_dx",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "noncolinear": {
+   "initial_spins": [
+    [
+     0.48,
+     0.6,
+     0.64
+    ],
+    [
+     0.0,
+     0.0,
+     0.0
+    ]
+   ],
+   "spin_constants": {
+    "H": -0.072,
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ],
+    "Cu": [
+     [
+      -0.016,
+      -0.012,
+      -0.004
+     ],
+     [
+      -0.012,
+      -0.04,
+      -0.002
+     ],
+     [
+      -0.004,
+      -0.002,
+      -0.017
+     ]
+    ],
+    "Gd": [
+     [
+      -0.010552,
+      -0.008687,
+      -0.006723,
+      -0.000704
+     ],
+     [
+      -0.008687,
+      -0.013022,
+      -0.004158,
+      -0.00029
+     ],
+     [
+      -0.006723,
+      -0.004158,
+      -0.008679,
+      -0.001912
+     ],
+     [
+      -0.000704,
+      -0.00029,
+      -0.001912,
+      -0.013626
+     ]
+    ]
+   }
+  },
+  "spin_orbit": {
+   "xi": {
+    "O": [
+     0.0,
+     0.01
+    ]
+   },
+   "dual": false
+  },
+  "time_reversal": true,
+  "analysis": {
+   "coord_derivatives": true,
+   "dftbplus_coord": false
+  },
+  "fd_delta": 0.0001220703125,
+  "hessian": {}
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.1,
+    0.05,
+    0.97
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_d2i8hezg/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n  SpinPolarisation = NonColinear {\n    InitialSpins {\n      AllAtomSpins = {\n        0.48 0.6 0.64\n        0.0 0.0 0.0\n      }\n    }\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    H = -0.072\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n  SpinOrbit {\n    Dual = No\n    O [Hartree] = { 0.0 0.01 }\n    H [Hartree] = { 0.0 }\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.5243263947,
+  "free_energy": -3.5243923628,
+  "e_zero": -3.5243593787,
+  "e_rep": 0.0241323318,
+  "e_scc": 0.0109930814,
+  "e_band": -3.5375406219,
+  "e_spin": -0.0166675239,
+  "e_ls": -0.0052436621,
+  "fermi": -0.236468727876304,
+  "forces": [
+   [
+    -0.00879549126986637,
+    -0.00439774564062931,
+    -0.085316252389553
+   ],
+   [
+    0.00879549126986637,
+    0.00439774564062931,
+    0.085316252389553
+   ]
+  ],
+  "charges_net": [
+   -0.31451038051925,
+   0.314510380519249
+  ],
+  "spins": [
+   [
+    0.110869410029468,
+    -0.00844877214605376
+   ],
+   [
+    0.0554347050146816,
+    -0.00422438607302242
+   ],
+   [
+    1.07543327728659,
+    -0.0819530898167885
+   ]
+  ],
+  "angular_spin": [
+   [
+    -0.00036803,
+    -0.00018401,
+    -0.00356986
+   ],
+   [
+    -0.05513096,
+    -0.02756548,
+    -0.53477034
+   ],
+   [
+    0.00422928,
+    0.00211464,
+    0.04102406
+   ]
+  ],
+  "angular_orbital": [
+   [
+    -0.0,
+    -0.0,
+    -0.0
+   ],
+   [
+    -0.10126085,
+    -0.05063042,
+    -0.98223023
+   ],
+   [
+    -0.0,
+    -0.0,
+    -0.0
+   ]
+  ],
+  "analysis": {
+   "detailed_blocks": []
+  },
+  "n_scc": 22,
+  "scc_errors": [
+   0.49875778,
+   0.22500736,
+   0.15642705,
+   0.0541544,
+   0.04636085,
+   0.042361854,
+   0.085404437,
+   0.023523836,
+   0.025631365,
+   0.013547562,
+   0.014639839,
+   0.011702342,
+   0.00052282226,
+   0.00015940095,
+   1.7545235e-05,
+   2.4655542e-05,
+   6.91998e-07,
+   8.2348113e-07,
+   1.925865e-08,
+   9.6995745e-12,
+   8.2343021e-11,
+   4.4408921e-14
+  ],
+  "hessian": {
+   "hessian": [
+    [
+     -0.0404252279315436,
+     0.00305925210586019,
+     0.0593495777056682,
+     0.0404252279330181,
+     -0.00305925210497549,
+     -0.0593495777058591
+    ],
+    [
+     0.00305925368117559,
+     -0.0450141117942912,
+     0.0296747814144786,
+     -0.00305925367978348,
+     0.0450141117946251,
+     -0.0296747814126138
+    ],
+    [
+     0.0593495934234078,
+     0.02967480402849,
+     0.529147752296177,
+     -0.0593495934207711,
+     -0.0296748040273798,
+     -0.529147752293263
+    ],
+    [
+     0.0404252279315436,
+     -0.00305925210586019,
+     -0.0593495777056682,
+     -0.0404252279330181,
+     0.00305925210497549,
+     0.0593495777058591
+    ],
+    [
+     -0.00305925368117559,
+     0.0450141117942912,
+     -0.0296747814144786,
+     0.00305925367978348,
+     -0.0450141117946251,
+     0.0296747814126138
+    ],
+    [
+     -0.0593495934234078,
+     -0.02967480402849,
+     -0.529147752296177,
+     0.0593495934207711,
+     0.0296748040273798,
+     0.529147752293263
+    ]
+   ],
+   "born": [
+    [
+     -0.310970898690435,
+     0.00176974067109259,
+     0.0343329690188909
+    ],
+    [
+     0.00176974067324365,
+     -0.313625509689285,
+     0.0171664845305397
+    ],
+    [
+     0.0343329679951612,
+     0.0171664839975806,
+     0.0185194086887996
+    ],
+    [
+     0.310970898689776,
+     -0.00176974067140484,
+     -0.0343329690249972
+    ],
+    [
+     -0.00176974067175178,
+     0.313625509690048,
+     -0.0171664845161068
+    ],
+    [
+     -0.0343329679945367,
+     -0.0171664839972684,
+     -0.0185194086826934
+    ]
+   ],
+   "files": {
+    "born.out": [
+     "   -0.3109708987    0.0017697407    0.0343329690",
+     "    0.0017697407   -0.3136255097    0.0171664845",
+     "    0.0343329680    0.0171664840    0.0185194087",
+     "    0.3109708987   -0.0017697407   -0.0343329690",
+     "   -0.0017697407    0.3136255097   -0.0171664845",
+     "   -0.0343329680   -0.0171664840   -0.0185194087"
+    ],
+    "hessian.out": [
+     "   -0.0404252279    0.0030592537    0.0593495934    0.0404252279",
+     "   -0.0030592537   -0.0593495934",
+     "    0.0030592521   -0.0450141118    0.0296748040   -0.0030592521",
+     "    0.0450141118   -0.0296748040",
+     "    0.0593495777    0.0296747814    0.5291477523   -0.0593495777",
+     "   -0.0296747814   -0.5291477523",
+     "    0.0404252279   -0.0030592537   -0.0593495934   -0.0404252279",
+     "    0.0030592537    0.0593495934",
+     "   -0.0030592521    0.0450141118   -0.0296748040    0.0030592521",
+     "   -0.0450141118    0.0296748040",
+     "   -0.0593495777   -0.0296747814   -0.5291477523    0.0593495777",
+     "    0.0296747814    0.5291477523"
+    ]
+   },
+   "detailed_born": [
+    " Born charges/dipole derivatives wrt. atom positions (e)",
+    "Atom 1",
+    "   -0.310971    0.001770    0.034333",
+    "    0.001770   -0.313626    0.017166",
+    "    0.034333    0.017166    0.018519",
+    "Atom 2",
+    "    0.310971   -0.001770   -0.034333",
+    "   -0.001770    0.313626   -0.017166",
+    "   -0.034333   -0.017166   -0.018519"
+   ],
+   "geometry_steps": 12,
+   "hsd": "Driver = SecondDerivatives {\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_bxuwppu9/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n  SpinPolarisation = NonColinear {\n    InitialSpins {\n      AllAtomSpins = {\n        0.48 0.6 0.64\n        0.0 0.0 0.0\n      }\n    }\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    H = -0.072\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n  SpinOrbit {\n    Dual = No\n    O [Hartree] = { 0.0 0.01 }\n    H [Hartree] = { 0.0 }\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n"
+  }
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-09,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "dipole": 1e-06,
+  "pc_forces": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_fr": 1e-06,
+  "n_electrons": 1e-06,
+  "fermi_level": 1e-08,
+  "pol": 1e-08,
+  "dqdE": 1e-08,
+  "dedE": 1e-08,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0001,
+  "dqdE_default": 0.0001,
+  "dqdx": 1e-10,
+  "born": 1e-10,
+  "coord_text": 0.0001,
+  "born_fd": 1e-07,
+  "hessian": 1e-07,
+  "hess_born": 5e-08,
+  "hess_dpol": 1e-06,
+  "hess_text": 2e-06,
+  "modes_freq": 1e-07,
+  "modes_int": 1e-05,
+  "modes_vec": 0.0001,
+  "orbital": 1e-06,
+  "eigenvalues": 1e-07,
+  "moments": 1e-08
+ }
+}

@@ -773,8 +773,8 @@ class DFTB:
     def _check_response(self):
         """The response analyses (M6g, DFTB+ ``Polarisability``/``ResponseKernel``/
         ``CoordDerivatives``/``ExternalChargeDerivatives``): DFTB+'s conditions (Fermi filling,
-        no solvation, full third order only) and the part left for milestone M6g-3b
-        (two-component spin); block potentials since M6g-3a."""
+        no solvation, full third order only); block potentials since M6g-3a, two-component spin
+        since M6g-3b."""
         a = self.analysis
         if a is None or (a.polarisability is False and a.response_kernel is False
                          and a.coord_derivatives is False
@@ -788,8 +788,6 @@ class DFTB:
             why = "no implicit solvation (DFTB+: 'Solvation not currently implemented')"
         elif self.third_order == "onsite":
             why = "the full third order only (DFTB+: 'Only full 3rd order currently supported')"
-        elif self.pauli:
-            why = "not with non-collinear spin or spin-orbit coupling yet (milestone M6g-3b)"
         elif self.dipole_correction is not None:
             why = "not with the dipole correction (DFTB+'s response leaves its potential out)"
         elif self.independent_k_filling:

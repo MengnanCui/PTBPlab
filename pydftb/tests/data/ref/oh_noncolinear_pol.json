@@ -1,0 +1,460 @@
+{
+ "schema": 1,
+ "case": "oh_noncolinear_pol",
+ "note": "no spin-orbit coupling: the global rotations of the tilted moments are exact zero modes (bordered solve); DFTB+'s magnetisation response is longitudinal",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu",
+ "skf_sha256": {
+  "C-C.skf": "2a417b0efd931de078c26621d8fdda3596a114847a14c148b6976b3bbde027c9",
+  "C-Cu.skf": "7239158d51e6ecb3e3014715204f0682b00684e9b1b8e227ec6c0cfc6804ae98",
+  "C-H.skf": "77562d5eecbf1519cd39c1d16bc49aee00637c1839a24b45172f7677fba52545",
+  "C-O.skf": "fbd7ee768cd013955de76c8163cb616edbd051cbd269483557d22a53132f7deb",
+  "Cu-C.skf": "e4c43f175b9346ab6bca7aeb0f44501ed8f1b0bebce914711e8c18bcf0918039",
+  "Cu-Cu.skf": "d4520c857b5c217062f0391d3f255c7868c079f667e3ffbcd8c4ad924e9d1e12",
+  "Cu-H.skf": "0744b9537f6c8d0237efbd84ca2449303bea48c7b186e2888be021edcf1a499f",
+  "Cu-O.skf": "d3bf407f8d3e060be8b7584e585a0e64d4f68b48190c6977b3383108e9e88964",
+  "H-C.skf": "1d20c1d4163ead29934c13abe014578f01827c5d1a819b83f50ccdcf65a650ab",
+  "H-Cu.skf": "341ee228ce9eec02b774df8a86474565da6484341938b466757c698ae00fdfbf",
+  "H-H.skf": "bda07f1b30ced641fe44538bcefd52e09ff97f36e737dfb1ca5b3808a7649778",
+  "H-O.skf": "3e67700111ea0eadba5d75212688de08d63318c27b60a3e8d36af1dcfa955519",
+  "O-C.skf": "afa99c160898719078718e5fa6371a9e3a40da231441ecf422fa26e5bd6d3e05",
+  "O-Cu.skf": "939a8935d2ead1159721ed4e41d29d285a2ef5657f708ac8fa0e43a63150d8cc",
+  "O-H.skf": "c8f50b470190dd83c3ec92116db3a948058952d3aa0b1ec4389e3c3189d854bd",
+  "O-O.skf": "59e0150a8c586b11cc581e828f83d2ecf9bccc910c6192ad43ab9f001b95aac1"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   300.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "noncolinear": {
+   "initial_spins": [
+    [
+     0.48,
+     0.6,
+     0.64
+    ],
+    [
+     0.0,
+     0.0,
+     0.0
+    ]
+   ],
+   "spin_constants": {
+    "H": -0.072,
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ],
+    "Cu": [
+     [
+      -0.016,
+      -0.012,
+      -0.004
+     ],
+     [
+      -0.012,
+      -0.04,
+      -0.002
+     ],
+     [
+      -0.004,
+      -0.002,
+      -0.017
+     ]
+    ],
+    "Gd": [
+     [
+      -0.010552,
+      -0.008687,
+      -0.006723,
+      -0.000704
+     ],
+     [
+      -0.008687,
+      -0.013022,
+      -0.004158,
+      -0.00029
+     ],
+     [
+      -0.006723,
+      -0.004158,
+      -0.008679,
+      -0.001912
+     ],
+     [
+      -0.000704,
+      -0.00029,
+      -0.001912,
+      -0.013626
+     ]
+    ]
+   }
+  },
+  "spin_orbit": null,
+  "time_reversal": true,
+  "analysis": {
+   "polarisability": true
+  }
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.1,
+    0.05,
+    0.97
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_hkx9avfe/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 300.0\n  }\n  SpinPolarisation = NonColinear {\n    InitialSpins {\n      AllAtomSpins = {\n        0.48 0.6 0.64\n        0.0 0.0 0.0\n      }\n    }\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    H = -0.072\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n\n}\nAnalysis {\n  Polarisability {\n  }\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.5192317315,
+  "free_energy": -3.520548773,
+  "e_zero": -3.5198902523,
+  "e_rep": 0.0241323318,
+  "e_scc": 0.0110177075,
+  "e_band": -3.5377133118,
+  "e_spin": -0.0166684591,
+  "fermi": -0.236477932321219,
+  "forces": [
+   [
+    -0.00877868902864523,
+    -0.00438934452002102,
+    -0.0851532706451448
+   ],
+   [
+    0.00877868902864523,
+    0.00438934452002102,
+    0.0851532706451448
+   ]
+  ],
+  "charges_net": [
+   -0.314862459014611,
+   0.314862459014609
+  ],
+  "spins": [
+   [
+    0.519633356127112,
+    -0.0396333561271165
+   ],
+   [
+    0.649541695158882,
+    -0.0495416951588955
+   ],
+   [
+    0.692844474836173,
+    -0.0528444748361556
+   ]
+  ],
+  "analysis": {
+   "response": {
+    "tags": {
+     "staticPolResponse": [
+      [
+       [
+        0.0537124918506794,
+        0.0268562459253397,
+        0.52101117095159
+       ],
+       [
+        0.0268562459253396,
+        0.0134281229626698,
+        0.260505585475794
+       ],
+       [
+        0.52101117095159,
+        0.260505585475795,
+        5.05380835823042
+       ]
+      ]
+     ],
+     "staticChargeReponse": [
+      [
+       [
+        0.284234286744785,
+        -0.284234286744774
+       ],
+       [
+        -0.0114943730817195,
+        0.0114943730817173
+       ],
+       [
+        -0.014367966352158,
+        0.0143679663521472
+       ],
+       [
+        -0.0153258307756227,
+        0.0153258307756222
+       ]
+      ],
+      [
+       [
+        0.142117143372394,
+        -0.142117143372387
+       ],
+       [
+        -0.00574718654086195,
+        0.00574718654085913
+       ],
+       [
+        -0.00718398317608037,
+        0.00718398317607405
+       ],
+       [
+        -0.00766291538781181,
+        0.00766291538781159
+       ]
+      ],
+      [
+       [
+        2.75707258142441,
+        -2.75707258142431
+       ],
+       [
+        -0.111495418892776,
+        0.111495418892668
+       ],
+       [
+        -0.139369273615881,
+        0.139369273615832
+       ],
+       [
+        -0.148660558523571,
+        0.148660558523541
+       ]
+      ]
+     ],
+     "dEidEfield": [
+      [
+       [
+        [
+         0.0630683942976487,
+         0.0637283115964326,
+         0.093253560731944,
+         0.101844718145691,
+         0.0595479953846286,
+         0.0595479953846286,
+         0.0582066580444472,
+         0.0582066580444472,
+         0.145771389774589,
+         0.137189675142891
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         0.031534197148825,
+         0.0318641557982167,
+         0.0466267803659725,
+         0.0509223590728459,
+         0.0297739976923149,
+         0.0297739976923149,
+         0.0291033290222239,
+         0.029103329022224,
+         0.0728856948872948,
+         0.068594837571446
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         0.611763424687216,
+         0.618164622485413,
+         0.904559539099879,
+         0.987893766013221,
+         0.57761555523092,
+         0.577615555230921,
+         0.564604583031155,
+         0.564604583031155,
+         1.41398248081353,
+         1.33073984888606
+        ]
+       ]
+      ]
+     ],
+     "neFermi": [
+      526.291079512561
+     ],
+     "dEfdE": [
+      [
+       0.0582066580444472
+      ],
+      [
+       0.029103329022224
+      ],
+      [
+       0.564604583031155
+      ]
+     ]
+    },
+    "detailed_kernel": [],
+    "detailed_main": [
+     "Density of states at the Fermi energy (a.u.):  0.526291E+03",
+     "Atomic charge derivatives (a.u.), d q / d E_x:",
+     "   1 q  0.284234286745E+00",
+     "     x -0.114943730817E-01",
+     "     y -0.143679663522E-01",
+     "     z -0.153258307756E-01",
+     "   2 q -0.284234286745E+00",
+     "     x  0.114943730817E-01",
+     "     y  0.143679663521E-01",
+     "     z  0.153258307756E-01",
+     "",
+     "Atomic charge derivatives (a.u.), d q / d E_y:",
+     "   1 q  0.142117143372E+00",
+     "     x -0.574718654086E-02",
+     "     y -0.718398317608E-02",
+     "     z -0.766291538781E-02",
+     "   2 q -0.142117143372E+00",
+     "     x  0.574718654086E-02",
+     "     y  0.718398317607E-02",
+     "     z  0.766291538781E-02",
+     "",
+     "Atomic charge derivatives (a.u.), d q / d E_z:",
+     "   1 q  0.275707258142E+01",
+     "     x -0.111495418893E+00",
+     "     y -0.139369273616E+00",
+     "     z -0.148660558524E+00",
+     "   2 q -0.275707258142E+01",
+     "     x  0.111495418893E+00",
+     "     y  0.139369273616E+00",
+     "     z  0.148660558524E+00",
+     "",
+     "Derivative of Fermi energy with respect to electric field",
+     " d E_f / d E_x:  0.582066580444E-01",
+     " d E_f / d E_y:  0.291033290222E-01",
+     " d E_f / d E_z:  0.564604583031E+00",
+     "",
+     " Electric field polarisability (a.u.)",
+     "",
+     " Static polarisability:",
+     "  0.537124918507E-01  0.268562459253E-01  0.521011170952E+00",
+     "  0.268562459253E-01  0.134281229627E-01  0.260505585476E+00",
+     "  0.521011170952E+00  0.260505585476E+00  0.505380835823E+01",
+     ""
+    ],
+    "dE_band.out": [
+     " DIR x KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.171618E+01",
+     "     2    0.173414E+01",
+     "     3    0.253756E+01",
+     "     4    0.277134E+01",
+     "     5    0.162038E+01",
+     "     6    0.162038E+01",
+     "     7    0.158388E+01",
+     "     8    0.158388E+01",
+     "     9    0.396664E+01",
+     "    10    0.373312E+01",
+     "",
+     " DIR y KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.858089E+00",
+     "     2    0.867068E+00",
+     "     3    0.126878E+01",
+     "     4    0.138567E+01",
+     "     5    0.810192E+00",
+     "     6    0.810192E+00",
+     "     7    0.791942E+00",
+     "     8    0.791942E+00",
+     "     9    0.198332E+01",
+     "    10    0.186656E+01",
+     "",
+     " DIR z KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.166469E+02",
+     "     2    0.168211E+02",
+     "     3    0.246143E+02",
+     "     4    0.268820E+02",
+     "     5    0.157177E+02",
+     "     6    0.157177E+02",
+     "     7    0.153637E+02",
+     "     8    0.153637E+02",
+     "     9    0.384764E+02",
+     "    10    0.362113E+02",
+     ""
+    ]
+   },
+   "detailed_blocks": []
+  },
+  "n_scc": 10,
+  "scc_errors": [
+   0.49889342,
+   0.22478209,
+   0.15628703,
+   0.0042327091,
+   0.0024178844,
+   0.00011164143,
+   7.4418831e-05,
+   1.1490041e-06,
+   1.8885224e-09,
+   8.3469232e-11
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 2e-06,
+  "charges": 1e-06,
+  "spins": 1e-06,
+  "dipole": 1e-06,
+  "pc_forces": 1e-06,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "e_fr": 1e-06,
+  "n_electrons": 1e-06,
+  "fermi_level": 1e-08,
+  "pol": 1e-08,
+  "dqdE": 1e-08,
+  "dedE": 1e-08,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0001,
+  "dqdE_default": 0.0001,
+  "moments": 1e-08,
+  "orbital": 1e-06,
+  "eigenvalues": 1e-07,
+  "dmdE": 1e-08,
+  "dmdV": 1e-08
+ }
+}

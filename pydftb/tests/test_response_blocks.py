@@ -193,6 +193,3 @@ def test_text_block():
 def test_refused():
     with pytest.raises(ValueError, match="point charges for the external charge derivatives"):
         _calc(_water(), {"external_charge_derivatives": True})
-    with pytest.raises(ValueError, match="M6g-3b"):
-        _calc(_water(), {"coord_derivatives": True}, spin_orbit={"O": [0.0, 0.01]},
-              temperature=300.0)

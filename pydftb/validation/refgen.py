@@ -685,6 +685,11 @@ def regenerate(names=None, threads: int = 1):
                                 f"central differences, h = {FD_STEP} Bohr")
         if case.hessian is not None:                                   # M6g-2
             doc["reference"]["hessian"] = run_dftbplus(case, inp, threads, hessian=True)
+        if case.analysis and case.analysis.get("field_fd"):            # M6g-3b
+            doc["reference"]["field_fd"] = field_fd_reference(case, inp, threads)
+            doc["field_fd"] = ("d mu / d E of DFTB+ (results.tag dipole_moments), 4-point "
+                               "central differences in fields of +-h, +-2h along x, y, z added "
+                               "to the case's own, SCC tolerance 1e-12; h in atomic units")
         if case.klines or case.regions or case.dp_dos:
             doc["reference"].update(_band_reference(case, ref))
             doc["band_hsd"] = ref.get("band", {}).get("hsd")
@@ -698,6 +703,31 @@ def regenerate(names=None, threads: int = 1):
 
 
 FD_STEP = 1e-4          # Bohr: differences of DFTB+'s excited-state energy (M6e)
+FIELD_FD_STEP = 5e-4    # atomic units of field: DFTB+'s finite-field polarisability (M6g-3b)
+
+
+def field_fd_reference(case: Case, inp: dict, threads: int = 1) -> dict:
+    """DFTB+'s own polarisability from finite fields (M6g-3b, for responses DFTB+ gets wrong):
+    12 runs with fields of +-h, +-2h along x, y, z added to the case's own field (SCC tolerance
+    1e-12, no analysis), d mu_j / d E_i = (8 (mu(h) - mu(-h)) - (mu(2h) - mu(-2h))) / 12 h from
+    the full-precision dipole of results.tag.  {"h", "alpha" (j, i)}."""
+    spec = case.analysis["field_fd"]
+    h = float(spec.get("h", FIELD_FD_STEP)) if isinstance(spec, dict) else FIELD_FD_STEP
+    base = np.zeros(3)
+    if case.efield:
+        d = np.asarray(case.efield["direction"], float)
+        base = case.efield["strength"] * d / np.linalg.norm(d)          # V/Angstrom
+    alpha = np.zeros((3, 3))
+    for i in range(3):
+        mu = []
+        for s in (2, 1, -1, -2):
+            e = base + s * h / VOLT_PER_ANGSTROM_AU * np.eye(3)[i]
+            c = dataclasses.replace(case, analysis=None, scc_tol=1e-12, hessian=None,
+                                    efield={"strength": float(np.linalg.norm(e)),
+                                            "direction": (e / np.linalg.norm(e)).tolist()})
+            mu.append(np.asarray(run_dftbplus(c, inp, threads)["dipole_tag"], float))
+        alpha[:, i] = (8.0 * (mu[1] - mu[2]) - (mu[0] - mu[3])) / (12.0 * h)
+    return {"h": h, "alpha": alpha.tolist()}
 
 
 def excited_forces_fd(case: Case, inp: dict, threads: int = 1, h: float = FD_STEP) -> np.ndarray:
@@ -965,7 +995,8 @@ ANALYSIS_DEV = ("atom_energies", "net_populations", "cm5", "esp", "esp_file", "e
                 "response_text", "dqdE_default",
                 "dqdx", "born", "coord_text", "born_fd", "hessian", "hess_born",    # M6g-2
                 "hess_dpol", "hess_text", "modes_freq", "modes_int", "modes_vec",
-                "dqdxext", "extq_text")                                             # M6g-3a
+                "dqdxext", "extq_text",                                             # M6g-3a
+                "dmdE", "dmdV", "pol_fd", "pol_dftbp", "kernel_dftbp")              # M6g-3b
 
 
 def _degenerate_groups(e, tol: float = 1e-6):
@@ -1079,6 +1110,13 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
         dev["bonds"], dev["bonds_file"] = worst, file_dev
     if "response" in r:                                               # M6g-1
         periodic = inp["cell_angstrom"] is not None
+        if case.analysis.get("skew_compat"):     # M6g-3b: DFTB+ 25.1 drops the skew blocks
+            dev.update(_compare_skew(ref, r["response"], a))
+            DFTB._response_skew_compat = True
+            try:
+                res = run_pydftb(case, inp, **run)
+            finally:
+                DFTB._response_skew_compat = False
         if case.analysis.get("eta_compat"):      # DFTB+'s eta term of reduced k-point sets
             dev["dqdE_default"] = _compare_response(r["response"], res, periodic).get("dqdE",
                                                                                      0.0)
@@ -1104,6 +1142,35 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
     return dev
 
 
+def _compare_skew(ref: dict, r: dict, a) -> dict:
+    """M6g-3b, dual spin-orbit coupling with block potentials: pydftb's polarisability (with the
+    skew block channels) against DFTB+'s finite fields ("pol_fd") and against DFTB+ 25.1's
+    analytic value ("pol_dftbp", which leaves the skew block response out), both relative; the
+    kernel's charge part against DFTB+'s ("kernel_dftbp", relative: DFTB+'s error)."""
+    dev = {}
+    pol, ker = a.polarisability, a.response_kernel
+    if pol is not None and pol.tensor is not None:
+        mine = pol.tensor[0]                             # (j, i) = d mu_j / d E_i, static
+        if "field_fd" in ref:
+            fd = np.array(ref["field_fd"]["alpha"])
+            dev["pol_fd"] = float(np.abs(mine - fd).max() / np.abs(fd).max())
+        if "staticPolResponse" in r["tags"]:
+            theirs = np.array(r["tags"]["staticPolResponse"])[0].T
+            dev["pol_dftbp"] = float(np.abs(mine - theirs).max() / np.abs(theirs).max())
+    if ker is not None and "dqdV" in r["tags"]:
+        theirs = np.array(r["tags"]["dqdV"])[:, :, 0].sum(-1)            # (n_w, A, B)
+        mine = ker.atom[:, :, 0, :]
+        dev["kernel_dftbp"] = float(np.abs(mine - theirs).max() / np.abs(theirs).max())
+    return dev
+
+
+def _relative_to_one(mine, theirs) -> float:
+    """max |mine - theirs| / max(1, max |theirs|): the magnetisation responses of two-component
+    calculations (soft spin modes make them large; without moments they are noise)."""
+    theirs = np.asarray(theirs)
+    return float(np.abs(np.asarray(mine) - theirs).max() / max(1.0, float(np.abs(theirs).max())))
+
+
 def _compare_response(r: dict, res, periodic: bool = False) -> dict:
     """The response analyses against DFTB+ (M6g-1), from results.tag: the polarisability of
     every frequency, the charge and eigenvalue derivatives d/dE of the last frequency (DFTB+
@@ -1125,16 +1192,20 @@ def _compare_response(r: dict, res, periodic: bool = False) -> dict:
         if "staticPolResponse" in tags:                    # (n_w, i, j) = d mu_j / d E_i
             dev["pol"] = float(np.abs(np.transpose(pol.tensor, (0, 2, 1))
                                       - tags["staticPolResponse"]).max())
-        dev["dqdE"] = float(np.abs(pol.charge_derivatives[-1]
-                                   - tags["staticChargeReponse"]).max())
+        dq, ref = pol.charge_derivatives[-1], np.asarray(tags["staticChargeReponse"])
+        if dq.shape[1] == 4:                                # two-component (M6g-3b): q | m
+            dev["dqdE"] = float(np.abs(dq[:, 0] - ref[:, 0]).max())
+            dev["dmdE"] = _relative_to_one(dq[:, 1:], ref[:, 1:])
+        else:
+            dev["dqdE"] = float(np.abs(dq - ref).max())
         if "dEidEfield" in tags:
             ref = tags["dEidEfield"]
             dev["dedE"] = float(np.abs(np.asarray(pol.eigenvalue_derivatives[-1]).reshape(ref.shape)
                                        - ref).max())
         if "neFermi" in tags:
             dev["dos"] = float(np.abs(pol.dos_fermi - tags["neFermi"]).max())
-        if "dEfdE" in tags:
-            fill = 2.0 if len(pol.dos_fermi) == 1 else 1.0
+        if "dEfdE" in tags:                                 # DFTB+ divides by the full filling
+            fill = 2.0 if pol.charge_derivatives.shape[2] == 1 else 1.0
             dev["dEf"] = float(np.abs(pol.fermi_derivatives[-1] / fill - tags["dEfdE"]).max())
     if ker is not None:
         ref = tags["dqdV"]                                  # (n_w, A, c, B, mOrb)
@@ -1143,11 +1214,18 @@ def _compare_response(r: dict, res, periodic: bool = False) -> dict:
         for b, n in enumerate(np.bincount(ker.orbital_atom)):
             mine[..., b, :n] = ker.orbital[..., o:o + n]
             o += n
-        dev["dqdV"] = float(np.abs(mine - ref).max())
+        if ref.shape[2] == 4:                               # two-component (M6g-3b): q | m
+            dev["dqdV"] = float(np.abs(mine[:, :, 0] - ref[:, :, 0]).max())
+            dev["dmdV"] = _relative_to_one(mine[:, :, 1:], ref[:, :, 1:])
+        else:
+            dev["dqdV"] = float(np.abs(mine - ref).max())
         dev["dqnet"] = float(np.abs(ker.net - tags["dqnetdV"]).max())
         ref = tags["dEidV"]
-        dev["dedV"] = float(np.abs(np.asarray(ker.eigenvalue_derivatives).reshape(ref.shape)
-                                   - ref).max())
+        dei = np.asarray(ker.eigenvalue_derivatives)
+        if ker.atom.shape[2] == 4:          # (n_w, A, n_k, 2N): DFTB+ pads spin slots 2-4
+            dei = np.concatenate([dei[:, :, None], np.zeros((dei.shape[0], dei.shape[1], 3)
+                                                           + dei.shape[2:])], axis=2)
+        dev["dedV"] = float(np.abs(dei.reshape(ref.shape) - ref).max())
         if "neFermi" in tags and pol is None:
             dev["dos"] = float(np.abs(ker.dos_fermi - tags["neFermi"]).max())
     with tempfile.TemporaryDirectory(prefix="pydftb_resp_") as tmp:

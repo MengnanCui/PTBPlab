@@ -158,6 +158,8 @@
 | SK 格点跳变 | DFTB+ 在 SK 表的相邻 8 个格点上做多项式插值，越过格点时换一组点：积分连续，导数跳变。两个原子的距离正好落在格点附近时，有限差分（如数值 Hessian）会看到这个跳变（M6g-2）。 |
 | 块通道（block channel） | 有 DFTB+U 或 onsite 修正时响应的新自由度：原子块中块势会碰到的一个矩阵元（i ≤ j）。它的势 V = v·E<sub>c</sub> 经 ½(SE<sub>c</sub> + E<sub>c</sub>S) 进入哈密顿量，共轭的布居是 (2 − δ<sub>ij</sub>)Q<sub>ij</sub>（Q 是对偶块布居）。χ<sub>0</sub> 的行与列加上这些通道，块核取块势对块布居的线性部分（M6g-3a）。 |
 | 点电荷导数（external charge derivatives） | 原子布居对外部点电荷位置的导数 dN<sub>B</sub>/dR<sub>j</sub>。移动点电荷只改变外势（H0、S 不变），按外场的方式求解。DFTB+ 只有开发版有（<code>ExternalChargeDerivatives</code>），周期体系的符号相反（M6g-3a）。 |
+| 转动零模式（rotation zero mode） | 没有 SOC 时，同时转动全部磁矩不改变能量，所以响应方程 (I − AB)x = AV 有严格的零模式：生成元 e<sub>a</sub> × m（每个壳层与块的磁化向量）。磁化的响应只确定到这个整体转动；pydftb 解以转动为边的加边方程，得到不含转动的解（M6g-3b）。 |
+| 虚部块通道（skew channel） | dual SOC 加 +U 或 onsite 修正时响应的另一种块通道：原子块中的元素 (i, j)，i &lt; j，势 Vi = v(E<sub>ij</sub> − E<sub>ji</sub>) 经 i½(SVi + ViS)⊗σ<sub>b</sub> 进入哈密顿量，共轭的布居是 2Qi<sub>ij</sub>（块布居的虚部）。DFTB+ 25.1 的响应少了这一项（M6g-3b）。 |
 | ParamSet | pydftb 中“参数从哪里来”的对象：一个 SKF 目录加上读取选项。 |
 | wheel | Python 包的标准发行文件（`.whl`）：已经排好目录的 zip 包，`pip install` 直接解压到 site-packages，不需要在安装时构建。pydftb 的 wheel 不含 `docs/` 与 `bench/`，含测试与冻结的参考数据（P1）。 |
 | sdist | 源码发行包（`.tar.gz`）：项目的源文件加构建配置，安装时先构建成 wheel。P1 检查过 sdist 构建出的 wheel 与直接构建的逐字节相同。 |

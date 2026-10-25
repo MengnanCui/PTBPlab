@@ -55,8 +55,9 @@ is the same for insulators.  H' holds dH0 and the ground state's potentials 1/2 
 the potential's own derivative at fixed charges (gamma, the third order, the field and the
 point charges, which DFTB+ leaves out) acts like an external potential.
 
-NumPy engine only; collinear spin and k-points included (coordinate derivatives: molecules);
-DFTB+U, onsite corrections, non-collinear spin and spin-orbit coupling are milestone M6g-3.
+NumPy engine only; collinear spin, k-points, DFTB+U and onsite corrections (M6g-3a) included
+(coordinate derivatives: molecules); two-component calculations (non-collinear spin, spin-orbit
+coupling; M6g-3b) branch to :mod:`pydftb.response_pauli`.
 """
 from __future__ import annotations
 
@@ -131,12 +132,14 @@ class PolarisabilityResult:
 
     ``tensor[w, j, i]`` = d mu_j / d E_i at ``frequencies[w]`` (Hartree), mu = sum_A (q0 - q)_A
     R_A as DFTB+ (None for periodic systems); ``charge_derivatives[w, i, c, A]`` = dN_A / dE_i
-    (electron populations, c = 0 charge, 1 magnetisation with collinear spin);
-    ``orbital_derivatives[w, i, c, mu]`` the same per orbital; ``eigenvalue_derivatives[w]``
-    (3, n_block, n_level) d eps / d E_i of every (spin, k) block (degenerate levels: the
+    (electron populations, c = 0 charge, 1 magnetisation with collinear spin, 1-3 the
+    magnetisation m_x, m_y, m_z of two-component calculations); ``orbital_derivatives[w, i, c,
+    mu]`` the same per orbital; ``eigenvalue_derivatives[w]`` (3, n_block, n_level) d eps / d E_i
+    of every (spin, k) block (two-component: one block per k, 2N levels; degenerate levels: the
     eigenvalues of M in the run, ascending); for metals ``fermi_derivatives[w, i, channel]``
     = dE_F / dE_i (the physical value; DFTB+ prints it divided by the full filling) and
-    ``dos_fermi`` DFTB+'s neFermi per channel (with the full filling)."""
+    ``dos_fermi`` DFTB+'s neFermi per channel (with the full filling; one channel without spin
+    and with two-component spin)."""
     frequencies: np.ndarray
     tensor: np.ndarray | None
     charge_derivatives: np.ndarray
@@ -151,8 +154,9 @@ class PolarisabilityResult:
 class ResponseKernelResult:
     """Response to a unit potential on each atom (``r.analysis.response_kernel``).
 
-    ``atom[w, A, c, B]`` = dN_B / dV_A (c = 0 charge, 1 magnetisation), ``orbital[w, A, c, mu]``
-    per orbital, ``net[w, A, B]`` the on-site (net) population of B, ``eigenvalue_derivatives
+    ``atom[w, A, c, B]`` = dN_B / dV_A (c = 0 charge, 1 magnetisation, 1-3 with two-component
+    spin), ``orbital[w, A, c, mu]`` per orbital, ``net[w, A, B]`` the on-site (net) population
+    of B (charge), ``eigenvalue_derivatives
     [w]`` (n_atom, n_block, n_level); ``rpa``: without SCC screening (the bare response);
     ``frontier``: (spin, k, last filled, first empty level) of every block (DFTB+'s n_F and
     n_E, 0-based); ``orbital_atom``: the atom of every orbital."""
@@ -766,6 +770,9 @@ def _fermi_level_derivative(gs: GroundState, resp: Response, v_col) -> np.ndarra
 def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     """DFTB+'s ``Polarisability``: the response to E_x, E_y, E_z (H' from the atoms'
     coordinates) at every frequency of ``spec``."""
+    if st.pauli is not None:                             # two-component (M6g-3b)
+        from . import response_pauli
+        return response_pauli.polarisability(calc, st, sc, spec, opts)
     omegas = frequencies(spec, "polarisability")
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
@@ -795,6 +802,9 @@ def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
 def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     """DFTB+'s ``ResponseKernel``: the response to a unit potential on each atom (SCC
     screened, or the bare response with ``rpa`` and without SCC)."""
+    if st.pauli is not None:                             # two-component (M6g-3b)
+        from . import response_pauli
+        return response_pauli.response_kernel(calc, st, sc, spec, opts)
     spec_d = {} if spec is True else dict(spec)
     rpa = bool(spec_d.get("rpa", False)) or not calc.scc
     omegas = frequencies(spec, "response_kernel")
@@ -838,7 +848,8 @@ class CoordDerivativesResult:
 
     ``atoms``: the displaced atoms (0-based); ``born[K, i, j]`` = d mu_j / d x_K,i with
     mu = sum_A (q0 - q)_A R_A (the physical sign; DFTB+ prints -born); ``atom[K, i, c, B]`` =
-    dN_B / dx_K,i (electron populations, c = 0 charge, 1 magnetisation with collinear spin),
+    dN_B / dx_K,i (electron populations, c = 0 charge, 1 magnetisation with collinear spin, 1-3
+    with two-component spin),
     ``orbital[K, i, c, mu]`` the same per orbital; ``eigenvalue_derivatives`` (n_K, 3,
     n_block, n_level) d eps / dx (degenerate levels: the eigenvalues of the run's block,
     ascending); for metals ``fermi_derivatives[K, i, channel]`` = dE_F / dx and ``dos_fermi``
@@ -1012,6 +1023,9 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
     if st.cell is not None and bool(np.any(st.pbc)):
         raise ValueError("coordinate derivatives (M6g-2) are for molecules only (as DFTB+: "
                          "Born charges of a periodic system need the Berry phase)")
+    if st.pauli is not None:                             # two-component (M6g-3b)
+        from . import response_pauli
+        return response_pauli.coordinate_derivatives(calc, st, sc, spec, opts)
     natom = len(st.species)
     sel = coordinate_atoms(spec, natom)
     atoms = np.arange(natom) if sel is None else sel
@@ -1187,7 +1201,8 @@ class ExternalChargeDerivativesResult:
     ``ExternalChargeDerivatives`` of the development version).
 
     ``charges``: the point charges (0-based); ``atom[j, c, q, B]`` = dN_B / dR_j,c (electron
-    populations, q = 0 charge, 1 magnetisation with collinear spin; DFTB+'s ``dqdxext`` for a
+    populations, q = 0 charge, 1 magnetisation with collinear spin, 1-3 with two-component spin;
+    DFTB+'s ``dqdxext`` for a
     molecule, the opposite sign for a periodic system), ``orbital[j, c, q, mu]`` the same per
     orbital."""
     charges: np.ndarray
@@ -1223,6 +1238,9 @@ def external_charge_derivatives(calc, st, sc, spec, opts: dict) -> ExternalCharg
     is the only perturbation (H0 and S do not change), solved like the field (M6g-1)."""
     if st.ext is None or st.ext.pc is None:
         raise ValueError("external charge derivatives need point charges")
+    if st.pauli is not None:                             # two-component (M6g-3b)
+        from . import response_pauli
+        return response_pauli.external_charge_derivatives(calc, st, sc, spec, opts)
     ncharge = len(st.ext.pc.charges)
     sel = external_charge_selection(spec, ncharge)
     charges = np.arange(ncharge) if sel is None else sel

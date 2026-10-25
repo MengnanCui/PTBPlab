@@ -640,10 +640,11 @@ def response_tables(res, part: str | None = None, dftbplus_fermi: bool = False) 
     (1X,I2,I4,2F14.6) and the Mulliken and on-site population derivatives (I5, 2F12.6)
     (written during the perturbation); then the density of states at the Fermi energy
     (metals), the atomic charge derivatives d q / d E_i of the last frequency ((I4,1X,E20.12),
-    with collinear spin "u"/"d" rows of 1/2 (q +- m)), the Fermi-level derivatives (metals;
-    the physical values, DFTB+ prints them divided by the full filling: ``dftbplus_fermi``)
-    and the polarisability of every frequency (one row per field direction, 3E20.12).
-    ``part``: "kernel" or "main" (the rest) only."""
+    with collinear spin "u"/"d" rows of 1/2 (q +- m), two-component "q"/"x"/"y"/"z" rows of the
+    four Pauli components, M6g-3b), the Fermi-level derivatives (metals; the physical values,
+    DFTB+ prints them divided by the full filling, 2 without spin: ``dftbplus_fermi``) and the
+    polarisability of every frequency (one row per field direction, 3E20.12).  ``part``:
+    "kernel" or "main" (the rest) only; the kernel's blocks hold the charge part."""
     a = res.analysis
     pol = None if a is None else a.polarisability
     ker = None if a is None else a.response_kernel
@@ -685,6 +686,10 @@ def response_tables(res, part: str | None = None, dftbplus_fermi: bool = False) 
             for at in range(dq.shape[2]):
                 if dq.shape[1] == 1:
                     lines.append(f"{at + 1:4d} " + fortran_e(dq[i, 0, at], 20, 12))
+                elif dq.shape[1] == 4:                   # two-component (M6g-3b)
+                    lines.append(f"{at + 1:4d} q" + fortran_e(dq[i, 0, at], 20, 12))
+                    lines += [f"     {c}" + fortran_e(dq[i, b, at], 20, 12)
+                              for b, c in enumerate("xyz", 1)]
                 else:
                     q, m = dq[i, 0, at], dq[i, 1, at]
                     lines.append(f"{at + 1:4d} u" + fortran_e(0.5 * (q + m), 20, 12))
@@ -694,8 +699,8 @@ def response_tables(res, part: str | None = None, dftbplus_fermi: bool = False) 
             lines.append("Derivative of Fermi energy with respect to electric field")
             for i in range(3):
                 vals = pol.fermi_derivatives[-1, i]
-                if dftbplus_fermi:
-                    vals = vals / (2.0 if len(vals) == 1 else 1.0)
+                if dftbplus_fermi:                       # the full filling: 2 without spin
+                    vals = vals / (2.0 if dq.shape[1] == 1 else 1.0)
                 lines.append(f" d E_f / d E_{_CART[i]}:" + "".join(fortran_e(v, 20, 12)
                                                               for v in vals))
         if pol.tensor is not None:
@@ -714,9 +719,10 @@ def write_band_derivatives(path, res, kind: str = "field") -> None:
     """DFTB+'s dE_band.out (``kind="field"``: for every direction, spin channel and k-point a
     list-directed header "DIR x KPT k SPIN s KWEIGHT w", then (I6, E16.6) rows of the level
     derivatives with the levels in eV, per unit field in atomic units), dV_band.out
-    (``kind="potential"``: per atom "ATOM n KPT ..." blocks, per unit potential in Hartree),
-    of the last frequency of the field and of every frequency of the kernel (DFTB+ keeps only
-    the last frequency of atom 1), or dBand_dx.out (``kind="coordinate"``, M6g-2: "Atom n dx
+    (``kind="potential"``: per atom "ATOM n KPT ..." blocks, per unit potential in Hartree;
+    two-component: SPIN 1 and zero blocks for SPIN 2-4, as DFTB+), of the last frequency of the
+    field and of every frequency of the kernel (DFTB+ keeps only the last frequency of atom 1),
+    or dBand_dx.out (``kind="coordinate"``, M6g-2: "Atom n dx
     KPT ..." blocks of d eps / dx in eV/Bohr, KWEIGHT 1)."""
     a = res.analysis
     kw = np.ones(1) if res.kweights is None else np.asarray(res.kweights, float)
@@ -741,8 +747,11 @@ def write_band_derivatives(path, res, kind: str = "field") -> None:
         ker = None if a is None else a.response_kernel
         if ker is None:
             raise ValueError("no response kernel in this result")
+        pauli = ker.atom.shape[2] == 4
         for w in range(len(ker.frequencies)):
             for at, de in enumerate(ker.eigenvalue_derivatives[w]):
+                if pauli:                                # DFTB+'s spin slots 2-4 (M6g-3b)
+                    de = np.concatenate([de, np.zeros((3 * len(de),) + de.shape[1:])])
                 block(f"ATOM {at + 1} ", de)
     elif kind == "coordinate":                           # dBand_dx.out (M6g-2)
         cd = None if a is None else a.coord_derivatives

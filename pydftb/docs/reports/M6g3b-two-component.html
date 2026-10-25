@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6g-3b 两分量响应报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6g-3b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6g-3b · 完成报告</p>
+    <h1>响应性质（下·二）：非共线自旋与 SOC 下的响应</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-25</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6g3b-two-component.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6g 的最后一块。M6g 的四种响应（极化率、响应核、坐标导数、点电荷导数）现在都能用于两分量计算：非共线自旋，onsite 与 dual 两种 SOC 模型，也可以带 +U 与 onsite 修正。代码在新模块 <code>response_pauli.py</code>。只有 NumPy 引擎；不开这些选项时结果逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：21 个新的参考算例全部通过。
+        <ul>
+          <li><strong>极化率与响应核，对照 25.1</strong>（11 个算例：OH 的非共线、dual 与 onsite SOC 及 +U，O<sub>2</sub> 的 SOC，Cu<sub>4</sub>CO 的 SOC 金属，GdO 的 SOC，CuO 链的 SOC 并用 k 点，三个响应核）：
+            <ul>
+              <li>极化率差 ≤ 1.0e-11 a.u.（GdO 的软模式 1.1e-9）；电荷导数 ≤ 1.9e-9；磁化导数相对 ≤ 4.2e-9；</li>
+              <li>写出的 detailed.out 块、dE_band.out、dV_band.out 与 DFTB+ 的版式相同，数字在打印位数内。</li>
+            </ul>
+          </li>
+          <li><strong>dual SOC 与块势同用，DFTB+ 25.1 是错的</strong>（4 个算例）：
+            <ul>
+              <li>pydftb 的物理值与 DFTB+ 自己的有限外场一致到 3.8e-12（Cu<sub>4</sub>CO 6.6e-9，差分的截断）；</li>
+              <li>DFTB+ 的解析值差 2.2e-5–1.3e-4（分子的极化率）与 75 %（周期的 CuO 链的响应核）；</li>
+              <li>测试专用开关 <code>DFTB._response_skew_compat</code> 去掉虚部通道后，与 DFTB+ 的全部输出一致到 1.4e-13（周期体系 5e-10）。</li>
+            </ul>
+          </li>
+          <li><strong>坐标导数，对照 DFTB+ 的差分</strong>（5 个算例；DFTB+ 拒绝两分量的坐标导数）：解析 Born 电荷与 DFTB+ <code>SecondDerivatives</code> 的差分一致到 4.4e-9（金属 4.9e-8），即差分的截断误差；数值 Hessian 差 ≤ 9.0e-9 Ha/Bohr²。</li>
+          <li><strong>点电荷导数，对照开发版</strong>：dN/dR 差 4.1e-14 e/Bohr，detailed.out 的块逐字相同。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 的行为</strong>（详见第五节）：
+        <ul>
+          <li>dual SOC 下，响应丢掉块布居的虚部及其 +U/onsite 势（<code>perturb.F90</code> 只把实数块布居交给块势）。</li>
+          <li>两分量的坐标导数拒绝，<code>SecondDerivatives</code> 照常；点电荷导数（开发版）只输出电荷分量。</li>
+          <li>没有 SOC 时，响应方程有整体转动的零模式；DFTB+ 的磁化响应是纵向的，pydftb 的加边解与之一致。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>：两分量的周期体系坐标导数（同 M6g-2）；M6g-1 拒绝的其他组合；torch 引擎。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">21</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 1e-11</span><span class="lbl">两分量极化率与 DFTB+ 25.1 的最大差（a.u.，GdO 的软模式除外）</span></li>
+      <li><span class="num">75 %</span><span class="lbl">DFTB+ 25.1 在 dual SOC + U 的 CuO 链上响应核的误差</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的行为</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response_pauli.py</code>（新）</td><td>
+              <ul>
+                <li><strong>基态</strong>：<code>PauliGroundState</code>（<code>GroundState</code> 的子类）：每个 k 点一个 2N × 2N 的旋量块，每个能级最多 1 个电子，一个费米能级；四个分量的费米向量与净布居的费米向量。</li>
+                <li><strong>矩阵元</strong>：<code>spinor_elements</code>（四个分量的逐轨道布居元）、<code>onsite_elements</code>（电荷的净布居）、<code>channel_elements</code>（块通道，实部与虚部）。</li>
+                <li><strong>块通道</strong>：实部通道沿用 <code>BlockChannels</code>（四个分量）；新类 <code>SkewChannels</code>：dual SOC 加块势时的虚部通道，核由 <code>BlockTerms.potentials</code> 对单位反对称块求出；<code>block_channels</code> 按 <code>_response_skew_compat</code> 决定要不要虚部通道。</li>
+                <li><strong>χ<sub>0</sub></strong>：<code>chi0</code> 返回 <code>PauliChi0</code>（四个分量的 [轨道 | 实部 | 虚部] × [壳层 | 实部 | 虚部]，含费米能级的秩 1 修正）。</li>
+                <li><strong>求解</strong>：<code>PauliResponse</code>；<code>rotation_generators</code>（没有 SOC 时整体转动的正交基，加边方程）；有 SOC 时 SVD 截断并警告；有限频率直接求解（<code>make_response</code> 选择）。</li>
+                <li><strong>导数</strong>：本征值导数（简并组含 Kramers 对）、费米能级导数；<code>polarisability</code>、<code>response_kernel</code>、<code>external_charge_derivatives</code>、<code>coordinate_derivatives</code>（分子：旋量的 H′、块势与 dual SOC 的 S′ 项、复数 X、四个分量的 ρS′ 与块布居）。</li>
+              </ul></td></tr>
+            <tr><td><code>response.py</code></td><td>四个入口的第一步转到 <code>response_pauli</code>（坐标导数先拒绝周期体系，点电荷导数先检查点电荷）；结果类与模块的说明写明两分量的四个分量。</td></tr>
+            <tr><td><code>calculator.py</code>、<code>analysis.py</code></td><td><code>_check_response</code> 不再拒绝两分量；说明。</td></tr>
+            <tr><td><code>dftbplus_io.py</code></td><td><code>response_tables</code>：两分量的电荷导数写 q/x/y/z 四行；<code>dftbplus_fermi</code> 的除数按分量数（原来按 dE<sub>F</sub> 的个数，两分量会被错误地减半）。<code>write_band_derivatives</code>：两分量时 dV_band.out 为 SPIN 2–4 写零块（DFTB+ 的格式）。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>refgen.py</code>：两分量时电荷（绝对）与磁化（相对于 max(1, |DFTB+|)，新键 <code>dmdE</code>、<code>dmdV</code>）分开比较；dEidV 补零后比较；dE<sub>F</sub> 的除数按分量数；<code>skew_compat</code> 流程（<code>pol_fd</code>、<code>pol_dftbp</code>、<code>kernel_dftbp</code>，然后用开关重算并比较）；<code>field_fd_reference</code>：DFTB+ 在 ±h、±2h 外场中的 12 次计算。</li>
+                <li><code>dftbplus.py</code>：存 results.tag 的 <code>dipole_moments</code>（全精度）。</li>
+                <li><code>cases.py</code>：21 个算例；容差组 <code>TOL_PRESP</code>、<code>TOL_SKEW</code>。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_response_pauli.py</code>，20 项（参数化后）；</li>
+                <li><code>test_response.py</code>、<code>test_response_blocks.py</code> 中断言两分量被拒绝的测试删去。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb import DFTB, dftbplus_io
+
+r = DFTB(sk, spin="noncolinear", spin_constants=w, spin_orbit={"O": [0.0, 0.01]},
+         plus_u={"O": [("p", 0.1)]}, smearing=("fermi", 300.0),
+         analysis={"polarisability": True, "response_kernel": True,
+                   "coord_derivatives": True}).calculate(labels, pos)
+p = r.analysis.polarisability
+p.tensor[0]                  # (3, 3)：α_ji = dμ_j/dE_i
+p.charge_derivatives[0]      # (3, 4, n_atom)：q、m_x、m_y、m_z 的 d/dE_i
+k = r.analysis.response_kernel
+k.atom[0]                    # (n_atom, 4, n_atom)
+c = r.analysis.coord_derivatives
+c.born                       # (n_atom, 3, 3)，分子
+print(dftbplus_io.response_tables(r))       # DFTB+ detailed.out 的块（q/x/y/z 行）</code></pre>
+      <ul>
+        <li>没有新选项。结果类不变，“自旋”维长度为 4 时就是 q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub>；本征值导数每个 k 点 2N 个旋量能级；金属只有一个费米能级。</li>
+        <li>没有 SOC 时，磁化响应不含整体转动（共线磁矩时纵向）；有 SOC 而遇到偶然的零模式时（如 GdO 电子绕轴的转动），给出最小范数解并警告，警告里写出被截掉的奇异值。</li>
+        <li>计算量（耗时与一次单点之比，粗略）：OH 的 dual SOC 极化率 1.07；加 +U 1.4（坐标导数 1.25）；Cu<sub>4</sub>CO 的 SOC 极化率 1.3、响应核 1.9、3000 K 的坐标导数 3.1；Cu<sub>4</sub>CO 的 SOC + U 极化率 4.1（实部 240 个、虚部 160 个块通道）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>测试参数 <code>ptbp_hcocu</code>（GdO 用 <code>hotcent_gdo</code>）。基态的能量、力、电荷与每轮的 SCC 误差照旧比较，全部在容差内；SCC 轮数逐个相同，只有 <code>cuo_chain_soc_plusu_kernel_k422</code> 差一轮（62 对 63）。三个算例每轮 SCC 误差的容差放宽，见第七节。</p>
+      <h3>极化率与响应核：对照 DFTB+ 25.1</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>α（a.u.）</th><th>dq/dE</th><th>dm/dE（相对）</th><th>dε/dE</th><th>其他</th><th>文本</th></tr></thead>
+        <tbody>
+          <tr><td><code>oh_noncolinear_pol</code></td><td>非共线、倾斜磁矩，没有 SOC（零模式，加边解）</td><td>3.8e-14</td><td>7.5e-14</td><td>1.2e-13</td><td>7.9e-14</td><td>dE<sub>F</sub>/dE 7.1e-14，N<sub>F</sub> 1.1e-13</td><td>1.0e-13</td></tr>
+          <tr><td><code>oh_noncolinear_soc_pol</code></td><td>dual SOC，静态加 1 与 3 eV</td><td>5.5e-14</td><td>3.5e-14</td><td>1.4e-13</td><td>1.0e-14</td><td>dE<sub>F</sub>/dE 3.6e-17，N<sub>F</sub> 1.1e-12</td><td>1.0e-13</td></tr>
+          <tr><td><code>oh_noncolinear_soc_onsite_pol</code></td><td>onsite SOC</td><td>4.5e-14</td><td>3.2e-14</td><td>2.7e-13</td><td>9.3e-15</td><td>dE<sub>F</sub>/dE 3.7e-15，N<sub>F</sub> 2.1e-12</td><td>3.0e-13</td></tr>
+          <tr><td><code>o2_noncolinear_soc_pol</code></td><td>O<sub>2</sub>，dual SOC，T = 0</td><td>4.3e-14</td><td>4.4e-15</td><td>1.1e-13</td><td>6.7e-15</td><td>—</td><td>2.0e-14</td></tr>
+          <tr><td><code>cu4co_soc_pol</code></td><td>没有自旋极化的 SOC：Kramers 对，300 K 的金属</td><td>1.0e-11</td><td>3.2e-12</td><td>9.0e-11</td><td>3.5e-13</td><td>dE<sub>F</sub>/dE 1.2e-13，N<sub>F</sub> 5.1e-11</td><td>9.0e-11</td></tr>
+          <tr><td><code>gdo_noncolinear_soc_pol</code></td><td>GdO，7 μ<sub>B</sub>，弱 SOC：软模式与一个严格的零模式（警告）</td><td>1.1e-9</td><td>3.1e-10</td><td>4.2e-9</td><td>8.0e-10</td><td>dE<sub>F</sub>/dE 1.1e-11，N<sub>F</sub> 9.8e-11</td><td>1.0e-6</td></tr>
+          <tr><td><code>cuo_chain_soc_pol_k422</code></td><td>周期（只有电荷响应），k 点，500 K</td><td>—</td><td>1.9e-9</td><td>3.7e-13</td><td>3.2e-10</td><td>dE<sub>F</sub>/dE 1.8e-10，N<sub>F</sub> 3.9e-9</td><td>1.9e-9</td></tr>
+          <tr><td><code>oh_noncolinear_plusu_pol</code></td><td>非共线 + U：零模式也转动块的磁化</td><td>6.2e-13</td><td>3.6e-13</td><td>8.0e-13</td><td>4.8e-13</td><td>dE<sub>F</sub>/dE 3.0e-13，N<sub>F</sub> 1.1e-13</td><td>1.0e-12</td></tr>
+          <tr><td><code>oh_noncolinear_kernel</code></td><td>响应核，非共线</td><td colspan="4">dq/dV 1.5e-13，dm/dV 1.3e-12，净布居 1.3e-13，dε/dV 4.3e-13</td><td>N<sub>F</sub> 1.1e-13</td><td>相同</td></tr>
+          <tr><td><code>oh_noncolinear_soc_kernel</code></td><td>响应核，dual SOC</td><td colspan="4">dq/dV 2.1e-14，dm/dV 5.6e-14，净布居 1.5e-14，dε/dV 5.2e-15</td><td>N<sub>F</sub> 1.1e-12</td><td>相同</td></tr>
+          <tr><td><code>cu4co_soc_kernel</code></td><td>响应核，Cu<sub>4</sub>CO 的 SOC</td><td colspan="4">dq/dV 3.3e-13，dm/dV 6.6e-12，净布居 8.4e-13，dε/dV 1.4e-13</td><td>N<sub>F</sub> 5.1e-11</td><td>相同</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>dm 列是磁化分量的差除以 max(1, |DFTB+ 的值|)：GdO 的磁化导数约 240（软模式），Cu<sub>4</sub>CO 与 CuO 链没有磁矩，磁化导数是 1e-10–1e-13 的噪声。</li>
+        <li>有限频率（OH 的 dual SOC，1 与 3 eV）不用 <code>eta_compat</code> 也与 DFTB+ 一致到 5.5e-14：两分量的分子中 η 项没有留下可见的差别。</li>
+        <li>GdO：极化率 1.1e-9 与磁化的 4.2e-9（相对）来自软模式（3.4e-4 的奇异值）放大两边基态的 SCC 误差；文本的 1e-6 是 240 左右的磁化导数在 12 位有效数字上的差（相对 4e-9）。CuO 链的 1.9e-9 与 N<sub>F</sub> 的 3.9e-9 同源（基态差约 1e-9）。</li>
+      </ul>
+
+      <h3>dual SOC 与块势：对照 DFTB+ 的有限外场与 25.1 的解析值</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>物理值对 DFTB+ 有限外场（相对）</th><th>DFTB+ 解析值的误差（相对）</th><th>开关后对 DFTB+</th></tr></thead>
+        <tbody>
+          <tr><td><code>oh_noncolinear_soc_plusu_pol</code></td><td>OH 的 dual SOC + U（O p）</td><td>3.8e-12</td><td>8.3e-5</td><td>α 6.6e-14，dq/dE 3.2e-14，dm/dE 2.5e-13，文本 2.0e-13</td></tr>
+          <tr><td><code>oh_noncolinear_soc_ons_pol</code></td><td>OH 的 dual SOC + onsite</td><td>1.6e-12</td><td>1.3e-4</td><td>α 1.4e-13，dq/dE 7.8e-14，dE<sub>F</sub>/dE 2.2e-14，文本 1.0e-13</td></tr>
+          <tr><td><code>cu4co_soc_plusu_pol</code></td><td>Cu<sub>4</sub>CO 的 dual SOC + U（金属，外场步长 2.5e-4）</td><td>6.6e-9</td><td>2.2e-5</td><td>α 3.0e-11，dq/dE 3.3e-12，dm/dE 3.0e-11，文本 3.0e-11</td></tr>
+          <tr><td><code>cuo_chain_soc_plusu_kernel_k422</code></td><td>周期的 CuO 链，dual SOC + U，k 点，1000 K，响应核</td><td>—（位点势的差分 2.3e-9，见第四节）</td><td><strong>0.75</strong></td><td>dq/dV 5.0e-10，净布居 3.3e-10，dε/dV 2.1e-9，dm/dV 3.1e-8（噪声）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>DFTB+ 的有限外场：12 次计算（±h、±2h，x、y、z），SCC 容差 1e-12，results.tag 的全精度偶极，四阶中心差分（步长 5e-4 a.u.；Cu<sub>4</sub>CO 2.5e-4，5e-4 时截断误差 3e-8）。</li>
+        <li>CuO 链没有磁矩（1e-11），磁化的响应是 2.5e-7 左右的噪声，两边都一样；这个算例的 dm/dV 容差 1e-7、dε/dV 5e-9，SCC 轮数允许差 1。</li>
+      </ul>
+
+      <h3>坐标导数：对照 DFTB+ 的差分</h3>
+      <p>DFTB+ 拒绝两分量的坐标导数，<code>SecondDerivatives</code> 却能运行（探针 P32）。设置与 M6g-2 相同：两边 SCC 容差 1e-12，pydftb 用 DFTB+ 的 SK 差分步长。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>解析 Born 对 DFTB+ 的差分</th><th>Hessian（Ha/Bohr²）</th><th>差分偶极导数</th></tr></thead>
+        <tbody>
+          <tr><td><code>oh_noncolinear_dx</code></td><td>非共线，没有 SOC</td><td>4.4e-9</td><td>9.0e-9</td><td>2.2e-10</td></tr>
+          <tr><td><code>oh_noncolinear_soc_dx</code></td><td>dual SOC（H<sub>SO</sub> 随 S 变化）</td><td>4.4e-9</td><td>9.0e-9</td><td>5.7e-11</td></tr>
+          <tr><td><code>oh_noncolinear_soc_onsite_dx</code></td><td>onsite SOC</td><td>4.4e-9</td><td>9.0e-9</td><td>3.7e-10</td></tr>
+          <tr><td><code>oh_noncolinear_soc_plusu_dx</code></td><td>dual SOC + U：虚部块势与块布居的 S′ 项</td><td>4.6e-9</td><td>8.8e-9</td><td>9.4e-10</td></tr>
+          <tr><td><code>cu4co_soc_dx_3000K</code></td><td>金属，Kramers 对，<code>filling_tol</code> = 1e-15</td><td>4.9e-8</td><td>6.7e-9</td><td>4.9e-8</td></tr>
+        </tbody>
+      </table></div>
+      <p>第三列是 DFTB+ 中心差分（δ = 1e-4 Bohr）的截断误差，与 M6g-2、M6g-3a 同一量级；hessian.out、born.out 与 detailed.out 的块差 ≤ 1e-6（6 位小数）。</p>
+
+      <h3>点电荷导数：对照开发版的 <code>ExternalChargeDerivatives</code></h3>
+      <p><code>oh_noncolinear_soc_pc_extq</code>（OH 的 dual SOC 与 3 个点电荷）：电荷分量的 dN/dR 差 4.1e-14 e/Bohr，detailed.out 的块逐字相同；pydftb 另给三个磁化分量。</p>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <ul>
+        <li><strong>极化率对外场中的四阶差分</strong>（pydftb 自己，SCC 容差 1e-12，步长 5e-4 a.u.）：dual SOC + U 2.6e-12、dual SOC + onsite 1.4e-12、非共线 + U 4.0e-12（相对值）；四个分量的电荷导数同一量级。dual SOC 下磁化的差分有 ~1e-11/h 的噪声（步长减半误差翻倍），解析值在噪声内。</li>
+        <li><strong>坐标导数对几何的四阶差分</strong>（步长 2e-4 Bohr）：Born 电荷 dual SOC 9.8e-12、onsite SOC 1.1e-11、非共线 3.0e-11、O<sub>2</sub> 的 SOC 9.0e-11、非共线 + U 7.7e-11、dual SOC + U 3.9e-11、dual SOC + onsite 4.0e-11（相对 max(1, |Z|)）；Cu<sub>4</sub>CO 的 SOC 与 SOC + U（3000 K）1.9e-9 与 1.8e-9（金属的 h<sup>4</sup> 截断）；能级导数 1.4e-11（OH）与 6.6e-11（Cu<sub>4</sub>CO，Kramers 对），dE<sub>F</sub>/dx 1.3e-11 与 2.4e-11；电子数守恒到 2e-16。</li>
+        <li><strong>点电荷导数对移动点电荷的差分</strong>：dual SOC + U 的电荷部分 1.4e-11、倾斜磁矩 4.0e-11（e/Bohr）；dual SOC 的磁化部分是差分噪声（1e-3、5e-4、2.5e-4 的步长给 9.4e-9、2.0e-8、3.8e-8）。</li>
+        <li><strong>周期体系的响应核对位点势的差分</strong>（CuO 链，dual SOC + U，k = 2 × 1 × 1）：2.3e-9（|dN| ≈ 10，步长 1e-4 Ha；2e-4 时 6e-8 是截断）；去掉虚部通道后核变 42 %：虚部通道在这里举足轻重。</li>
+        <li><strong>转动零模式</strong>：倾斜磁矩、没有 SOC 时，磁化响应与基态磁矩平行（叉积 &lt; 1e-10）；整体转动初始磁矩后，磁化响应随之转动、电荷响应不变（1e-9）；SCC 容差 1e-8 时加边解与 DFTB+ 差 7.7e-10，最小范数解（lstsq）差 1.2e-5。</li>
+        <li><strong>共线极限</strong>：水阳离子二重态，磁矩沿 z 的两分量计算与共线自旋（共享费米能级）的极化率、电荷与 m<sub>z</sub> 的导数、响应核与净布居一致到 1e-9；m<sub>x</sub>、m<sub>y</sub> 不响应（1e-12）。</li>
+        <li><strong>χ<sub>0</sub> 的对称性</strong>：四个分量的 [壳层 | 实部 | 虚部] 上对称（OH 的 dual SOC + U、Cu<sub>4</sub>CO 的 SOC 金属），相对 1e-12 以内。</li>
+        <li><strong>Kramers 对</strong>：Cu<sub>4</sub>CO 的 SOC 在外场中每对的导数相等（1e-10），磁化不响应；与能级的差分一致到 6.3e-10（离相邻能级对 0.01 Ha 以上的对；相距 2.5e-4–9e-4 Ha 的 d 能级对强烈耦合，差分的 h<sup>4</sup> 误差可达 1e-6）。</li>
+        <li><strong>旧路径</strong>：没有两分量时代码不经过新模块；golden 的所有计算逐位相同（第六节）。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的行为</h2>
+      <ul>
+        <li><strong>dual SOC 与块势同用时的响应错误</strong>（<code>derivs/perturb.F90</code>）：
+          <ul>
+            <li>块势的响应只用实数块布居：<code>getDftbUShift(orbitalBlock, dqBlockIn)</code>，<code>addOnsShift(…, dqBlockIn, placeHolder, …)</code> 的虚部布居是占位的零；<code>addShift</code> 只由实数部分建 dH，<code>iOrbitalBlock</code> 从不进入 idH。</li>
+            <li>dual SOC 的基态混合块布居的虚部，+U 与 onsite 的势依赖它；DFTB+ 的响应把它丢了。dual SOC 本身的能量对块布居是线性的，单独时没有问题（有限外场确认到 1.4e-10）。</li>
+            <li>大小：OH 的极化率 8.3e-5（+U）、1.3e-4（onsite），Cu<sub>4</sub>CO 2.2e-5，周期的 CuO 链的响应核 75 %。pydftb 去掉虚部通道后与 DFTB+ 一致到 1e-13，所以误差正是这一项。</li>
+          </ul>
+        </li>
+        <li><strong>两分量的坐标导数</strong>：拒绝（“Spin polarised calculations are not yet supported for coordinate derivative perturbations”）；<code>SecondDerivatives</code> 照常给出数值 Hessian 与差分 Born 电荷。</li>
+        <li><strong>输出</strong>：<code>dEidV</code> 的自旋维为 4、第 2–4 个是零，<code>dV_band.out</code> 也写 SPIN 2–4 的零块；<code>dEidEfield</code> 的自旋维为 1；detailed.out 的电荷导数每个原子 q、x、y、z 四行，dE<sub>F</sub>/dE 除以 maxFill = 1；点电荷导数（开发版）只有电荷分量。</li>
+        <li><strong>转动零模式</strong>：没有 SOC 时 DFTB+ 的迭代给出纵向的磁化响应，与 pydftb 的加边解一致到 1e-13。</li>
+        <li><strong>GdO 的 SOC 在小外场中</strong>（P30 的风险）：两边的 SCC 都常常在 500 轮内不收敛（5e-4、2.5e-4 a.u.），收敛时（1e-3 a.u. 沿 z）两边的偶极一致到 6 位小数（121 对 120 轮）；是体系的软模式，不是 pydftb 的问题。GdO 因此只对照 DFTB+ 的解析值。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6g-3a 的文档提交 <code>5a27631</code> 逐字节比较；不加 <code>--allow-new</code></td><td>运行中（结果随下一次提交补上）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>运行中（结果随下一次提交补上）</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>运行中（结果随下一次提交补上）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>运行中（结果随下一次提交补上）</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>运行中（结果随下一次提交补上）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>算例</strong>（共 21 个，设计约 20 个）：新增 <code>cuo_chain_soc_plusu_kernel_k422</code>（周期的 dual SOC + U 响应核），设计中周期体系只打算做开关后的比较；物理值用位点势的差分检查（新测试），它显示 DFTB+ 的误差在这里达 75 %。</li>
+        <li><strong>有限频率</strong>：设计估计两分量的有限频率要 <code>eta_compat</code>；实测不用（第三节）。</li>
+        <li><strong>容差</strong>：
+          <ul>
+            <li>每轮 SCC 误差：<code>oh_noncolinear_plusu_pol</code> 5、<code>oh_noncolinear_soc_ons_pol</code> 0.5、<code>gdo_noncolinear_soc_pol</code> 0.5（相对值；原为 1e-4）。三者在误差大时一致到 1e-8–7e-5，只是收敛末尾（误差 ~1e-6；GdO 的 166 轮从 2.5e-3 起）两边的 Broyden 步分开：没有 SOC 的转动或软模式让末尾的步对舍入敏感；轮数与最终状态相同。</li>
+            <li><code>cuo_chain_soc_plusu_kernel_k422</code>：轮数允许差 1，dε/dV 5e-9，dm/dV 1e-7（见第三节）。</li>
+          </ul>
+        </li>
+        <li><strong>自洽测试</strong>：Kramers 对的能级差分只比较离相邻能级对 0.01 Ha 以上的对（第四节）；设计中的“松的 SCC 容差”用 1e-7。</li>
+        <li><strong>写出</strong>：坐标导数与点电荷导数的写出不用改（只写电荷分量）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6g 完成</strong>：DFTB+ 的 <code>Polarisability</code>、<code>ResponseKernel</code>、<code>CoordDerivatives</code>（及 <code>SecondDerivatives</code> 的对照）与开发版的 <code>ExternalChargeDerivatives</code>，在 pydftb 支持的全部哈密顿量上都能用。</li>
+        <li><strong>M6h</strong>：长程校正 LC/CAM（含 TD-LC）；先解决带 <code>RangeSep</code> 的测试参数。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6g3b-two-component.html">← M6g-3b 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

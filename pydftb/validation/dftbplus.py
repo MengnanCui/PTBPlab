@@ -1200,6 +1200,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         m = re.search(r"^Dipole moment:\s+(\S+)\s+(\S+)\s+(\S+)\s+au", det, re.M)
         if m:
             res["dipole"] = np.array([float(x) for x in m.groups()])
+        if "dipole_moments" in tag:       # full precision (M6g-3b: finite-field references)
+            res["dipole_tag"] = np.asarray(tag["dipole_moments"], float).ravel()
         res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
         if autotest or extra_top:
             res.update(parse_casida(workdir, det))

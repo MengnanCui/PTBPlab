@@ -1685,4 +1685,101 @@ CASES += [
          dftbplus="dev", torch=False, tol=TOL_EXTQ, analysis=EXTQ,
          note="periodic (Ewald): the development build's sign is reversed"),
 ]
+
+
+# ---- milestone M6g-3b: responses of two-component calculations (non-collinear spin, onsite and
+# dual spin-orbit coupling, also with +U and onsite corrections).  The polarisability and the
+# kernel against DFTB+ 25.1: the four components (q, m_x, m_y, m_z) of dq/dE and dq/dV as charge
+# ("dqdE", "dqdV", absolute) and magnetisation ("dmdE", "dmdV", relative to max(1, |DFTB+|):
+# soft spin modes make them large, without moments they are noise).  Dual spin-orbit coupling
+# with block potentials: DFTB+ 25.1 leaves the skew block response out; "skew_compat" compares
+# pydftb with DFTB+'s own finite fields ("pol_fd", relative; "field_fd": the runs, h in a.u.)
+# and with DFTB+'s analytic value ("pol_dftbp": its error, ~1e-4), then repeats the comparison
+# of the tags and texts with DFTB._response_skew_compat.  The coordinate derivatives against
+# DFTB+'s finite-difference Born charges (DFTB+ refuses two-component ones), the point charges'
+# positions against the development build
+TOL_PRESP = {**TOL_RESP, "moments": 1e-8, "orbital": 1e-6, "eigenvalues": 1e-7, "dmdE": 1e-8,
+             "dmdV": 1e-8}
+TOL_SKEW = {**TOL_PRESP, "pol_fd": 1e-8, "pol_dftbp": 1e-3}
+SOC_O = {"xi": {"O": [0.0, 0.01]}}
+SKEW = {"polarisability": True, "skew_compat": True, "field_fd": True}
+_OHNC = {"filling": ("fermi", 300.0), "noncolinear": NC_OH}
+_O2Z = {"noncolinear": {"initial_spins": [[0.0, 0.0, 1.0]] * 2, "spin_constants": {"O": -0.028}},
+        "spin_orbit": SOC_O}
+CASES += [
+    # polarisability and response kernel against DFTB+ 25.1
+    Case("oh_noncolinear_pol", _oh, **_OHNC, torch=False, tol=TOL_PRESP, analysis=POL,
+         note="no spin-orbit coupling: the global rotations of the tilted moments are exact zero "
+              "modes (bordered solve); DFTB+'s magnetisation response is longitudinal"),
+    Case("oh_noncolinear_soc_pol", _oh, **_OHNC, spin_orbit=SOC_O, torch=False, tol=TOL_PRESP,
+         analysis={"polarisability": {"frequencies": _freq(1.0, 3.0)}},
+         note="dual spin-orbit coupling, static and two frequencies"),
+    Case("oh_noncolinear_soc_onsite_pol", _oh, **_OHNC, spin_orbit={**SOC_O, "dual": False},
+         torch=False, tol=TOL_PRESP, analysis=POL),
+    Case("o2_noncolinear_soc_pol", _o2, **_O2Z, torch=False, tol=TOL_PRESP, analysis=POL,
+         note="T = 0 (insulating)"),
+    Case("cu4co_soc_pol", _cu4co, filling=("fermi", 300.0), spin_orbit={"xi": XI_CU4CO},
+         torch=False, tol=TOL_PRESP, analysis=POL,
+         note="no spin polarisation: Kramers pairs (degenerate runs), metallic"),
+    Case("gdo_noncolinear_soc_pol", _gdo, shell_resolved=True, **GDO, noncolinear=NC_GDO,
+         spin_orbit={"xi": XI_GDO}, torch=False, tol={**TOL_PRESP, "scc_errors": 0.5},
+         analysis=POL,
+         note="7 muB and weak spin-orbit coupling: a soft spin mode (|dm/dE| ~ 240) and an exact "
+              "zero mode (left out with a warning); along the 166 SCC iterations the soft mode "
+              "lets the Broyden steps drift apart (errors from 2.5e-3 on, up to 22 %), same "
+              "iterations and final state"),
+    Case("cuo_chain_soc_pol_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 500.0), spin_orbit={"xi": XI_CUO}, ewald_tolerance=1e-12,
+         torch=False, tol=TOL_PRESP, analysis=POL, note="k-points (charge response only)"),
+    Case("oh_noncolinear_plusu_pol", _oh, **_OHNC, plus_u=U_O, torch=False,
+         tol={**TOL_PRESP, "scc_errors": 5.0}, analysis=POL,
+         note="+U: the zero modes rotate the block magnetisations too; the SCC errors agree to "
+              "1e-8 down to 4e-7, then the free rotation lets the last two Broyden steps "
+              "(errors ~1e-6) differ by a factor of 3 (same iterations and final state)"),
+    Case("oh_noncolinear_kernel", _oh, **_OHNC, torch=False, tol=TOL_PRESP, analysis=KERNEL),
+    Case("oh_noncolinear_soc_kernel", _oh, **_OHNC, spin_orbit=SOC_O, torch=False,
+         tol=TOL_PRESP, analysis=KERNEL),
+    Case("cu4co_soc_kernel", _cu4co, filling=("fermi", 300.0), spin_orbit={"xi": XI_CU4CO},
+         torch=False, tol=TOL_PRESP, analysis=KERNEL),
+    # dual spin-orbit coupling with block potentials: DFTB+ 25.1 leaves the skew response out
+    Case("oh_noncolinear_soc_plusu_pol", _oh, **_OHNC, spin_orbit=SOC_O, plus_u=U_O,
+         torch=False, tol=TOL_SKEW, analysis=SKEW),
+    Case("oh_noncolinear_soc_ons_pol", _oh, **_OHNC, spin_orbit=SOC_O, onsite=ONS, torch=False,
+         tol={**TOL_SKEW, "scc_errors": 0.5}, analysis=SKEW,
+         note="the SCC errors agree to 7e-5 down to 1e-6, the last Broyden steps differ by up "
+              "to 34 % (same iterations and final state)"),
+    Case("cu4co_soc_plusu_pol", _cu4co, filling=("fermi", 300.0), spin_orbit={"xi": XI_CU4CO},
+         plus_u=U_CU, torch=False, tol=TOL_SKEW, analysis={**SKEW, "field_fd": {"h": 2.5e-4}},
+         note="metallic: field step 2.5e-4 a.u. (5e-4 leaves 3e-8 of h^4 truncation)"),
+    Case("cuo_chain_soc_plusu_kernel_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
+         filling=("fermi", 1000.0), spin_orbit={"xi": XI_CUO}, plus_u=U_CU,
+         ewald_tolerance=1e-12, torch=False,
+         tol={**TOL_SKEW, "kernel_dftbp": 1.0, "dmdV": 1e-7, "dedV": 5e-9, "n_scc": 1,
+              "scc_errors": 1.0},
+         analysis={"response_kernel": True, "skew_compat": True},
+         note="periodic, k-points: no finite fields; pydftb's physical kernel is checked by "
+              "differences in site potentials (test_response_pauli); 'kernel_dftbp' records "
+              "DFTB+'s error (75 %), the rest is compared with DFTB._response_skew_compat.  "
+              "Without moments (1e-11) the magnetisation response is noise, ~2.5e-7 in both "
+              "codes; the 63-iteration metallic SCC ends one iteration apart and the ground "
+              "states agree to ~1e-9 (N_F 4e-9, the level derivatives 2e-9)"),
+    # coordinate derivatives: DFTB+ refuses them, its differences are the reference
+    Case("oh_noncolinear_dx", _oh, **_OHNC, **DX, tol=TOL_BDX, analysis=COORD_FD, hessian={}),
+    Case("oh_noncolinear_soc_dx", _oh, **_OHNC, spin_orbit=SOC_O, **DX, tol=TOL_BDX,
+         analysis=COORD_FD, hessian={},
+         note="dual model: H_SO = i/2 (S Lambda + Lambda S) x sigma moves with S (1.2e-4 of the "
+              "Born charges)"),
+    Case("oh_noncolinear_soc_onsite_dx", _oh, **_OHNC, spin_orbit={**SOC_O, "dual": False},
+         **DX, tol=TOL_BDX, analysis=COORD_FD, hessian={}),
+    Case("oh_noncolinear_soc_plusu_dx", _oh, **_OHNC, spin_orbit=SOC_O, plus_u=U_O, **DX,
+         tol=TOL_BDX, analysis=COORD_FD, hessian={},
+         note="skew block potentials and populations in S' and the response"),
+    Case("cu4co_soc_dx_3000K", _cu4co, filling=("fermi", 3000.0), spin_orbit={"xi": XI_CU4CO},
+         **DX, tol=TOL_BDX_METAL, analysis={**COORD_FD, "perturbation": {"filling_tol": 1e-15}},
+         hessian={}, note="metallic, Kramers pairs"),
+    # point charges' positions against the development build
+    Case("oh_noncolinear_soc_pc_extq", _oh, **_OHNC, spin_orbit=SOC_O, point_charges=PC3,
+         dftbplus="dev", torch=False, tol={**TOL_EXTQ, "moments": 1e-8}, analysis=EXTQ,
+         note="the development build prints the charge part; pydftb gives all four components"),
+]
 CASES_BY_NAME = {c.name: c for c in CASES}

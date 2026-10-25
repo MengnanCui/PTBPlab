@@ -33,7 +33,8 @@
   orders sum (PS)_mu,nu (PS)_nu,mu (molecules), from the spin-summed output density.
 * **Polarisability and response kernel** (``Polarisability``, ``ResponseKernel``, M6g-1):
   the coupled-perturbed SCC response to an electric field and to a potential on each atom,
-  static and at finite frequencies (see :mod:`pydftb.response`).
+  static and at finite frequencies (see :mod:`pydftb.response`; with block potentials M6g-3a,
+  two-component spin M6g-3b, :mod:`pydftb.response_pauli`).
 
 The files are written by :mod:`pydftb.dftbplus_io`.  NumPy engine only.
 """
