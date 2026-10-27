@@ -7,7 +7,11 @@
 2. get_elements_from_dataset (utils.data, and its copy in Loss) on structures with different
    numbers of elements: NumPy >= 1.24 refuses the ragged array it built, so every
    ``ptbp optimize`` run on such a dataset stopped at the start (cli/run.py).  The result is
-   unchanged, values and types, for every dataset that worked."""
+   unchanged, values and types, for every dataset that worked.
+
+M5b-4: --shared-parameters with a --multi_element that lists every element of a dataset of several
+elements is refused at the start (the code of one parameter set gave radii to the first listed
+element only)."""
 from __future__ import annotations
 
 import argparse
@@ -26,10 +30,11 @@ from ase.data import chemical_symbols
 import utils.data as data
 import utils.engines as eng
 import utils.loss as L
-from tests.test_types import SKF, _box, _copy_skf, _ho_args
+from tests.test_types import SKF, _bnna, _box, _copy_skf, _ho_args
 from tools.physrep import physrep
 from utils import loss_grad as LG
 from utils import typemodel as TM
+from utils.parameters_set import get_PTBP
 
 ROOT = Path(__file__).resolve().parents[1]
 linux = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="fork backend")
@@ -262,3 +267,46 @@ def test_optimize_starts_on_structures_with_different_numbers_of_elements(tmp_pa
         assert "result.pkl" in out.stderr and "inhomogeneous" not in out.stderr, out.stderr[-2000:]
         assert (tmp_path / name / "plan.json").exists()
         assert ("types (shared parameters)" if extra else "types (parameters per type)") in out.stdout
+
+
+# ---- 3. --shared-parameters with a --multi_element of every element (M5b-4) -------------------
+def test_shared_parameters_refuse_a_multi_element_of_every_element():
+    """--shared-parameters with --multi_element listing every element of a dataset of several
+    elements: nothing is left at PTBP's parameters, so the layout is that of before M5b, whose
+    code reads --multi_element in its old sense and gives radii to the first listed element only
+    (B of B, N, Na): refused, with the ways out.  Some of the elements, a dataset of one element,
+    or either option alone work as before."""
+    for listed in (["B", "N", "Na"], ["Na", "N", "B", "N"]):
+        with pytest.raises(ValueError, match="cannot be combined") as err:
+            TM.TypeModel.from_dataset(_bnna(), shared=True, multi_element=listed)
+        assert "(B, N, Na)" in str(err.value) and "--shared-parameters alone" in str(err.value)
+    some = TM.TypeModel.from_dataset(_bnna(), shared=True, multi_element=["B", "N"])
+    assert not some.legacy and [s.labels for s in some.sets] == [("B", "N")]
+    assert some.r0([3.0, 5.0])["Na"] == (get_PTBP()["Na"]["r0_w"], get_PTBP()["Na"]["r0_d"])
+    assert TM.TypeModel.from_dataset(_bnna(), multi_element=["B", "N", "Na"]).n_sigma == 3
+    assert TM.TypeModel.from_dataset(_bnna(), shared=True).legacy
+    cu = [_box(["Cu", "Cu"], [[0, 0, 0], [2.5, 0, 0]])]
+    assert TM.TypeModel.from_dataset(cu, shared=True, multi_element=["Cu"]).legacy
+
+
+def test_optimize_refuses_shared_parameters_with_every_element_at_the_start(tmp_path):
+    """ptbp optimize --shared-parameters --multi-element B N Na stops at the start with the
+    message, before any file of the run (par.out, plan.json, results/); ptbp plan refuses it
+    too."""
+    images = ase.io.read(ROOT / "dft" / "nitrides.xyz", ":")
+    (tmp_path / "data").mkdir()
+    dataset = tmp_path / "data" / "bn_nan3.xyz"
+    ase.io.write(dataset, images[0:11] + images[22:33])            # B2N2 and N3Na
+    run = tmp_path / "run"
+    opts = ["--mode", "energygeometry", "--engine", "pydftb", "--ncores", "1",
+            "--shared-parameters", "--multi-element", "B", "N", "Na"]
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "parameterize.py"), "optimize", str(dataset), *opts,
+         "--output", str(run)], cwd=tmp_path, capture_output=True, text=True, timeout=900)
+    assert out.returncode != 0
+    assert "types: --shared-parameters cannot be combined" in out.stderr, out.stderr[-2000:]
+    assert not any((run / name).exists() for name in ("par.out", "plan.json", "results"))
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "parameterize.py"), "plan", str(dataset), *opts],
+        cwd=tmp_path, capture_output=True, text=True, timeout=900)
+    assert out.returncode == 2 and "ptbp plan: --shared-parameters cannot be combined" in out.stdout

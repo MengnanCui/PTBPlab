@@ -284,26 +284,57 @@ def find_ref_by_structure(atoms_input1, atoms_input2, in_prefix, out_prefix):
     return atoms_output, search_index
 
 
+def composition(atoms) -> str:
+    """The composition of a structure: its reduced formula (ASE's empirical Hill formula), e.g.
+    B2N2 -> BN, Cu4 -> Cu, K2N6 -> KN3; N3Na and C3N4 stay as they are (M5b-4).  The Boltzmann
+    factors compare the EOS groups of one composition only (:func:`get_bolt_factor`)."""
+    return atoms.get_chemical_formula(mode='hill', empirical=True)
+
+
+def group_compositions(structures, eos_points) -> list:
+    """The composition of every EOS group as :func:`get_bolt_factor` sees it: that of the centre
+    structures ``structures[floor(eos_points/2)::eos_points]`` (cli/run.py's dft_center)."""
+    eos = max(1, int(eos_points))
+    return [composition(a) for a in structures[math.floor(eos / 2)::eos]]
+
+
 def get_bolt_factor(atoms:Atoms, option:str, temperature:float) -> tuple:
     '''
     Calculate the Boltzmann factor as the weight of each molecule
     Parameters:
     ----------
-        atoms(Atoms): a list of Atoms object
+        atoms(Atoms): a list of Atoms object (one per EOS group: its centre structure)
 
         option(str): whether ouput boltzmann factor weight or uniformly equal to 1/num_atoms or 1 for all
                         eg. "boltzmann" or "uniform" and "identical"
 
         temperature(float): temperature in K
-    
+
     Returns:
         bf_weight_norm(List): list of boltzmann factor weight for each structure
         bf_weight_norm11(List): list of Boltzmann factors weight for each structure's EOS expansion
 
+    "boltzmann" weighs the structures of each composition (:func:`composition`) on their own
+    (M5b-4): exp(-(E - E_min)/(kB T)) with the energies per atom and E_min of that composition,
+    normalised to a sum of 1 within it, i.e. the factors that composition alone would get (a
+    composition of one EOS group gets 1; of several, the most stable gets the largest factor).
+    Total energies per atom of different compositions are not comparable (-1085 to -40511
+    eV/atom in dft/nitrides.xyz: before M5b-4 only the lowest composition, I4N16, kept a weight).
+    One composition (every dataset of one element): the factors of before, bit for bit.
     '''
     T = temperature
     atoms_number = len(atoms)
     if option == "boltzmann":
+        compositions = [composition(dft_mole) for dft_mole in atoms]
+        if len(set(compositions)) > 1:
+            # every composition as a dataset of its own, the structures in their order (M5b-4)
+            bf_weight_norm = np.zeros(atoms_number)
+            for comp in dict.fromkeys(compositions):
+                members = [i for i, c in enumerate(compositions) if c == comp]
+                bf_weight_norm[members] = get_bolt_factor([atoms[i] for i in members], option, T)[0]
+            bf_weight_norm11 = np.array([[bf_weight_norm[n]] * 11 for n in range(atoms_number)]).flatten()
+            return(bf_weight_norm, bf_weight_norm11)
+
         energy_per_atom = [dft_mole.get_total_energy() / dft_mole.get_global_number_of_atoms() for dft_mole in atoms]
         energy_per_atom_min = np.array(energy_per_atom).min()
 

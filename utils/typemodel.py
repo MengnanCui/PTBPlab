@@ -217,7 +217,9 @@ class TypeModel:
                      multi_element=None) -> "TypeModel":
         """The types of ``dataset`` (ASE Atoms): its elements, split into the declared switched
         types; ``multi_element``: the elements whose types are fitted (the others are fixed at
-        PTBP's table); ``starts``: {label: (r0_w, r0_d)} starting points."""
+        PTBP's table); ``starts``: {label: (r0_w, r0_d)} starting points.  ValueError for
+        layouts that cannot run, among them ``shared`` with a ``multi_element`` that lists every
+        element of a dataset of several elements (M5b-4)."""
         from pydftb.typeswitch import check_switches
 
         from utils.parameters_set import get_PTBP
@@ -242,6 +244,18 @@ class TypeModel:
         bad = [e for e in fitted if e not in symbols]
         if bad:
             raise ValueError(f"--multi_element: {bad} not in the dataset ({symbols})")
+        if shared and multi_element and len(symbols) > 1 and set(fitted) == set(symbols):
+            # M5b-4: nothing left at PTBP's parameters is the layout of before M5b (legacy), whose
+            # code reads --multi_element in its old sense and gives the confinement radii to the
+            # first listed element only: the run could not work
+            raise ValueError(
+                f"--shared-parameters cannot be combined with a --multi-element that lists every "
+                f"element of the dataset ({', '.join(symbols)}): nothing would keep PTBP's "
+                f"parameters, and the code of one parameter set would give the radii to "
+                f"{fitted[0]} only.  Use --shared-parameters alone (one set for all elements), "
+                f"--multi-element alone (one set per listed element), or list only the elements "
+                f"to fit (with --shared-parameters they share one set, the others keep PTBP's "
+                f"published parameters)")
         types = []
         for el in symbols:
             fixed = None

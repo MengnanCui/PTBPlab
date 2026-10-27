@@ -66,7 +66,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--shared_parameters', help="One (r0_w, r0_d, sigma_rep) for all elements, as before "
                                     "M5b; default: one set per element (type), the penalty "
-                                    "being the geometric mean of the sets' penalties",
+                                    "being the geometric mean of the sets' penalties.  With "
+                                    "--multi_element the listed elements share one set and the "
+                                    "others keep PTBP's; a --multi_element of every element of "
+                                    "the dataset is refused",
         action='store_true',
         default=None,
     )
