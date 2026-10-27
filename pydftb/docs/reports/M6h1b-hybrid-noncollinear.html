@@ -18,7 +18,7 @@
     <dl class="meta">
       <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
       <div><dt>日期</dt><dd>2026-10-27</dd></div>
-      <div><dt>提交</dt><dd><code>（待填）</code></dd></div>
+      <div><dt>提交</dt><dd><code>bf03461</code></dd></div>
       <div><dt>配套</dt><dd><a href="../design/M6h1b-hybrid-noncollinear.html">设计文档</a></dd></div>
     </dl>
   </header>
@@ -175,7 +175,17 @@ atoms.calc = PyDFTB(skdir, hybrid="lc", spin="noncolinear", reuse_charges=True)<
 
     <section id="tests">
       <h2>六、测试与门槛</h2>
-      <p>（门槛结果待填）</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6h-1 的文档提交 <code>61c57d2</code> 逐字节比较；<code>--allow-new pauli</code>（<code>HybridTerms</code> 的新属性 <code>pauli</code>）</td><td>conda 1123 个计算、570415 个字段，最小环境 1066 个计算、558023 个字段，都逐位相同（新算例与新动力学参考的 31 个计算不在比较之列；最小环境 28 个，没有 D3 的算例跳过）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>374 个算例全部通过；torch 74 个通过，300 个按设计跳过（只有 NumPy 的物理，含 10 个新算例）；28 条动力学参考全部通过（非共线 LC 的 MD 每步的 SCC 轮数相同）</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>全部通过：conda 1312 个通过 / 300 个跳过，最小环境 1065 / 426，torch 1269 / 343</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>270 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>第一次 golden 只报出一种差别：杂化计算的 <code>_Setup.hybrid</code> 多了属性 <code>pauli</code>（33 个杂化计算、102 处，都是 “only in work tree”），于是按 M6h-1 的做法加 <code>--allow-new pauli</code> 重跑。</p>
     </section>
 
     <section id="deviations">
