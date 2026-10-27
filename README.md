@@ -239,7 +239,7 @@ convert them with `tools/rescale_checkpoint.py`).
 
 | `--optimization_option` | Input shape | Loss | Required extras |
 |---|---|---|---|
-| `energygeometry` | An EOS scan of N phases × `--eos_points` volumes (i.e. `--eos_points 11` strict). | (½μ_V + ½μ_E)·P, Boltzmann-weighted over phases (μ_B is only logged; matches the original PTBP paper). | `--eos_file fit.json` (DFT EOS results) |
+| `energygeometry` | An EOS scan of N phases × `--eos_points` volumes (i.e. `--eos_points 11` strict). | (½μ_V + ½μ_E)·P, Boltzmann-weighted over the phases of each composition (reduced formula: each composition weighted as on its own; one composition as before) (μ_B is only logged; matches the original PTBP paper). | `--eos_file fit.json` (DFT EOS results) |
 | `dataset` | Any ASE-readable trajectory (xyz, traj, …) of structures with DFT energies + forces. | (0.9·μ_E + 0.1·μ_F)·P, μ_E the sum over structures of the per-atom formation-energy error, μ_F the force MAE. | `--E0s '{"<Z>": <eV>, ...}'` (atomic ref energies as JSON dict) |
 | `reaction` | Same as `dataset`, but the trajectory is expected to span multiple chemical formulas. | Identical to `dataset` plus a `reaction_per_formula.csv` written next to `par.out` reporting per-formula mean / max ΔE per atom. | `--E0s` (same as dataset) |
 | `bandstructure` | A k-path band-structure reference. | HOMO/LUMO mismatch. | `--dft_band_file dft.json` |
@@ -315,6 +315,9 @@ log line and should pass `--E0s` explicitly.
   [checkpoint] Resuming from checkpoint.pkl: 11 prior iteration(s)
                 loaded; will run 5 more (total stored: 16).
   ```
+  An energygeometry run on EOS groups of several compositions does not resume a checkpoint
+  written before M5b-4 (its losses used other Boltzmann factors; the meta file records
+  `"boltzmann": "per composition"`).
 
   Pass `--n_calls` to control how many additional iterations to run on
   top of what's stored. To force a cold start, delete `checkpoint.pkl`.
@@ -527,6 +530,10 @@ ptbp optimize data.xyz --type-start N 2.4 3.6   # start of one type's radii (Boh
 - Several types of one element (`--switch`, or `types:` in the YAML config) use pydftb's
   smooth type switching (M5a) and need `--engine pydftb` with the NumPy backend.
 - The penalty is the geometric mean of the parameter sets' penalties.
+- `--shared-parameters` with `--multi-element`: the listed elements share one set and the others
+  keep PTBP's; listing every element of the dataset is refused at the start (M5b-4).
+- The σ_rep search reports the loss at σ*: when L-BFGS-B returns the loss of another evaluation,
+  the loss recorded at σ* is used and a line says so (M5b-4).
 - Gradient optimisers work with one set per element (2N directions), not with switched types.
 - Several types of one element with `--mode energygeometry` print a warning: that loss compares
   energies only within each EOS group and may leave a type without data; use a reaction or

@@ -209,7 +209,7 @@
       <ul>
         <li><strong>M5b-2 报告对错误二的范围写小了</strong>：不只旧路径，<code>cli/run.py</code> 对每个运行都调用 <code>get_elements_from_dataset</code>（第三节）。</li>
         <li><strong>单元素作图在多于 6 个 EOS 组时让运行停止</strong>（原有，未改）：<code>plot_tradition</code> 的相名只有 6 个，第 7 个组 <code>IndexError</code>，不在接住的异常之列；<code>plot_vs</code> 对权重 ≥ 0.1 的第 7 个以后的组也一样。单元素数据集有 7 个以上的组时，第一步 σ 搜索之后整个运行停止（用 7 个组直接调用 <code>plot_tradition</code> 核对过：<code>IndexError</code>）。</li>
-        <li><strong>L-BFGS-B 的结果可能不配对</strong>（原有，未改）：设计测试时用过一组 DFTB 极小落在扫描范围外的合成数据，EOS 拟合在 σ 改变约 10<sup>−9</sup> 时在两个解之间跳，损失在 1.80 与 74.9 之间跳。<code>Repulsion_optimization</code> 返回 σ* = 0.5926215820 与 μ = 74.874，而在这个 σ* 上重算（<code>parallel_repulsion</code>、<code>loss_grad.mu</code>）都得 1.7954559。看来是线搜索退回上一个迭代点时 SciPy 退回了 <code>x</code>，<code>fun</code> 却留着最后一次求值的值，于是写进 par.out、交给 BO 的 μ 不是 μ(σ*)。损失跳动时差别很大，平滑时即使发生也只差一点；没有检查门槛与演示的运行中是否发生过。按类型的路径用同样的调用。测试改用 DFTB 极小在扫描范围内的数据。</li>
+        <li><strong>L-BFGS-B 的结果可能不配对</strong>（原有，未改）：设计测试时用过一组 DFTB 极小落在扫描范围外的合成数据，EOS 拟合在 σ 改变约 10<sup>−9</sup> 时在两个解之间跳，损失在 1.80 与 74.9 之间跳。<code>Repulsion_optimization</code> 返回 σ* = 0.5926215820 与 μ = 74.874，而在这个 σ* 上重算（<code>parallel_repulsion</code>、<code>loss_grad.mu</code>）都得 1.7954559。看来是线搜索退回上一个迭代点时 SciPy 退回了 <code>x</code>，<code>fun</code> 却留着最后一次求值的值，于是写进 par.out、交给 BO 的 μ 不是 μ(σ*)。损失跳动时差别很大，平滑时即使发生也只差一点；没有检查门槛与演示的运行中是否发生过。按类型的路径用同样的调用。测试改用 DFTB 极小在扫描范围内的数据。<em>（M5b-4 已处理：L-BFGS-B 的 σ* 与 σ* 处的损失配对，见 <a href="M5b4-ptbp-fixes.html">M5b-4 报告</a>。）</em></li>
         <li><strong>与指示的偏差</strong>：
           <ul>
             <li>工作树建在 <code>main</code>（<code>2eb6bd6</code>，第一个提交）上，开始时把本分支 <code>git reset --hard 5a27631</code>（工作树是干净的，只动本分支）。</li>
@@ -227,8 +227,8 @@
     <section id="decisions">
       <h2>九、需要用户决定的事</h2>
       <ul>
-        <li><strong>组成不同的 EOS 组的 Boltzmann 因子</strong>：energygeometry 按 DFT 每原子总能量（3000 K）给每组加权，全电子能量的每原子值随元素相差很大：演示中 B<sub>2</sub>N<sub>2</sub> −1084.63 eV/原子、N<sub>3</sub>Na −2223.75 eV/原子，权重为 0 和 1，B<sub>2</sub>N<sub>2</sub> 不进入损失，DFTB 阶段也只算 Γ 点；<code>dft/nitrides.xyz</code> 的 18 个组成只剩 I<sub>4</sub>N<sub>16</sub>（−40510.75 eV/原子，权重 1），其余 17 个的权重都是 0。按元素与共用参数两条路径用同一组因子（<code>cli/run.py</code>），所以没有改：改动会改变按元素拟合的旧结果。可选的做法：组成不同时按组成分别归一（每种组成内比较），或者对多组成的数据集用相同的权重（<code>--multi_element</code> 时已经是 <code>identical</code>）。</li>
-        <li><strong><code>--shared-parameters</code> 加上列出所有元素的 <code>--multi_element</code></strong>：没有固定的元素，类型模型判为旧布局，旧路径按 <code>--multi_element</code> 的旧含义只给第一个列出的元素设半径（B、N、Na 时 <code>set_parameters</code> 只返回 <code>{'B': [r0_w, r0_d]}</code>），运行不能正常进行。建议拒绝这个组合，或者在列出全部元素时忽略 <code>--multi_element</code>。</li>
+        <li><strong>组成不同的 EOS 组的 Boltzmann 因子</strong>：energygeometry 按 DFT 每原子总能量（3000 K）给每组加权，全电子能量的每原子值随元素相差很大：演示中 B<sub>2</sub>N<sub>2</sub> −1084.63 eV/原子、N<sub>3</sub>Na −2223.75 eV/原子，权重为 0 和 1，B<sub>2</sub>N<sub>2</sub> 不进入损失，DFTB 阶段也只算 Γ 点；<code>dft/nitrides.xyz</code> 的 18 个组成只剩 I<sub>4</sub>N<sub>16</sub>（−40510.75 eV/原子，权重 1），其余 17 个的权重都是 0。按元素与共用参数两条路径用同一组因子（<code>cli/run.py</code>），所以没有改：改动会改变按元素拟合的旧结果。可选的做法：组成不同时按组成分别归一（每种组成内比较），或者对多组成的数据集用相同的权重（<code>--multi_element</code> 时已经是 <code>identical</code>）。<em>（M5b-4：按你的决定改为每种组成内分别计算并归一。）</em></li>
+        <li><strong><code>--shared-parameters</code> 加上列出所有元素的 <code>--multi_element</code></strong>：没有固定的元素，类型模型判为旧布局，旧路径按 <code>--multi_element</code> 的旧含义只给第一个列出的元素设半径（B、N、Na 时 <code>set_parameters</code> 只返回 <code>{'B': [r0_w, r0_d]}</code>），运行不能正常进行。建议拒绝这个组合，或者在列出全部元素时忽略 <code>--multi_element</code>。<em>（M5b-4：按你的决定在开始时拒绝。）</em></li>
         <li><strong><code>tools/skf_generator.py</code></strong>：不能运行的旧脚本，含错误二的第三份副本，功能已由 <code>ptbp gen</code> 代替；删除还是修好。</li>
         <li><strong>多于 6 个组的单元素作图</strong>与 <strong>L-BFGS-B 结果的配对</strong>（第八节）是否修。</li>
         <li>仍未处理的原有问题（不在本次范围）：physrep 的 <code>raiseExceptions</code>、bandstructure 的失败值 20、BO 结束时的作图错误（<code>eval[0][0]</code>）。</li>
