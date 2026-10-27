@@ -1258,20 +1258,26 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
 
 
 def run_restart(labels, pos1_ang, pos2_ang, cell_ang=None, text: bool = False,
-                extra_ham: str = "", **kw) -> dict:
+                extra_ham: str = "", run1_plain_skdir: str | None = None, **kw) -> dict:
     """DFTB+ ``ReadInitialCharges`` (M6f): run 1 at ``pos1_ang`` writes charges.bin
     (charges.dat with ``text``), run 2 at ``pos2_ang`` starts from it.  Returns run 2's
     results with the bytes of run 1's file (``charges_file``, base64) and run 1's energy and
     SCC iterations (``run1``).  DFTB+ does not read initial spins when it reads charges (and
-    stops at the unread block), so run 2's input has none."""
+    stops at the unread block), so run 2's input has none.  ``run1_plain_skdir`` (M6h-1b): run 1
+    without the ``Hybrid`` block on these SK files (without RangeSep): DFTB+ writes no charge
+    file for a non-collinear hybrid calculation."""
     workdir = tempfile.mkdtemp(prefix="dftbp_restart_")
     try:
         dirs = [os.path.join(workdir, d) for d in ("run1", "run2")]
         for d in dirs:
             os.makedirs(d)
         fname = "charges.dat" if text else "charges.bin"
-        r1 = run(labels, pos1_ang, cell_ang, workdir=dirs[0], extra_ham=extra_ham,
-                 extra_options="  WriteChargesAsText = Yes\n" if text else "", **kw)
+        kw1, ham1 = kw, extra_ham
+        if run1_plain_skdir is not None:
+            kw1 = {**kw, "skdir": run1_plain_skdir}
+            ham1 = re.sub(r"^( *)Hybrid = \w+ \{\n(?:.*\n)*?\1\}\n", "", extra_ham, flags=re.M)
+        r1 = run(labels, pos1_ang, cell_ang, workdir=dirs[0], extra_ham=ham1,
+                 extra_options="  WriteChargesAsText = Yes\n" if text else "", **kw1)
         with open(os.path.join(dirs[0], fname), "rb") as fh:
             blob = fh.read()
         with open(os.path.join(dirs[1], fname), "wb") as fh:

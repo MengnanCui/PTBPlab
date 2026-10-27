@@ -194,6 +194,10 @@ class Case:
     # milestone M6h-1: a hybrid functional, pydftb's ``hybrid`` option ("lc", "cam" or {"type",
     # "screening", "threshold", "cutoff_reduction" (Bohr)}); the SK set must have RangeSep
     hybrid: str | dict | None = None
+    # milestone M6h-1b: the reference forces are 4-point differences of DFTB+'s energy (where its
+    # analytic forces are not that derivative); pydftb's DFTB+-compatible forces are compared with
+    # DFTB+'s own (forces_dftbp)
+    forces_fd: bool = False
 
     @property
     def corrections(self) -> bool:
@@ -1899,5 +1903,68 @@ CASES += [
          note="DeltaP_in of both spin channels (up, down) after the (q, m) populations"),
     Case("h2co_lc_plusu_read_charges", _h2co, **LC, plus_u=U_O, read_charges={"text": False},
          note="blocks, then the density matrix"),
+]
+
+# M6h-1b: non-collinear spin with a hybrid functional (DFTB+: the matrix screening, molecules).
+# The spins start along TILT (out of every axis): a complex DeltaP whose magnetisation keeps one
+# direction, so the results are those of the collinear calculation turned
+NC_HCO = {"initial_spins": [[0.0, 0.0, 0.0], TILT, [0.0, 0.0, 0.0]], "spin_constants": W_HCO}
+NC_CH3 = {"initial_spins": [TILT, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+          "spin_constants": W_HCO}
+
+
+def _h3():
+    """An H3 triangle (sides 2.5 A): from spins at 120 degrees in its plane the SCC ends in a
+    non-collinear state (DeltaP's spin-diagonal blocks have imaginary parts)."""
+    r = 2.5 / np.sqrt(3.0)
+    ang = np.deg2rad([90.0, 210.0, 330.0])
+    return Atoms("H3", positions=np.c_[r * np.cos(ang), r * np.sin(ang), np.zeros(3)])
+
+
+CASES += [
+    Case("hco_lc_noncolinear", _hco, **LC, noncolinear=NC_HCO,
+         note="complex DeltaP; the energy and forces of the collinear calculation"),
+    Case("ch3_lc_noncolinear", _ch3, **LC, noncolinear=NC_CH3),
+    Case("hco_lc_noncolinear_300K", _hco, **LC, noncolinear=NC_HCO, filling=("fermi", 300.0)),
+    Case("ch3_lc_noncolinear_anderson", _ch3, **LC, noncolinear=NC_CH3, mixer="anderson",
+         note="DFTB+'s complex Anderson mixer is the real one on [Re | Im]"),
+    Case("h3_lc_noncolinear_120", _h3,
+         **{**LC, "tol": {**TOL_HYB, "forces_dftbp": 1e-10}}, filling=("fermi", 100.0),
+         noncolinear={"initial_spins": [[0.0, 1.0, 0.0], [-0.8660254, -0.5, 0.0],
+                                        [0.8660254, -0.5, 0.0]],
+                      "spin_constants": W_HCO},
+         scc_tol=1e-12, forces_fd=True,
+         note="a non-collinear SCC solution: the spins stay at 120 degrees, and DeltaP's Pauli "
+              "components have imaginary (antisymmetric) parts.  DFTB+'s forces are not the "
+              "energy's derivative (1.1e-5 Ha/Bohr off): addCamGradientsMatrix_pauli takes the "
+              "gamma term from the real parts of the components only (pauli2components); "
+              "compared with differences of DFTB+'s energy, and with that term as DFTB+'s "
+              "(HybridTerms._dftbp_pauli_gamma) with DFTB+'s forces"),
+    Case("o2_cam_noncolinear_90", _o2,
+         **{**LC, "skf_set": "ptbp_hcocu_cam", "hybrid": "cam",
+            "tol": {**TOL_HYB, "n_scc": 4, "scc_errors": 1e3, "spins": 1e-2}},
+         noncolinear={"initial_spins": [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                      "spin_constants": W_HCO},
+         note="the O spins start at 90 degrees and end parallel.  Not the same SCC path: DFTB+'s "
+              "input populations after mixing (denseMullikenPauli) take only the lower left spin "
+              "block of every atom pair, which is not the Mulliken population while that block "
+              "is not symmetric (in this SCC's first iterations); pydftb's are the Mulliken "
+              "populations.  The same energy and forces, more iterations in DFTB+; the direction the "
+              "parallel spins end in depends on the path (without spin-orbit coupling every "
+              "direction is a solution): 7e-3 between the codes"),
+    Case("hco_lc_noncolinear_field_pc", _hco, **LC, noncolinear=NC_HCO, efield=FIELD,
+         point_charges=PC3),
+    Case("hco_lc_noncolinear_dftb3_d3", _hco, **LC, noncolinear=NC_HCO, dftb3=DFTB3_3OB,
+         dispersion=D3BJ_3OB),
+    Case("hco_lc_onsite_spin", _hco, **LC, onsite=ONS,
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO},
+         note="collinear: the result of pydftb's non-collinear calculation with onsite "
+              "corrections (test_hybrid); DFTB+'s non-collinear one keeps the first output's "
+              "blocks and ends 1.3e-3 Ha above (M6h-1b report)"),
+    Case("hco_lc_noncolinear_read_charges", _hco, **LC, noncolinear=NC_HCO,
+         read_charges={"text": True, "run1_skf_set": "ptbp_hcocu"},
+         note="DFTB+ writes no charge file for a non-collinear hybrid: run 1 without the hybrid "
+              "(the SK files without RangeSep) writes the populations, run 2 starts from them "
+              "with DeltaP_in = 0"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

@@ -15,6 +15,11 @@ populations q0_mu / S_mumu, half per spin channel), as DFTB+ (``dftb/hybridxc.F9
   H_munu = c sum_ab S_mua DP_ab S_bnu (g_munu + g_mub + g_ab + g_anu);
 * E_Fock = 1/2 sum_spin sum H_x[DP_in] o DP_in (DFTB+ "Energy Fock").
 
+Non-collinear spin (milestone M6h-1b; DFTB+ ``addCamHamiltonianMatrix_pauli``): DeltaP is the
+2N x 2N spinor matrix (Hermitian, complex), P0 half the reference populations on both spin
+blocks; H_x applies the operator above, with c = -1/4, to each of its four N x N blocks (S x 1
+and G on all four blocks); E_Fock = 1/2 Re sum H_x o conj(DP).
+
 The SCC mixes DeltaP (:meth:`pydftb.calculator.DFTB._scc_hybrid`); the forces take DeltaP_out
 (:meth:`HybridTerms.pair_coefficient` for the S derivatives, :meth:`HybridTerms.gamma_gradient`
 for the gamma derivatives).  Screening as DFTB+'s molecular algorithms: ``matrix`` (dense,
@@ -276,10 +281,18 @@ class HybridTerms:
     ``params``: (kind, omega, alpha, beta) of the SK files; ``u_atom``: the first shell's
     Hubbard U of every atom; ``smat``: the dense real overlap; ``q0_orb``: the reference
     population of every orbital; ``sk_cutoff``: the largest SK cutoff (the neighbour and
-    threshold screening's CAM cutoff is that minus the reduction)."""
+    threshold screening's CAM cutoff is that minus the reduction); ``pauli``: non-collinear
+    spin (M6h-1b, the matrix screening): the densities are one 2N x 2N spinor matrix."""
 
-    def __init__(self, spec: Hybrid, params, u_atom, pos, orb_atom, smat, q0_orb, sk_cutoff):
+    # validation only (M6h-1b): the two-component gamma term as DFTB+'s addCamGradientsMatrix_pauli,
+    # from the real parts of DeltaP's Pauli components (pauli2components): not the energy's
+    # derivative when the components have imaginary parts
+    _dftbp_pauli_gamma = False
+
+    def __init__(self, spec: Hybrid, params, u_atom, pos, orb_atom, smat, q0_orb, sk_cutoff,
+                 pauli: bool = False):
         self.spec = spec
+        self.pauli = pauli
         self.kind, self.omega, self.alpha, self.beta = params
         pos = np.asarray(pos, float)
         nat = len(pos)
@@ -296,7 +309,7 @@ class HybridTerms:
         self.S = np.asarray(smat, float)
         self.q0_orb = np.asarray(q0_orb, float)
         self.n = len(self.S)
-        self.tril = np.tril_indices(self.n)
+        self.tril = np.tril_indices(2 * self.n if pauli else self.n)
         cam_cutoff = sk_cutoff - spec.cutoff_reduction
         if cam_cutoff < 0.0:
             raise ValueError("Screening cutoff for hybrid xc-functional neighbours too short "
@@ -311,31 +324,56 @@ class HybridTerms:
     # -- densities ------------------------------------------------------------------------
     @property
     def packed_size(self) -> int:
-        """Length of one spin channel's packed DeltaP (the lower triangle, diagonal included)."""
-        return len(self.tril[0])
+        """Length of one spin channel's packed DeltaP (the lower triangle, diagonal included);
+        two-component: the real and imaginary parts of the spinor matrix's lower triangle."""
+        return 2 * len(self.tril[0]) if self.pauli else len(self.tril[0])
 
     def reference(self, nspin: int) -> np.ndarray:
         """P0 of one spin channel: the reference populations on the diagonal, half each with
-        spin."""
+        spin; two-component: half on both spin blocks of the spinor matrix (DFTB+
+        denseSubtractDensityOfAtomsPauli)."""
+        if self.pauli:
+            return np.diag(np.tile(0.5 * self.q0_orb, 2)).astype(complex)
         return np.diag(self.q0_orb * (0.5 if nspin == 2 else 1.0))
 
     def pack(self, dps) -> np.ndarray:
         """The vector the SCC mixes: every channel's lower triangle (DFTB+ mixes the full
-        matrices with a zero upper triangle: the same dot products)."""
+        matrices with a zero upper triangle: the same dot products); two-component: [Re | Im] of
+        the spinor matrix's (DFTB+'s complex mixers take the real part of conj(x) y: the same
+        mixing)."""
+        if self.pauli:
+            t = dps[0][self.tril]
+            return np.concatenate([t.real, t.imag])
         return np.concatenate([d[self.tril] for d in dps])
 
     def unpack(self, vec, nspin: int) -> list:
         k = self.packed_size
-        if len(vec) != k * nspin:
-            raise ValueError(f"a hybrid calculation's mixed vector (q_init) has {k * nspin} "
-                             f"elements (the packed DeltaP of {nspin} spin channel(s)), not "
-                             f"{len(vec)}")
+        nmat = 1 if self.pauli else nspin
+        if len(vec) != k * nmat:
+            what = ("the packed two-component DeltaP" if self.pauli
+                    else f"the packed DeltaP of {nspin} spin channel(s)")
+            raise ValueError(f"a hybrid calculation's mixed vector (q_init) has {k * nmat} "
+                             f"elements ({what}), not {len(vec)}")
+        if self.pauli:
+            n2, h = 2 * self.n, k // 2
+            m = np.zeros((n2, n2), complex)
+            m[self.tril] = vec[:h] + 1j * vec[h:]
+            return [m + np.tril(m, -1).conj().T]
         out = []
         for s in range(nspin):
             m = np.zeros((self.n, self.n))
             m[self.tril] = vec[s * k:(s + 1) * k]
             out.append(m + np.tril(m, -1).T)
         return out
+
+    def error(self, x_out, x_in) -> float:
+        """The SCC error max|DeltaP_out - DeltaP_in|; two-component: of the complex elements
+        (DFTB+ getNextInputDensityPauli)."""
+        d = np.asarray(x_out) - np.asarray(x_in)
+        if self.pauli:
+            h = len(d) // 2
+            return float(np.hypot(d[:h], d[h:]).max())
+        return float(np.abs(d).max())
 
     # -- Fock matrices and energy -----------------------------------------------------------
     def reset(self, restart: bool):
@@ -345,7 +383,16 @@ class HybridTerms:
         self._dp_prev = np.zeros((self.n, self.n)) if restart else None
 
     def fock(self, dps) -> list:
-        """H_x[DeltaP] of every spin channel."""
+        """H_x[DeltaP] of every spin channel; two-component: of the spinor matrix, the operator
+        on each of its blocks (H_x of the upper right block the adjoint of the lower left's)."""
+        if self.pauli:
+            n, d = self.n, dps[0]
+            h = np.empty_like(d)
+            for r, c in ((0, 0), (1, 1), (1, 0)):
+                h[r * n:(r + 1) * n, c * n:(c + 1) * n] = -0.25 * self._four_terms(
+                    self.S, d[r * n:(r + 1) * n, c * n:(c + 1) * n])
+            h[:n, n:] = h[n:, :n].conj().T
+            return [h]
         if self.spec.screening == "threshold":
             return [self._fock_threshold(dps[0])]
         s = self.S_cam if self.spec.screening == "neighbour" else self.S
@@ -405,16 +452,33 @@ class HybridTerms:
             self._t_max = np.where(self.neighbours, t, 0.0)
         return self._t_max
 
-    @staticmethod
-    def energy(focks, dps) -> float:
-        """E_Fock = 1/2 sum_spin sum H_x o DeltaP."""
+    def energy(self, focks, dps) -> float:
+        """E_Fock = 1/2 sum_spin sum H_x o DeltaP; two-component 1/2 Re sum H_x o conj(DeltaP)
+        (DFTB+ evaluateEnergy_pauli)."""
+        if self.pauli:
+            return float(0.5 * np.sum(focks[0] * dps[0].conj()).real)
         return float(sum(0.5 * np.sum(h * d) for h, d in zip(focks, dps)))
+
+    def _spinor(self):
+        """S x 1 and G on all four blocks: the overlap and gamma of the spinor matrices."""
+        n = self.n
+        s2 = np.zeros((2 * n, 2 * n))
+        s2[:n, :n] = s2[n:, n:] = self.S
+        return s2, np.tile(self.G, (2, 2))
 
     # -- forces ---------------------------------------------------------------------------
     def pair_coefficient(self, dps, pairs) -> np.ndarray:
         """dE_x/dS at every pair element (the S derivatives at fixed DeltaP_out; with the band
         terms' coefficient of dS): c [(D o G) S D + ((D S) o G) D + (D S)(D o G) + D ((S D) o G)],
-        summed over the spin channels (exact, whatever the screening, as DFTB+)."""
+        summed over the spin channels (exact, whatever the screening, as DFTB+).  Two-component:
+        the real part of the same on the spinor matrices, its two diagonal blocks summed (S x 1)."""
+        if self.pauli:
+            s, g = self._spinor()
+            d = dps[0]
+            ds, sd = d @ s, s @ d
+            x = (-0.25 * ((d * g) @ sd + (ds * g) @ d + ds @ (d * g) + d @ (sd * g))).real
+            n = self.n
+            return (x[:n, :n] + x[n:, n:])[pairs.rows, pairs.cols]
         s, g = self.S, self.G
         c = -0.125 if len(dps) == 1 else -0.25
         x = np.zeros_like(s)
@@ -426,12 +490,26 @@ class HybridTerms:
     def gamma_gradient(self, dps) -> np.ndarray:
         """dE_x/dR_A through gamma: dE/dG = c [D o (S D S) + (D S) o (S D)] summed over each
         atom pair's orbitals, times gamma'(R_AB) (R_A - R_B) / R_AB, over all atom pairs."""
-        s = self.S
-        c = -0.125 if len(dps) == 1 else -0.25
-        de = np.zeros_like(s)
-        for d in dps:
-            ds, sd = d @ s, s @ d
-            de = de + c * (d * (sd @ s) + ds * sd)
+        if self.pauli:          # Re[conj(D) o (S D S) + (S D)^T o (S D)], the four blocks summed
+            s, _ = self._spinor()
+            d = dps[0]
+            if self._dftbp_pauli_gamma:
+                n = self.n
+                uu, ud, du, dd = d[:n, :n], d[:n, n:], d[n:, :n], d[n:, n:]
+                q, mz = (uu + dd).real, (uu - dd).real
+                mx, my = (ud + du).real, (1j * (ud - du)).real
+                d = 0.5 * np.block([[q + mz, mx - 1j * my], [mx + 1j * my, q - mz]])
+            sd = s @ d
+            x = (-0.25 * (d.conj() * (sd @ s) + sd.T * sd)).real
+            n = self.n
+            de = x[:n, :n] + x[:n, n:] + x[n:, :n] + x[n:, n:]
+        else:
+            s = self.S
+            c = -0.125 if len(dps) == 1 else -0.25
+            de = np.zeros_like(s)
+            for d in dps:
+                ds, sd = d @ s, s @ d
+                de = de + c * (d * (sd @ s) + ds * sd)
         starts = self.offsets[:-1]
         g = np.add.reduceat(np.add.reduceat(de, starts, axis=0), starts, axis=1)
         nat = len(starts)

@@ -179,7 +179,7 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     hyb_dp = None
     if getattr(engine, "hybrid", None) is not None and q.shape != (n_expected,):   # M6h-1
         q, rho = engine._split_hybrid_vector(st.basis, q)
-        hyb_dp = [r + np.tril(r, -1).T for r in rho]
+        hyb_dp = [r + np.tril(r, -1).conj().T for r in rho]     # (two-component: complex)
     if q.shape != (n_expected,):
         raise ValueError(f"populations need {n_expected} entries (the SCC's mixed vector, "
                          f"DFTBResult.q_in), got shape {q.shape}")
@@ -214,6 +214,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 h = engine._block_hamiltonian(st, h0, s, v_orb, vs_orb, pots, hso)
             else:
                 h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
+            if hyb_dp is not None:                    # + H_x[DeltaP_in] (M6h-1b, molecules)
+                terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real)
+                h = h + terms.fock(hyb_dp)[0]
             s2 = so.overlap2(s)
             solver.prepare(s2)
             e, c = solver.eig(h)

@@ -1,0 +1,259 @@
+{
+ "schema": 1,
+ "case": "hco_lc_noncolinear_read_charges",
+ "note": "DFTB+ writes no charge file for a non-collinear hybrid: run 1 without the hybrid (the SK files without RangeSep) writes the populations, run 2 starts from them with DeltaP_in = 0",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "noncolinear": {
+   "initial_spins": [
+    [
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.48,
+     0.6,
+     0.64
+    ],
+    [
+     0.0,
+     0.0,
+     0.0
+    ]
+   ],
+   "spin_constants": {
+    "H": -0.072,
+    "C": [
+     [
+      -0.031,
+      -0.025
+     ],
+     [
+      -0.025,
+      -0.023
+     ]
+    ],
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ]
+   }
+  },
+  "spin_orbit": null,
+  "time_reversal": true,
+  "mixer": null,
+  "initial_charges": null,
+  "read_charges": {
+   "text": true,
+   "run1_skf_set": "ptbp_hcocu"
+  },
+  "charge": 0.0,
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc"
+ },
+ "libraries": {},
+ "input": {
+  "run1_positions_angstrom": [
+   [
+    -0.6332280933671982,
+    0.905036854101261,
+    0.019212679513298463
+   ],
+   [
+    0.003147003514591191,
+    -0.01607008119483333,
+    0.010847851647284542
+   ],
+   [
+    1.219120001353904,
+    0.028412428893877264,
+    -0.021112057074209777
+   ]
+  ],
+  "labels": [
+   "H",
+   "C",
+   "O"
+  ],
+  "positions_angstrom": [
+   [
+    -0.637,
+    0.909,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    1.18,
+    0.0,
+    0.0
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "H": 0,
+   "C": 1,
+   "O": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "charges_file": "ICAgICAgICAgICA4CiBGIEYgRiBGIFQgICAgICAgICAgIDMgICAgICAgICAgIDQgICAxMC45OTk5OTk5OTk5OTk5OTYgICAgICAgMC40ODAwMDAwMDAwMDAwODc0NyAgICAgICAwLjYwMDAwMDAwMDAwMDA3NjkyICAgICAgIDAuNjM5OTk5OTk5OTk5ODYyNjggICAgIAogIDAuODY2OTIzNDcxMjYwMTIyODEgICAgIAogICAxLjU1OTU0OTQ4ODEwMjk0MDQgICAgICAgIDIuMzY5MDMyMDI5MjM3NDAxNiAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogICAxLjkxNjg5ODcyMjIwNTc2NTIgICAgICAgIDQuMjg3NTk2Mjg5MTkzNzY1NiAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogIDAuMTAyNTkxODgyNDc4OTE5NzYgICAgIAogICAyLjY5MTY3MDUzNzYyMTUwMjdFLTAwMiAgMC4xMzc2NzI0MTA4NDU3MDg3MiAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogICA5LjIzNjYwMzEwMTc5NjM4NTdFLTAwNCAgMC4yMTE4OTUzNDA5ODkwNjQzNyAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogIDAuMTI4MjM5ODUzMDk4NjQ1MDAgICAgIAogICAzLjM2NDU4ODE3MjAyNjc4MTNFLTAwMiAgMC4xNzIwOTA1MTM1NTcxMjYzNSAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogICAxLjE1NDU3NTM4NzcyNDgwNzBFLTAwMyAgMC4yNjQ4NjkxNzYyMzYzMTMwMSAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogIDAuMTM2Nzg5MTc2NjM4NTA3MzQgICAgIAogICAzLjU4ODg5NDA1MDE2MTIwMzFFLTAwMiAgMC4xODM1NjMyMTQ0NjA4NjM1MiAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogICAxLjIzMTU0NzA4MDI0Njk3MThFLTAwMyAgMC4yODI1MjcxMjEzMTg2MzI4MyAgICAgICAgMC4wMDAwMDAwMDAwMDAwMDAwICAgICAgICAwLjAwMDAwMDAwMDAwMDAwMDAgICAgIAogMCAwCg==",
+  "charges_text": true
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  ReadInitialCharges = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_36_p7kol/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    H = \"s\"\n    C = \"p\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  SpinPolarisation = NonColinear {\n  }\n  SpinConstants {\n    ShellResolvedSpin = Yes\n    H = -0.072\n    C = -0.031 -0.025 -0.025 -0.023\n    O = -0.035 -0.03 -0.03 -0.028\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  ReadChargesAsText = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -5.228330668,
+  "free_energy": -5.228330668,
+  "e_zero": -5.228330668,
+  "e_rep": 0.1375890484,
+  "e_scc": 0.0034711018,
+  "e_band": -5.1352415267,
+  "e_spin": -0.0071251535,
+  "e_fock": -0.227024138,
+  "fermi": -0.191510152618708,
+  "forces": [
+   [
+    -0.0440322242301178,
+    0.0917131482515761,
+    1.62511114180295e-17
+   ],
+   [
+    -0.284923905912326,
+    -0.107302965901227,
+    -5.62685352843311e-17
+   ],
+   [
+    0.328956130142444,
+    0.0155898176496505,
+    4.00174238663016e-17
+   ]
+  ],
+  "charges_net": [
+   0.159924087198019,
+   -0.0685652769657655,
+   -0.0913588102322569
+  ],
+  "spins": [
+   [
+    0.118067341237845,
+    0.0886462167847402,
+    0.273286441977458
+   ],
+   [
+    0.1475841765473,
+    0.110807770980911,
+    0.341608052471791
+   ],
+   [
+    0.157423121650426,
+    0.118194955712977,
+    0.364381922636558
+   ]
+  ],
+  "n_scc": 32,
+  "scc_errors": [
+   0.39668054,
+   0.28124274,
+   0.18604187,
+   0.17395617,
+   0.054360385,
+   0.029712446,
+   0.0088923336,
+   0.012621638,
+   0.01255265,
+   0.0096894157,
+   0.0019828958,
+   0.001818129,
+   0.00088168178,
+   0.00069796681,
+   0.00043482266,
+   0.00039613322,
+   5.0704149e-05,
+   3.7656037e-05,
+   1.6684019e-05,
+   1.1036714e-05,
+   6.7749101e-06,
+   1.8415528e-06,
+   1.4370462e-06,
+   3.8158693e-07,
+   5.569793e-08,
+   5.8032966e-08,
+   1.0466538e-08,
+   3.0600029e-09,
+   1.5679518e-09,
+   1.1806321e-10,
+   1.296958e-10,
+   2.2283286e-11
+  ],
+  "run1": {
+   "energy": -5.0316109724,
+   "n_scc": 16
+  }
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08
+ }
+}

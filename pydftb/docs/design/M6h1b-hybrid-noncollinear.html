@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-1b 非共线杂化泛函设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6h-1b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-1b · 设计</p>
+    <h1>长程校正（一 b）：非共线自旋的杂化泛函</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-27</dd></div>
+      <div><dt>提交</dt><dd><code>（待填）</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6h1b-hybrid-noncollinear.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6h-1 的补充：分子的 LC/CAM 杂化泛函加非共线自旋（两分量，Pauli 表示）。DFTB+ 只在 MatrixBased 与分子上支持这个组合，也不能与自旋轨道耦合同用。ΔP 成为 2N × 2N 的复 Hermite 自旋矩阵，SCC 混合它的下三角（实部与虚部）。只做 NumPy，不开杂化或共线时逐位不变。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节）：H<sub>x</sub> 是 M6h-1 的四项算子作用在 2N × 2N 的矩阵上（S × 1，Γ 铺满四个块），c = −1/4；E<sub>Fock</sub> = ½ Re Σ H<sub>x</sub>∘ΔP*；复数混合器（Broyden、Anderson、DIIS）只取 conj(x)·y 的实部，等于对 [Re | Im] 的实数混合；误差是元素模的最大值；第一轮总不混合（读入电荷时除外）。</li>
+      <li><strong>实测与原型</strong>（第二节，探针 P48–P51）：自旋方向一致的算例（HCO、CH<sub>3</sub>、300 K、读入电荷）与 DFTB+ 25.1 逐轮一致，SCC 轮数相同，能量差 ≤ 4e-11 Ha，力 ≤ 1.5e-12；非共线 MD 40 步每步轮数相同。</li>
+      <li><strong>DFTB+ 的三处问题</strong>（第六节，每一处都用“照 DFTB+ 改一行”的原型精确复现了 DFTB+ 的数）：
+        <ul>
+          <li>+U 或 onsite 时，混合之后的块布居一直是第一轮输出的（<code>getNextInputDensityPauli</code> 不更新 <code>qBlockIn</code>）：HCO 的能量高 2.46e-3 Ha（+U）与 1.33e-3 Ha（onsite），与方向无关；冻结块的原型复现到 4e-11、轮数相同。pydftb 由 ΔP<sub>in</sub> 更新块布居，等于共线的结果（DFTB+ 共线的计算也是这个值）。</li>
+          <li>混合之后的输入布居（<code>denseMullikenPauli</code>）对原子对只用左下自旋块：该块不对称时不是 Mulliken 布居。O<sub>2</sub> 两个自旋从 90° 开始时 DFTB+ 20 轮、pydftb 16 轮，结果相同；照 DFTB+ 算布居的原型复现 20 轮、每轮误差相同。</li>
+          <li>力的 γ 部分只用了 Pauli 分量的实部（<code>pauli2components</code>）：分量有虚部时（H<sub>3</sub> 三角形的 120° 态）力差 1.1e-5 Ha/Bohr，不是能量的导数；pydftb 的力对能量差分到 1.9e-10，换成 DFTB+ 的 γ 部分时与 DFTB+ 一致到 5e-15。</li>
+        </ul>
+      </li>
+      <li><strong>电荷文件</strong>：DFTB+ 不为非共线杂化写电荷文件（<code>main.F90</code> 跳过），但能读入不带密度矩阵的非共线文件（ΔP<sub>in</sub> = 0）；pydftb 相同：<code>charge_data</code> 拒绝，<code>populations_from_file</code> 只接受不带密度矩阵的文件。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 8e-11</span><span class="lbl">与 DFTB+ 25.1 的总能量之差（Ha，10 个参考算例）</span></li>
+      <li><span class="num">2.46e-3</span><span class="lbl">DFTB+ 非共线 +U 杂化的能量误差（Ha，HCO）</span></li>
+      <li><span class="num">1.1e-5</span><span class="lbl">DFTB+ 非共线态的力误差（Ha/Bohr，H<sub>3</sub> 120°）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为与原型</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#bugs">六、DFTB+ 的问题与 pydftb 的做法</a></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码 041e723（<code>dftb/hybridxc.F90</code> 的 <code>addCamHamiltonianMatrix_pauli</code>、<code>evaluateEnergy_pauli</code>、<code>addCamGradientsMatrix_pauli</code>，<code>dftbplus/main.F90</code> 的 <code>getNextInputDensityPauli</code>，<code>dftb/populations.F90</code>，<code>mixer/*.F90</code>），行为以 25.1 的二进制为准。</p>
+      <ul>
+        <li><strong>适用范围</strong>（<code>initprogram.F90</code>）：非共线只用 MatrixBased（“Non-collinear spin only available for matrix alogorithm hybrids at present.”）、只用于分子；SOC 与杂化不能同用（M6h-1 已拒绝）。</li>
+        <li><strong>密度</strong>：ΔP = ½ W − P<sub>0</sub>，W 是 2N × 2N 的自旋密度矩阵（DFTB+ 两分量的占据在 0 到 2 之间，所以乘 ½；等于 pydftb 的 ρ = Σ f c c<sup>†</sup>，f ∈ [0, 1]），只有下三角（<code>herk</code>）。P<sub>0</sub> 是 ½ q<sub>0,μ</sub>/S<sub>μμ</sub>，放在两个自旋对角块上（<code>denseSubtractDensityOfAtomsPauli</code>）。</li>
+        <li><strong>Fock 矩阵</strong>：与 M6h-1 相同的四项 c[(SΔPS)∘Γ + ((SΔP)∘Γ)S + S(ΔP∘Γ)S + S((ΔPS)∘Γ)]，只是 S 换成 2N × 2N 的 S × 1、Γ 在四个 N × N 块上重复（<code>hadamardProduct</code> 的 Pauli 版本），矩阵乘用 <code>hemm</code>；<code>isSpin</code> 为真，c = −1/4。所以 H<sub>x</sub> 的每个自旋块就是 M6h-1 的算子作用在 ΔP 的同一个块上。</li>
+        <li><strong>能量</strong>：E<sub>Fock</sub> = ½ Re Σ H<sub>x</sub>∘conj(ΔP)（两个三角都填满之后）。</li>
+        <li><strong>SCC</strong>（<code>getNextInputDensityPauli</code>）：
+          <ul>
+            <li>误差 max|ΔP<sub>out</sub> − ΔP<sub>in</sub>|（复数的模）；收敛还要求 iSCC ≥ minSccIter = 2，读入电荷或几何步 &gt; 0 时不要求。</li>
+            <li>第一个几何步的第一轮（不读电荷时）总是不混合：ΔP<sub>in</sub> := ΔP<sub>out</sub>、q<sub>in</sub> := q<sub>out</sub>、块布居 := 输出的块布居。共线时只有自旋才这样，两分量总是自旋。</li>
+            <li>之后用复数混合器混整个 ΔP（上三角为零），q<sub>in</sub> = <code>denseMullikenPauli</code>(ΔP<sub>in</sub>) + q<sub>0</sub>；<strong>块布居不再更新</strong>（第六节）。</li>
+            <li>复数混合器：Broyden、Anderson、DIIS 的系数矩阵是实数，<code>dot_product</code> 的结果赋给实变量即取 conj(x)·y 的实部；所以它们等于对 [Re | Im] 的实数混合，向量里的零（上三角）不影响点积。</li>
+          </ul>
+        </li>
+        <li><strong>力</strong>（<code>addCamGradientsMatrix_pauli</code>）：dS 部分由 (ΔP S)(ΔP∘Γ) + ((ΔP S)∘Γ)ΔP 的 Hermite 化取电荷分量；γ 部分由 <code>pauli2components</code>（只取四个 Pauli 分量的实部）拼出。用 ΔP<sub>out</sub>。</li>
+        <li><strong>电荷文件</strong>：<code>main.F90</code> 在 <code>isHybridXc .and. nSpin == 4</code> 时不写 charges.bin/dat（SCC 中的重启文件也不写）；读入时只认不带密度矩阵的文件（实数路径读的是 <code>deltaRhoIn</code>，两分量用不上）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为与原型</h2>
+      <p>探针 P47–P51（草稿目录 <code>m6h1b/</code>），参数集 <code>ptbp_hcocu_lc</code> 与 <code>_cam</code>；原型即 pydftb 的实现（第四节），用钩子换掉一处来模拟 DFTB+ 的做法。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P47/P48 DFTB+</td><td>HCO（自旋斜着 / 沿 z）、CH<sub>3</sub>、HCO 300 K、O<sub>2</sub>（两个自旋成 90°），各与共线的计算比较；+U；NeighbourBased</td><td>非共线与共线的能量相同（≤ 1e-10），力相同（≤ 2e-11）；轮数：斜着 29、沿 z 30、共线 29（初始自旋不同）。+U：斜着与沿 z 都是 −5.1698219898，共线 −5.1722778382。NeighbourBased 被拒绝。电荷文件：不写，读入时报“Failure to open external file of charge data”。</td></tr>
+          <tr><td>P48b 读入电荷</td><td>不加杂化的非共线运行写 charges.dat，加杂化的运行读入</td><td>能算：32 轮到同一个能量，第一轮误差 0.39552068（ΔP<sub>in</sub> = 0）。</td></tr>
+          <tr><td>P49 原型对照</td><td>上面每个算例，用 DFTB+ 的 SK 差分步长</td><td>方向一致的算例轮数全同，每轮误差相同到 3e-8（DFTB+ 打印 8 位），能量 ≤ 4e-11，力 ≤ 1.5e-12；读入电荷 32 轮，前 4 轮误差 8 位全同。O<sub>2</sub> 90°：16 对 20 轮，能量 6e-11、力 3e-12。+U：−5.1722778382（= 共线），38 对 30 轮。</td></tr>
+          <tr><td>P52 组合</td><td>HCO 非共线 LC 加 onsite、外场与点电荷、GBSA、DFTB3（full）与 D3、MP 展宽；DFTB+ 共线的 onsite</td><td>外场与点电荷、GBSA、DFTB3 与 D3、MP：轮数相同，能量 ≤ 5e-11，力 ≤ 7e-13。onsite：DFTB+ −5.1920630025，pydftb −5.1933909926（= pydftb 共线 = DFTB+ 共线，差 3e-11）。</td></tr>
+          <tr><td>P49 照 DFTB+ 改一处</td><td>(a) 混合后的布居用 <code>denseMullikenPauli</code>；(b) +U 的块势一直用第一轮输出的块</td><td>(a) O<sub>2</sub> 90° 变成 20/20 轮，每轮误差 3e-8，能量 1.7e-11。(b) +U 变成 −5.1698219898（差 3.7e-11），30/30 轮，每轮误差 3e-8。两处的原因都确定了。</td></tr>
+          <tr><td>P50/P50b 非共线的解</td><td>H<sub>3</sub> 三角形（边长 2–3 Å），自旋从平面内 120° 开始；ΔP 的左下块是否对称</td><td>收敛态仍是 120°；DFTB+ 与 pydftb 能量、轮数都相同。这个态的左下块对称（1e-15），非共线体现在自旋对角块的虚部（|Im uu| 1.6e-2）；O<sub>2</sub> 90° 第 3 轮的左下块不对称（0.10），收敛时对称（4e-11）。</td></tr>
+          <tr><td>P51/P51b 力</td><td>H<sub>3</sub> 120°（边长 2.5 Å）与 HCO：力对能量的中心差分（h = 1e-4 Bohr）</td><td>H<sub>3</sub>：pydftb 1.9e-10，DFTB+ 1.13e-5；pydftb 的 γ 部分只用 Pauli 分量的实部时与 DFTB+ 的力一致到 4.8e-15。HCO（分量为实数）：两边一样。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>calc = DFTB(sk, hybrid="lc", spin="noncolinear", spin_constants=W,
+            initial_spins=[[0, 0, 0], [0.48, 0.6, 0.64], [0, 0, 0]])
+r = calc.calculate(labels, pos)
+r.e_fock, r.magmoms                          # (n_atom, 3) 的磁矩；E_Fock 已计入 energy</code></pre>
+      <ul>
+        <li><strong>选项</strong>：与 M6h-1 相同，加上非共线的 <code>spin="noncolinear"</code>、<code>initial_spins</code>、<code>spin_constants</code>（M6a）。只能用 MatrixBased（按 DFTB+ 的文字拒绝其余两种），不能加 <code>spin_orbit</code>（M6h-1 已拒绝），只用于分子。</li>
+        <li><strong>结果</strong>：<code>q_in</code>、<code>q_out</code> 为 [布居 [q, m<sub>x</sub>, m<sub>y</sub>, m<sub>z</sub>]（或块向量） | 2N × 2N 的 ΔP 下三角的实部 | 虚部]；<code>scc_errors</code> 是复数元素之差的模的最大值。<code>q_init</code> 接受整个向量（几何步之间沿用 ΔP<sub>in</sub>）或只有布居（ΔP<sub>in</sub> = 0）。</li>
+        <li><strong>能用</strong>：Fermi/Gauss/MP 展宽、+U 与 onsite 修正（块布居由 ΔP<sub>in</sub> 更新，与共线相同；DFTB+ 不更新）、外场、点电荷、溶剂、色散、全部混合器、结构优化与 MD、<code>bands.eigenstates</code>（加 H<sub>x</sub>[ΔP<sub>in</sub>]）。</li>
+        <li><strong>电荷文件</strong>：<code>charge_data</code> 拒绝（DFTB+ 不写，也没有这种密度矩阵的格式）；<code>populations_from_file</code> 接受不带密度矩阵的非共线文件（ΔP<sub>in</sub> = 0），带密度矩阵的拒绝。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3><code>pydftb/hybrid.py</code></h3>
+        <ul>
+          <li><code>HybridTerms(…, pauli=True)</code>：密度是一个 2N × 2N 的复矩阵；<code>tril</code> 换成 2N 的下三角。</li>
+          <li><code>reference</code>：½ q<sub>0</sub> 放在两个自旋对角块；<code>pack</code>/<code>unpack</code>：[Re | Im]，展开时补上 Hermite 的上三角；新方法 <code>error</code>：两分量时取模（<code>np.hypot</code>），共线时 max|Δx|。</li>
+          <li><code>fock</code>：对 uu、dd、du 三个块各做一次 M6h-1 的四项（c = −1/4），ud = du<sup>†</sup>（F[X<sup>†</sup>] = F[X]<sup>†</sup>）；<code>energy</code>：½ Re Σ H∘ΔP*。</li>
+          <li><code>pair_coefficient</code>：Hermite 的 D 让 M6h-1 的公式原样成立，只是取实部：X = −¼ Re[(D∘Γ)SD + ((DS)∘Γ)D + DS(D∘Γ) + D((SD)∘Γ)]（2N × 2N），dS 的系数是两个自旋对角块之和。</li>
+          <li><code>gamma_gradient</code>：∂E/∂Γ = −¼ Re[conj(D)∘(SDS) + (SD)<sup>T</sup>∘(SD)]，四个块相加（Γ 铺满四个块）后照 M6h-1 按原子对求和。<code>_dftbp_pauli_gamma</code>（只给验证用）：先把 D 的四个 Pauli 分量换成实部，即 DFTB+ 的做法。</li>
+        </ul>
+        <h3>计算器</h3>
+        <ul>
+          <li><code>_check_hybrid</code>：非共线时只许 MatrixBased（DFTB+ 的文字）；删去“非共线以后再做”的拒绝。<code>_hybrid_terms</code> 传 <code>pauli</code>。</li>
+          <li><code>_scc_hybrid</code>：两分量时求解器用 S × 1，H 由 <code>_spinor_hamiltonian</code>（或块势的 <code>_block_hamiltonian</code>）加 H<sub>x</sub>；ΔP<sub>out</sub> = ρ − P<sub>0</sub>（复数）；误差用 <code>hy.error</code>；第一轮不混合、至少两轮（不给 <code>q_init</code> 时）；混合之后 q<sub>in</sub> = <code>_populations</code>(ΔP<sub>in</sub> + P<sub>0</sub>)，于是 [q, m] 的 Mulliken 布居与块向量都由现有代码给出。</li>
+          <li><code>_energies_pauli</code>：E<sub>Fock</sub> 计入能量，<code>q_in</code>/<code>q_out</code> 接上打包的 ΔP。力不用改：<code>_gradient</code> 已经调用 <code>pair_coefficient</code> 与 <code>gamma_gradient</code>。</li>
+          <li><code>_split_hybrid_vector</code> 的两分量版本（(1, 2N, 2N) 复数下三角）；<code>bands.eigenstates</code> 的两分量分支加 H<sub>x</sub>；<code>charge_data</code> 与 <code>populations_from_file</code> 按第三节。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>10 个参考算例</strong>：HCO（斜着的自旋，复数 ΔP）、CH<sub>3</sub>、HCO 300 K、CH<sub>3</sub> 加 Anderson 混合器、H<sub>3</sub> 120°（非共线的解，SCC 容差 1e-12）、O<sub>2</sub> 90°（CAM；轮数与磁矩方向放宽，见注记）、HCO 读入电荷（run 1 不加杂化、用不带 RangeSep 的参数集）、HCO 加外场与点电荷、HCO 加 DFTB3 与 D3；共线的 HCO 加 onsite 与自旋（pydftb 非共线 onsite 的对照值）。一个动力学参考：CH<sub>3</sub> 非共线 LC 的 MD（每步轮数）。</li>
+          <li><strong>工具</strong>：<code>Case.forces_fd</code>（参考的力取 DFTB+ 能量的四点差分，另存 DFTB+ 自己的力，与 pydftb 的 DFTB+ 兼容模式比较，同 M6f-3 的卤素修正）；读电荷算例的 <code>run1_skf_set</code>（run 1 去掉 <code>Hybrid</code> 块、换参数集）；dynamics 支持非共线（pydftb 选项与 DFTB+ 的输入）。</li>
+          <li><strong>自洽测试</strong>（<code>tests/test_hybrid.py</code>，新增 10 项，共 79 项）：两分量 H<sub>x</sub> 等于显式的 2N × 2N 公式、Hermite、是 ∂E/∂ΔP，块对角时等于共线的两个通道；打包、误差与 P<sub>0</sub>；dS 系数对 S 的差分（ΔP 的左下块不对称、对角块有虚部）；力对能量的差分（HCO、H<sub>3</sub> 120°）；沿 z 与斜着都等于共线的计算（能量、E<sub>Fock</sub>、力、电荷、磁矩方向）；+U 与 onsite 等于共线的结果；重启向量；电荷文件的拒绝与读入；本征态；NeighbourBased 的拒绝。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="bugs">
+      <h2>六、DFTB+ 的问题与 pydftb 的做法</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 的情况</th><th>证据</th><th>pydftb</th></tr></thead>
+        <tbody>
+          <tr><td><code>getNextInputDensityPauli</code> 在第一轮复制之后不再更新 <code>qBlockIn</code>：+U 与 onsite 的势一直来自第一轮的输出块</td><td>HCO +U：−5.1698219898 对共线 −5.1722778382（差 2.46e-3 Ha，力差 9.9e-3）；斜着与沿 z 相同；pydftb 冻结块后复现到 3.7e-11、30 轮。HCO onsite：−5.1920630025 对共线 −5.1933909926（差 1.33e-3 Ha）</td><td>由 ΔP<sub>in</sub> + P<sub>0</sub> 更新块布居（与共线路径、DFTB+ 的共线路径相同）：等于共线的结果</td></tr>
+          <tr><td><code>denseMullikenPauli</code> 对原子对只用左下自旋块的元素（再乘 2）：该块不对称时（磁矩方向不一致的 SCC 中间步）不是 Mulliken 布居；DFTB+ 不加杂化的路径（<code>packHSPauli</code>）是对称化的</td><td>O<sub>2</sub> 90°：DFTB+ 20 轮、pydftb 16 轮，能量与力相同；照 DFTB+ 算布居后 20/20 轮、每轮误差 3e-8</td><td>用 Mulliken 布居。收敛态的左下块对称时两者的结果相同（所有测过的算例都是）；不对称时 DFTB+ 的不动点不自洽</td></tr>
+          <tr><td><code>addCamGradientsMatrix_pauli</code> 的 γ 部分由 <code>pauli2components</code> 只取 Pauli 分量的实部，丢了 Im·Im 项</td><td>H<sub>3</sub> 120°：DFTB+ 的力对能量差分错 1.13e-5 Ha/Bohr；pydftb 1.9e-10；兼容模式与 DFTB+ 一致到 4.8e-15</td><td>精确的导数；参考算例 <code>h3_lc_noncolinear_120</code> 的力对照 DFTB+ 能量的差分，兼容模式（<code>HybridTerms._dftbp_pauli_gamma</code>）对照 DFTB+ 的力</td></tr>
+          <tr><td>不写电荷文件</td><td><code>main.F90</code></td><td><code>charge_data</code> 拒绝；读入不带密度矩阵的文件</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li>NeighbourBased 与 Thresholded 加非共线、周期体系加非共线：DFTB+ 不支持，pydftb 也拒绝（实现上只是换 S，但没有参考）。</li>
+        <li><strong>规模</strong>：2N × 2N 的复矩阵，混合向量长 2N(2N + 1)，是共线时的四倍；分子规模可以。</li>
+        <li><strong>自旋方向</strong>：没有自旋轨道耦合时任何共同方向都是解，自旋从不同方向出发时停在哪个方向取决于 SCC 的路径；O<sub>2</sub> 90° 的两个程序路径不同，最后的方向差 7e-3（能量、力相同）。</li>
+        <li>TD-LC 的非共线（DFTB+ 不支持）不在 M6h-2 的范围。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

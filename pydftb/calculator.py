@@ -471,7 +471,8 @@ class DFTB:
                           (in ``energy``); ``q_in``/``q_out`` are then [populations | packed
                           DeltaP], what the SCC carries between geometries.  SK files with a
                           ``RangeSep`` section need it (as DFTB+) unless ``hybrid=False``.
-                          NumPy only.
+                          With ``spin="noncolinear"`` (M6h-1b, the matrix screening) DeltaP is
+                          the 2N x 2N spinor matrix.  NumPy only.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -734,6 +735,8 @@ class DFTB:
         elif hy.screening == "threshold" and self.spin:
             dftbp = ("Spin-unrestricted calculation for thresholded range-separation not yet "
                      "implemented")
+        elif self.noncolinear and hy.screening != "matrix":
+            dftbp = "Non-collinear spin only available for matrix alogorithm hybrids at present"
         elif a is not None and a.atom_energies:
             dftbp = ("Atomic resolved energies cannot be calculated with hybrid functionals at "
                      "the moment")
@@ -742,10 +745,7 @@ class DFTB:
         if dftbp:
             raise ValueError(f"{dftbp} (as in DFTB+)")
         why = None                         # not (yet) in pydftb
-        if self.noncolinear:
-            why = ("non-collinear spin (DFTB+ has it for the matrix screening of molecules) is not "
-                   "supported yet")
-        elif self.casida is not None:
+        if self.casida is not None:
             why = "Casida excitations (TD-LC) are milestone M6h-2"
         elif a is not None and (a.polarisability is not False or a.response_kernel is not False
                                 or a.external_charge_derivatives is not False):
@@ -1145,6 +1145,10 @@ class DFTB:
         basis, site_of_orb, rep, block = self._charge_layout(species)
         vec = np.asarray(result.q_in, float)
         rho = None
+        if self.hybrid is not None and self.pauli:         # M6h-1b
+            raise ValueError("DFTB+ writes no charge file for a non-collinear hybrid calculation "
+                             "(main.F90 leaves it out): there is no format for its 2N x 2N "
+                             "density matrix")
         if self.hybrid is not None:                        # [populations | packed DeltaP]
             vec, rho = self._split_hybrid_vector(basis, vec)
         n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
@@ -1170,7 +1174,19 @@ class DFTB:
 
     def _split_hybrid_vector(self, basis: Basis, vec) -> tuple:
         """A hybrid run's mixing vector -> (populations, DeltaP per spin channel as DFTB+ keeps
-        it: the lower triangle, the upper one zero)."""
+        it: the lower triangle, the upper one zero; two-component: the complex spinor matrix,
+        (1, 2N, 2N))."""
+        if self.pauli:
+            n = 2 * basis.norb
+            tril = np.tril_indices(n)
+            k = len(tril[0])
+            if len(vec) <= 2 * k:
+                raise ValueError("the result is not one of this hybrid calculation (q_in has no "
+                                 "density matrix)")
+            pops, x = vec[:len(vec) - 2 * k], vec[len(vec) - 2 * k:]
+            rho = np.zeros((1, n, n), complex)
+            rho[0][tril] = x[:k] + 1j * x[k:]
+            return pops, rho
         n = basis.norb
         tril = np.tril_indices(n)
         nspin = 2 if self.spin else 1
@@ -1207,6 +1223,10 @@ class DFTB:
         q = self._file_populations(basis, site_of_orb, rep, block, data, skip_charge_test)
         if self.hybrid is None or data.rho is None:
             return q
+        if self.pauli:                                     # M6h-1b
+            raise ValueError("the charge file has a density matrix, which a non-collinear hybrid "
+                             "calculation cannot take (DFTB+ writes none for one and reads only "
+                             "files without)")
         nspin = 2 if self.spin else 1
         if data.rho.shape != (nspin, basis.norb, basis.norb):
             raise ValueError(f"the charge file's density matrix has shape {data.rho.shape}, this "
@@ -1602,7 +1622,8 @@ class DFTB:
         q0_orb = (self._reference_shell_populations(basis) / (2 * ls + 1))[basis.orb_shell]
         return _hybrid.HybridTerms(self.hybrid, self._range_sep,
                                    [self.sk.hubbard[lab][0] for lab in species], pos,
-                                   basis.orb_atom, smat, q0_orb, self.sk.cutoff)
+                                   basis.orb_atom, smat, q0_orb, self.sk.cutoff,
+                                   pauli=self.pauli)
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -2127,36 +2148,47 @@ class DFTB:
         unmixed with spin only, at least two iterations with spin or +U unless it starts from given
         populations, no mixing after the last iteration.  ``q_init``: the populations (DeltaP_in
         = 0, as a DFTB+ charge file without a density) or [populations | packed DeltaP], what
-        DFTB+ carries from one geometry step to the next (``DFTBResult.q_in``)."""
+        DFTB+ carries from one geometry step to the next (``DFTBResult.q_in``).
+        Non-collinear spin (M6h-1b; DFTB+ getNextInputDensityPauli): DeltaP is the 2N x 2N spinor
+        matrix, mixed as [Re | Im] of its lower triangle, the error the largest modulus of its
+        elements, the first output always taken unmixed (unless the SCC starts from given
+        populations); the input populations [q, m_x, m_y, m_z] per shell (or the blocks) are
+        those of DeltaP_in + P0 (DFTB+ keeps the blocks of the first output: see the M6h-1b
+        report)."""
         hy = st.hybrid
+        pauli = st.pauli is not None
         threads = self.k_threads if self.k_threads.n > 1 else None
         solver = (self.solver if not isinstance(self.solver, str)
                   else SOLVERS[self.solver](threads=threads))
         t1 = time.perf_counter()
         s = st.smat_precise
-        solver.prepare(s if st.spin is None else np.concatenate([s, s]))
+        if pauli:
+            solver.prepare(st.pauli.s2)
+        else:
+            solver.prepare(s if st.spin is None else np.concatenate([s, s]))
         t_diag = time.perf_counter() - t1
         nspin = 1 if st.spin is None else 2
+        nmat = 1 if pauli else nspin                 # DeltaP matrices (one spinor matrix)
         mixer = make_mixer(self.mixer, self.mixing)
-        p0 = [hy.reference(nspin)] * nspin
+        p0 = [hy.reference(nspin)] * nmat
         q_start = self._initial_populations(st)
         npop = len(q_start)
+        nx = hy.packed_size * nmat
         if q_init is None:
-            q_in, x_in = q_start, np.zeros(hy.packed_size * nspin)
+            q_in, x_in = q_start, np.zeros(nx)
         else:
             q_init = np.asarray(q_init, float)
-            if len(q_init) not in (npop, npop + hy.packed_size * nspin):
+            if len(q_init) not in (npop, npop + nx):
                 raise ValueError(f"q_init of a hybrid calculation: {npop} populations, or those "
-                                 f"and the {hy.packed_size * nspin} elements of the packed "
-                                 f"DeltaP; not {len(q_init)} values")
+                                 f"and the {nx} elements of the packed DeltaP; not "
+                                 f"{len(q_init)} values")
             q_in = q_init[:npop].copy()
-            x_in = (q_init[npop:].copy() if len(q_init) > npop
-                    else np.zeros(hy.packed_size * nspin))
+            x_in = q_init[npop:].copy() if len(q_init) > npop else np.zeros(nx)
         dp_in = hy.unpack(x_in, nspin)
         hy.reset(q_init is not None)
-        first_out = st.spin is not None and q_init is None
+        first_out = (st.spin is not None or pauli) and q_init is None
         min_iter = 1
-        if q_init is None and (st.spin is not None
+        if q_init is None and (st.spin is not None or pauli
                                or (st.block is not None and st.block.has_u)):
             min_iter = 2                          # DFTB+ getMinSccIters
         max_iter, tol = self.max_scc, self.scc_tol
@@ -2169,6 +2201,8 @@ class DFTB:
             if st.block is not None:
                 pots = self._block_potentials(st, q_in, onsite=nit > 1 or q_init is not None)
                 h = self._block_hamiltonian(st, h0, st.smat, v_orb, vs_orb, pots, None)
+            elif pauli:                               # (no spin-orbit coupling with hybrids)
+                h = self._spinor_hamiltonian(h0, st.smat, v_orb, vs_orb, None)
             else:
                 v = np.asarray(v_orb)
                 h = h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
@@ -2181,9 +2215,12 @@ class DFTB:
             rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=False)
             t_diag += time.perf_counter() - t1
             q_orb, q_out = self._populations(st, rho)
-            dp_out = [np.asarray(rho[i]).real - p0[i] for i in range(nspin)]
+            if pauli:
+                dp_out = [np.asarray(rho[0]) - p0[0]]
+            else:
+                dp_out = [np.asarray(rho[i]).real - p0[i] for i in range(nspin)]
             x_out = hy.pack(dp_out)
-            diff = np.abs(x_out - x_in).max()
+            diff = hy.error(x_out, x_in)
             errors.append(float(diff))
             if self.verbose:
                 print(f"SCC {nit:3d}  max dDeltaP = {diff:.3e}")
@@ -2248,12 +2285,18 @@ class DFTB:
         q_spin = (sc.q_out.reshape(4, -1) if st.block is None
                   else self._block_shell_channels(st, sc.q_out))
         occ = None if sc.occ is None else [np.asarray(o) for o in sc.occ]
+        q_in, q_out = sc.q_in, sc.q_out
+        if sc.hybrid is not None:                                    # M6h-1b
+            energy = energy + sc.hybrid.e_fock
+            env["e_fock"] = sc.hybrid.e_fock
+            q_in = np.concatenate([sc.q_in, sc.hybrid.x_in])
+            q_out = np.concatenate([sc.q_out, sc.hybrid.x_out])
         return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, sc.mu, q_atom,
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
-                          q_out=sc.q_out,
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=q_in,
+                          q_out=q_out,
                           e_spin=e_spin, magmoms=magmoms, q_spin=q_spin,
                           e_ls=e_ls, orbital_moments=lmom, e_plus_u=e_u, e_onsite=e_ons,
                           dipole=self._dipole(st, dq_atom), **env)

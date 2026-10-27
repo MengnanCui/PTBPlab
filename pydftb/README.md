@@ -519,8 +519,20 @@ files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block),
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
 coordinate derivatives, XL-BOMD; not yet in pydftb: periodic systems (M6h-3), Casida (M6h-2),
-the response analyses (M6h-4), non-collinear spin, torch and `pydftb.autodiff`.  Details:
+the response analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
+
+Non-collinear spin (milestone M6h-1b; DFTB+: the matrix screening, molecules) takes the same
+options with `spin="noncolinear"`: DeltaP is the 2N x 2N spinor matrix (complex), mixed as the
+real and imaginary parts of its lower triangle (DFTB+'s complex mixers), and `q_in` holds them
+after the [q, m_x, m_y, m_z] populations.  DFTB+ writes no charge file for it (`charge_data`
+refuses) and reads one without a density matrix.  Three differences from DFTB+ 25.1, where
+pydftb gives the consistent result: with +U or onsite corrections DFTB+ keeps the first
+output's blocks (2.5e-3 and 1.3e-3 Ha too high for HCO; pydftb gives the collinear result);
+DFTB+'s input populations after mixing take only the lower left spin block (other SCC paths
+while the spins turn; the same result); DFTB+'s forces drop the imaginary parts of DeltaP's
+Pauli components in the gamma term (1.1e-5 Ha/Bohr off in a non-collinear state).  Details:
+[`docs/reports/M6h1b-hybrid-noncollinear.html`](docs/reports/M6h1b-hybrid-noncollinear.html).
 
 ### Analysis outputs
 

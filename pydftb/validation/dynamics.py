@@ -166,6 +166,10 @@ DYN_CASES = [
     DynCase("ch3_lc_spin_md", "ch3_lc_spin", "md", tol={**TOL_MD, "n_scc": 0},
             note="LC with spin: after the first step neither the unmixed first output nor two "
                  "iterations at least (DFTB+ iGeoStep > 0)"),
+    # M6h-1b: non-collinear spin, the complex DeltaP carried from step to step
+    DynCase("ch3_lc_noncolinear_md", "ch3_lc_noncolinear", "md", tol={**TOL_MD, "n_scc": 0},
+            note="LC with non-collinear spin: DeltaP_in (2N x 2N, complex) and the [q, m] "
+                 "populations from one step to the next"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -220,6 +224,7 @@ def pydftb_calculator(case: DynCase, inp: dict, **overrides) -> PyDFTB:
                 shell_resolved=base.shell_resolved, labels=inp["labels"], fd_delta=FD_DELTA,
                 dispersion=inp.get("dispersion"), reuse_charges=True,
                 **(base.dftb3 or {}), **({"spin": True, **base.spin} if base.spin else {}),
+                **refgen.pauli_options(base, inp["labels"]),     # M6h-1b: non-collinear
                 **refgen.block_options(base, inp["labels"]),
                 **refgen.environment_ase_options(base),
                 **refgen.casida_options(base),              # M6e: an excited state's forces
@@ -329,6 +334,8 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
         skdir = refgen._plain_skf_dir(base, tmp)
         extra = (dftbplus.dftb3_block(base.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(base.spin, set(inp["labels"]), base.shell_resolved)
+                 + dftbplus.noncolinear_block(base.noncolinear, set(inp["labels"]),
+                                              base.shell_resolved)
                  + dftbplus.dispersion_block(inp.get("dispersion"), inp["labels"])
                  + refgen.block_hsd(base, inp) + refgen.environment_hsd(base)
                  + dftbplus.mixer_block(base.mixer)

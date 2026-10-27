@@ -1,9 +1,12 @@
-"""Range-separated hybrid functionals (milestone M6h-1): LC and CAM for molecules.
+"""Range-separated hybrid functionals (milestone M6h-1): LC and CAM for molecules; with
+non-collinear spin (M6h-1b).
 
 Comparisons with DFTB+ are the frozen references *_lc*, *_cam*, c2h4_global and the restart
-cases *_lc*_read_charges* in test_reference.py, and h2o_lc_opt, h2o_lc_md and ch3_lc_spin_md
-in test_md_opt.py; here the building blocks, self-consistency, limits and errors (no dftb+).
+cases *_lc*_read_charges* in test_reference.py, and h2o_lc_opt, h2o_lc_md, ch3_lc_spin_md and
+ch3_lc_noncolinear_md in test_md_opt.py; here the building blocks, self-consistency, limits and
+errors (no dftb+).
 """
+import dataclasses
 import gzip
 import os
 
@@ -24,7 +27,7 @@ from pydftb.params import ParamSet
 from pydftb.skf import SKFile
 from pydftb.system import System
 from pydftb.validation import refgen
-from pydftb.validation.cases import SKF_SETS, W_HCO
+from pydftb.validation.cases import ONS, SKF_SETS, TILT, U_O, W_HCO
 from pydftb.validation.make_hybrid_sets import with_range_sep
 
 from .conftest import SKF_HCOCU
@@ -204,7 +207,8 @@ def test_sk_files_and_the_option():
       "spin_constants": W_HCO}, "thresholded"),
     ({"analysis": {"atom_energies": True}}, "Atomic resolved energies"),
     ({"analysis": {"coord_derivatives": True}}, "Coordinate derivative"),
-    ({"spin": "noncolinear", "spin_constants": W_HCO}, "non-collinear"),
+    ({"spin": "noncolinear", "spin_constants": W_HCO,
+      "hybrid": {"type": "lc", "screening": "neighbour"}}, "matrix alogorithm"),
     ({"casida": {"n_excitations": 3}}, "M6h-2"),
     ({"analysis": {"polarisability": True}}, "M6h-4"),
     ({"truncate_sk_range": 10.0}, "truncate_sk_range"),
@@ -341,7 +345,8 @@ def _fd_forces(calc, labels, pos, atoms, h=1e-6):
 
 @pytest.mark.parametrize("name", ["h2o_lc", "h2co_cam", "c2h4_global", "ch3_lc_spin",
                                   "h2co_lc_plusu", "cuco_lc_300K", "h2o_lc_onsite",
-                                  "ch3oh_lc_field_pc"])
+                                  "ch3oh_lc_field_pc", "hco_lc_noncolinear",
+                                  "h3_lc_noncolinear_120"])
 def test_forces_match_energy_differences(name):
     """Central differences with h = 1e-6 Bohr (below the distance of water's H-H pair to an SK
     grid node); their noise reaches 2.2e-7 Ha/Bohr for the 300 K CuCO (minimal environment)."""
@@ -406,7 +411,7 @@ def test_plain_calculation_ignores_a_density_matrix(tmp_path):
 
 
 @pytest.mark.parametrize("name, tol", [("h2o_lc", 1e-12), ("ch3_lc_spin", 1e-12),
-                                       ("h2co_lc_plusu", 1e-12),
+                                       ("h2co_lc_plusu", 1e-12), ("hco_lc_noncolinear", 1e-12),
                                        ("c6h6_lc_threshold", 1e-5)])
 def test_eigenstates_reproduce_the_scc_levels(name, tol):
     """The SCC's last Hamiltonian from q_in: H_x[DeltaP_in] included (the threshold screening:
@@ -440,3 +445,149 @@ def test_api_and_ase_calculator():
                    ).calculate(labels, pos)
         assert atoms.get_potential_energy() == pytest.approx(ref.energy * units.Hartree,
                                                              rel=1e-12)
+
+
+# ---- non-collinear spin (M6h-1b) ---------------------------------------------------------
+def _hermitian(rng, n):
+    m = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+    return m + m.conj().T
+
+
+def _spinor_terms(name="hco_lc_noncolinear"):
+    _, calc, labels, pos = _case(name)
+    return calc._setup(labels, pos, None, None, False, {}).hybrid
+
+
+def test_spinor_fock_is_the_block_operator():
+    """The two-component H_x is the operator on S x 1 and G on all four blocks with c = -1/4,
+    Hermitian; E = 1/2 Re <H_x[D], D> has the gradient H_x; a block-diagonal real DeltaP gives
+    the collinear channels' H_x."""
+    t = _spinor_terms()
+    n = t.n
+    rng = np.random.default_rng(5)
+    d, x = _hermitian(rng, 2 * n), _hermitian(rng, 2 * n)
+    h = t.fock([d])[0]
+    s2 = np.zeros((2 * n, 2 * n))
+    s2[:n, :n] = s2[n:, n:] = t.S
+    g2 = np.tile(t.G, (2, 2))
+    ref = -0.25 * ((s2 @ d @ s2) * g2 + ((s2 @ d) * g2) @ s2 + s2 @ (d * g2) @ s2
+                   + s2 @ ((d @ s2) * g2))
+    assert np.abs(h - ref).max() < 1e-12 and np.abs(h - h.conj().T).max() < 1e-12
+
+    def e(m):
+        return t.energy(t.fock([m]), [m])
+    eps = 1e-6
+    assert (e(d + eps * x) - e(d - eps * x)) / (2 * eps) == pytest.approx(
+        np.sum(h * x.conj()).real, rel=1e-7)
+    up, dn = (m + m.T for m in rng.normal(size=(2, n, n)))
+    blk = np.zeros((2 * n, 2 * n), complex)
+    blk[:n, :n], blk[n:, n:] = up, dn
+    h = t.fock([blk])[0]
+    collinear = [-0.25 * t._four_terms(t.S, m) for m in (up, dn)]
+    assert np.abs(h[:n, :n] - collinear[0]).max() < 1e-12
+    assert np.abs(h[n:, n:] - collinear[1]).max() < 1e-12 and np.abs(h[n:, :n]).max() == 0.0
+
+
+def test_spinor_packing_and_reference():
+    t = _spinor_terms()
+    n2 = 2 * t.n
+    d = _hermitian(np.random.default_rng(2), n2)
+    x = t.pack([d])
+    assert len(x) == t.packed_size == n2 * (n2 + 1)
+    assert np.abs(t.unpack(x, 1)[0] - d).max() == 0.0
+    d2 = d + 1e-3 * (1 + 1j)
+    k = len(x) // 2
+    assert t.error(t.pack([d2]), x) == pytest.approx(np.abs(d2 - d)[np.tril_indices(n2)].max())
+    assert t.error(t.pack([d2]), x) == pytest.approx(np.sqrt(2) * 1e-3, rel=1e-9)
+    assert len(x[:k]) == len(x[k:])
+    with pytest.raises(ValueError, match="two-component"):
+        t.unpack(x[:-1], 1)
+    p0 = t.reference(1)                    # half the reference populations on both blocks
+    assert np.trace(p0).real == pytest.approx(11.0) and np.abs(p0.imag).max() == 0.0
+
+
+def test_spinor_pair_coefficient_is_the_overlap_derivative():
+    """dE_x/dS at fixed DeltaP for a DeltaP with complex spin-diagonal blocks and a lower left
+    block that is not symmetric (what a non-collinear SCC passes through)."""
+    t = _spinor_terms()
+    n = t.n
+    d = _hermitian(np.random.default_rng(7), 2 * n)
+
+    class _All:
+        rows, cols = np.indices((n, n)).reshape(2, -1)
+    x = t.pair_coefficient([d], _All).reshape(n, n)
+    s0 = t.S.copy()
+    for i, j in [(0, 3), (2, 5), (1, 1)]:
+        e = []
+        for sgn in (1, -1):
+            t.S = s0.copy()
+            t.S[i, j] += sgn * 1e-6
+            if i != j:
+                t.S[j, i] += sgn * 1e-6
+            e.append(t.energy(t.fock([d]), [d]))
+        t.S = s0
+        assert (e[0] - e[1]) / 2e-6 == pytest.approx(x[i, j] + (x[j, i] if i != j else 0.0),
+                                                      rel=1e-6)
+
+
+def _noncollinear(name, **changes):
+    case = dataclasses.replace(refgen.CASES_BY_NAME[name], **changes)
+    inp = refgen._inputs(case)
+    return refgen.run_pydftb(case, inp, engine=True, scc_tol=1e-11)
+
+
+def test_noncollinear_along_z_and_tilted_equal_collinear():
+    """Without spin-orbit coupling the spin direction is free: along z or tilted, the energy,
+    E_Fock, forces and charges are the collinear calculation's."""
+    nc = refgen.CASES_BY_NAME["hco_lc_noncolinear"].noncolinear
+    z = {**nc, "initial_spins": [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]]}
+    col, _ = _noncollinear("hco_lc_spin_neighbour", hybrid="lc")
+    for spins in (nc, z):
+        res, _ = _noncollinear("hco_lc_noncolinear", noncolinear=spins)
+        assert res.energy == pytest.approx(col.energy, abs=1e-9)
+        assert res.e_fock == pytest.approx(col.e_fock, abs=1e-9)
+        assert np.abs(res.forces - col.forces).max() < 1e-8
+        assert np.abs(res.charges - col.charges).max() < 1e-8
+        m = np.asarray(res.magmoms)                       # (n_atom, 3), along the start
+        direction = np.asarray(spins["initial_spins"][1])
+        assert np.abs(m - np.outer(col.magmoms, direction)).max() < 1e-7
+
+
+@pytest.mark.parametrize("collinear, block", [("hco_lc_plusu_spin", {"plus_u": U_O}),
+                                               ("hco_lc_onsite_spin", {"onsite": ONS})])
+def test_noncollinear_blocks_come_from_deltap_in(collinear, block):
+    """+U and onsite corrections: the input blocks after mixing are those of DeltaP_in + P0, as
+    with collinear spin (DFTB+'s two-component path keeps the first output's blocks: 2.5e-3 and
+    1.3e-3 Ha above, M6h-1b report): the collinear result (a DFTB+ reference)."""
+    col, _ = _noncollinear(collinear)
+    res, _ = _noncollinear("hco_lc_noncolinear", **block)
+    assert res.energy == pytest.approx(col.energy, abs=1e-9)
+    assert res.e_plus_u == pytest.approx(col.e_plus_u, abs=1e-9)
+    assert res.e_onsite == pytest.approx(col.e_onsite, abs=1e-9)
+    assert np.abs(res.forces - col.forces).max() < 1e-8
+
+
+def test_noncollinear_restart_and_charge_files(tmp_path):
+    res, calc = _noncollinear("hco_lc_noncolinear")
+    inp = refgen._inputs(refgen.CASES_BY_NAME["hco_lc_noncolinear"])
+    labels, pos = inp["labels"], np.array(inp["positions_angstrom"]) / BOHR
+    n2 = 2 * calc._charge_layout(labels)[0].norb
+    npop = len(res.q_in) - n2 * (n2 + 1)
+    again = calc.calculate(labels, pos, q_init=res.q_in)
+    assert again.n_scc <= 2 and again.energy == pytest.approx(res.energy, abs=1e-10)
+    pops = calc.calculate(labels, pos, q_init=res.q_in[:npop])     # DeltaP_in = 0
+    assert pops.energy == pytest.approx(res.energy, abs=1e-9) and pops.n_scc > again.n_scc
+    # DFTB+ writes no charge file for a non-collinear hybrid, and reads one without a density
+    with pytest.raises(ValueError, match="writes no charge file"):
+        calc.charge_data(labels, res)
+    plain = DFTB(_sk(SKF_HCOCU, labels), scc_tol=1e-10, spin="noncolinear",
+                 spin_constants={k: W_HCO[k] for k in set(labels)},
+                 initial_spins=[[0.0, 0.0, 0.0], TILT, [0.0, 0.0, 0.0]])
+    data = plain.charge_data(labels, plain.calculate(labels, pos))
+    write_charges(tmp_path / "charges.bin", data)
+    q = calc.populations_from_file(labels, str(tmp_path / "charges.bin"))
+    assert len(q) == npop
+    data.rho, data.density_matrix = np.zeros((1, n2 // 2, n2 // 2)), True
+    with pytest.raises(ValueError, match="non-collinear hybrid"):
+        calc.populations_from_file(labels, data)
+

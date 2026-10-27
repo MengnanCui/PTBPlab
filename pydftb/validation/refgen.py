@@ -32,6 +32,7 @@ from ..casida import AU_DEBYE, Casida
 from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
 from ..external import PointCharges
+from ..hybrid import HybridTerms
 from ..params import ParamSet
 from ..skf import shell_names, write_typed_copies
 from . import dftbplus
@@ -470,9 +471,14 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
                                                   born_derivs="born_derivs" in out)
             return out
         if case.read_charges is not None:             # M6f-1: two runs
+            plain = None
+            if case.read_charges.get("run1_skf_set"):     # M6h-1b: run 1 without the hybrid
+                plain = _plain_skf_dir(dataclasses.replace(
+                    case, skf_set=case.read_charges["run1_skf_set"]), os.path.join(tmp, "run1"))
             return dftbplus.run_restart(args[0], np.array(inp["run1_positions_angstrom"]),
                                         args[1], args[2],
-                                        text=bool(case.read_charges.get("text")), **kw)
+                                        text=bool(case.read_charges.get("text")),
+                                        run1_plain_skdir=plain, **kw)
         if not (case.klines or case.regions or case.dp_dos):
             return dftbplus.run(*args, **kw)
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1))
@@ -696,7 +702,7 @@ def regenerate(names=None, threads: int = 1):
             if isinstance(case.stress_fd, tuple):                       # M6f-3
                 doc["stress_fd"] += (f"; components {list(case.stress_fd)} only, the others "
                                      "DFTB+'s analytic stress")
-        if case.halogen and case.halogen.get("forces_fd"):            # M6f-3
+        if case.forces_fd or (case.halogen and case.halogen.get("forces_fd")):   # M6f-3
             doc["reference"]["forces_fd"] = forces_fd(case, inp, threads).tolist()
             doc["forces_fd"] = ("-dE_Mermin/dR of DFTB+ (results.tag mermin_energy), 4-point "
                                 f"central differences, h = {FD_STEP} Bohr")
@@ -878,6 +884,14 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         terms = [abs(getattr(res, k) - ref[k]) for k in ("e_fock", "e_3rd", "e_spin")
                  if k in ref]
         dev["e_terms"] = max([dev.get("e_terms", 0.0)] + terms)
+        if "forces_fd" in ref:                       # M6h-1b: DFTB+'s two-component gamma term
+            dev["forces"] = float(np.abs(res.forces - np.array(ref["forces_fd"])).max())
+            HybridTerms._dftbp_pauli_gamma = True
+            try:
+                compat = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, **backend)
+            finally:
+                HybridTerms._dftbp_pauli_gamma = False
+            dev["forces_dftbp"] = float(np.abs(compat.forces - np.array(ref["forces"])).max())
     if case.overrides:
         dev.update(_compare_fill(case, ref, res))
     if case.corrections:
@@ -960,7 +974,11 @@ def _compare_scc_start(case: Case, inp: dict, ref: dict, res, **run) -> dict:
     if case.read_charges is not None:
         inp1 = {k: v for k, v in inp.items() if k != "charges_file"}
         inp1["positions_angstrom"] = inp["run1_positions_angstrom"]
-        r1, calc = run_pydftb(case, inp1, engine=True, **run)
+        case1 = case
+        if case.read_charges.get("run1_skf_set"):         # M6h-1b: run 1 without the hybrid
+            case1 = dataclasses.replace(case, skf_set=case.read_charges["run1_skf_set"],
+                                        hybrid=None)
+        r1, calc = run_pydftb(case1, inp1, engine=True, **run)
         data = charge_file_data(inp, calc._charge_layout(inp["labels"])[0].norb_atom)
         dev["charges_file"] = float(np.abs(calc.populations_from_file(inp["labels"], data)
                                            - r1.q_in).max())

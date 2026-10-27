@@ -1,0 +1,226 @@
+{
+ "schema": 1,
+ "case": "h3_lc_noncolinear_120",
+ "note": "a non-collinear SCC solution: the spins stay at 120 degrees, and DeltaP's Pauli components have imaginary (antisymmetric) parts.  DFTB+'s forces are not the energy's derivative (1.1e-5 Ha/Bohr off): addCamGradientsMatrix_pauli takes the gamma term from the real parts of the components only (pauli2components); compared with differences of DFTB+'s energy, and with that term as DFTB+'s (HybridTerms._dftbp_pauli_gamma) with DFTB+'s forces",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   100.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "noncolinear": {
+   "initial_spins": [
+    [
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.8660254,
+     -0.5,
+     0.0
+    ],
+    [
+     0.8660254,
+     -0.5,
+     0.0
+    ]
+   ],
+   "spin_constants": {
+    "H": -0.072,
+    "C": [
+     [
+      -0.031,
+      -0.025
+     ],
+     [
+      -0.025,
+      -0.023
+     ]
+    ],
+    "O": [
+     [
+      -0.035,
+      -0.03
+     ],
+     [
+      -0.03,
+      -0.028
+     ]
+    ]
+   }
+  },
+  "spin_orbit": null,
+  "time_reversal": true,
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc",
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "H",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    8.838126989374225e-17,
+    1.4433756729740645,
+    0.0
+   ],
+   [
+    -1.25,
+    -0.7216878364870324,
+    0.0
+   ],
+   [
+    1.2499999999999998,
+    -0.7216878364870329,
+    0.0
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_rtv5exf5/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 100.0\n  }\n  SpinPolarisation = NonColinear {\n    InitialSpins {\n      AllAtomSpins = {\n        0.0 1.0 0.0\n        -0.8660254 -0.5 0.0\n        0.8660254 -0.5 0.0\n      }\n    }\n  }\n  SpinConstants {\n    ShellResolvedSpin = No\n    H = -0.072\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -0.9684505431,
+  "free_energy": -0.9684505431,
+  "e_zero": -0.9684505431,
+  "e_rep": 0.0,
+  "e_scc": 0.0,
+  "e_band": -0.7178324622,
+  "e_spin": -0.1071247549,
+  "e_fock": -0.143493326,
+  "fermi": -0.236437887596556,
+  "forces": [
+   [
+    -7.95186060552866e-17,
+    -0.00156330959693037,
+    -0.0
+   ],
+   [
+    0.00135386582473173,
+    0.000781654798466817,
+    -0.0
+   ],
+   [
+    -0.00135386582473165,
+    0.000781654798463552,
+    -0.0
+   ]
+  ],
+  "charges_net": [
+   1.55431223447522e-14,
+   -7.99360577730113e-15,
+   -7.54951656745106e-15
+  ],
+  "spins": [
+   [
+    -2.07612857569713e-15,
+    -0.862509077598048,
+    0.862509077598163
+   ],
+   [
+    0.995939696311385,
+    -0.497969848234214,
+    -0.497969848234014
+   ],
+   [
+    2.63433258168052e-14,
+    -2.01618480386106e-13,
+    1.7602323592168e-13
+   ]
+  ],
+  "n_scc": 11,
+  "scc_errors": [
+   0.49617924,
+   0.0065433354,
+   0.0058206214,
+   0.00011293151,
+   0.0001048315,
+   3.8348669e-07,
+   4.5347298e-10,
+   2.1005556e-12,
+   2.0755905e-12,
+   2.0533136e-12,
+   2.1156467e-13
+  ],
+  "forces_fd": [
+   [
+    8.585724723767876e-11,
+    -0.0015745843057191065,
+    -0.0
+   ],
+   [
+    0.0013636309764697427,
+    0.0007872940013808892,
+    -0.0
+   ],
+   [
+    -0.0013636308280699319,
+    0.0007872940680867894,
+    -0.0
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08,
+  "forces_dftbp": 1e-10
+ },
+ "forces_fd": "-dE_Mermin/dR of DFTB+ (results.tag mermin_energy), 4-point central differences, h = 0.0001 Bohr"
+}
