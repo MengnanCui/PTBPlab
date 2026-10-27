@@ -544,6 +544,16 @@ starts the worst successful loss from the loaded points, and in checkpoints writ
 M5b-2 the values exactly 97, 98 or 99 count as failures. Runs without failures are unchanged
 byte for byte. Details: `pydftb/docs/reports/M5b2-ptbp-followups.html`.
 
+**Datasets of several compositions (M5b-3).** Structures with different numbers of elements
+(H2O, OH, CH4 and H2 together) can share one dataset; such datasets used to stop at the start
+of every run. With one parameter set (`--shared-parameters`, or one element) the energygeometry
+loss accepts EOS groups of several elements (B2N2, N3Na): every element of a group gets the
+shared σ_rep, and the single-element plots are skipped. Note that the energygeometry Boltzmann
+weights still compare the DFT energy per atom across groups, so with several compositions only
+the lowest one keeps any weight; weighting each composition separately is being done in M5b-4.
+Runs that worked before are unchanged byte for byte. Details:
+`pydftb/docs/reports/M5b3-ptbp-fixes.html`.
+
 ### 5. `--postprocess_only`: skip the optimisation, redo just the plots
 
 After every successful run PTBP snapshots the optimisation outcome to

@@ -202,7 +202,7 @@
       <ul>
         <li><strong>旧路径的部分失败让运行停止</strong>（原有，见第二、三节）：现在 DFTB 阶段之后就是失败点，不再走到那一段；physrep 的 <code>raiseExceptions</code> 错误本身没有改（<code>tools/physrep.py</code>，写 SKF 时缺文件就会遇到）。</li>
         <li><strong>旧路径 energygeometry 不支持一个 EOS 组里有几个元素</strong>（原有，未改）：<code>parallel_repulsion</code> 只给 physrep 一个 σ，多元素的组在 physrep 处 <code>IndexError</code>。多元素 EOS 数据集加 <code>--shared-parameters</code> 在第一步就停止；按元素的默认（按类型的路径）可以。</li>
-        <li><strong><code>Loss.get_elements_from_dataset</code>（旧路径）在各结构的元素数不同时出错</strong>（原有，未改）：<code>np.array</code> 收到参差的列表，NumPy ≥ 1.24 拒绝。reaction 示例的 B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 都是两个元素，所以没有碰到；测试用 H<sub>2</sub>O、OH、CH<sub>4</sub>、CH。</li>
+        <li><strong><code>Loss.get_elements_from_dataset</code>（旧路径）在各结构的元素数不同时出错</strong>（原有，未改）：<code>np.array</code> 收到参差的列表，NumPy ≥ 1.24 拒绝。reaction 示例的 B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 都是两个元素，所以没有碰到；测试用 H<sub>2</sub>O、OH、CH<sub>4</sub>、CH。<em>后注（M5b-3）：</em>范围比这里写的大，<code>cli/run.py</code> 对每个运行都调用它，所以这样的数据集在任何参数布局下都在开始时停止；M5b-3 已修正（<a href="M5b3-ptbp-fixes.html">M5b-3 报告</a>）。</li>
         <li><strong>M5b 报告的一处说法</strong>：“所有结构都缺 SKF 时旧路径在 <code>int('')</code> 处崩溃”不对，实测得到 97–99（第三节）。</li>
         <li><strong>BO 结束时的作图错误</strong>（原有，M5b 第六节）：基础与本分支的 <code>--optimizer bo</code> 运行都在写完 <code>convergence.png</code> 之后因 <code>eval[0][0]</code> 停下。</li>
         <li><strong>演示中发现并修正（本分支自己的错误）</strong>：第一次按元素的演示运行时，<code>failed_evaluations</code> 写进了失败那一步的目录（<code>results/opt_…/checkpoint.pkl.meta.json</code>），因为 <code>--checkpoint</code> 是相对路径，而每次求值都进入自己的目录（M5b 对 par.out 记下的同一现象）。现在 BO 开始时（当前目录还是运行文件夹）就取绝对路径；测试中的替身损失也像 <code>EnergyGeometry</code> 一样进入步的目录，修正前的代码在这个测试上失败。修正之后重跑了 G1、共用参数的 reaction 运行、按元素的演示与全部测试（第七节的数字都是修正后的）；单元素 Cu 的演示本来就在修正之后运行。</li>
