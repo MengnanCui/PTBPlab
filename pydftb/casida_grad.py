@@ -26,6 +26,18 @@ partner with the spin signs.  Unlike DFTB+, the Z-vector runs over all occupied-
 
 The gradient (DFTB+ addGradients) is assembled by the calculator from :func:`pair_terms` (the
 coefficients of dH0 and dS at its pair elements) and the gamma-derivative and external terms.
+
+TD-LC (milestone M6h-2): the long-range exchange adds, with the Mulliken exchange operator
+K^x (:func:`pydftb.hybrid.four_terms`), R = C_o (X+Y) C_v^T, L = C_o (X-Y) C_v^T and
+q+ = C^T K^x[R_s] C, q- = C^T K^x[L_a] C (s, a: symmetric and antisymmetric parts), the orbital
+gradient of Omega's exchange -<R_s, K^x R_s> - <L_a, K^x L_a> (X = X+Y, Y = X-Y):
+
+    G_oo = -2 (q+_ov X^T + q-_ov Y^T),   G_vo = -2 (q+_vv X^T + q-_vv Y^T)
+    G_ov = -2 (q+_oo X - q-_oo Y),        G_vv = -2 (q+_ov^T X + q-_ov^T Y)
+
+(rhs += G_ov - G_vo^T, W_ov += G_ov, W_oo and W_vv += the symmetric parts of G_oo, G_vv); the
+ground state's exchange response -2 K^x[M] to T and Z_s (rhs, W_oo; the exchange in A+B); and
+the explicit derivatives of :func:`exchange_terms` through S and gamma_lr.
 """
 from __future__ import annotations
 
@@ -35,8 +47,9 @@ import numpy as np
 import scipy.linalg as sla
 
 from .backend import ops
-from .casida import EXACT_LIMIT, GroundState, transition_charges
+from .casida import EXACT_LIMIT, GroundState, _Exchange, transition_charges
 from .constants import ELEC_TOL_MAX
+from .hybrid import four_terms
 
 Z_RTOL = 1e-14              # Z-vector: |(A+B) Z - R| <= Z_RTOL |R| (conjugate gradients)
 DEGENERATE = 1e-6           # Hartree: orbitals this close count as degenerate (window terms)
@@ -50,7 +63,8 @@ class Relaxed:
     the energy-weighted matrix in the gradient convention (its term is -sum_mu,nu W dS) and
     C (X+Y + (X+Y)^T) C^T; ``dqex`` (n_chan, n_atom) the Mulliken populations of P (excess
     electrons of the excited state per atom and channel); ``xi`` = q[X+Y] summed over the
-    channels and ``xi_ds`` their spin difference (spin polarised only)."""
+    channels and ``xi_ds`` their spin difference (spin polarised only); with TD-LC (M6h-2)
+    ``xmy_ao`` = C (X-Y - (X-Y)^T) C^T per channel."""
     omega: float
     sym: str                        # "S", "T" or " " (spin polarised)
     p_ao: list
@@ -60,6 +74,7 @@ class Relaxed:
     xi: np.ndarray
     xi_ds: np.ndarray | None
     z_iterations: int               # conjugate-gradient iterations (0: dense solve)
+    xmy_ao: list | None = None
 
     @property
     def dqex_total(self) -> np.ndarray:
@@ -117,7 +132,8 @@ def _v_ov(gs: GroundState, ch: _Channel, g_atom) -> np.ndarray:
 
 class _APlusB:
     """The singlet A+B on all occupied-virtual pairs of the channels: w Y + pref V[gamma q[Y]]
-    (+ pref s V[W q_s[Y]] with spin polarisation), pref = 4 (closed shell) or 2."""
+    (+ pref s V[W q_s[Y]] with spin polarisation), pref = 4 (closed shell) or 2; with TD-LC
+    (M6h-2) also the exchange -[(ij|ab) + (ib|ja)] Y."""
 
     def __init__(self, gs: GroundState, chans: list):
         self.gs, self.chans = gs, chans
@@ -125,6 +141,9 @@ class _APlusB:
         self.pref = 2.0 if self.spin else 4.0
         self.sizes = [ch.n_o * ch.n_v for ch in chans]
         self.w = np.concatenate([ch.w.ravel() for ch in chans])
+        self.exchange = None
+        if gs.lr_gamma is not None:
+            self.exchange = _Exchange(gs, self._pairs(), np.ones(len(self.w)))
 
     def split(self, y):
         out, start = [], 0
@@ -149,15 +168,22 @@ class _APlusB:
             if self.spin:
                 v = v + self.pref * ch.sigma * _v_ov(gs, ch, gs.spin_w * qds)
             out.append((ch.w * yy + v).ravel())
-        return np.concatenate(out)
+        out = np.concatenate(out)
+        if self.exchange is not None:
+            out = out + self.exchange.product(y, 1.0)
+        return out
 
-    def _transition_charges(self, chunk=None):
-        """q^ia_A of all pairs (n_pair, n_atom), in the order of the flat vectors."""
+    def _pairs(self) -> np.ndarray:
+        """(i, a, spin) of all pairs (orbital indices), in the order of the flat vectors."""
         pairs = []
         for s, ch in enumerate(self.chans):
             i, a = np.divmod(np.arange(ch.n_o * ch.n_v), ch.n_v)
             pairs.append(np.stack([i, a + ch.n_o, np.full(len(i), s)], axis=1))
-        pairs = np.concatenate(pairs)
+        return np.concatenate(pairs)
+
+    def _transition_charges(self, chunk=None):
+        """q^ia_A of all pairs (n_pair, n_atom), in the order of the flat vectors."""
+        pairs = self._pairs()
         if chunk is None:
             return transition_charges(self.gs, pairs)
         return (transition_charges(self.gs, pairs[k:k + chunk])
@@ -171,6 +197,9 @@ class _APlusB:
             sigma = np.concatenate([np.full(n, ch.sigma) for ch, n in zip(self.chans, self.sizes)])
             m += self.pref * np.outer(sigma, sigma) * ((q * gs.spin_w) @ q.T)
         m[np.diag_indices_from(m)] += self.w
+        if self.exchange is not None:
+            kd, kx = self.exchange.dense()
+            m = m - (kd + kx)
         return 0.5 * (m + m.T)
 
     def diagonal(self, chunk: int = 4096) -> np.ndarray:
@@ -182,6 +211,8 @@ class _APlusB:
             if self.spin:
                 d = d + self.pref * ((q * q) * gs.spin_w).sum(axis=1)
             parts.append(d)
+        if self.exchange is not None:
+            return np.concatenate(parts) + self.w + self.exchange.diagonal()
         return np.concatenate(parts) + self.w
 
     def solve(self, rhs):
@@ -263,6 +294,11 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
     # through gamma or W): Omega = sum T F + (c/2) xi.g.xi, c = 4 (closed shell) or 2
     xi, xi_ds = apb.charges(xp)
     ck = 2.0 if spin else 4.0
+    lc = apb.exchange is not None
+    if lc:                       # TD-LC (M6h-2): K^x, q+ = C^T K^x[R_s] C, q- = C^T K^x[L_a] C
+        s_ao, go = gs.overlap, apb.exchange.go
+        kx = lambda m: 0.25 * four_terms(s_ao, go, m)          # noqa: E731
+        qps, qms = [], []
     t, vk = [], []
     for ch, p, m in zip(chans, xp, xm):
         tm = np.zeros((ch.n_o + ch.n_v,) * 2)
@@ -273,6 +309,10 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
             vk.append(_v_mo(gs, ch, gamma @ xi) + ch.sigma * _v_mo(gs, ch, gs.spin_w * xi_ds))
         else:
             vk.append(_v_mo(gs, ch, kernel(xi)))
+        if lc:
+            r, l_ = ch.c_o @ p @ ch.c_v.T, ch.c_o @ m @ ch.c_v.T
+            qps.append(ch.c.T @ kx(0.5 * (r + r.T)) @ ch.c)
+            qms.append(ch.c.T @ kx(0.5 * (l_ - l_.T)) @ ch.c)
     windowed = len(x.pairs) < sum(apb.sizes)
     if windowed and not window_only:
         # with an energy window Omega is not invariant under rotations among the occupied
@@ -283,7 +323,7 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
 
     # the kernel terms of the right-hand side and of W, and the rest of W without the response
     rhs, w_ov, w_oo, w_vv = [], [], [], []
-    for ch, tt, v, p, m in zip(chans, t, vk, xp, xm):
+    for k_ch, (ch, tt, v, p, m) in enumerate(zip(chans, t, vk, xp, xm)):
         n_o = ch.n_o
         v_oo, v_ov, v_vv = v[:n_o, :n_o], v[:n_o, n_o:], v[n_o:, n_o:]
         rhs.append(-ck * p @ v_vv + ck * v_oo @ p)
@@ -303,6 +343,16 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
         w_oo.append(ch.e_o[:, None] * t_oo + t_oo * ch.e_o[None, :] + 0.5 * ck * (g + g.T))
         g = v_ov.T @ p
         w_vv.append(ch.e_v[:, None] * t_vv + t_vv * ch.e_v[None, :] + 0.5 * ck * (g + g.T))
+        if lc:                   # the exchange's orbital gradient (module docstring)
+            qp, qm = qps[k_ch], qms[k_ch]
+            g_oo = -2.0 * (qp[:n_o, n_o:] @ p.T + qm[:n_o, n_o:] @ m.T)
+            g_vo = -2.0 * (qp[n_o:, n_o:] @ p.T + qm[n_o:, n_o:] @ m.T)
+            g_ov = -2.0 * (qp[:n_o, :n_o] @ p - qm[:n_o, :n_o] @ m)
+            g_vv = -2.0 * (qp[:n_o, n_o:].T @ p + qm[:n_o, n_o:].T @ m)
+            rhs[-1] = rhs[-1] + g_ov - g_vo.T
+            w_ov[-1] = w_ov[-1] + g_ov
+            w_oo[-1] = w_oo[-1] + 0.5 * (g_oo + g_oo.T)
+            w_vv[-1] = w_vv[-1] + 0.5 * (g_vv + g_vv.T)
 
     # the ground state's response to T (H+[T], always with gamma)
     q_t = [mulliken(gs, ch.c @ tt @ ch.c.T) for ch, tt in zip(chans, t)]
@@ -314,6 +364,10 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
             v = v + ch.sigma * _v_mo(gs, ch, gs.spin_w * qt_ds)
         rhs[s] = rhs[s] - (pref * v[:ch.n_o, ch.n_o:])
         w_oo[s] = w_oo[s] + pref * v[:ch.n_o, :ch.n_o]
+        if lc:                   # and its exchange response -2 K^x[T]
+            kt = ch.c.T @ kx(ch.c @ t[s] @ ch.c.T) @ ch.c
+            rhs[s] = rhs[s] + 2.0 * kt[:ch.n_o, ch.n_o:]
+            w_oo[s] = w_oo[s] - 2.0 * kt[:ch.n_o, :ch.n_o]
 
     # Z-vector
     r = np.concatenate([v.ravel() for v in rhs])
@@ -324,11 +378,15 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
     zs = apb.split(z)
     qz, qz_ds = apb.charges(zs)
     p_ao, w_ao, xpy_ao, dqex = [], [], [], []
+    xmy_ao = [] if lc else None
     for s, (ch, zz) in enumerate(zip(chans, zs)):
         v = _v_mo(gs, ch, gamma @ qz)
         if spin:
             v = v + ch.sigma * _v_mo(gs, ch, gs.spin_w * qz_ds)
         woo = w_oo[s] + pref * v[:ch.n_o, :ch.n_o]
+        if lc:                   # the exchange response -2 K^x[Z_s]
+            zao = ch.c_o @ zz @ ch.c_v.T
+            woo = woo - 2.0 * (ch.c_o.T @ kx(0.5 * (zao + zao.T)) @ ch.c_o)
         wov = w_ov[s] + zz * ch.e_o[:, None]
         n = ch.n_o + ch.n_v
         wm = np.zeros((n, n))
@@ -345,7 +403,24 @@ def relax(gs: GroundState, x, state: int, window_only: bool = False) -> Relaxed:
         w_ao.append(0.5 * (ch.c @ wm @ ch.c.T))          # DFTB+ wcc / 2: the -sum W dS form
         xpy_ao.append(ch.c @ (xm_full + xm_full.T) @ ch.c.T)
         dqex.append(mulliken(gs, p_ao[-1]))
-    return Relaxed(omega, sym, p_ao, w_ao, xpy_ao, np.array(dqex), xi, xi_ds, n_it)
+        if lc:
+            ym = np.zeros((n, n))
+            ym[:ch.n_o, ch.n_o:] = xm[s]
+            xmy_ao.append(ch.c @ (ym - ym.T) @ ch.c.T)
+    return Relaxed(omega, sym, p_ao, w_ao, xpy_ao, np.array(dqex), xi, xi_ds, n_it, xmy_ao)
+
+
+def exchange_terms(rel: Relaxed, dps) -> list:
+    """The explicit exchange terms of dOmega/dR for TD-LC (M6h-2), as [(c, M1, M2)] for
+    :meth:`pydftb.hybrid.HybridTerms.exchange_force`: -1/2 B(P, DeltaP) (closed shell, both
+    total; -B(P_s, DeltaP_s) per spin channel with spin polarisation), -B(R_s, R_s) and
+    -B(L_a, L_a) with R_s = xpy_ao / 2 and L_a = xmy_ao / 2.  ``dps``: the ground state's
+    DeltaP_out per channel."""
+    half = 0.5 if len(rel.p_ao) == 1 else 1.0
+    out = []
+    for p, dp, xp, xm in zip(rel.p_ao, dps, rel.xpy_ao, rel.xmy_ao):
+        out += [(-half, p, dp), (-0.25, xp, xp), (-0.25, xm, xm)]
+    return out
 
 
 def _canonical_multipliers(ch: _Channel, t, v, xp, ck: float) -> np.ndarray:

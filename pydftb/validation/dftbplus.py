@@ -543,9 +543,14 @@ def mixer_block(spec) -> str:
 
 def spin_constants_block(consts, labels=None) -> str:
     """HSD ``SpinConstants`` alone (one W per type, ``ShellResolvedSpin = No``): triplet
-    excitations of a spin-restricted ground state (M6d)."""
+    excitations of a spin-restricted ground state (M6d).  A shell matrix is refused: DFTB+'s
+    response uses the HOAO shell's value, which one number per type cannot carry (M6h-2)."""
     if not consts:
         return ""
+    for k, v in consts.items():
+        if np.size(v) != 1:
+            raise ValueError(f"spin_constants_block: one W per type, not a shell matrix ({k!r}); "
+                             "give the HOAO shell's value")
     lines = ["  SpinConstants {", "    ShellResolvedSpin = No"]
     lines += [f"    {k} = {_f(float(np.ravel(v)[0]))}" for k, v in consts.items()
               if labels is None or k in labels]

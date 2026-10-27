@@ -1,0 +1,322 @@
+{
+ "schema": 1,
+ "case": "h2o_tdlc",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "casida": {
+   "n": 6,
+   "symmetry": "singlet",
+   "solver": "Stratmann"
+  },
+  "charge": 0.0,
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc"
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_5cwuy3pd/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  WriteAutotestTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\nExcitedState {\n  Casida {\n    NrOfExcitations = 6\n    Symmetry = singlet\n    StateOfInterest = 0\n    Diagonaliser = Stratmann {}\n    WriteTransitions = Yes\n    WriteSPTransitions = Yes\n    WriteTransitionDipole = Yes\n    ExcitedStateForces = No\n  }\n}\n",
+ "reference": {
+  "energy": -4.0178145848,
+  "free_energy": -4.0178145848,
+  "e_zero": -4.0178145848,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0194037558,
+  "e_band": -3.9700715331,
+  "e_fock": -0.1062019615,
+  "fermi": -0.0914100330646904,
+  "forces": [
+   [
+    0.00396413305844027,
+    0.0819770669815935,
+    0.105091204847166
+   ],
+   [
+    -0.00343825014731746,
+    0.0140471956975142,
+    -0.023276710780059
+   ],
+   [
+    -0.000525882911122806,
+    -0.0960242626791077,
+    -0.081814494067107
+   ]
+  ],
+  "charges_net": [
+   -0.472726784782527,
+   0.193933254946121,
+   0.278793529836405
+  ],
+  "exc_energies": [
+   0.226394122643778,
+   0.2824448853567153,
+   0.3575766446760546,
+   0.37631785714541643,
+   0.41386865953108704,
+   0.5222593789007686
+  ],
+  "exc_symmetries": [
+   "S",
+   "S",
+   "S",
+   "S",
+   "S",
+   "S"
+  ],
+  "exc_rows": [
+   [
+    6.16,
+    0.0,
+    4,
+    5,
+    1.0,
+    11.629,
+    "S"
+   ],
+   [
+    7.686,
+    0.00436954,
+    3,
+    5,
+    0.919,
+    12.675,
+    "S"
+   ],
+   [
+    9.73,
+    0.0,
+    4,
+    6,
+    1.0,
+    15.231,
+    "S"
+   ],
+   [
+    10.24,
+    0.45944211,
+    2,
+    5,
+    0.948,
+    13.443,
+    "S"
+   ],
+   [
+    11.262,
+    0.00540348,
+    3,
+    6,
+    0.936,
+    16.277,
+    "S"
+   ],
+   [
+    14.211,
+    0.31835583,
+    2,
+    6,
+    0.96,
+    17.045,
+    "S"
+   ]
+  ],
+  "spx_rows": [
+   [
+    11.629,
+    0.0,
+    4,
+    5,
+    ""
+   ],
+   [
+    12.675,
+    0.1331089,
+    3,
+    5,
+    ""
+   ],
+   [
+    13.443,
+    0.22374,
+    2,
+    5,
+    ""
+   ],
+   [
+    15.231,
+    0.0,
+    4,
+    6,
+    ""
+   ],
+   [
+    16.277,
+    0.1364414,
+    3,
+    6,
+    ""
+   ],
+   [
+    17.045,
+    0.2113195,
+    2,
+    6,
+    ""
+   ],
+   [
+    24.043,
+    0.071592,
+    1,
+    5,
+    ""
+   ],
+   [
+    27.645,
+    0.1126243,
+    1,
+    6,
+    ""
+   ]
+  ],
+  "n_scc": 17,
+  "scc_errors": [
+   0.68725821,
+   0.52335314,
+   0.25729153,
+   0.070463196,
+   0.018771084,
+   0.0045658233,
+   0.00048423103,
+   0.00038372374,
+   9.9016934e-05,
+   1.501555e-05,
+   2.0522326e-05,
+   1.4969488e-06,
+   5.4702639e-07,
+   1.2979552e-08,
+   7.124793e-10,
+   5.1450633e-10,
+   5.5150884e-12
+  ],
+  "exc_tags": {
+   "omega2": [
+    0.0512542987679804,
+    0.079775113264428,
+    0.127861056818327,
+    0.141615129605394,
+    0.171287267338245,
+    0.272754858841396
+   ],
+   "oscillator": [
+    2.79111539227573e-32,
+    0.00436954221737028,
+    1.59094776205771e-30,
+    0.459442112376401,
+    0.00540348337947994,
+    0.318355825392066
+   ],
+   "transdip": [
+    4.3003316586087e-16,
+    0.152333963539007,
+    2.58338430720183e-15,
+    1.3532673879998,
+    0.139943028848079,
+    0.956222384801214
+   ]
+  }
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08,
+  "exc": 1e-08,
+  "exc_osc": 1e-07,
+  "exc_tdip": 1e-07,
+  "exc_table": 0,
+  "spx": 0,
+  "exc_state": 1e-09,
+  "exc_charges": 1e-07,
+  "exc_dipole": 1e-07,
+  "forces_dftbp": 1e-10
+ }
+}

@@ -1967,4 +1967,108 @@ CASES += [
               "(the SK files without RangeSep) writes the populations, run 2 starts from them "
               "with DeltaP_in = 0"),
 ]
+
+
+# M6h-2: TD-LC, Casida with the long-range exchange (DFTB+ needs its Stratmann solver).  One spin
+# constant per type, the HOAO values of W_HCO's shell matrices: a restricted triplet's HSD has one W
+# per type (dftbplus.spin_constants_block), and excited-state forces need one per type (M6e).
+# DFTB+'s Stratmann solver converges the squared residuals to 1.2e-8: exact where its subspace
+# (20 x the states) holds every transition, ~1e-9 in Omega^2 beyond (benzene, naphthalene).
+W_HOAO = {"H": -0.072, "C": -0.023, "O": -0.028}
+TDLC = {"n": 6, "symmetry": "singlet", "solver": "Stratmann"}
+TDLC_EXC = {**TDLC, "state": 2, "excited_forces": True}
+TOL_TDLC = {**TOL_HYB, "exc": 1e-8, "exc_osc": 1e-7, "exc_tdip": 1e-7, "exc_table": 0, "spx": 0,
+            "exc_state": 1e-9, "exc_charges": 1e-7, "exc_dipole": 1e-7, "forces_dftbp": 1e-10}
+TDLC_CASE = {**LC, "tol": TOL_TDLC}
+TOL_TDLC_STRATMANN = {**TOL_TDLC, "exc": 3e-8, "exc_osc": 3e-6, "exc_tdip": 3e-4,
+                      "exc_state": 3e-8, "exc_table": 10, "forces": 3e-6, "exc_charges": 1e-6,
+                      "exc_dipole": 1e-5}
+
+
+def _naphthalene():
+    """Naphthalene (rattled): 576 transitions, so pydftb's Stratmann iteration ("auto" beyond
+    500) and the Z vector's conjugate gradients.  Seed 37: every atom pair at least 3e-4 Bohr
+    from a point of the SK grid (0.02 Bohr), so DFTB+'s difference step (2^-13 Bohr) and the
+    tests' differences stay on one interpolation polynomial (seed 5 put a C-C pair 7.5e-5 from
+    one: DFTB+'s forces 3e-5 off there)."""
+    c = [(0, 0.70), (0, -0.70), (1.2124, 1.40), (2.4249, 0.70), (2.4249, -0.70),
+         (1.2124, -1.40), (-1.2124, -1.40), (-2.4249, -0.70), (-2.4249, 0.70), (-1.2124, 1.40)]
+    h = [(1.2124, 2.49), (3.369, 1.245), (3.369, -1.245), (1.2124, -2.49), (-1.2124, -2.49),
+         (-3.369, -1.245), (-3.369, 1.245), (-1.2124, 2.49)]
+    a = Atoms("C10H8", positions=[(x, y, 0.0) for x, y in c + h])
+    a.rattle(0.02, seed=37)
+    return a
+
+
+CASES += [
+    # excitations
+    Case("h2o_tdlc", _water, **TDLC_CASE, casida=TDLC),
+    Case("h2co_tdlc", _h2co, **TDLC_CASE, casida={**TDLC, "n": 8}),
+    Case("h2co_tdlc_triplet", _h2co, **TDLC_CASE,
+         casida={**TDLC, "symmetry": "triplet", "spin_constants": W_HOAO},
+         note="the same exchange in A+B and A-B as the singlets (DFTB+ warns: not well tested)"),
+    Case("h2co_tdlc_both", _h2co, **TDLC_CASE,
+         casida={**TDLC, "n": 4, "symmetry": "both", "spin_constants": W_HOAO}),
+    Case("ch3oh_tdlc", _meoh, **TDLC_CASE, casida={**TDLC, "n": 12}),
+    Case("h2co_cation_tdlc", _h2co, **TDLC_CASE, charge=1.0,
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO},
+         casida={**TDLC, "symmetry": None},
+         note="spin polarised: the exchange within each spin channel only"),
+    Case("o2_tdlc", _o2, **TDLC_CASE, spin={"unpaired_electrons": 2.0, "spin_constants": W_HCO},
+         casida={**TDLC, "symmetry": None}, note="spin-polarised triplet, degenerate states"),
+    Case("cuh_tdlc", _cuh, **TDLC_CASE, casida=TDLC, note="Cu d orbitals"),
+    Case("c2h4_tdlc_bright", _c2h4, **TDLC_CASE, casida={**TDLC, "state": -1}),
+    Case("ch3oh_tdlc_cam_keyword", _meoh, **{**TDLC_CASE, "hybrid": "cam"}, casida=TDLC,
+         note="Hybrid = CAM with LC files: DFTB+ takes the type from the files, TD-LC runs"),
+    Case("h2co_tdlc_transq", _h2co, **{**TDLC_CASE, "tol": {**TOL_TDLC, **TOL_TRANSQ}},
+         casida={**TDLC, "state": 2, "transition_charges": True}),
+    Case("c6h6_tdlc", _c6h6_rattled, **{**TDLC_CASE, "tol": TOL_TDLC_STRATMANN},
+         casida={**TDLC, "n": 8},
+         note="225 transitions: DFTB+'s Stratmann subspace (160) does not hold them all, its "
+              "Omega^2 are 1.8e-9 and its oscillator strengths 2.3e-7 off (EXC.DAT's 8 "
+              "decimals: some printed values differ)"),
+    # excited-state forces and charges (Z vector with the exchange)
+    Case("h2co_tdlc_exc_forces", _h2co, **TDLC_CASE, casida=TDLC_EXC),
+    Case("h2co_tdlc_exc_forces_triplet", _h2co, **TDLC_CASE,
+         casida={**TDLC_EXC, "symmetry": "triplet", "spin_constants": W_HOAO}),
+    Case("h2co_cation_tdlc_exc_forces", _h2co, **TDLC_CASE, charge=1.0,
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HOAO},
+         casida={**TDLC_EXC, "symmetry": None},
+         note="one W per type: with W_HCO's shell matrices DFTB+'s forces are 2.6e-4 off "
+              "(pydftb refuses, M6e)"),
+    Case("c2h4_tdlc_exc_forces_s1", _c2h4, **TDLC_CASE, casida={**TDLC_EXC, "state": 1}),
+    Case("h2co_tdlc_exc_forces_s1", _h2co, **TDLC_CASE, casida={**TDLC_EXC, "n": 4, "state": 1},
+         note="first singlet (n -> pi*); the base of the TD-LC S1 optimisation"),
+    Case("ch3oh_tdlc_exc_forces", _meoh, **TDLC_CASE, casida={**TDLC_EXC, "n": 8, "state": 3}),
+    Case("h2co_tdlc_exc_charges", _h2co, **TDLC_CASE,
+         casida={**TDLC_EXC, "state": 4, "excited_forces": False, "excited_charges": True}),
+    Case("h2co_tdlc_exc_forces_field_pc", _h2co,
+         **{**TDLC_CASE, "tol": {**TOL_TDLC, **TOL_ENV, "forces": 1e-8, "forces_dftbp": 1e-10,
+                                 "n_scc": 1}},
+         efield=FIELD, point_charges=PC3, scc_tol=1e-12,
+         casida={**TDLC_EXC, "forces_fd": True, "compat": ["external"]},
+         note="DFTB+'s TD-LC forces are 3.0e-3 off with a field and point charges (the terms "
+              "M6e found missing): compared with differences of DFTB+'s E0 + w, and pydftb "
+              "leaving out what DFTB+ leaves out with DFTB+'s forces.  SCC tolerance 1e-12 (the "
+              "differences): the codes stop one iteration apart (30 and 31) at round-off"),
+    Case("h2co_tdlc_exc_forces_threshold", _h2co,
+         **{**TDLC_CASE, "hybrid": {"type": "lc", "screening": "threshold"},
+            "tol": {**TOL_TDLC, "scc_errors": 1.0}}, casida=TDLC_EXC,
+         note="as DFTB+: the TD part unscreened; neither code's forces are the derivative of "
+              "E0 + w (the thresholded ground state's own forces are 1.4e-3 off its energy's "
+              "differences).  The SCC tail's errors differ (screening decisions flip with "
+              "rounding, as c6h6_lc_threshold), not the iterations or the result"),
+    Case("c6h6_tdlc_exc_forces_neighbour", _c6h6_rattled,
+         **{**TDLC_CASE, "hybrid": {"type": "lc", "screening": "neighbour",
+                                    "cutoff_reduction": 10.0},
+            "tol": TOL_TDLC_STRATMANN}, casida=TDLC_EXC,
+         note="the meta and para C-H and H-H pairs out of the ground state's exchange; as "
+              "DFTB+ (both 4.8e-5 off the differences of E0 + w); DFTB+'s Stratmann accuracy "
+              "on 225 transitions limits the comparison to 1e-7"),
+    Case("naphthalene_tdlc_exc_forces", _naphthalene,
+         **{**TDLC_CASE, "tol": TOL_TDLC_STRATMANN}, casida={**TDLC_EXC, "n": 8, "state": 1},
+         note="576 transitions: pydftb's Stratmann iteration and conjugate gradients; DFTB+'s "
+              "Stratmann leaves its Omega 1e-8 and its forces 6.6e-7 off (its forces against "
+              "the differences of its own E0 + w; pydftb's 1.1e-9)"),
+]
 CASES_BY_NAME = {c.name: c for c in CASES}

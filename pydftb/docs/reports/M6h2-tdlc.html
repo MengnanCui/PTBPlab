@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-2 TD-LC 报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6h-2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-2 · 完成报告</p>
+    <h1>长程校正（二）：TD-LC 激发态</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-27</dd></div>
+      <div><dt>提交</dt><dd><code>（待填）</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6h2-tdlc.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6d/M6e 的 Casida 激发与激发态力加上 M6h-1 的长程校正（LC）交换，即 DFTB+ 25.1 的 TD-LC-DFTB。DFTB+ 支持的范围全部做了：LC 型的 SK 文件、分子、整数占据；单重态、三重态、两者、自旋极化；激发能、振子强度、跃迁偶极、Δ⟨S²⟩、跃迁电荷、激发态的电荷与偶极、激发态力。基态可以用三种屏蔽中的任何一种，也可以加外场与点电荷；激发态的结构优化与 MD 都能用。求解器有两个：稠密的对称化精确解，以及 Stratmann 子空间迭代。只有 NumPy 引擎；不开杂化时结果逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：23 个参考算例与 2 条动力学参考全部通过。
+        <ul>
+          <li>小分子：DFTB+ 的 Stratmann 子空间能装下全部跃迁，结果精确。基态用 MatrixBased 时，激发能之差 ≤ 1.5e-11 Ha，振子强度 ≤ 7.2e-14；激发态力用 DFTB+ 的 SK 差分步长比较，差 ≤ 1.4e-12 Ha/Bohr，覆盖单重态 S1–S3、三重态、自旋极化。Thresholded 的算例差 1.0e-10 与 6.4e-11：基态的屏蔽决定随舍入翻转。</li>
+          <li>苯与萘：差别来自 DFTB+ Stratmann 的收敛阈值（残差平方 1.2e-8）。萘的 8 个激发能差 ≤ 1.0e-8 Ha（S1 3.1e-9），S1 的力差 6.5e-7 Ha/Bohr；pydftb 的力与它自己 E0 + Ω 的差分一致到 1.1e-9，DFTB+ 只到 6.6e-7。</li>
+          <li>动力学：H<sub>2</sub>CO 的 S1 结构优化（分子变成锥形）与 S2 的 20 步 MD 都与 DFTB+ 一致，能量差 ≤ 1.1e-8 Ha，位置差 ≤ 7.0e-7 Å；MD 每一步的 SCC 轮数都相同。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 25.1 的情况</strong>（第五节）：
+        <ul>
+          <li>外场加点电荷时，TD-LC 激发态力偏 3.0e-3 Ha/Bohr，漏的是 M6e 已发现的那几项。pydftb 给出精确的导数；兼容模式复现 DFTB+ 的力，差 9.2e-13。</li>
+          <li>自旋极化且自旋常数是壳层矩阵时，DFTB+ 的力偏 2.6e-4，pydftb 照 M6e 拒绝。</li>
+          <li>屏蔽：TD 部分用不屏蔽的交换，力不是 E0 + Ω 的导数。根源在基态：Thresholded 的基态力本身就偏 1.4e-3。pydftb 照 DFTB+ 的写法给出相同的力。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>（与 DFTB+ 相同）：
+        <ul>
+          <li>CAM 与全局杂化的 TD、能量或振子窗口、onsite 修正、分数占据、周期体系。</li>
+          <li>pydftb 的 ARPACK 求解器只解 Hermite 形式，TD-LC 时拒绝。</li>
+        </ul>
+      </li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">23 + 2</span><span class="lbl">新的 DFTB+ 参考算例与动力学参考，全部通过</span></li>
+      <li><span class="num">≤ 1.5e-11</span><span class="lbl">与 DFTB+ 25.1 的激发能之差（Ha，小分子，MatrixBased）</span></li>
+      <li><span class="num">≤ 1.4e-12</span><span class="lbl">与 DFTB+ 的激发态力之差（Ha/Bohr，小分子，MatrixBased）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的问题</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>hybrid.py</code></td><td>
+              <ul>
+                <li>四项算子改为模块函数 <code>four_terms(s, g, d)</code>；<code>HybridTerms._four_terms</code> 调用它，运算相同，基态结果逐位不变。</li>
+                <li><code>bilinear_ds</code>、<code>bilinear_dg</code>：B(M<sub>1</sub>, M<sub>2</sub>) = ⟨M<sub>1</sub>, K<sup>x</sup>[M<sub>2</sub>]⟩ 对 S 与 Γ 的导数，M 可以不对称。</li>
+                <li><code>HybridTerms.exchange_force(terms, pairs)</code>：对一组 (c, M<sub>1</sub>, M<sub>2</sub>) 求和，返回成对元素上的 dS 系数和 γ 部分的梯度。γ 部分与基态共用 <code>_gamma_force</code>（从 <code>gamma_gradient</code> 中分出）。</li>
+              </ul></td></tr>
+            <tr><td><code>casida.py</code></td><td>
+              <ul>
+                <li><code>GroundState.lr_gamma</code>：原子级的 γ<sup>lr</sup>，不开杂化时为 None。</li>
+                <li><code>_Exchange</code>：
+                  <ul>
+                    <li>稠密的 (ij|ab) 与 (ib|ja) 用任意轨道对的 Mulliken 跃迁电荷各做一次 GEMM；</li>
+                    <li>对角 −[(ii|aa) + (ia|ia)]；</li>
+                    <li>对向量的乘积用 AO 的 <code>four_terms</code>（−2 C<sub>o</sub><sup>T</sup>K<sup>x</sup>[Y<sub>s/a</sub>]C<sub>v</sub>）。</li>
+                  </ul></li>
+                <li><code>_symmetric_rpa</code>：(A−B)<sup>½</sup>(A+B)(A−B)<sup>½</sup> 的本征问题，返回 Ω²、X+Y、X−Y；A−B 不正定时报基态不稳定。</li>
+                <li><code>HybridResponse</code>：
+                  <ul>
+                    <li>A±B 的稠密矩阵与不建矩阵的乘积；</li>
+                    <li><code>solve</code>：<code>"exact"</code>、<code>"davidson"</code>（Stratmann）、<code>"auto"</code>（≤ 500 个跃迁用前者）；<code>"arpack"</code> 拒绝；</li>
+                    <li><code>stratmann</code>：多跟踪几个态，免得边缘的简并组被切开；子空间满了就从 X+Y、X−Y 重新开始；新方向用完且子空间已是全空间时返回精确解。</li>
+                  </ul></li>
+                <li><code>_check_tdlc</code>：窗口、onsite、分数占据，报错用 DFTB+ 的原话。</li>
+                <li><code>excitations</code>：<code>lr_gamma</code> 不为 None 时走 TD-LC。<code>_properties</code> 接收现成的 X±Y；原来的路径不变，算 X±Y 的表达式只是挪到调用处。</li>
+                <li>另加 <code>Response.kernel_product</code>：库仑与自旋耦合核对向量的乘积（不含前因子与 onsite 项），供 A+B 用。</li>
+              </ul></td></tr>
+            <tr><td><code>casida_grad.py</code></td><td>
+              <ul>
+                <li><code>_APlusB</code>：Z 向量方程的 A+B 加交换项，稠密矩阵、乘积与对角都加。</li>
+                <li><code>relax</code>：
+                  <ul>
+                    <li>轨道梯度 G<sub>oo</sub>、G<sub>vo</sub>、G<sub>ov</sub>、G<sub>vv</sub> 的交换部分进入右端项与 W；</li>
+                    <li>基态对 T 与 Z<sub>s</sub> 的交换响应 −2K<sup>x</sup>[M]；</li>
+                    <li><code>Relaxed.xmy_ao</code> = C(Ỹ − Ỹ<sup>T</sup>)C<sup>T</sup>。</li>
+                  </ul></li>
+                <li><code>exchange_terms</code>：显式导数的三项：
+                  <ul>
+                    <li>−½ B(P, ΔP)：闭壳层；自旋极化时每个通道 −B(P<sub>σ</sub>, ΔP<sub>σ</sub>)；</li>
+                    <li>−B(R<sub>s</sub>, R<sub>s</sub>)；</li>
+                    <li>−B(L<sub>a</sub>, L<sub>a</sub>)。</li>
+                  </ul></li>
+              </ul></td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li><code>_check_hybrid</code>：删去“TD-LC 是 M6h-2”的拒绝；改为 DFTB+ 的条件（CAM 与全局文件、窗口、onsite，DFTB+ 的原话）与 ARPACK 的拒绝。</li>
+                <li><code>_casida_ground_state</code> 传 γ<sup>lr</sup>；<code>_excited_gradient</code> 加交换的显式项。</li>
+              </ul></td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>cases.py</code>：
+                  <ul>
+                    <li>23 个算例；</li>
+                    <li>每种元素一个 W 的 <code>W_HOAO</code>（W<sub>HCO</sub> 壳层矩阵的 HOAO 值）；</li>
+                    <li>容差 <code>TOL_TDLC</code> 与 <code>TOL_TDLC_STRATMANN</code>；</li>
+                    <li>手工搭的萘（第七节）。</li>
+                  </ul></li>
+                <li><code>refgen.py</code>：
+                  <ul>
+                    <li>TD-LC 的 <code>forces_fd</code> 由激发态的比较处理；</li>
+                    <li>简并组的 KS 能量只在整组不受旋转影响时比较（O<sub>2</sub> 的主导跃迁本身随旋转而变）。</li>
+                  </ul></li>
+                <li><code>dftbplus.py</code>：<code>spin_constants_block</code> 拒绝壳层矩阵（第五节的工具问题）。</li>
+                <li><code>dynamics.py</code>：两条参考（S1 结构优化、S2 MD）。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_casida_lc.py</code>：21 项。</li>
+                <li><code>tests/test_hybrid.py</code>：原来“Casida 是 M6h-2”的拒绝换成四项新的拒绝（两种窗口、onsite、ARPACK）。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>calc = DFTB(sk_lc, hybrid="lc",
+            casida=Casida(n_excitations=6, symmetry="singlet", state_of_interest=2))
+r = calc.calculate(labels, pos, forces=True)
+r.excitations.energies, r.excitation_energy   # 激发能（Ha）
+r.forces                                       # -d(E0 + Omega)/dR
+r.excited_charges, r.excited_dipole            # 激发态的 Mulliken 电荷与偶极
+atoms.calc = PyDFTB(skdir, hybrid="lc", casida={"n_excitations": 4, "state_of_interest": 1})</code></pre>
+      <ul>
+        <li><strong>选项</strong>：M6d/M6e 的 <code>Casida</code> 全部可用：对称性、态、最亮态、激发态力与电荷、跃迁电荷、求解器。条件与 DFTB+ 相同：
+          <ul>
+            <li>SK 文件必须是 LC 型（<code>hybrid="cam"</code> 配 LC 文件也可以）；</li>
+            <li>不能用窗口，不能用 onsite 修正；</li>
+            <li>占据必须是整数，否则在计算激发时报错。</li>
+          </ul>
+        </li>
+        <li><strong>求解器</strong>：
+          <ul>
+            <li><code>"exact"</code>：稠密的 A±B，对称化后对角化。</li>
+            <li><code>"davidson"</code>：Stratmann 子空间迭代，A±B 不建成矩阵，残差收敛到 1e-10，比 DFTB+ 的阈值严得多。</li>
+            <li><code>"auto"</code>：≤ 500 个跃迁用前者，更多时用后者。</li>
+          </ul>
+        </li>
+        <li><strong>屏蔽</strong>：基态的屏蔽照常可选，TD 部分与 DFTB+ 一样不屏蔽。屏蔽下的激发态力照 DFTB+ 给出，与基态的屏蔽力一样不是能量的导数。</li>
+        <li><strong>自旋常数</strong>：三重态与激发态力都要求每种元素一个 W（M6d、M6e 的规则）。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>参数 <code>ptbp_hcocu_lc</code>（M6h-1），DFTB+ 25.1 用 Stratmann 求解器（TD-LC 只能用它），pydftb 用 <code>"auto"</code>。两边 SCC 容差 1e-10，pydftb 用 DFTB+ 的 SK 差分步长。</p>
+      <ul>
+        <li><strong>容差</strong>（<code>TOL_TDLC</code>）：
+          <ul>
+            <li>基态同 M6h-1；</li>
+            <li>激发能 1e-8 Ha，振子强度与跃迁偶极 1e-7；</li>
+            <li>EXC.DAT 与 SPX.DAT 的表 0 处不同；</li>
+            <li>激发态的能量 1e-9 Ha，电荷与偶极 1e-7；</li>
+            <li>力与 DFTB+ 的力比较到 1e-10 Ha/Bohr。</li>
+          </ul>
+        </li>
+        <li>苯与萘照 Stratmann 的精度放宽（<code>TOL_TDLC_STRATMANN</code>），第七节说明。</li>
+      </ul>
+      <h3>激发能：12 个算例</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>|ΔE<sub>0</sub>|（Ha）</th><th>SCC 轮数</th><th>|Δω|（Ha）</th><th>|Δf|</th><th>|Δμ|（e Bohr）</th><th>表的不同</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_tdlc</code></td><td>H<sub>2</sub>O，6 个单重态</td><td>9.3e-12</td><td>17/17</td><td>8.1e-12</td><td>9.2e-15</td><td>6.1e-15</td><td>0/0</td></tr>
+          <tr><td><code>h2co_tdlc</code></td><td>H<sub>2</sub>CO，8 个单重态</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>1.4e-14</td><td>9.9e-14</td><td>0/0</td></tr>
+          <tr><td><code>h2co_tdlc_triplet</code></td><td>三重态（<code>W_HOAO</code>）</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>0</td><td>0</td><td>0/0</td></tr>
+          <tr><td><code>h2co_tdlc_both</code></td><td>单重态与三重态各 4 个</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>8.0e-15</td><td>5.4e-14</td><td>0/0</td></tr>
+          <tr><td><code>ch3oh_tdlc</code></td><td>CH<sub>3</sub>OH，12 个单重态</td><td>1.1e-11</td><td>22/22</td><td>1.5e-11</td><td>4.2e-14</td><td>7.1e-14</td><td>0/0</td></tr>
+          <tr><td><code>h2co_cation_tdlc</code></td><td>H<sub>2</sub>CO<sup>+</sup>，自旋极化（W<sub>HCO</sub> 的壳层矩阵）</td><td>3.0e-11</td><td>38/38</td><td>1.9e-12</td><td>4.9e-14</td><td>3.7e-12</td><td>0/0</td></tr>
+          <tr><td><code>o2_tdlc</code></td><td>O<sub>2</sub>（三重态基态），自旋极化，简并态</td><td>2.0e-11</td><td>8/8</td><td>1.1e-12</td><td>1.0e-15</td><td>4.4e-15</td><td>0/0</td></tr>
+          <tr><td><code>cuh_tdlc</code></td><td>CuH，Cu 的 d 轨道</td><td>2.6e-11</td><td>38/38</td><td>1.3e-13</td><td>4.5e-33</td><td>7.2e-16</td><td>0/0</td></tr>
+          <tr><td><code>c2h4_tdlc_bright</code></td><td>C<sub>2</sub>H<sub>4</sub>，最亮态（|ΔE<sub>exc</sub>| 3.3e-11 Ha）</td><td>7.4e-12</td><td>21/21</td><td>1.2e-12</td><td>2.8e-15</td><td>1.9e-14</td><td>0/0</td></tr>
+          <tr><td><code>ch3oh_tdlc_cam_keyword</code></td><td>LC 文件配 <code>Hybrid = CAM</code></td><td>1.1e-11</td><td>22/22</td><td>1.8e-12</td><td>1.8e-15</td><td>1.4e-14</td><td>0/0</td></tr>
+          <tr><td><code>h2co_tdlc_transq</code></td><td>S2 的跃迁电荷（q² 1.1e-15，ATQ.DAT 1.1e-10）</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>1.4e-14</td><td>5.4e-14</td><td>0/0</td></tr>
+          <tr><td><code>c6h6_tdlc</code></td><td>扰动的苯，8 个单重态，225 个跃迁 *</td><td>2.0e-11</td><td>26/26</td><td>6.9e-9</td><td>2.3e-7</td><td>2.3e-5</td><td>7/0</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>|Δf|、|Δμ| 按简并组比较（组内各态的值随旋转而变，只有组的和有确定值）；“表的不同”是 EXC.DAT 与 SPX.DAT 中印出的值超出最后一位的个数。</li>
+        <li>* DFTB+ 的 Stratmann 子空间（20 × 8 = 160 个向量）装不下全部 225 个跃迁，它的结果只准到收敛阈值：Ω 差 6.9e-9 Ha，振子强度 2.3e-7；EXC.DAT 印 8 位，7 处印出的值不同（容差 10）。</li>
+      </ul>
+      <h3>激发态的力与电荷：11 个算例</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>|ΔE<sub>0</sub>|（Ha）</th><th>SCC 轮数</th><th>|Δω|（Ha）</th><th>|ΔE<sub>exc</sub>|（Ha）</th><th>|ΔF|（Ha/Bohr）</th><th>|Δq<sup>ex</sup>|（e）</th><th>|Δμ<sup>ex</sup>|（e Bohr）</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2co_tdlc_exc_forces</code></td><td>H<sub>2</sub>CO S2</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>7.5e-12</td><td>1.0e-12</td><td>3.6e-9</td><td>1.9e-9</td></tr>
+          <tr><td><code>h2co_tdlc_exc_forces_triplet</code></td><td>H<sub>2</sub>CO T2（<code>W_HOAO</code>）</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>2.8e-12</td><td>1.0e-12</td><td>3.0e-9</td><td>1.8e-9</td></tr>
+          <tr><td><code>h2co_cation_tdlc_exc_forces</code></td><td>H<sub>2</sub>CO<sup>+</sup> 第 2 个态，自旋极化（<code>W_HOAO</code>）</td><td>7.4e-12</td><td>38/38</td><td>2.2e-12</td><td>2.6e-11</td><td>1.0e-12</td><td>4.8e-9</td><td>1.8e-9</td></tr>
+          <tr><td><code>c2h4_tdlc_exc_forces_s1</code></td><td>C<sub>2</sub>H<sub>4</sub> S1</td><td>7.4e-12</td><td>21/21</td><td>1.2e-12</td><td>4.4e-11</td><td>6.0e-13</td><td>5.0e-9</td><td>1.5e-9</td></tr>
+          <tr><td><code>h2co_tdlc_exc_forces_s1</code></td><td>H<sub>2</sub>CO S1（n → π*），结构优化的起点</td><td>4.3e-11</td><td>28/28</td><td>1.6e-12</td><td>4.6e-11</td><td>1.4e-12</td><td>4.8e-9</td><td>1.6e-9</td></tr>
+          <tr><td><code>ch3oh_tdlc_exc_forces</code></td><td>CH<sub>3</sub>OH S3</td><td>1.1e-11</td><td>22/22</td><td>1.8e-12</td><td>2.7e-12</td><td>8.7e-13</td><td>4.5e-9</td><td>1.8e-9</td></tr>
+          <tr><td><code>h2co_tdlc_exc_charges</code></td><td>H<sub>2</sub>CO S4，只算电荷与偶极</td><td>4.3e-11</td><td>28/28</td><td>1.8e-12</td><td>3.1e-11</td><td>（基态）1.5e-12</td><td>4.6e-9</td><td>1.9e-9</td></tr>
+          <tr><td><code>h2co_tdlc_exc_forces_field_pc</code></td><td>外场加 3 个点电荷，S2 †</td><td>4.8e-11</td><td>30/31</td><td>1.6e-12</td><td>3.8e-11</td><td>9.5e-9 †</td><td>4.8e-9</td><td>1.9e-9</td></tr>
+          <tr><td><code>h2co_tdlc_exc_forces_threshold</code></td><td>Thresholded，S2 ‡</td><td>7.8e-12</td><td>45/45</td><td>1.0e-10</td><td>3.5e-11</td><td>6.4e-11</td><td>4.4e-9</td><td>1.3e-9</td></tr>
+          <tr><td><code>c6h6_tdlc_exc_forces_neighbour</code></td><td>苯，NeighbourBased（CutoffReduction 10 Bohr），S2 §</td><td>1.9e-11</td><td>26/26</td><td>3.2e-9</td><td>1.7e-11</td><td>6.6e-8</td><td>4.4e-7</td><td>2.8e-6</td></tr>
+          <tr><td><code>naphthalene_tdlc_exc_forces</code></td><td>萘 S1，576 个跃迁（pydftb 的 Stratmann 迭代与共轭梯度）§</td><td>4.7e-11</td><td>30/30</td><td>1.0e-8</td><td>3.1e-9</td><td>6.5e-7</td><td>6.4e-7</td><td>3.5e-6</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>激发态的电荷与偶极按 DFTB+ 的 XCH.DAT、XREST.DAT 比较，3–5e-9 的差是这两个文件印出的位数（与 M6e 相同）。</li>
+        <li>† 参考的力是 DFTB+ 的 E0 + Ω 的四点差分（DFTB+ 自己的力偏 3.0e-3，第五节），9.5e-9 是差分的精度；兼容模式 <code>external</code>（去掉 DFTB+ 去掉的项）与 DFTB+ 的力差 9.2e-13。两边 SCC 容差 1e-12，在舍入误差处差一轮（30 与 31，轮数容差 1）。</li>
+        <li>‡ Thresholded 的屏蔽决定随舍入翻转，基态电荷差 3.1e-10、每轮误差不比较（轮数与结果照常比较）；两个程序的力都不是 E0 + Ω 的导数（第五节），彼此一致到 6.4e-11。</li>
+        <li>§ 差别来自 DFTB+ Stratmann 的收敛阈值（第五节）；苯的表 3 处、萘 8 处印出的值不同。pydftb 萘的力对它自己 E0 + Ω 的差分 1.1e-9。</li>
+      </ul>
+      <h3>动力学</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>参考</th><th>内容</th><th>|ΔE|（Ha）</th><th>|Δr|（Å）</th><th>步数 py/ref</th><th>SCC 轮数 py/ref</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2co_tdlc_s1_opt</code></td><td>H<sub>2</sub>CO 在 S1 上的结构优化：分子变成锥形</td><td>1.2e-14</td><td>7.0e-7</td><td>16/19</td><td>354/394</td></tr>
+          <tr><td><code>h2co_tdlc_s2_md</code></td><td>H<sub>2</sub>CO S2，20 步 Velocity Verlet，300 K</td><td>1.1e-8</td><td>2.7e-8</td><td>20/20</td><td>617/617（每一步相同）</td></tr>
+        </tbody>
+      </table></div>
+      <p>结构优化比较最后的能量与结构：pydftb 用 ASE 的优化器，DFTB+ 用自己的，步数本来就不同（同 M2f 与 M6h-1）。MD 中 ΔP<sub>in</sub> 跨几何步沿用，每一步的轮数都与 DFTB+ 相同；位置与能量差是 ASE 与 DFTB+ 单位常数之差。</p>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <p><code>tests/test_casida_lc.py</code> 的 21 项：</p>
+      <ul>
+        <li><strong>交换矩阵</strong>：
+          <ul>
+            <li>稠密的 (ij|ab)、(ib|ja) 等于逐个算的 q<sup>ij</sup>γq<sup>ab</sup>、q<sup>ib</sup>γq<sup>ja</sup>（1e-13）；</li>
+            <li>A±B 是对称的，不建矩阵的乘积等于矩阵（1e-13）；</li>
+            <li>两个自旋通道之间没有交换。单重态、三重态与自旋极化都测。</li>
+          </ul></li>
+        <li><strong>对称解</strong>：(A+B)(X+Y) = Ω(X−Y)、(A−B)(X−Y) = Ω(X+Y)、(X+Y)·(X−Y) = 1，Ω² 等于 (A−B)(A+B) 的本征值（1e-12）。</li>
+        <li><strong>Stratmann 与精确解</strong>：苯、自旋极化的 H<sub>2</sub>CO<sup>+</sup> 与萘（576 个跃迁）的 Ω² 相同（1e-12），简并组的振子强度之和相同（1e-9）。</li>
+        <li><strong>没有交换的极限</strong>：γ<sup>lr</sup> = 0 时，TD-LC 的解就是 M6d 的 Hermite Casida（单重态、三重态、自旋极化；Ω² 1e-14）。</li>
+        <li><strong>闭壳层按自旋极化算</strong>：H<sub>2</sub>CO 的 TD-LC 态就是限制性的单重态与三重态之并（1e-10）。</li>
+        <li><strong>力对 E0 + Ω 的差分</strong>：五种情形差 ≤ 3e-9 Ha/Bohr（解析 SK 导数），即单重态、三重态、自旋极化、C<sub>2</sub>H<sub>4</sub> S1，以及外场加点电荷。</li>
+        <li><strong>Z 向量</strong>：稠密解与共轭梯度（交换项的乘积与对角）给出相同的力与电荷（1e-12）。</li>
+        <li><strong>弛豫密度</strong>：电子数守恒，没有外场时力之和为零（1e-12）。</li>
+        <li><strong>双线性导数</strong>：∂B/∂S、∂B/∂Γ 对中心差分，S、Γ 保持对称，M<sub>1</sub>、M<sub>2</sub> 取对称、反对称、混合与一般的矩阵；B(M<sub>1</sub>, M<sub>2</sub>) = B(M<sub>2</sub>, M<sub>1</sub>)。</li>
+        <li><strong>拒绝</strong>：CAM 与全局文件、分数占据（3000 K）、ARPACK、壳层矩阵的 W；LC 文件配 <code>hybrid="cam"</code> 照常运行。</li>
+      </ul>
+      <p>另有原型阶段的检查（设计文档第二节）：Ω² 与 DFTB+ 的差 ≤ 6.2e-14；激发态力用 DFTB+ 的步长时与 DFTB+ 差 ≤ 1.1e-12。</p>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的问题</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 25.1</th><th>证据</th><th>pydftb 的做法</th></tr></thead>
+        <tbody>
+          <tr><td>外场加点电荷时，激发态力漏了 dq<sup>ex</sup>·∇V<sub>ext</sub>，shift 中也没有外场（M6e 已记录，TD-LC 相同）</td><td>H<sub>2</sub>CO S2：DFTB+ 的力对其 E0 + Ω 的差分偏 3.0e-3 Ha/Bohr；pydftb 对 DFTB+ 能量的差分 9.5e-9</td><td>精确的导数；兼容模式 <code>external</code> 去掉 DFTB+ 去掉的项，与 DFTB+ 的力差 9.2e-13（验证用）</td></tr>
+          <tr><td>自旋常数是壳层矩阵时，响应只用 HOAO 的 W，基态用整个矩阵，两者不一致（M6e 的机理）</td><td>自旋极化的 H<sub>2</sub>CO<sup>+</sup>：DFTB+ 的力偏 2.6e-4（M6e 不加杂化时为 8.8e-6）</td><td>照 M6e 拒绝，要求每种元素一个 W</td></tr>
+          <tr><td>屏蔽：TD 部分用不屏蔽的交换，基态用屏蔽的交换</td><td>苯，NeighbourBased（CutoffReduction 10 Bohr）：两个程序的力都偏离各自 E0 + Ω 的差分 4.8e-5，彼此差 6.6e-8。Thresholded 的基态力本身就偏 1.4e-3，且差分随步长不收敛：E0 本身不光滑</td><td>照 DFTB+ 给出（与基态的屏蔽力一样不是能量的导数），在文档中说明</td></tr>
+          <tr><td>Stratmann 的收敛阈值是残差平方 1.2e-8</td><td>萘 S1：DFTB+ 的力对其差分偏 6.6e-7，pydftb 1.1e-9；8 个激发能差 ≤ 1.0e-8</td><td>pydftb 收敛到 1e-10；苯与萘的参考容差放宽，小分子仍按 1e-10 比较</td></tr>
+          <tr><td>Stratmann 扩充子空间时，L 残差的预条件分母用的是上一个循环剩下的 <code>dummyReal</code>（<code>linrespgrad.F90</code> 第 1437 行）</td><td>代码</td><td>只影响收敛快慢，不影响结果；pydftb 按每个态的 Ω 做预条件</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>验证工具的问题</strong>（不是 DFTB+ 的）：给限制性三重态写 HSD 的 <code>spin_constants_block</code> 遇到 W 矩阵只取第一个元素（ss），而两个程序都用 HOAO 的 pp 值，三重态差 3e-3。现在拒绝矩阵，算例改用 <code>W_HOAO</code>。M6d、M6e 的三重态算例本来就用标量 W，不受影响。</li>
+        <li><strong>SK 网格</strong>：SK 表的网格是 0.02 Bohr，插值多项式在网格点处只有分段光滑。原子间距离离网格点太近时，DFTB+ 的差分步长（2<sup>−13</sup> Bohr）或测试的差分会跨过网格点，力的比较出现 1e-5 量级的假差别。萘的第一个几何（种子 5）就是这样：一个 C–C 距离离网格点 7.5e-5 Bohr，DFTB+ 的力偏 3.1e-5，pydftb 对差分偏 4.1e-6。改用种子 37 后，所有原子对离网格点至少 3e-4 Bohr，差别降到上面的数。这是 SK 表本身的性质，不是哪个程序的错。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M5b-4 的活文档提交 <code>d838f19</code> 逐字节比较</td><td>conda 1154 个计算、578205 个字段，最小环境 1094 个计算、565091 个字段，都逐位相同；新算例与新动力学参考的 71 个计算不在比较之列。没有新的公开属性，不需要 <code>--allow-new</code></td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>397 个算例全部通过；torch 74 个通过，323 个按设计跳过（只有 NumPy 的物理，含 23 个新算例）；30 条动力学参考全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>全部通过：conda 1361 个通过 / 323 个跳过，最小环境 1114 / 449，torch 1318 / 366（各比 M6h-1b 多 49 个：23 个参考算例、2 条动力学参考、<code>test_casida_lc.py</code> 的 21 项与 <code>test_hybrid.py</code> 的 3 项）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>参考算例</strong>：比设计的多了萘、苯的 NeighbourBased 激发态力与 H<sub>2</sub>CO 的 S1 力，共 23 个。
+          <ul>
+            <li>萘有 576 个跃迁，超过 <code>"auto"</code> 的 500，所以 pydftb 走 Stratmann 迭代，Z 向量走共轭梯度。这两条路要有 DFTB+ 的对照。</li>
+            <li>苯的 NeighbourBased 真的去掉了原子对（CutoffReduction 10 Bohr 时去掉间位、对位的 C–H 与 H–H）。H<sub>2</sub>CO 太小，什么都没去掉。</li>
+            <li>H<sub>2</sub>CO 的 S1 力是结构优化的基础。</li>
+          </ul></li>
+        <li><strong>动力学</strong>：设计写的是“一条 MD 或一次结构优化”，实际两条都做了：S1 结构优化与 S2 的 20 步 MD。</li>
+        <li><strong>Stratmann 的容差</strong>：苯与萘放宽到
+          <ul>
+            <li>激发能 3e-8；</li>
+            <li>振子强度 3e-6，跃迁偶极 3e-4：激发能的误差是本征向量误差的二阶，振子强度与跃迁偶极是一阶，残差 1e-4 时偶极就差 1e-4 量级；</li>
+            <li>表中最多 10 处印出的值不同，力 3e-6，激发态电荷 1e-6、偶极 1e-5。</li>
+          </ul>
+          这些都是 DFTB+ 收敛阈值的量级；pydftb 自己的 Stratmann 与精确解一致到 1e-12（第四节）。</li>
+        <li><strong>两个 SCC 容差</strong>：
+          <ul>
+            <li>外场加点电荷的算例 SCC 容差 1e-12（参考是 DFTB+ 能量的差分），两个程序在舍入误差处差一轮（30 与 31），轮数容差为 1；</li>
+            <li>Thresholded 的算例每轮误差不比较（屏蔽的决定随舍入翻转，同 M6h-1 的 <code>c6h6_lc_threshold</code>），轮数与结果照常比较。</li>
+          </ul></li>
+        <li><strong>Stratmann 的重新开始</strong>：设计只说“子空间满了就从 X+Y、X−Y 重新开始”。H<sub>2</sub>CO 的调试表明，要先把新方向对旧子空间投影，再判断是否满，而且新方向用完且子空间已是全空间时要返回精确解，不能报错。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6h-3 周期体系</strong>：
+          <ul>
+            <li>Γ 点：Truncated 与 TruncatedAndDamped，MatrixBased 与 NeighbourBased；</li>
+            <li>k 点：超胞折叠网格，MatrixBased 混合 ΔP(k)，NeighbourBased 混合实空间 ΔP(R)；MinimumImage；</li>
+            <li>力：Γ 点，以及 k 点的 Truncated；自旋。</li>
+          </ul></li>
+        <li><strong>M6h-4</strong>：杂化泛函下的响应（静态极化率、响应核、点电荷导数）。</li>
+        <li>向 DFTB+ 报告外场加点电荷时的 TD-LC 激发态力（与 M6e 的同一问题）：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6h2-tdlc.html">← M6h-2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

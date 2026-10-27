@@ -170,6 +170,12 @@ DYN_CASES = [
     DynCase("ch3_lc_noncolinear_md", "ch3_lc_noncolinear", "md", tol={**TOL_MD, "n_scc": 0},
             note="LC with non-collinear spin: DeltaP_in (2N x 2N, complex) and the [q, m] "
                  "populations from one step to the next"),
+    # M6h-2: TD-LC, an excited state's forces with the long-range exchange
+    DynCase("h2co_tdlc_s1_opt", "h2co_tdlc_exc_forces_s1", "opt", tol=TOL_OPT,
+            note="first excited singlet with TD-LC: the molecule pyramidalises"),
+    DynCase("h2co_tdlc_s2_md", "h2co_tdlc_exc_forces", "md", temperature=300.0, steps=20,
+            tol={**TOL_MD, "n_scc": 0},
+            note="second excited singlet with TD-LC, 20 steps; DeltaP_in reused"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 

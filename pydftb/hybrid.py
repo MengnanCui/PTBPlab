@@ -27,6 +27,12 @@ exact; DFTB+'s default MatrixBased), ``neighbour`` (S blocks beyond the largest 
 ``cutoff_reduction`` left out; NeighbourBased) and ``threshold`` (DFTB+'s incremental
 Thresholded build).  The forces are always the exact ones, as DFTB+'s.  Molecules only (periodic
 systems: milestone M6h-3).
+
+TD-LC (milestone M6h-2, :mod:`pydftb.casida`): the Mulliken exchange operator
+K^x[M] = 1/4 :func:`four_terms` (S, G, M) of any square M (K^x[M^T] = K^x[M]^T) gives the
+exchange integrals of the Casida matrices, and :func:`bilinear_ds`, :func:`bilinear_dg` the
+derivatives of B(M1, M2) = <M1, K^x[M2]> for the excited-state forces
+(:meth:`HybridTerms.exchange_force`).
 """
 from __future__ import annotations
 
@@ -253,6 +259,35 @@ def dgamma_lr(ua, ub, omega, r):
     return out
 
 
+def four_terms(s, g, d):
+    """(S D S) o G + ((S D) o G) S + S (D o G) S + S ((D S) o G): four times the Mulliken exchange
+    operator K^x[D]_munu = sum_kl (mu kappa|nu lambda) D_kl (G the orbital-level gamma), for any
+    square D (milestone M6h-1; M6h-2 applies it to transition densities)."""
+    sd, ds = s @ d, d @ s
+    return (sd @ s) * g + (sd * g) @ s + s @ (d * g) @ s + s @ (ds * g)
+
+
+def bilinear_ds(s, g, m1, m2):
+    """The S coefficients C of B = <M1, K^x[M2]> (M6h-2; S and G symmetric): the derivative
+    along a symmetric change of S_munu = S_numu is C_munu + C_numu (C_mumu on the diagonal), as
+    the pair terms take both orderings of every element.
+    C = 1/4 [(M1 o G) S M2^T + ((M1 S) o G) M2^T + M1 ((S M2^T) o G) + (M1 S)(M2 o G)^T
+             + (M1 o G)^T S M2 + M1^T ((S M2) o G) + ((S M1) o G)^T M2 + (S M1)^T (M2 o G)]."""
+    c1 = ((m1 * g) @ s @ m2.T + ((m1 @ s) * g) @ m2.T + m1 @ ((s @ m2.T) * g)
+          + (m1 @ s) @ (m2 * g).T)
+    c2 = ((m1 * g).T @ s @ m2 + m1.T @ ((s @ m2) * g) + ((s @ m1) * g).T @ m2
+          + (s @ m1).T @ (m2 * g))
+    return 0.25 * (c1 + c2)
+
+
+def bilinear_dg(s, m1, m2):
+    """The orbital-level gamma coefficients of B = <M1, K^x[M2]> (M6h-2), in the same sense as
+    :func:`bilinear_ds` (summed over both orderings of an atom pair by :meth:`HybridTerms
+    ._gamma_force`): 1/4 [M1 o (S M2 S) + (M1 S) o (S M2) + (S M1) o (M2 S) + M2 o (S M1 S)]."""
+    return 0.25 * (m1 * (s @ m2 @ s) + (m1 @ s) * (s @ m2) + (s @ m1) * (m2 @ s)
+                   + m2 * (s @ m1 @ s))
+
+
 def gamma_cam(ua, ub, r, omega, alpha, beta):
     """alpha gamma_HF + beta gamma_LR(omega), a term left out when its coefficient is below
     100 eps (DFTB+ getCamAnalyticalGammaValue_workhorse)."""
@@ -400,9 +435,7 @@ class HybridTerms:
         return [c * self._four_terms(s, d) for d in dps]
 
     def _four_terms(self, s, d):
-        g = self.G
-        sd, ds = s @ d, d @ s
-        return (sd @ s) * g + (sd * g) @ s + s @ (d * g) @ s + s @ (ds * g)
+        return four_terms(s, self.G, d)
 
     def _fock_threshold(self, dp):
         """DFTB+ addCamHamiltonianThreshold_cluster: H_prev += the change from DeltaDeltaP =
@@ -510,9 +543,26 @@ class HybridTerms:
             for d in dps:
                 ds, sd = d @ s, s @ d
                 de = de + c * (d * (sd @ s) + ds * sd)
+        return self._gamma_force(de)
+
+    def _gamma_force(self, de) -> np.ndarray:
+        """sum_AB dE/dgamma_AB dgamma_AB/dR from the orbital-level dE/dG (n_atom, 3)."""
         starts = self.offsets[:-1]
         g = np.add.reduceat(np.add.reduceat(de, starts, axis=0), starts, axis=1)
         nat = len(starts)
         with np.errstate(divide="ignore", invalid="ignore"):
             w = np.where(np.eye(nat, dtype=bool), 0.0, (g + g.T) * self.dg_atom / self.dist)
         return np.einsum("ab,abx->ax", w, self.vec)
+
+    def exchange_force(self, terms, pairs):
+        """The explicit derivatives of sum_k c_k B(M1_k, M2_k), B = <M1, K^x[M2]> (TD-LC
+        excited-state forces, milestone M6h-2; ``terms`` = [(c, M1, M2), ...]): the dS
+        coefficient at every pair element and the gamma part of the gradient (n_atom, 3).  The
+        full S and gamma whatever the screening, as DFTB+'s excited-state gradient."""
+        s, g = self.S, self.G
+        cds = np.zeros_like(s)
+        cdg = np.zeros_like(s)
+        for c, m1, m2 in terms:
+            cds = cds + c * bilinear_ds(s, g, m1, m2)
+            cdg = cdg + c * bilinear_dg(s, m1, m2)
+        return cds[pairs.rows, pairs.cols], self._gamma_force(cdg)

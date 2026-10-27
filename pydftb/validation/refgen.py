@@ -884,7 +884,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         terms = [abs(getattr(res, k) - ref[k]) for k in ("e_fock", "e_3rd", "e_spin")
                  if k in ref]
         dev["e_terms"] = max([dev.get("e_terms", 0.0)] + terms)
-        if "forces_fd" in ref:                       # M6h-1b: DFTB+'s two-component gamma term
+        if "forces_fd" in ref and not case.casida:   # M6h-1b: DFTB+'s two-component gamma term
+                                                     # (TD-LC's: _compare_excited, M6h-2)
             dev["forces"] = float(np.abs(res.forces - np.array(ref["forces_fd"])).max())
             HybridTerms._dftbp_pauli_gamma = True
             try:
@@ -1488,10 +1489,11 @@ def _compare_casida(ref: dict, res) -> dict:
     ``exc_table`` and ``spx`` count the printed values that differ by more than their last
     digit.  Degenerate states and orbitals are fixed only up to a rotation that the two codes
     choose differently, so the tables are compared through what does not depend on it: per
-    group of degenerate states the summed oscillator strength and D<S^2> and the sorted KS
-    energies, the transition and weight only of a non-degenerate state that is free of
-    degenerate transitions (:func:`_rotation_free`), and in SPX.DAT the summed oscillator
-    strength of every group of degenerate transitions."""
+    group of degenerate states the summed oscillator strength and D<S^2>, the sorted KS
+    energies where every state of the group is free of degenerate transitions
+    (:func:`_rotation_free`; else the dominant transition itself depends on the rotation, M6h-2),
+    the transition and weight only of such a non-degenerate state, and in SPX.DAT the summed
+    oscillator strength of every group of degenerate transitions."""
     xs = res.excitations if isinstance(res.excitations, list) else [res.excitations]
     tags = ref["exc_tags"]
     g = xs[-1].degenerate_groups()             # the tags hold the last symmetry (DFTB+)
@@ -1516,8 +1518,9 @@ def _compare_casida(ref: dict, res) -> dict:
         for a, b in x.degenerate_groups()["groups"]:
             grp = rows[a:b]
             bad += abs(x.oscillator_strengths[a:b].sum() - sum(r[1] for r in grp)) > 6e-9 * (b - a)
-            bad += np.abs(np.sort(x.ks_energies[a:b]) * HARTREE
-                          - np.sort([r[5] for r in grp])).max() > 6e-4
+            if free[a:b].all():  # else the dominant transition depends on the rotation (M6h-2)
+                bad += np.abs(np.sort(x.ks_energies[a:b]) * HARTREE
+                              - np.sort([r[5] for r in grp])).max() > 6e-4
             if x.symmetries is None:
                 bad += abs(x.spin_contamination[a:b].sum()
                            - sum(float(r[6]) for r in grp)) > 6e-4 * (b - a)

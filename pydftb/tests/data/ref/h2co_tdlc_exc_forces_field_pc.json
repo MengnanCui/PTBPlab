@@ -1,0 +1,560 @@
+{
+ "schema": 1,
+ "case": "h2co_tdlc_exc_forces_field_pc",
+ "note": "DFTB+'s TD-LC forces are 3.0e-3 off with a field and point charges (the terms M6e found missing): compared with differences of DFTB+'s E0 + w, and pydftb leaving out what DFTB+ leaves out with DFTB+'s forces.  SCC tolerance 1e-12 (the differences): the codes stop one iteration apart (30 and 31) at round-off",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-12,
+  "ewald_tolerance": null,
+  "efield": {
+   "strength": 0.5,
+   "direction": [
+    1.0,
+    0.3,
+    -0.2
+   ]
+  },
+  "point_charges": {
+   "positions": [
+    [
+     3.0,
+     0.2,
+     0.1
+    ],
+    [
+     -2.5,
+     1.0,
+     0.5
+    ],
+    [
+     0.3,
+     -2.8,
+     1.2
+    ]
+   ],
+   "charges": [
+    0.8,
+    -0.6,
+    0.4
+   ]
+  },
+  "site_potentials": null,
+  "solvation": null,
+  "rescale_fields": true,
+  "charge": 0.0,
+  "casida": {
+   "n": 6,
+   "symmetry": "singlet",
+   "solver": "Stratmann",
+   "state": 2,
+   "excited_forces": true,
+   "forces_fd": true,
+   "compat": [
+    "external"
+   ]
+  },
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc"
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "C",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.03577256946860637,
+    0.008730197010239788,
+    0.6854309493614402
+   ],
+   [
+    -0.03726985406728982,
+    -0.005547764050287981,
+    -0.5437091795853798
+   ],
+   [
+    -0.0016548296296491954,
+    0.9218499864635231,
+    -1.1250403633795185
+   ],
+   [
+    -0.009544360607190053,
+    -0.9606672950672537,
+    -1.1064715523900082
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "C": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-12\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_f34po2g8/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    C = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  ElectricField = {\n    External = {\n      Strength [V/AA] = 0.5\n      Direction = 1.0 0.3 -0.2\n    }\n    PointCharges = {\n      CoordsAndCharges [Angstrom] = {\n        3.0 0.2 0.1 0.8\n        -2.5 1.0 0.5 -0.6\n        0.3 -2.8 1.2 0.4\n      }\n    }\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  WriteAutotestTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\nExcitedState {\n  Casida {\n    NrOfExcitations = 6\n    Symmetry = singlet\n    StateOfInterest = 2\n    Diagonaliser = Stratmann {}\n    WriteTransitions = Yes\n    WriteSPTransitions = Yes\n    WriteTransitionDipole = Yes\n    WriteMulliken = Yes\n    ExcitedStateForces = Yes\n  }\n}\n",
+ "reference": {
+  "energy": -5.5884145728,
+  "free_energy": -5.5884145728,
+  "e_zero": -5.5884145728,
+  "e_rep": 0.120279168,
+  "e_scc": 0.006010635,
+  "e_band": -5.4939862954,
+  "e_ext": -0.0017779198,
+  "e_fock": -0.2189401606,
+  "fermi": -0.271860010205013,
+  "forces": [
+   [
+    0.0318820446992093,
+    -0.00370317026354624,
+    0.345270181134739
+   ],
+   [
+    -0.0358960848616765,
+    0.00171638059450027,
+    -0.254318493448019
+   ],
+   [
+    0.00197655189846979,
+    0.0877006053474218,
+    -0.0480258789700703
+   ],
+   [
+    0.0048029898022921,
+    -0.087953086697743,
+    -0.0436116437757585
+   ]
+  ],
+  "charges_net": [
+   -0.225059804949219,
+   0.0200425805843713,
+   0.164687227250977,
+   0.0403299971138695
+  ],
+  "point_charge_forces": [
+   [
+    -0.00124482487465182,
+    -0.000786965979107846,
+    0.00265996364111235
+   ],
+   [
+    -0.00137803832253054,
+    0.00132160625220823,
+    -0.00243504272540205
+   ],
+   [
+    -0.000142638341112337,
+    0.00170463074626682,
+    0.000460914143398005
+   ]
+  ],
+  "dipole": [
+   -0.01786812,
+   0.2097543,
+   -0.74656283
+  ],
+  "exc_energies": [
+   0.06488875264321814,
+   0.13477647433926046,
+   0.16620361874641107,
+   0.19528455806429104,
+   0.22964832719922795,
+   0.2982171645694838
+  ],
+  "exc_symmetries": [
+   "S",
+   "S",
+   "S",
+   "S",
+   "S",
+   "S"
+  ],
+  "exc_rows": [
+   [
+    1.766,
+    6.672e-05,
+    6,
+    7,
+    1.0,
+    7.089,
+    "S"
+   ],
+   [
+    3.667,
+    4.11e-06,
+    4,
+    7,
+    0.997,
+    9.045,
+    "S"
+   ],
+   [
+    4.523,
+    0.00025485,
+    3,
+    7,
+    1.0,
+    9.721,
+    "S"
+   ],
+   [
+    5.314,
+    0.04754773,
+    5,
+    7,
+    0.992,
+    8.959,
+    "S"
+   ],
+   [
+    6.249,
+    3.42e-06,
+    2,
+    7,
+    1.0,
+    11.462,
+    "S"
+   ],
+   [
+    8.115,
+    0.07863444,
+    6,
+    8,
+    0.998,
+    12.459,
+    "S"
+   ]
+  ],
+  "spx_rows": [
+   [
+    7.089,
+    0.0004372,
+    6,
+    7,
+    ""
+   ],
+   [
+    8.959,
+    0.2797694,
+    5,
+    7,
+    ""
+   ],
+   [
+    9.045,
+    0.0223806,
+    4,
+    7,
+    ""
+   ],
+   [
+    9.721,
+    0.0006898,
+    3,
+    7,
+    ""
+   ],
+   [
+    11.462,
+    6.03e-05,
+    2,
+    7,
+    ""
+   ],
+   [
+    12.459,
+    0.1946371,
+    6,
+    8,
+    ""
+   ],
+   [
+    14.329,
+    0.0132962,
+    5,
+    8,
+    ""
+   ],
+   [
+    14.415,
+    0.1705084,
+    4,
+    8,
+    ""
+   ],
+   [
+    14.978,
+    0.2422087,
+    6,
+    9,
+    ""
+   ],
+   [
+    15.091,
+    0.2862492,
+    3,
+    8,
+    ""
+   ],
+   [
+    16.832,
+    0.0629406,
+    2,
+    8,
+    ""
+   ],
+   [
+    16.847,
+    0.0033678,
+    5,
+    9,
+    ""
+   ],
+   [
+    16.934,
+    0.1098605,
+    4,
+    9,
+    ""
+   ],
+   [
+    17.61,
+    0.0214429,
+    3,
+    9,
+    ""
+   ],
+   [
+    18.352,
+    0.01175,
+    6,
+    10,
+    ""
+   ],
+   [
+    19.351,
+    0.2703046,
+    2,
+    9,
+    ""
+   ],
+   [
+    20.222,
+    0.0269128,
+    5,
+    10,
+    ""
+   ],
+   [
+    20.278,
+    4.7e-06,
+    1,
+    7,
+    ""
+   ],
+   [
+    20.308,
+    0.4217442,
+    4,
+    10,
+    ""
+   ],
+   [
+    20.984,
+    0.0275612,
+    3,
+    10,
+    ""
+   ],
+   [
+    22.725,
+    0.2089406,
+    2,
+    10,
+    ""
+   ],
+   [
+    25.648,
+    0.0126715,
+    1,
+    8,
+    ""
+   ],
+   [
+    28.167,
+    0.0019005,
+    1,
+    9,
+    ""
+   ],
+   [
+    31.541,
+    0.3208956,
+    1,
+    10,
+    ""
+   ]
+  ],
+  "excitation_energy": 0.1347764743,
+  "n_scc": 31,
+  "scc_errors": [
+   0.92634453,
+   0.72407032,
+   0.41782884,
+   0.17834017,
+   0.045433345,
+   0.06604855,
+   0.033507603,
+   0.015756648,
+   0.0031884348,
+   0.0016746601,
+   0.0003006341,
+   9.3722252e-05,
+   4.4034052e-05,
+   2.5311003e-05,
+   7.4814872e-06,
+   2.4965442e-06,
+   1.1255978e-06,
+   2.3807215e-06,
+   4.4629742e-07,
+   6.183472e-08,
+   6.1564945e-08,
+   1.3454228e-08,
+   2.4811494e-09,
+   8.9918561e-10,
+   3.6824088e-10,
+   1.7106988e-10,
+   1.7280333e-10,
+   1.8732571e-11,
+   1.2722046e-12,
+   1.1303181e-12,
+   1.4244161e-13
+  ],
+  "exc_tags": {
+   "omega2": [
+    0.00421055021978431,
+    0.018164698034934,
+    0.0276236428838274,
+    0.0381360586186017,
+    0.0527383541852586,
+    0.0889334772431497
+   ],
+   "oscillator": [
+    6.67198718400144e-05,
+    4.10661195181799e-06,
+    0.00025485192535134,
+    0.0475477315281101,
+    3.42329192086089e-06,
+    0.0786344362264973
+   ],
+   "transdip": [
+    0.0392724972834392,
+    0.0067605249086133,
+    0.0479589152230757,
+    0.604333374330955,
+    0.00472863675873402,
+    0.628905944745249
+   ]
+  },
+  "excited_charges_net": [
+   -0.20161848,
+   -0.07120539,
+   0.20600439,
+   0.06681948
+  ],
+  "excited_dipole_debye": [
+   -0.02659654,
+   0.59727237,
+   -1.94615108
+  ],
+  "forces_fd": [
+   [
+    0.03101954725822272,
+    -0.0031946253598036374,
+    0.345323067066546
+   ],
+   [
+    -0.032876883119629476,
+    0.0003335942144744308,
+    -0.2538944724343276
+   ],
+   [
+    0.0008400862087457975,
+    0.08804372405209666,
+    -0.048217361075704915
+   ],
+   [
+    0.004326472204200607,
+    -0.08762122172489838,
+    -0.04392587026706233
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-06,
+  "forces": 1e-08,
+  "charges": 1e-06,
+  "spins": 1e-08,
+  "n_scc": 1,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-06,
+  "dipole": 1e-06,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08,
+  "exc": 1e-08,
+  "exc_osc": 1e-07,
+  "exc_tdip": 1e-07,
+  "exc_table": 0,
+  "spx": 0,
+  "exc_state": 1e-09,
+  "exc_charges": 1e-07,
+  "exc_dipole": 1e-07,
+  "forces_dftbp": 1e-10
+ },
+ "forces_fd": "-d(E_Mermin + Excitation Energy)/dR of DFTB+ (autotest.tag mermin_energy), 4-point central differences, h = 0.0001 Bohr"
+}

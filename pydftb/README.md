@@ -371,7 +371,8 @@ and dispersion are fine.  `solver="auto"` diagonalises Omega densely up to 500
 transitions and uses a block Davidson solver beyond (C60's 14,400 transitions in 0.46 s,
 DFTB+'s fastest solver 1.46 s); `"arpack"` is an independent check.  In degenerate
 manifolds only group sums are defined (`x.degenerate_groups()`).  `PyDFTB(...,
-casida=...)` gives `calc.excitations`.  Details:
+casida=...)` gives `calc.excitations`.  With a long-range corrected functional (`hybrid="lc"`)
+this is TD-LC (milestone M6h-2, see the hybrid section).  Details:
 [`docs/reports/M6d-casida.html`](docs/reports/M6d-casida.html).
 
 ### Excited-state forces, charges and XL-BOMD
@@ -518,9 +519,21 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: periodic systems (M6h-3), Casida (M6h-2),
-the response analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
+coordinate derivatives, XL-BOMD; not yet in pydftb: periodic systems (M6h-3), the response
+analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
+
+TD-LC (milestone M6h-2): `casida=` with LC files gives DFTB+'s TD-LC-DFTB.  The long-range
+exchange enters A+B as -[(ij|ab) + (ib|ja)] and A-B as -[(ij|ab) - (ib|ja)] (same spin), so
+A-B is no longer diagonal: solver "exact" diagonalises (A-B)^1/2 (A+B) (A-B)^1/2, "davidson" runs
+Stratmann's subspace iteration with matrix-free A+B and A-B ("auto": exact up to 500
+transitions), "arpack" is refused.  Singlets, triplets, both and spin polarisation; oscillator
+strengths, transition charges, the state of interest's forces (the Z vector, W and explicit
+terms with the exchange) and its charges and dipole, as M6d/M6e.  As DFTB+: LC files only (CAM
+and global hybrids refused), no energy or oscillator windows, no onsite corrections, integer
+occupations; any screening of the ground state, the TD part unscreened.  With a field and point
+charges pydftb's forces are -d(E0 + Omega)/dR; DFTB+'s miss the terms M6e found (3.0e-3 Ha/Bohr
+off).  Details: [`docs/reports/M6h2-tdlc.html`](docs/reports/M6h2-tdlc.html).
 
 Non-collinear spin (milestone M6h-1b; DFTB+: the matrix screening, molecules) takes the same
 options with `spin="noncolinear"`: DeltaP is the 2N x 2N spinor matrix (complex), mixed as the

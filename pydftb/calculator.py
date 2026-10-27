@@ -742,11 +742,23 @@ class DFTB:
                      "the moment")
         elif a is not None and a.coord_derivatives is not False:
             dftbp = "Coordinate derivative perturbations do not yet work with hybrid functionals"
+        elif self.casida is not None:                           # TD-LC (M6h-2)
+            cas = self.casida
+            if rs[0] == "cam":
+                dftbp = "General CAM functionals not currently implemented for linear response"
+            elif rs[0] == "global":
+                dftbp = "Global hybrid functionals not currently implemented for linear response"
+            elif cas.energy_window is not None or cas.oscillator_window is not None:
+                dftbp = "hybrid functional excited states not available for window options"
+            elif self.onsite_corrections is not None:
+                dftbp = ("Onsite corrections not implemented for Stratmann diagonaliser, which "
+                         "TD-LC needs")
         if dftbp:
             raise ValueError(f"{dftbp} (as in DFTB+)")
         why = None                         # not (yet) in pydftb
-        if self.casida is not None:
-            why = "Casida excitations (TD-LC) are milestone M6h-2"
+        if self.casida is not None and self.casida.solver == "arpack":
+            why = ("the 'arpack' Casida solver works on the Hermitian Omega, which TD-LC does not "
+                   "have: use 'exact' or 'davidson' (DFTB+ uses its Stratmann solver)")
         elif a is not None and (a.polarisability is not False or a.response_kernel is not False
                                 or a.external_charge_derivatives is not False):
             why = "the response analyses are milestone M6h-4"
@@ -1413,7 +1425,13 @@ class DFTB:
                     v_orb = v_orb - v[st.basis.orb_atom]
         pb = st.pairs
         p_e, coef = _cgrad.pair_terms(rel, gs, pb.rows, pb.cols, v_orb, vs_orb)
+        g_x = None
+        if st.hybrid is not None:              # TD-LC (M6h-2): the exchange's S and gamma parts
+            c_x, g_x = st.hybrid.exchange_force(_cgrad.exchange_terms(rel, sc.hybrid.dp_out), pb)
+            coef = coef + c_x
         grad, _ = self._add_pair_terms(st, np.zeros_like(st.pos), p_e, coef)
+        if g_x is not None:
+            grad = grad + g_x
         coul = st.coulomb
         if "damping" in compat and (coul.damped.any() or coul.h5 is not None):
             coul = Coulomb(st.pos, coul.site_atom, coul.tau / 3.2)   # DFTB+: no damping, no H5
@@ -1457,8 +1475,9 @@ class DFTB:
                                     for m in parsed[lab]))
                 edges = np.concatenate([[0], np.cumsum([2 * l + 1 for l in b.shells[a]])])
                 ranges.append(list(zip(edges[:-1].tolist(), edges[1:].tolist())))
+        lr = None if st.hybrid is None else np.asarray(st.hybrid.g_atom)   # TD-LC (M6h-2)
         return _casida.GroundState(eps, coeffs, occ, s, np.asarray(b.orb_atom), st.pos,
-                                   np.asarray(st.coulomb.gamma), spin_w, onsite, ranges)
+                                   np.asarray(st.coulomb.gamma), spin_w, onsite, ranges, lr)
 
     # ------------------------------------------------------------------
     def _sites(self, basis: Basis):

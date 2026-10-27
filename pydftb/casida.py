@@ -18,6 +18,14 @@ each atom's orbital block (DFTB+ ``onsiteEner``).  Its eigenvalues are the squar
 excitation energies Omega_I^2; X + Y = F sqrt(w / Omega_I) for the normalised eigenvectors F.
 
 Energies are in Hartree and dipoles in e Bohr.
+
+TD-LC (milestone M6h-2, DFTB+'s Casida with ``Hybrid = LC``): the ground state's long-range
+exchange adds -[(ij|ab) + (ib|ja)] n_ia n_jb to A+B and -[(ij|ab) - (ib|ja)] n_ia n_jb to A-B
+(same spin channel only; (pq|rs) = q^pq gamma_lr q^rs with the Mulliken transition charges of
+any orbital pair).  A-B is then not diagonal: :class:`HybridResponse` solves
+(A-B)^1/2 (A+B) (A-B)^1/2 T = Omega^2 T, X+Y = (A-B)^1/2 T / sqrt(Omega),
+X-Y = (A-B)^-1/2 T sqrt(Omega), densely or by Stratmann's subspace iteration (DFTB+
+buildAndDiagExcMatrixStratmann).
 """
 from __future__ import annotations
 
@@ -29,6 +37,7 @@ import numpy as np
 import scipy.linalg as sla
 
 from .constants import AU_FS, BOHR, ELEC_TOL_MAX, HARTREE
+from .hybrid import four_terms
 
 # DFTB+ common/constants.F90: Debye__au = 1e-16 alpha_fs au__fs Coulomb__au AA__Bohr^2
 AU_DEBYE = 1.0 / (1e-16 * 0.007297352568 * AU_FS / 1.60217653e-19 / BOHR ** 2)
@@ -37,6 +46,7 @@ SYMMETRIES = {"singlet": "S", "triplet": "T", "both": "B"}
 SOLVERS = ("auto", "exact", "davidson", "arpack")
 EXACT_LIMIT = 500           # "auto": dense Omega up to this many transitions (Davidson beyond)
 DAVIDSON_TOL = 1e-12        # residual norm |Omega x - Omega^2 x| (Hartree^2) of every state
+STRATMANN_TOL = 1e-10       # TD-LC: residual norms |(A-+B)(X-+Y) - Omega (X+-Y)| (Hartree)
 
 
 @dataclass
@@ -59,7 +69,10 @@ class Casida:
     (matrix-free block Davidson with the diagonal w^2 as preconditioner: Omega is that diagonal
     plus a coupling of rank n_atom, so few iterations), "arpack" (matrix-free, SciPy's ARPACK;
     slower, an independent check) or "auto" (exact up to :data:`EXACT_LIMIT` transitions, else
-    Davidson).
+    Davidson).  With a hybrid functional (TD-LC, milestone M6h-2) "exact" diagonalises the
+    symmetrised (A-B)^1/2 (A+B) (A-B)^1/2 and "davidson" runs Stratmann's subspace iteration
+    (matrix-free A+B and A-B, residuals to :data:`STRATMANN_TOL`); "arpack" is for the
+    Hermitian Omega only.
     """
     n_excitations: int
     symmetry: str = "singlet"
@@ -209,6 +222,7 @@ class GroundState:
     spin_w: np.ndarray | None       # (n_atom,) spin constant of each atom's HOAO shell
     onsite: list | None = None      # per atom: (f_uu, f_ud) orbital matrices
     shell_ranges: list | None = None   # per atom: local (start, stop) of every shell
+    lr_gamma: np.ndarray | None = None   # (n_atom, n_atom) long-range gamma: TD-LC (M6h-2)
     sc: list = field(default_factory=list)   # S C per channel (filled in by prepare)
 
     @property
@@ -396,6 +410,22 @@ class Response:
                                                                            else x[:, None])
         return out if x.ndim == 2 else out[:, 0]
 
+    def kernel_product(self, u: np.ndarray) -> np.ndarray:
+        """K u (u: (n_pair,) or (n_pair, m)) without the prefactors and the onsite term: the
+        coupling of A+B for TD-LC (M6h-2)."""
+        q, gs = self.q, self.gs
+        uu = u if u.ndim == 2 else u[:, None]
+        qx = q.T @ uu
+        if self.spin:
+            y = q @ (gs.gamma @ qx)
+            y = y + self.sigma[:, None] * (
+                q @ (gs.spin_w[:, None] * (q.T @ (self.sigma[:, None] * uu))))
+        elif self.sym == "S":
+            y = q @ (gs.gamma @ qx)
+        else:
+            y = q @ (gs.spin_w[:, None] * qx)
+        return y if u.ndim == 2 else y[:, 0]
+
     def solve(self, n: int, solver: str):
         """The lowest n eigenpairs (Omega^2, F) of Omega."""
         size = len(self.w)
@@ -456,11 +486,216 @@ def _new_directions(t, v):
     return u / np.linalg.norm(u, axis=0)
 
 
+# ---- TD-LC (milestone M6h-2) ----------------------------------------------------------------
+class _Exchange:
+    """The long-range exchange of TD-LC on a set of transitions (pairs (i, a, spin), all of the
+    same spin channel's occupied-virtual combinations or a subset): -[(ij|ab) +- (ib|ja)]
+    n_ia n_jb between transitions of the same spin channel, (pq|rs) = q^pq gamma_lr q^rs with
+    the Mulliken transition charges of any orbital pair (DFTB+ transq).  Dense through the
+    transition charges (:meth:`dense`), or applied to vectors through the AO exchange operator
+    K^x[M] = 1/4 four_terms(S, G, M) (:meth:`product`): Y = C_o y C_v^T,
+    (A+-B)^x y = -2 C_o^T K^x[(Y +- Y^T)/2] C_v."""
+
+    def __init__(self, gs: GroundState, pairs, sqrt_n):
+        self.gs, self.pairs, self.sqrt_n = gs, pairs, sqrt_n
+        self.go = gs.lr_gamma[np.ix_(gs.orb_atom, gs.orb_atom)]     # orbital-level gamma_lr
+        self.channels = []           # (spin, rows of the pairs, occupied, virtual, grid index)
+        for s in np.unique(pairs[:, 2]):
+            rows = np.flatnonzero(pairs[:, 2] == s)
+            occ, vir = np.unique(pairs[rows, 0]), np.unique(pairs[rows, 1])
+            grid = (np.searchsorted(occ, pairs[rows, 0]) * len(vir)
+                    + np.searchsorted(vir, pairs[rows, 1]))
+            self.channels.append((int(s), rows, occ, vir, grid))
+
+    def _charges(self, s: int, p, q) -> np.ndarray:
+        """q^pq_A (len(p), len(q), n_atom) of channel s."""
+        c, sc = self.gs.coeffs[s], self.gs.sc[s]
+        r = (np.einsum("mp,mq->mpq", c[:, p], sc[:, q])
+             + np.einsum("mp,mq->mpq", sc[:, p], c[:, q]))
+        starts = np.searchsorted(self.gs.orb_atom, np.arange(len(self.gs.positions)))
+        return 0.5 * np.add.reduceat(r, starts, axis=0).transpose(1, 2, 0)
+
+    def dense(self):
+        """(Kd, Kx): (ij|ab) n n and (ib|ja) n n over the pairs (zero between channels)."""
+        lr = self.gs.lr_gamma
+        n = len(self.pairs)
+        kd, kx = np.zeros((n, n)), np.zeros((n, n))
+        for s, rows, occ, vir, grid in self.channels:
+            no, nv = len(occ), len(vir)
+            q_oo = self._charges(s, occ, occ).reshape(no * no, -1)
+            q_vv = self._charges(s, vir, vir).reshape(nv * nv, -1)
+            q_ov = self._charges(s, occ, vir).reshape(no * nv, -1)
+            d = (q_oo @ (q_vv @ lr).T).reshape(no, no, nv, nv)          # [i, j, a, b]
+            d = d.transpose(0, 2, 1, 3).reshape(no * nv, no * nv)
+            x = (q_ov @ (q_ov @ lr).T).reshape(no, nv, no, nv)          # [i, b, j, a]
+            x = x.transpose(0, 3, 2, 1).reshape(no * nv, no * nv)
+            kd[np.ix_(rows, rows)] = d[np.ix_(grid, grid)]
+            kx[np.ix_(rows, rows)] = x[np.ix_(grid, grid)]
+        f = np.outer(self.sqrt_n, self.sqrt_n)
+        return kd * f, kx * f
+
+    def diagonal(self) -> np.ndarray:
+        """The diagonal of (A+B)^x: -[(ii|aa) + (ia|ia)] n_ia^2."""
+        lr = self.gs.lr_gamma
+        out = np.zeros(len(self.pairs))
+        for s, rows, occ, vir, grid in self.channels:
+            c, sc = self.gs.coeffs[s], self.gs.sc[s]
+            starts = np.searchsorted(self.gs.orb_atom, np.arange(len(self.gs.positions)))
+            q_i = np.add.reduceat(c[:, occ] * sc[:, occ], starts, axis=0)    # (n_atom, n_o)
+            q_a = np.add.reduceat(c[:, vir] * sc[:, vir], starts, axis=0)
+            q_ov = self._charges(s, occ, vir)                                 # (n_o, n_v, A)
+            iiaa = (q_i.T @ lr @ q_a).ravel()
+            iaia = np.einsum("pqA,pqA->pq", q_ov, q_ov @ lr).ravel()
+            out[rows] = -(iiaa + iaia)[grid]
+        return out * self.sqrt_n ** 2
+
+    def product(self, v: np.ndarray, sign: float) -> np.ndarray:
+        """(A+B)^x v (sign 1) or (A-B)^x v (sign -1); v (n_pair,) or (n_pair, m)."""
+        vv = v if v.ndim == 2 else v[:, None]
+        out = np.zeros_like(vv)
+        s_ao = self.gs.overlap
+        for s, rows, occ, vir, grid in self.channels:
+            c = self.gs.coeffs[s]
+            co, cv = c[:, occ], c[:, vir]
+            for k in range(vv.shape[1]):
+                y = np.zeros(len(occ) * len(vir))
+                y[grid] = vv[rows, k] * self.sqrt_n[rows]
+                yao = co @ y.reshape(len(occ), len(vir)) @ cv.T
+                kx = 0.25 * four_terms(s_ao, self.go, 0.5 * (yao + sign * yao.T))
+                out[rows, k] = -2.0 * (co.T @ kx @ cv).ravel()[grid] * self.sqrt_n[rows]
+        return out if v.ndim == 2 else out[:, 0]
+
+
+def _symmetric_rpa(apb, amb, n: int):
+    """The lowest n solutions of (A-B)(A+B)(X+Y) = Omega^2 (X+Y): (Omega^2, X+Y, X-Y) from
+    (A-B)^1/2 (A+B) (A-B)^1/2 T = Omega^2 T, X+Y = (A-B)^1/2 T / sqrt(Omega),
+    X-Y = (A-B)^-1/2 T sqrt(Omega), so that (X+Y).(X-Y) = 1 (DFTB+'s Stratmann solution)."""
+    e, u = np.linalg.eigh(0.5 * (amb + amb.T))
+    if e[0] <= 0.0:
+        raise ValueError(f"TD-LC: A-B is not positive definite (lowest eigenvalue {e[0]:.3e}): "
+                         "the ground state is unstable")
+    sq = (u * np.sqrt(e)) @ u.T
+    isq = (u / np.sqrt(e)) @ u.T
+    m = sq @ apb @ sq
+    omega2, t = sla.eigh(0.5 * (m + m.T), subset_by_index=[0, n - 1])
+    om = np.sqrt(np.abs(omega2))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return omega2, (sq @ t) / np.sqrt(om), (isq @ t) * np.sqrt(om)
+
+
+class HybridResponse:
+    """TD-LC Casida for one symmetry (or spin polarisation) on a set of transitions: A+B and
+    A-B with the long-range exchange (:class:`_Exchange`), the Coulomb and spin coupling of
+    :class:`Response` in A+B.  ``pairs``, ``w``, ``sqrt_n`` and ``q`` as :class:`Response`."""
+
+    def __init__(self, gs: GroundState, pairs, w, sqrt_n, q, sym: str):
+        self.gs, self.pairs, self.w, self.sqrt_n, self.q, self.sym = gs, pairs, w, sqrt_n, q, sym
+        self.coulomb = Response(gs, pairs, w, sqrt_n, q, sym)
+        self.exchange = _Exchange(gs, pairs, sqrt_n)
+
+    def matrices(self):
+        """Dense A+B and A-B."""
+        apb = self.coulomb.pref * np.outer(self.sqrt_n, self.sqrt_n) * self.coulomb.kernel()
+        apb[np.diag_indices_from(apb)] += self.w
+        amb = np.diag(self.w)
+        kd, kx = self.exchange.dense()
+        apb = apb - (kd + kx)
+        amb = amb - (kd - kx)
+        return 0.5 * (apb + apb.T), 0.5 * (amb + amb.T)
+
+    def apb_product(self, v: np.ndarray) -> np.ndarray:
+        vv = v if v.ndim == 2 else v[:, None]
+        n = self.sqrt_n[:, None]
+        out = (self.w[:, None] * vv + self.coulomb.pref * n * self.coulomb.kernel_product(n * vv)
+               + self.exchange.product(vv, 1.0))
+        return out if v.ndim == 2 else out[:, 0]
+
+    def amb_product(self, v: np.ndarray) -> np.ndarray:
+        vv = v if v.ndim == 2 else v[:, None]
+        out = self.w[:, None] * vv + self.exchange.product(vv, -1.0)
+        return out if v.ndim == 2 else out[:, 0]
+
+    def solve(self, n: int, solver: str):
+        """The lowest n solutions (Omega^2, X+Y, X-Y)."""
+        size = len(self.w)
+        if solver == "arpack":
+            raise ValueError("the 'arpack' Casida solver works on the Hermitian Omega, which TD-LC "
+                             "does not have: use 'exact' or 'davidson' (DFTB+: TD-LC-DFTB "
+                             "implemented only for Stratmann diagonaliser)")
+        if solver == "auto":
+            solver = "exact" if size <= EXACT_LIMIT else "davidson"
+        if solver == "exact" or n >= size - 1:
+            return _symmetric_rpa(*self.matrices(), n)
+        return self.stratmann(n)
+
+    def stratmann(self, n: int, tol: float = STRATMANN_TOL, max_iter: int = 1000):
+        """Stratmann's subspace iteration (J. Chem. Phys. 109, 8218 (1998); DFTB+
+        buildAndDiagExcMatrixStratmann) with A+B and A-B applied to the basis: the subspace
+        problem by :func:`_symmetric_rpa`, the residuals (A-B)(X-Y) - Omega (X+Y) and
+        (A+B)(X+Y) - Omega (X-Y) of the states not converged, divided by Omega - w, as new
+        directions.  Starts from the unit vectors of the n + a few lowest w (a few states
+        beyond the n-th are tracked, so a degenerate group at the edge converges) and restarts
+        from the X+Y, X-Y of the tracked states when the space is full."""
+        w = self.w
+        size = len(w)
+        m = min(size, n + min(n, 8))
+        max_space = min(size, max(8 * m, 200))
+        b = np.zeros((size, m))
+        b[np.argsort(w, kind="stable")[:m], np.arange(m)] = 1.0
+        vp, vm = self.apb_product(b), self.amb_product(b)
+        for _ in range(max_iter):
+            mp, mm = b.T @ vp, b.T @ vm
+            omega2, cr, cl = _symmetric_rpa(mp, mm, min(m, b.shape[1]))
+            om = np.sqrt(np.abs(omega2))
+            xpy, xmy = b @ cr, b @ cl
+            r_r = vm @ cl - xpy * om                     # (A-B)(X-Y) - Omega (X+Y)
+            r_l = vp @ cr - xmy * om                     # (A+B)(X+Y) - Omega (X-Y)
+            nr = np.maximum(np.linalg.norm(r_r[:, :n], axis=0), np.linalg.norm(r_l[:, :n], axis=0))
+            todo = np.flatnonzero(nr > tol)
+            if len(todo) == 0:
+                return omega2[:n], xpy[:, :n], xmy[:, :n]
+            denom = om[todo][None, :] - w[:, None]
+            denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+            t_raw = np.hstack([r_r[:, todo] / denom, r_l[:, todo] / denom])
+            t = _new_directions(t_raw, b)
+            if b.shape[1] + t.shape[1] > max_space:          # restart from X+Y and X-Y
+                b = _new_directions(np.hstack([xpy, xmy]), np.zeros((size, 0)))
+                vp, vm = self.apb_product(b), self.amb_product(b)
+                t = _new_directions(t_raw, b)
+            if t.shape[1] == 0:
+                if b.shape[1] >= size:                       # the whole space: exact
+                    return omega2[:n], xpy[:, :n], xmy[:, :n]
+                raise RuntimeError("TD-LC Stratmann solver: no new search directions")
+            b = np.hstack([b, t])
+            vp = np.hstack([vp, self.apb_product(t)])
+            vm = np.hstack([vm, self.amb_product(t)])
+        raise RuntimeError(f"TD-LC Stratmann solver: no convergence in {max_iter} iterations")
+
+
+def _check_tdlc(cas: Casida, gs: GroundState):
+    """DFTB+'s conditions for TD-LC (initprogram ensureLinRespConditions, linrespgrad), in its
+    words: no windows, no onsite corrections (DFTB+'s TD-LC needs its Stratmann solver), integer
+    occupations."""
+    if cas.energy_window is not None or cas.oscillator_window is not None:
+        raise ValueError("hybrid functional excited states not available for window options "
+                         "(as in DFTB+)")
+    if gs.onsite is not None:
+        raise ValueError("Onsite corrections not implemented for Stratmann diagonaliser (as in "
+                         "DFTB+, whose TD-LC needs that solver)")
+    full = 1.0 if gs.spin_polarised else 2.0
+    for f in gs.occupations:
+        if np.any((f > ELEC_TOL_MAX) & (full - f > ELEC_TOL_MAX)):
+            raise ValueError("Fractional occupations not implemented for TD-LC-DFTB (as in DFTB+)")
+
+
 # ---- the calculation -------------------------------------------------------------------------
 def excitations(cas: Casida, gs: GroundState) -> Excitations | list:
     """Excitations of one ground state; a list [triplets, singlets] for "both" (DFTB+'s
     order)."""
     gs.prepare()
+    hybrid = gs.lr_gamma is not None
+    if hybrid:
+        _check_tdlc(cas, gs)
     pairs, w, sqrt_n = single_particle_transitions(gs)
     n_exc = cas.n_excitations
     if n_exc + 1 >= len(w):
@@ -480,6 +715,11 @@ def excitations(cas: Casida, gs: GroundState) -> Excitations | list:
         SYMMETRIES[cas.symmetry]]
     out = []
     for sym in syms:
+        if hybrid:                                                       # TD-LC (M6h-2)
+            resp = HybridResponse(gs, pairs, w, sqrt_n, q, sym or " ")
+            omega2, xpy, xmy = resp.solve(n_exc, cas.solver)
+            out.append(_properties(cas, gs, resp, omega2, None, dip, spx, sym, (xpy, xmy)))
+            continue
         resp = Response(gs, pairs, w, sqrt_n, q, sym or " ")
         omega2, f = resp.solve(n_exc, cas.solver)
         out.append(_properties(cas, gs, resp, omega2, f, dip, spx, sym))
@@ -524,14 +764,20 @@ def _bright_groups(gs: GroundState, pairs, w, sposz, threshold) -> np.ndarray:
     return np.array(keep, int)
 
 
-def _properties(cas: Casida, gs: GroundState, resp: Response, omega2, f, dip, spx, sym):
+def _properties(cas: Casida, gs: GroundState, resp, omega2, f, dip, spx, sym, vectors=None):
+    """The excitations' properties from the eigenvectors F of Omega, or from ``vectors`` =
+    (X+Y, X-Y) (TD-LC, M6h-2)."""
     if np.any(omega2 <= 0):
         warnings.warn("negative or zero Omega^2 in the Casida equation: the ground state is "
                       "unstable", RuntimeWarning, stacklevel=3)
-    with np.errstate(invalid="ignore", divide="ignore"):
+    if vectors is not None:
+        xpy, xmy = vectors
         omega = np.sqrt(np.abs(omega2))
-        xpy = f * np.sqrt(resp.w[:, None] / omega[None, :])
-        xmy = f * np.sqrt(omega[None, :] / resp.w[:, None])
+    else:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            omega = np.sqrt(np.abs(omega2))
+            xpy = f * np.sqrt(resp.w[:, None] / omega[None, :])
+            xmy = f * np.sqrt(omega[None, :] / resp.w[:, None])
     closed = not gs.spin_polarised
     if closed and sym == "T":
         tdip = np.zeros((len(omega2), 3))
