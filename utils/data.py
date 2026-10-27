@@ -238,8 +238,16 @@ def get_energy_per_atom(dft:Atoms,dftb:Atoms, bolt_all, bolt_fxx:list=None):
 
 
 def get_elements_from_dataset(dataset, opt_elem):
-    
-    tot_atomic_numbers = np.unique(np.array([np.unique(mole.numbers).tolist() for mole in dataset]).flatten()) 
+    """(atomic_numbers, atomic_numbers_exclusive, atomic_symbols, atomic_symbols_exclusive):
+    the elements of ``dataset`` not in ``opt_elem`` (sorted, NumPy integers), then ``opt_elem``
+    as given; the symbols in the same order.
+
+    The elements of every structure are concatenated before np.unique (M5b-3).  They used to be
+    stacked with np.array, which NumPy >= 1.24 refuses for structures with different numbers of
+    elements (H2O, OH, CH4 and H2 together).  For every dataset that worked the result is the same,
+    values and types: np.array of the same Python ints, flattened in the same order."""
+    tot_atomic_numbers = np.unique(np.array([z for mole in dataset
+                                             for z in np.unique(mole.numbers).tolist()]))
     atomic_numbers_exclusive = [i for i in tot_atomic_numbers if i not in opt_elem]
     atomic_numbers = atomic_numbers_exclusive + opt_elem
 

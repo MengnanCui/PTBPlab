@@ -161,8 +161,8 @@ class StepData:
             if self.multi_element:
                 scale = [get_PTBP()[chemical_symbols[n]]['sigma_rep'] for n in exclusive] + [sigma]
                 varying = [z for z in numbers if z not in exclusive]
-            else:
-                scale = [sigma]
+            else:                  # every element of the group: the shared sigma (M5b-3)
+                scale = [sigma] * len(numbers)
                 varying = list(numbers)
             return _physrep(numbers, scale, [0.0] * len(numbers)), varying
         scale = [sigma] * len(self.numbers)

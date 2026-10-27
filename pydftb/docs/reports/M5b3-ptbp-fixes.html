@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5b-3 PTBP 旧错误修正报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M5b-3</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5b-3 · 完成报告</p>
+    <h1>PTBP 的两个旧错误：含几个元素的 EOS 组，元素数不同的结构</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-25</dd></div>
+      <div><dt>提交</dt><dd><code>53da5e8</code></dd></div>
+      <div><dt>配套</dt><dd><a href="M5b2-ptbp-followups.html">M5b-2 完成报告</a> · <a href="M5b-ptbp-types.html">M5b 完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">修正 M5b-2 报告第八节记下的两个原有错误，都在 PTBP 一侧，pydftb 未改动。① 一个参数集（单元素，或 <code>--shared-parameters</code>）的 energygeometry 损失遇到含几个元素的 EOS 组时，physrep 只拿到一个 σ<sub>rep</sub>，第一步就以 <code>IndexError</code> 停止；现在组里每个元素都用共用的 σ。② <code>get_elements_from_dataset</code> 遇到元素数不同的结构时 NumPy（≥ 1.24）拒绝参差数组；<code>cli/run.py</code> 对每个 energygeometry/dataset/reaction 运行都调用它，所以这样的数据集不只旧路径，连按元素的默认也在开始时停止；现在可以运行，原来能运行的数据集结果逐字不变。</p>
+    <ul>
+      <li><strong>错误一的修正</strong>：<code>parallel_repulsion</code> 把共用的 σ 给 EOS 组的每个元素，与 dataset/reaction 的 <code>unparallel_repulsion</code> 相同；<code>utils/loss_grad.py</code> 中同一段代码的副本（<code>StepData.physrep</code>：<code>loss_grad.mu</code> 与梯度优化器用它）同样修改；含多元素组的运行不再画单元素的两张图（<code>dmin.png</code>、<code>dftb_ener.png</code>），与按类型的路径一致。Boltzmann 因子、<code>collectAndcalculate_muEV</code>、写 SKF 逐一检查过，不需要改（第二节）。</li>
+      <li><strong>错误二的修正</strong>：先把各结构的元素列表连接起来再 <code>np.unique</code>，不再叠成二维数组；<code>Loss.get_elements_from_dataset</code> 改为调用 <code>utils.data</code> 的同一个函数。对原来能运行的输入，返回值与元素类型（数据集的元素为 <code>np.int64</code>，<code>opt_elem</code> 照原样）逐字相同（第三节）。</li>
+      <li><strong>演示</strong>（energygeometry、pydftb、<code>--shared-parameters</code>、11 次 BO，数据取自 <code>dft/nitrides.xyz</code>）：B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 两个 EOS 组（<code>examples/04</code> 的 22 个结构），基础提交在第一步 <code>IndexError</code>，本分支 11 次求值都成功，最低损失 0.1903568534；只用 B<sub>2</sub>N<sub>2</sub> 一个组时基础同样停止，本分支最低 0.0256327014（第五节）。</li>
+      <li><strong>逐位不变</strong>：G1 损失 0.9198547924，1 核与自动核数逐位相同，34 个文件（包括单元素的两张图）与基础提交 <code>5a27631</code> 逐字节相同；共用参数的 reaction 示例（B<sub>2</sub>N<sub>2</sub> + N<sub>3</sub>Na，11 次 BO，DFTB+，同一输出路径）296 个文件中 261 个逐字节相同，其余只有已知的每次运行不同的内容（可用内存、耗时、孤立原子 DFTB+ 输出的随机种子与计时表），11 个损失与 M5b-2 的同一运行逐位相同（最佳 368.347133）。</li>
+      <li><strong>改变的旧结果</strong>：没有。每处改动都只在原来出错停止的情形下生效：多元素组原来在第一个 σ 就停止，元素数不同的数据集原来在开始时停止（第四节）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">0</span><span class="lbl">原来能运行的运行改变的字节（G1 的 34 个文件；共用参数的 reaction 示例）</span></li>
+      <li><span class="num">270</span><span class="lbl">PTBP 测试通过（新增 4 项；7 个已知的界面冒烟失败）</span></li>
+      <li><span class="num">2</span><span class="lbl">修正的原有错误（新增的 4 项测试在基础提交上都失败）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#eos">二、错误一：含几个元素的 EOS 组</a></li>
+      <li><a href="#ragged">三、错误二：元素数不同的结构</a></li>
+      <li><a href="#changes">四、哪些旧结果改变</a></li>
+      <li><a href="#demo">五、演示：多元素 EOS 数据集</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#users">七、对用户的改变</a></li>
+      <li><a href="#findings">八、发现的问题与偏差</a></li>
+      <li><a href="#decisions">九、需要用户决定的事</a></li>
+      <li><a href="#living">十、建议加入活文档</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>utils/loss.py</code></td><td><code>parallel_repulsion</code>：没有 <code>--multi_element</code> 时 <code>para_rep_tot = [σ] × 组的元素数</code>（原来 <code>= sigma_rep</code>，一个值）；<code>EnergyGeometry</code> 的作图条件加上“每个 EOS 组只有一个元素”（<code>one_element_groups</code>）；<code>Loss.get_elements_from_dataset</code> 改为调用 <code>utils.data.get_elements_from_dataset</code>（原来是逐字相同的副本）</td></tr>
+            <tr><td><code>utils/data.py</code></td><td><code>get_elements_from_dataset</code>：各结构的元素连接成一维再 <code>np.unique</code>（原来 <code>np.array</code> 叠成二维再 <code>flatten</code>）；说明返回值及其类型</td></tr>
+            <tr><td><code>utils/loss_grad.py</code></td><td><code>StepData.physrep</code>（旧路径、energygeometry、没有 <code>--multi_element</code>）：<code>scale = [σ] × 组的元素数</code>（原来 <code>[σ]</code>）</td></tr>
+            <tr><td>测试</td><td>新文件 <code>tests/test_shared_parameters.py</code>（4 项，第六节）；<code>tests/test_failures.py</code> 中 <code>_hco_dataset</code> 的说明（原来写“旧代码需要元素数相同的结构”）</td></tr>
+          </tbody>
+        </table></div>
+        <p>没有改动的：<code>tools/physrep.py</code>（包括 <code>raiseExceptions</code>）、Boltzmann 因子（<code>cli/run.py</code>）、按类型的路径、bandstructure 模式、BO 结束时的作图、<code>pydftb/</code> 的代码（只加了本报告）。</p>
+      </div>
+    </details>
+
+    <section id="eos">
+      <h2>二、错误一：含几个元素的 EOS 组</h2>
+      <h3>原因</h3>
+      <p>旧路径（一个参数集：单元素，或 <code>--shared-parameters</code>，<code>TypeModel.legacy</code>）的 energygeometry 损失：<code>Loss_EnergyGeometry</code> → <code>EnergyGeometry</code> → <code>Repulsion_optimization</code>（11 点格点搜索，再 L-BFGS-B）对每个 σ 调用 <code>parallel_repulsion</code>，它按 EOS 组调用 <code>generate_repulsion</code> → <code>_physrep(组的元素, para_rep_tot, kxc_tot)</code>。没有 <code>--multi_element</code> 时 <code>para_rep_tot = sigma_rep</code>（搜索给的一个值，基础提交 <code>utils/loss.py</code> 第 961 行），<code>atomic_subnumbers</code> 却列出组里的每个元素；<code>physrep.__init__</code> 按元素取 <code>scale_cov[i]</code>（<code>tools/physrep.py</code> 第 107 行），第二个元素就 <code>IndexError</code>。<code>EnergyGeometry</code> 只接住 <code>RuntimeError</code> 等几种异常，<code>IndexError</code> 不在其中，所以不是失败点，而是<strong>整个运行停止</strong>。单元素数据集每组只有一个元素，从来碰不到；M5b 之后多元素数据集默认按元素拟合（按类型的路径给每个类型自己的 σ），只有加 <code>--shared-parameters</code> 才走到这里。</p>
+      <h3>修正</h3>
+      <ul>
+        <li><code>para_rep_tot = [float(σ)] × len(atomic_subnumbers)</code>；<code>kxc_tot</code> 原来就是每个元素一个 0。与 <code>unparallel_repulsion</code>（dataset/reaction，基础提交第 1016 行 <code>scale_cov_per_elem = [σ] × len(atomic_numbers_tot)</code>）的做法相同；<code>EnergyGeometry</code> 在 σ 搜索之后写 SKF 时，本来也把 σ 给数据集的每个元素。</li>
+        <li>单元素的组：列表仍是 <code>[σ]</code>，同一个 Python 浮点数，physrep 的缓存键（<code>repr</code>）与结果逐位不变。</li>
+        <li><strong>同一段代码的副本</strong>：<code>utils/loss_grad.py</code> 的 <code>StepData.physrep</code> 为 <code>loss_grad.mu</code>（从步的文件逐位重算 Loss 的损失）与梯度优化器（<code>--optimizer gradient</code>、<code>bo_grad</code>）重建同样的 physrep，原来也是 <code>scale = [σ]</code>（基础提交第 165 行）。修正之前，梯度钩子 <code>GradRequest.after_step</code> 接住这个 <code>IndexError</code>，多元素组的梯度一律“不可用”；现在是 <code>[σ] × 组的元素数</code>。随 σ 变化的元素（<code>varying</code>）原来就是组里的全部元素，σ 导数的样条不用改。测试检查了 <code>loss_grad.mu</code> 与 Loss 逐位相同；梯度优化器本身没有在多元素组上运行过。</li>
+      </ul>
+      <h3>这条路径上检查过的其他地方</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>地方</th><th>与组里有几个元素的关系</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>Boltzmann 因子（<code>cli/run.py</code> 用 DFT 每原子能量、3000 K 算 <code>bolt_f11</code>）</td><td>按组取：<code>generate_repulsion</code> 用 <code>bolt_f11[n·eos:(n+1)·eos]</code>，<code>collectAndcalculate_muEV</code> 用每组中心结构的 <code>bolt_f[num]</code>，与组里有几个元素无关</td><td>不改。不同组成的组之间比较每原子能量是另一个问题（第九节），按元素的路径用同一组因子</td></tr>
+          <tr><td>组内相对能量（<code>get_energy_per_atom</code>）</td><td>一个 EOS 组只有一种组成，能量相对组内最低的结构</td><td>不改</td></tr>
+          <tr><td><code>collectAndcalculate_muEV</code>、<code>eos_atoms</code>、<code>eos_cal</code></td><td>每组一次 Birch–Murnaghan 拟合，标签取组的元素（<code>eos_B_N_0</code>、<code>eos_N_Na_0</code>）；各组依次覆盖 <code>dftb.json</code>、<code>dft.json</code> 和 csv 文件，留下最后一组的，与单元素相同</td><td>不改</td></tr>
+          <tr><td>σ 搜索中写 SKF（<code>generate_repulsion</code> 的 <code>write_skf</code>）</td><td>写组里所有元素对；元素不同的组各写各的（<code>same_files</code> 为假）。σ 共用时同一元素对的样条在每个组都一样，后写的覆盖先写的，内容相同</td><td>不改</td></tr>
+          <tr><td>σ 搜索之后写 SKF（<code>EnergyGeometry</code>）</td><td>数据集的所有元素、同一个 σ，<code>write_skf</code> 写每个元素对，包括不在同一组里的（例如 B–Na、测试中的 C–H）。<code>write_specific_skf</code> 只用于 <code>--multi_element</code>（只写含第一个优化元素的对），与这里无关</td><td>不改（原来就对）</td></tr>
+          <tr><td>作图（<code>plot_vs</code>、<code>plot_tradition</code>）</td><td>为一个元素的六个相设计：相名只有 dimer…fcc 六个（第 7 个组 <code>IndexError</code>，不被接住），图例写 <code>atomic_symbols[0]</code>（多元素时是最轻的元素），能量相对整个数据集最低的每原子能量（组成不同时差上千 eV）</td><td>含多元素组时不画；每组一个元素的数据集照旧画（按类型的路径对多元素数据集本来就不画）</td></tr>
+          <tr><td>罚项半径、边界、BO 种子</td><td>共用参数取最重元素的共价半径（M5b 的设计）；种子：单元素查 PTBP 表，否则 r<sub>cov</sub> × (3, 5)</td><td>不改</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="ragged">
+      <h2>三、错误二：元素数不同的结构</h2>
+      <h3>原因与影响范围</h3>
+      <p><code>np.unique(np.array([np.unique(mole.numbers).tolist() for mole in dataset]).flatten())</code> 把每个结构的元素列表叠成二维数组；结构的元素数不同时（H<sub>2</sub>O、OH 两个元素，CH<sub>4</sub> 两个，H<sub>2</sub> 一个）是参差列表，NumPy 1.24 起报 <code>ValueError: … inhomogeneous shape</code>。M5b-2 报告把它记为旧路径的问题，实际范围更大：</p>
+      <ul>
+        <li><code>cli/run.py</code> 第 298 行对每个 energygeometry/dataset/reaction 运行都调用 <code>utils.data.get_elements_from_dataset</code>，不论哪种参数布局，所以这样的数据集按元素（默认）与 <code>--shared-parameters</code> 都在<strong>开始时</strong>停止。实测：<code>ptbp optimize</code>（H<sub>2</sub>O、OH、CH<sub>4</sub>、H<sub>2</sub>，reaction，按元素）在基础提交上于第 298 行 <code>ValueError</code>，本分支走到计划（<code>plan.json</code>）。</li>
+        <li>其余调用处：<code>cli/run.py</code> 第 459 行（<code>--params sigma_rep</code>）与第 573 行（<code>--skf_generator</code> 从数据集取元素；<code>ptbp gen</code> 只传元素符号，不经过这里）；<code>Loss</code> 的副本用在旧路径的 <code>set_parameters</code>、<code>parallel_repulsion</code>、<code>unparallel_repulsion</code> 和 <code>loss_grad.StepData.from_files</code>；<code>EnergyGeometry</code> 写 SKF 时用 <code>utils.data</code> 的。（第 507 行 bandstructure 分支用了未定义的 <code>loss</code>，原有，不在范围内。）</li>
+      </ul>
+      <h3>修正</h3>
+      <ul>
+        <li><code>np.unique(np.array([z for mole in dataset for z in np.unique(mole.numbers).tolist()]))</code>：同样的 Python 整数、同样的顺序，只是一维。对原来能叠成矩形的输入，<code>np.array(...)</code> 再 <code>flatten</code> 与一维的 <code>np.array</code> 得到同一个数组（同样的值、NumPy 默认整数类型，这台机器上是 <code>np.int64</code>）；空数据集与没有原子的结构仍是空的浮点数组，结果仍是空列表。其余三行（<code>opt_elem</code> 照原样接在后面、符号）不变。</li>
+        <li><code>Loss.get_elements_from_dataset</code> 原来是逐字相同的副本，现在调用 <code>utils.data</code> 的函数，只剩一份实现。</li>
+        <li>类型为什么要紧：调用方用 <code>repr()</code> 作缓存键（<code>_physrep</code>）和比较（<code>parallel_repulsion</code> 的 <code>same_files</code>），打印 <code>Atomic number: [np.int64(29)]</code>；把 <code>np.int64</code> 换成 <code>int</code> 会改变这些。</li>
+      </ul>
+      <h3>逐字不变的核对</h3>
+      <p>同一段探针在基础导出副本与本分支上各跑一次，打印四个返回值的 <code>repr</code> 与每个元素的类型：Cu/Cu<sub>2</sub>；H<sub>2</sub>O/OH/CH<sub>4</sub>/CH；NaN<sub>3</sub>/B<sub>2</sub>N<sub>2</sub>（<code>opt_elem</code> 为 <code>[]</code>、<code>[8]</code>、<code>[29, 7]</code>）；空数据集；没有原子的结构——每一行逐字相同。只有参差的两组（H<sub>2</sub>O、OH、CH<sub>4</sub>、CH、H<sub>2</sub>；Cu 与 BN）不同：基础 <code>ValueError</code>，本分支给出排好序的 <code>np.int64</code>。测试把旧实现抄作参照，逐项比较 <code>repr</code> 与类型。</p>
+      <h3>其他副本</h3>
+      <p>在 PTBP（<code>pydftb/</code> 之外）中搜索同样的写法，只有第三份：<code>tools/skf_generator.py</code> 第 95 行。它是独立的旧脚本，哪里都不导入它，而且按现状不能运行（把 <code>hotpy</code>、<code>physrep</code> 当作 <code>tools/</code> 里的顶层模块导入，读不存在的 <code>atoms_info[...]['r_wave']</code>，调用 <code>write_skf()</code> 不给参数），不在运行路径上，没有改（第九节）。<code>tools/debug.ipynb</code> 里也有旧的调用（笔记本）。其他把逐结构列表交给 <code>np.array</code> 的地方（<code>get_bolt_factor</code> 的 ×11 列表、能量、体积、力的长列表）元素等长，不会参差。</p>
+    </section>
+
+    <section id="changes">
+      <h2>四、哪些旧结果改变</h2>
+      <p><strong>没有。</strong>每处改动都只在原来出错停止的情形下改变行为：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>改动</th><th>原来能运行的情形</th><th>那些运行</th></tr></thead>
+        <tbody>
+          <tr><td><code>para_rep_tot</code>（<code>parallel_repulsion</code>）</td><td>每个 EOS 组一个元素：单元素数据集，或每组一个元素的多元素数据集加 <code>--shared-parameters</code></td><td>不变：仍是 <code>[σ]</code>，同一个浮点数、同一个 physrep。多元素的组原来在第一个 σ 就 <code>IndexError</code></td></tr>
+          <tr><td><code>StepData.physrep</code>（<code>loss_grad</code>）</td><td>同上</td><td>不变；多元素的组原来梯度不可用、<code>loss_grad.mu</code> 出错</td></tr>
+          <tr><td>作图条件</td><td>每组一个元素</td><td>不变，照旧画两张图；不画的只有含多元素组的运行（原来走不到作图）</td></tr>
+          <tr><td><code>get_elements_from_dataset</code>（两份）</td><td>各结构元素数相同（包括空数据集）</td><td>不变：值与类型逐字相同（第三节）；元素数不同的数据集原来在开始时停止</td></tr>
+        </tbody>
+      </table></div>
+      <p>门槛中的两个对照覆盖两条旧路径：G1 是单元素 energygeometry（<code>parallel_repulsion</code>、作图、<code>get_elements_from_dataset</code>），34 个文件逐字节相同；共用参数的 reaction 示例是多元素 dataset/reaction（<code>unparallel_repulsion</code>，B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 都是两个元素，不参差），除已知的每次运行不同的行外逐字节相同（第六节）。</p>
+    </section>
+
+    <section id="demo">
+      <h2>五、演示：多元素 EOS 数据集</h2>
+      <p>数据取自 <code>dft/nitrides.xyz</code>（18 个氮化物的 EOS 扫描，每个 11 个体积，每个结构两个元素，共 19 个元素，整个拟合太贵）：<code>examples/04_reaction_b2n2_n3na/prepare.py</code> 取出的 22 个结构，B<sub>2</sub>N<sub>2</sub> 与 N<sub>3</sub>Na 各一个 EOS 组，这次用 energygeometry 损失；另取 B<sub>2</sub>N<sub>2</sub> 一个组单独跑。基础导出副本与本分支各跑一次，同一输出路径：</p>
+      <pre><code>ptbp optimize dft/dft.xyz --mode energygeometry --engine pydftb --shared-parameters --n-calls 11 --output run_cmp</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>数据</th><th>基础提交 <code>5a27631</code></th><th>本分支</th></tr></thead>
+        <tbody>
+          <tr><td>B<sub>2</sub>N<sub>2</sub> + N<sub>3</sub>Na（22 个结构，B、N、Na，两个组）</td><td>第一步（种子点 r<sub>0,w</sub> = 9.411、r<sub>0,d</sub> = 15.685 Bohr）的第一个 σ 就 <code>IndexError</code>（<code>tools/physrep.py</code> 第 107 行），运行停止，没有任何损失（38 s）</td><td>11 次求值都成功，没有失败点；σ* 在 0.554–0.566；损失 0.190–2.673；最低为第 5 点 r<sub>0,w</sub> = 4.8792、r<sub>0,d</sub> = 13.3583 Bohr、σ = 0.56638，<strong>μ = 0.1903568534</strong>（μ<sub>E</sub> 0.0711、μ<sub>V</sub> 0.0149、μ<sub>B</sub> 1.143、罚项 4.4235）；每步 35–46 s，共 458 s</td></tr>
+          <tr><td>B<sub>2</sub>N<sub>2</sub>（11 个结构，B、N，一个组）</td><td>同样在第一步 <code>IndexError</code>（种子点 4.025、6.709 Bohr）</td><td>11 次都成功；σ* 在 0.577–0.623；损失 0.0256–0.959；最低为种子点 r<sub>0,w</sub> = 4.0251、r<sub>0,d</sub> = 6.7085 Bohr、σ = 0.60798，<strong>μ = 0.0256327014</strong>（μ<sub>E</sub> 0.00677、μ<sub>V</sub> 0.00094、μ<sub>B</sub> 1.0055、罚项 6.6467）；每步 13–18 s，共 170 s</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>文件</strong>：本分支每一步都给所有元素对写了排斥样条（两个组 11 × 9 = 99 个 SKF，包括没有组同时含有的 B–Na；B<sub>2</sub>N<sub>2</sub> 11 × 4 = 44 个），EOS 文件按组命名（<code>eos_B_N_0.traj</code>、<code>eos_N_Na_0.traj</code>），没有 <code>dmin.png</code>、<code>dftb_ener.png</code>。之后与所有 <code>--optimizer bo</code> 运行一样，写完 <code>result.pkl</code>、<code>convergence.png</code>、<code>summary.json</code> 与检查点，在 BO 结束时的作图处停下（原有错误）。</li>
+        <li><strong>Boltzmann 因子</strong>：两个组时为 [0.0, 1.0]，只有 N<sub>3</sub>Na 进入损失；B<sub>2</sub>N<sub>2</sub> 组照样计算（B、N 用共用的 σ），但权重为 0，DFTB 阶段只算 Γ 点（第九节）。只有 B<sub>2</sub>N<sub>2</sub> 时为 [1.0]。</li>
+        <li><strong>罚项半径与边界</strong>：共用参数取最重元素的共价半径（Na 3.137 Bohr，B<sub>2</sub>N<sub>2</sub> 时 N 1.342 Bohr），r<sub>0,w</sub> 的上界为 7 倍（21.96、9.39 Bohr）；种子为 r<sub>cov</sub> × (3, 5)。</li>
+        <li>11 次是种子加 skopt 的 10 个随机点（<code>random_state=123</code>），还没有引导步，所以这里只说明运行完成，不说明拟合质量。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th rowspan="2">序号</th><th colspan="4">B<sub>2</sub>N<sub>2</sub> + N<sub>3</sub>Na</th><th colspan="4">B<sub>2</sub>N<sub>2</sub></th></tr>
+          <tr><th>r<sub>0,w</sub></th><th>r<sub>0,d</sub></th><th>σ*</th><th>μ</th><th>r<sub>0,w</sub></th><th>r<sub>0,d</sub></th><th>σ*</th><th>μ</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>9.4108</td><td>15.6847</td><td>0.56402</td><td>0.2548028726</td><td>4.0251</td><td>6.7085</td><td>0.60798</td><td>0.0256327014</td></tr>
+          <tr><td>1</td><td>16.2583</td><td>14.0400</td><td>0.56403</td><td>1.8933258323</td><td>7.2988</td><td>7.1171</td><td>0.61233</td><td>0.2961042509</td></tr>
+          <tr><td>2</td><td>15.8200</td><td>21.2583</td><td>0.56527</td><td>2.6725815255</td><td>7.1379</td><td>9.6389</td><td>0.62122</td><td>0.9593874935</td></tr>
+          <tr><td>3</td><td>11.8529</td><td>22.7700</td><td>0.56528</td><td>0.9043326000</td><td>5.6812</td><td>10.1670</td><td>0.62215</td><td>0.4507038717</td></tr>
+          <tr><td>4</td><td>10.2604</td><td>17.7953</td><td>0.56457</td><td>0.3626360096</td><td>5.0964</td><td>8.4291</td><td>0.61699</td><td>0.1391815613</td></tr>
+          <tr><td>5</td><td>4.8792</td><td>13.3583</td><td>0.56638</td><td><strong>0.1903568534</strong></td><td>3.1205</td><td>6.8790</td><td>0.61377</td><td>0.0470982184</td></tr>
+          <tr><td>6</td><td>14.5576</td><td>11.4495</td><td>0.56283</td><td>1.0751305176</td><td>6.6744</td><td>6.2121</td><td>0.60663</td><td>0.1418012456</td></tr>
+          <tr><td>7</td><td>6.9606</td><td>20.6525</td><td>0.56574</td><td>0.2482083141</td><td>3.8848</td><td>9.4272</td><td>0.62253</td><td>0.1368762121</td></tr>
+          <tr><td>8</td><td>13.8941</td><td>19.0890</td><td>0.56493</td><td>1.2317827595</td><td>6.4307</td><td>8.8810</td><td>0.61886</td><td>0.4279256103</td></tr>
+          <tr><td>9</td><td>10.8429</td><td>5.4791</td><td>0.55429</td><td>0.2658600907</td><td>5.3103</td><td>4.1264</td><td>0.57670</td><td>0.3186058806</td></tr>
+          <tr><td>10</td><td>16.2459</td><td>14.0249</td><td>0.56403</td><td>1.8856164981</td><td>7.2943</td><td>7.1119</td><td>0.61229</td><td>0.2943813684</td></tr>
+        </tbody>
+      </table></div>
+      <p>（r<sub>0</sub> 以 Bohr 计；点与损失取自检查点，σ* 取自每一步目录中的 <code>par.out</code>。旧路径在进入步的目录之后才写 <code>par.out</code>，所以运行文件夹中的 <code>par.out</code>、<code>log.out</code> 只有表头，M5b 已记下。）</p>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <h3>新测试（<code>tests/test_shared_parameters.py</code>，4 项，每项在基础提交上失败）</h3>
+      <ul>
+        <li><strong>错误一</strong>（<code>test_shared_parameters_on_eos_groups_of_several_elements</code>，约 11 s）：一个参数集（<code>TypeModel(shared=True)</code>，<code>legacy</code>）的 energygeometry，两个两元素的 EOS 组（岩盐结构 CO 与 OH，各 11 个点，晶格常数 a<sub>0</sub> × 0.94–1.06，DFT 能量为编造的抛物线），pydftb，hotcent 换成存好的 H、C、O 表并去掉其中的排斥样条，Boltzmann 因子按 <code>cli/run.py</code> 计算。CO 组的 DFTB 极小落在扫描范围内，并在 σ ≈ 0.72 时到达 a<sub>0</sub> = 3.95 Å，所以 σ* 在边界之内，损失对 σ 敏感。断言：经过 <code>parallel_repulsion</code> → physrep 得到有限的损失，不是失败点；9 个 SKF 都有排斥样条，且与 physrep 以 σ* 给 H、C、O 写出的文件逐字节相同（C–H 不在任何一组里，也写了）；没有 <code>dmin.png</code>、<code>dftb_ener.png</code>；在 σ* 和另外两个 σ 上，<code>parallel_repulsion</code>、<code>loss_grad.mu</code> 与按元素的路径（M5b，三个 σ 相等）算出的各项逐位相同（罚项除外）。基础提交：<code>IndexError</code>（<code>tools/physrep.py</code>）。只把 <code>utils/loss_grad.py</code> 还原成基础版本时，这项也失败（<code>StepData.physrep</code> 的 <code>IndexError</code>）。</li>
+        <li><strong>错误二</strong>（<code>test_elements_of_structures_with_different_numbers_of_elements</code>）：H<sub>2</sub>O、OH、CH<sub>4</sub>、H<sub>2</sub>、Cu 在两份实现上都给出 <code>[1, 6, 8, 29]</code>（<code>np.int64</code>），<code>opt_elem=[8]</code> 时 O 移到最后且保持 <code>int</code>；六组元素数相同的输入（含空数据集、<code>opt_elem</code> 不在数据集中）与抄下的旧实现 <code>repr</code> 和类型逐项相同；旧实现在参差输入上 <code>ValueError</code>。</li>
+        <li><code>test_shared_parameters_on_structures_with_different_numbers_of_elements</code>（约 4 s）：一个参数集的 dataset 损失（旧路径）在 H<sub>2</sub>O、OH、CH<sub>4</sub>、H<sub>2</sub> 上得到所有结构的损失，<code>loss_grad.mu</code>（数据集分支，同样经过 <code>get_elements_from_dataset</code>）逐位重算。基础提交：<code>Loss.set_parameters</code> 中 <code>ValueError</code>。</li>
+        <li><code>test_optimize_starts_on_structures_with_different_numbers_of_elements</code>（约 7 s，两个子进程）：<code>ptbp optimize</code>（reaction，按元素与 <code>--shared-parameters</code>，<code>--postprocess-only</code>）都走到计划。基础提交：<code>cli/run.py</code> 第 298 行 <code>ValueError</code>。</li>
+      </ul>
+      <h3>门槛</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>PTBP 测试</td><td><code>flock $S/heavy.lock python -m pytest -q -p no:cacheprovider tests</code>（conda Python 3.11、NumPy 2.4.6，<code>PYTHONPATH</code> 指向本工作树）</td><td><strong>270 通过</strong>，7 失败，1 跳过（412.8 s）。7 个失败都是 <code>tests/test_tui_smoke.py</code> 的界面冒烟测试（没有异步插件：“async def functions are not natively supported”），与基础提交导出副本上同一组（导出副本：266 通过，7 失败，1 跳过，414.4 s）；270 = 266 + 新增 4 项</td></tr>
+          <tr><td>新测试在基础提交上</td><td>基础导出副本只加上 <code>tests/test_shared_parameters.py</code></td><td>4 项都失败：<code>IndexError</code>（physrep），三次 <code>ValueError</code>（参差数组：单元测试、<code>Loss.set_parameters</code>、<code>cli/run.py</code> 第 298 行）。只把 <code>utils/loss_grad.py</code> 还原时错误一的测试也失败（<code>StepData.physrep</code>）</td></tr>
+          <tr><td>G1</td><td><code>ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines pydftb --compare-serial --workdir &lt;dir&gt;</code>，本分支与基础提交 <code>5a27631</code> 的 <code>git archive</code> 导出副本各跑一次</td><td>两边都是 <strong>0.9198547924</strong>，1 核与自动核数逐位相同（损失与 5 个文件）；两个运行目录共 <strong>34 个文件逐字节相同</strong>，包括单元素的两张图 <code>dmin.png</code>、<code>dftb_ener.png</code></td></tr>
+          <tr><td>共用参数的 reaction 示例</td><td><code>examples/04</code> 的 22 个结构（<code>prepare.py</code> 的输出，与 M5b、M5b-2 用的数据和 E0 缓存逐字节相同），<code>ptbp optimize dft.xyz --n-calls 11 --shared-parameters</code>，DFTB+，同一输出路径，基础导出副本对本分支</td><td>没有失败点；296 个文件中 <strong>261 个逐字节相同</strong>（每一步的 par.out、log.out、SKF、DFTB+ 输入输出、<code>reaction_per_formula.csv</code>、<code>dftb_full.xyz</code>，<code>result.pkl</code>、<code>checkpoint.pkl</code> 与元数据、<code>ptbp_run.yaml</code>、<code>convergence.png</code>）；不同的 35 个只有 <code>plan.json</code> 的 <code>estimates.memory_available</code>、<code>summary.json</code> 的 <code>runtime_s</code>，以及 33 个孤立原子 DFTB+ 输出（<code>B.out</code>、<code>N.out</code>、<code>Na.out</code>）的 “Chosen random seed” 行和计时表的行（“Missing”“Total”，有几个文件还有 “SCC”“Global initialisation”：DFTB+ 只列出超过阈值的计时）。11 个损失与 M5b-2 的两次同一运行逐位相同（最佳 368.347133，r<sub>0,w</sub> = 4.8792、r<sub>0,d</sub> = 13.3583）。两次都在 BO 结束后的作图处停下（原有错误）</td></tr>
+          <tr><td>修正 (a) 的演示</td><td>第五节：energygeometry、pydftb、<code>--shared-parameters</code>、<code>--n-calls 11</code>，B<sub>2</sub>N<sub>2</sub> + N<sub>3</sub>Na 与 B<sub>2</sub>N<sub>2</sub>，基础导出副本对本分支</td><td>基础两次都在第一步 <code>IndexError</code>；本分支两次 11 次求值都成功，最低损失 0.1903568534 与 0.0256327014，SKF 都有排斥样条</td></tr>
+          <tr><td>改变的旧结果</td><td>第四节</td><td>没有</td></tr>
+          <tr><td>pydftb 未改动</td><td><code>git diff --stat 5a27631 -- pydftb</code></td><td>只有本报告</td></tr>
+          <tr><td>pydftb 测试</td><td>—</td><td>没有运行（pydftb 未改动）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="users">
+      <h2>七、对用户的改变</h2>
+      <ul>
+        <li><strong>多元素 EOS 数据集可以用 <code>--shared-parameters</code> 拟合 energygeometry 损失</strong>（原来第一步停止）。所有元素共用 (r<sub>0,w</sub>, r<sub>0,d</sub>, σ<sub>rep</sub>)，SKF 中每个元素对都写排斥样条；这样的运行不画单元素的 <code>dmin.png</code>、<code>dftb_ener.png</code>（按元素拟合同样不画）。注意第九节的 Boltzmann 因子：组成不同的组之间按每原子能量加权，通常只有一个组成进入损失。</li>
+        <li><strong>各结构元素数不同的数据集可以运行</strong>（例如分子与原子、单质与化合物混在一起），所有模式、按元素与共用参数都可以；原来不论哪种布局都在开始时以 <code>ValueError</code> 停止。</li>
+        <li>梯度优化器（<code>--optimizer gradient</code>、<code>bo_grad</code>）在共用参数、多元素 EOS 组上不再因同一个 <code>IndexError</code> 得不到梯度（<code>loss_grad</code> 的 physrep 已修正；没有运行梯度优化器的演示）。</li>
+        <li>原来能运行的运行，输出逐字节不变；命令行、YAML、检查点、文件格式都没有变。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>八、发现的问题与偏差</h2>
+      <ul>
+        <li><strong>M5b-2 报告对错误二的范围写小了</strong>：不只旧路径，<code>cli/run.py</code> 对每个运行都调用 <code>get_elements_from_dataset</code>（第三节）。</li>
+        <li><strong>单元素作图在多于 6 个 EOS 组时让运行停止</strong>（原有，未改）：<code>plot_tradition</code> 的相名只有 6 个，第 7 个组 <code>IndexError</code>，不在接住的异常之列；<code>plot_vs</code> 对权重 ≥ 0.1 的第 7 个以后的组也一样。单元素数据集有 7 个以上的组时，第一步 σ 搜索之后整个运行停止（用 7 个组直接调用 <code>plot_tradition</code> 核对过：<code>IndexError</code>）。</li>
+        <li><strong>L-BFGS-B 的结果可能不配对</strong>（原有，未改）：设计测试时用过一组 DFTB 极小落在扫描范围外的合成数据，EOS 拟合在 σ 改变约 10<sup>−9</sup> 时在两个解之间跳，损失在 1.80 与 74.9 之间跳。<code>Repulsion_optimization</code> 返回 σ* = 0.5926215820 与 μ = 74.874，而在这个 σ* 上重算（<code>parallel_repulsion</code>、<code>loss_grad.mu</code>）都得 1.7954559。看来是线搜索退回上一个迭代点时 SciPy 退回了 <code>x</code>，<code>fun</code> 却留着最后一次求值的值，于是写进 par.out、交给 BO 的 μ 不是 μ(σ*)。损失跳动时差别很大，平滑时即使发生也只差一点；没有检查门槛与演示的运行中是否发生过。按类型的路径用同样的调用。测试改用 DFTB 极小在扫描范围内的数据。</li>
+        <li><strong>与指示的偏差</strong>：
+          <ul>
+            <li>工作树建在 <code>main</code>（<code>2eb6bd6</code>，第一个提交）上，开始时把本分支 <code>git reset --hard 5a27631</code>（工作树是干净的，只动本分支）。</li>
+            <li>也修改了 <code>utils/loss_grad.py</code> 中的副本（同一个错误；<code>loss_grad.mu</code> 声称逐位重算 Loss 的损失，梯度优化器靠它）。</li>
+            <li>含多元素组时不画单元素的图（指示要求检查作图）：条件取“有组含几个元素”而不是“数据集有几个元素”，后者会让每组一个元素的多元素数据集（原来能运行）少两张图。</li>
+            <li><code>Loss.get_elements_from_dataset</code> 改为调用 <code>utils.data</code> 的函数，而不是把同样的修改写两遍。</li>
+            <li>演示用 <code>--n-calls 11</code> 而不是 3：skopt 0.10.2 在 BO 有种子点时要求 n_calls ≥ 10 个随机点 + 1 个种子，<code>gp_minimize(n_calls=3, x0=…)</code> 报 <code>ValueError: Expected `n_calls` &gt;= 11, got 3</code>，11 是最少的次数。</li>
+            <li>多加了两项测试（旧路径 dataset 损失、<code>ptbp optimize</code> 的开始）：错误二在开始时就停止，单元测试不足以说明这一点。</li>
+            <li>共享磁盘在 14:44 左右写满（另一个会话的 6.7 GB 输出），第一次门槛运行的所有步骤立即失败；腾出空间后全部重跑。工作树 <code>git fsck</code> 正常，输入文件与基础导出副本核对过（只有运行追加的 <code>report.log</code> 不同），本报告的数字都来自重跑。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="decisions">
+      <h2>九、需要用户决定的事</h2>
+      <ul>
+        <li><strong>组成不同的 EOS 组的 Boltzmann 因子</strong>：energygeometry 按 DFT 每原子总能量（3000 K）给每组加权，全电子能量的每原子值随元素相差很大：演示中 B<sub>2</sub>N<sub>2</sub> −1084.63 eV/原子、N<sub>3</sub>Na −2223.75 eV/原子，权重为 0 和 1，B<sub>2</sub>N<sub>2</sub> 不进入损失，DFTB 阶段也只算 Γ 点；<code>dft/nitrides.xyz</code> 的 18 个组成只剩 I<sub>4</sub>N<sub>16</sub>（−40510.75 eV/原子，权重 1），其余 17 个的权重都是 0。按元素与共用参数两条路径用同一组因子（<code>cli/run.py</code>），所以没有改：改动会改变按元素拟合的旧结果。可选的做法：组成不同时按组成分别归一（每种组成内比较），或者对多组成的数据集用相同的权重（<code>--multi_element</code> 时已经是 <code>identical</code>）。</li>
+        <li><strong><code>--shared-parameters</code> 加上列出所有元素的 <code>--multi_element</code></strong>：没有固定的元素，类型模型判为旧布局，旧路径按 <code>--multi_element</code> 的旧含义只给第一个列出的元素设半径（B、N、Na 时 <code>set_parameters</code> 只返回 <code>{'B': [r0_w, r0_d]}</code>），运行不能正常进行。建议拒绝这个组合，或者在列出全部元素时忽略 <code>--multi_element</code>。</li>
+        <li><strong><code>tools/skf_generator.py</code></strong>：不能运行的旧脚本，含错误二的第三份副本，功能已由 <code>ptbp gen</code> 代替；删除还是修好。</li>
+        <li><strong>多于 6 个组的单元素作图</strong>与 <strong>L-BFGS-B 结果的配对</strong>（第八节）是否修。</li>
+        <li>仍未处理的原有问题（不在本次范围）：physrep 的 <code>raiseExceptions</code>、bandstructure 的失败值 20、BO 结束时的作图错误（<code>eval[0][0]</code>）。</li>
+      </ul>
+    </section>
+
+    <section id="living">
+      <h2>十、建议加入活文档</h2>
+      <ul>
+        <li><code>ROADMAP.md</code> 的 M5 一行：在 M5b-2 之后加 “M5b-3 ✅（PTBP 的两个旧错误：<code>--shared-parameters</code> 的 energygeometry 支持含几个元素的 EOS 组，组内每个元素用共用的 σ<sub>rep</sub>，<code>loss_grad</code> 的副本同样；<code>get_elements_from_dataset</code> 接受元素数不同的结构，原来这样的数据集在任何布局下都在开始时停止；原来能运行的运行逐字节不变）”；文档列加 <code>reports/M5b3-ptbp-fixes.html</code>。</li>
+        <li><code>index.html</code>：M5b-3 报告的链接；首页离线测试数中 PTBP 的 266 → 270（新增 <code>tests/test_shared_parameters.py</code> 4 项）。</li>
+        <li><code>ROADMAP.md</code> 或 <code>RESEARCH.md</code> 的已知问题：去掉“旧路径 energygeometry 不支持多元素的 EOS 组”“<code>Loss.get_elements_from_dataset</code> 遇到元素数不同的结构出错”；保留 physrep 的 <code>raiseExceptions</code>、bandstructure 的失败值 20、BO 结束时的作图错误；加上：组成不同的 EOS 组的 Boltzmann 因子，<code>--shared-parameters</code> 与列出全部元素的 <code>--multi_element</code>，多于 6 个组的单元素作图，<code>tools/skf_generator.py</code>。</li>
+        <li>根目录 <code>README.md</code>（PTBP）：<code>--shared-parameters</code> 可用于多元素 EOS 数据集的 energygeometry（不画单元素的图）；元素数不同的结构可以放进同一个数据集；energygeometry 的 Boltzmann 权重在组成不同的组之间比较每原子能量（第九节）。<code>pydftb/README.md</code> 不需要改。</li>
+        <li>M5b-2 报告第八节关于 <code>get_elements_from_dataset</code> 的一条可加注：影响每个运行的开始（<code>cli/run.py</code>），M5b-3 已修正。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M5b2-ptbp-followups.html">← M5b-2 完成报告</a><a href="../index.html">文档索引</a></nav>
+    <span>M5b-3</span>
+  </footer>
+</div>
+</body>
+</html>
