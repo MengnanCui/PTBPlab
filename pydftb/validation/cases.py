@@ -26,6 +26,10 @@ SKF_SETS = {
     "orbit_poly": os.path.join(DATA, "skf", "orbit_poly"),   # make_poly_set.py
     "hotcent_gdo": os.path.join(DATA, "skf", "hotcent_gdo"), # make_f_set.py (f orbitals)
     "cu_types": os.path.join(DATA, "skf", "cu_types"),       # make_cu_types_set.py (M5a)
+    # make_hybrid_sets.py (M6h-1): ptbp_hcocu with a RangeSep section
+    "ptbp_hcocu_lc": os.path.join(DATA, "skf", "ptbp_hcocu_lc"),
+    "ptbp_hcocu_cam": os.path.join(DATA, "skf", "ptbp_hcocu_cam"),
+    "ptbp_hcocu_global": os.path.join(DATA, "skf", "ptbp_hcocu_global"),
 }
 REF_DIR = os.path.join(DATA, "ref")
 MAXL = {"H": 0, "C": 1, "O": 1, "Cu": 2, "Li": 0, "Gd": 3}
@@ -187,6 +191,9 @@ class Case:
     # "coord_derivatives" also pydftb's analytic Born charges against DFTB+'s differences
     fd_delta: float | None = None
     hessian: dict | None = None
+    # milestone M6h-1: a hybrid functional, pydftb's ``hybrid`` option ("lc", "cam" or {"type",
+    # "screening", "threshold", "cutoff_reduction" (Bohr)}); the SK set must have RangeSep
+    hybrid: str | dict | None = None
 
     @property
     def corrections(self) -> bool:
@@ -205,7 +212,8 @@ class Case:
     def track_scc(self) -> bool:
         """References keep the SCC error of every iteration and pydftb must take the same
         number of iterations (M6f cases)."""
-        return self.scc_start or self.overrides or self.corrections or self.analysis is not None
+        return (self.scc_start or self.overrides or self.corrections or self.analysis is not None
+                or self.hybrid is not None)
 
     @property
     def scc_start(self) -> bool:
@@ -1782,5 +1790,114 @@ CASES += [
     Case("oh_noncolinear_soc_pc_extq", _oh, **_OHNC, spin_orbit=SOC_O, point_charges=PC3,
          dftbplus="dev", torch=False, tol={**TOL_EXTQ, "moments": 1e-8}, analysis=EXTQ,
          note="the development build prints the charge part; pydftb gives all four components"),
+]
+
+# Range-separated hybrid functionals (milestone M6h-1): LC-DFTB, CAM and a global hybrid for
+# molecules, on ptbp_hcocu with a RangeSep section (make_hybrid_sets.py; not a physical
+# parametrisation).  The references keep every SCC error: the mixed vector is DeltaP, and the
+# iteration counts must match.  fd_delta: DFTB+'s difference step for the H0/S derivatives.
+HYB_FD = 2.0 ** -13
+TOL_HYB = {"energy": 1e-8, "forces": 1e-8, "charges": 1e-8, "spins": 1e-8, "n_scc": 0,
+           "scc_errors": 1e-4, "orbital": 1e-8, "eigenvalues": 1e-8, "moments": 1e-8,
+           "pc_forces": 1e-8, "dipole": 1e-8, "e_fr": 1e-8, "n_electrons": 1e-8,
+           "fermi_level": 1e-8, "charges_file": 1e-8}
+W_C = [[-0.031, -0.025], [-0.025, -0.023]]        # spin constants of C (Ha), mio's values
+W_HCO = {"H": W_SPIN["H"], "C": W_C, "O": W_SPIN["O"]}
+LC = {"skf_set": "ptbp_hcocu_lc", "hybrid": "lc", "fd_delta": HYB_FD, "torch": False,
+      "tol": TOL_HYB}
+
+
+def _ch3():
+    a = molecule("CH3")
+    a.rattle(0.02, seed=21)
+    return a
+
+
+def _c6h6_rattled():
+    a = molecule("C6H6")
+    a.rattle(0.02, seed=22)
+    return a
+
+
+def _hco():
+    """The formyl radical (bent): no degenerate level.  The OH radical is no test for a hybrid
+    with spin: its half-filled pi pair in the minority channel breaks the symmetry in a direction
+    set by rounding, and the SCC path (not the energy) depends on it."""
+    return Atoms("HCO", positions=[[-0.637, 0.909, 0.0], [0, 0, 0], [1.18, 0, 0]])
+
+
+def _cuh():
+    """CuH, closed shell.  CuCO (an odd electron count) with LC and +U at 300 K is no test: the
+    SCC diverges in both codes, and DFTB+ converges after 387 iterations by chance."""
+    return Atoms("CuH", positions=[[0, 0, 0], [0.3, 0.2, 1.45]])
+
+
+CASES += [
+    Case("h2o_lc", _water, **LC),
+    Case("ch3oh_lc", _meoh, **LC),
+    Case("c6h6_lc", _c6h6_rattled, **LC),
+    Case("h2co_cam", _h2co, **{**LC, "skf_set": "ptbp_hcocu_cam", "hybrid": "cam"},
+         note="CAM 0.3 0.19 0.46 (DFTB+'s CAM test values)"),
+    Case("c2h4_global", _c2h4, **{**LC, "skf_set": "ptbp_hcocu_global", "hybrid": "cam"},
+         note="a global hybrid: CAM with beta = 0 (DFTB+ has no Hybrid = Global)"),
+    Case("ch3oh_lc_cam_keyword", _meoh, **{**LC, "hybrid": "cam"},
+         note="Hybrid = CAM takes LC files"),
+    # screening
+    Case("c6h6_lc_neighbour_10", _c6h6_rattled,
+         **{**LC, "hybrid": {"type": "lc", "screening": "neighbour", "cutoff_reduction": 10.0}},
+         note="S blocks beyond the largest SK cutoff minus 10 Bohr (5.4 Bohr: the meta and para "
+              "C-H and H-H pairs) left out of the exchange; the forces stay exact (as DFTB+): "
+              "not the energy's derivative"),
+    Case("c6h6_lc_threshold", _c6h6_rattled,
+         **{**LC, "hybrid": {"type": "lc", "screening": "threshold"}}, scc_tol=1e-6,
+         note="DFTB+'s incremental Thresholded build, threshold 1e-6.  scc_tol 1e-6: below it "
+              "the screening decisions flip with rounding and the tail of the SCC (not its "
+              "result) differs between the codes (74 and 52 iterations to 1e-10)"),
+    Case("c6h6_lc_threshold_1e-4_red4", _c6h6_rattled,
+         **{**LC, "hybrid": {"type": "lc", "screening": "threshold", "threshold": 1e-4,
+                             "cutoff_reduction": 4.0}}),
+    # collinear spin
+    Case("ch3_lc_spin", _ch3, **LC, spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO}),
+    Case("hco_lc_spin_neighbour", _hco,
+         **{**LC, "hybrid": {"type": "lc", "screening": "neighbour"}},
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO}),
+    Case("o2_cam_triplet", _o2, **{**LC, "skf_set": "ptbp_hcocu_cam", "hybrid": "cam"},
+         spin={"unpaired_electrons": 2.0, "spin_constants": W_HCO}),
+    Case("h2o_lc_spin_closed", _water, **LC,
+         spin={"unpaired_electrons": 0.0, "spin_constants": W_HCO},
+         note="a closed shell run spin-polarised: the restricted result (test_hybrid)"),
+    Case("h2o_cation_lc_spin", _water, **LC, charge=1.0,
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO}),
+    Case("ch3_lc_relax_spin", _ch3, **LC, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 1.0, "relax_total_spin": True, "spin_constants": W_HCO}),
+    # charged, smearing, d shells
+    Case("oh_anion_lc", _oh, **LC, charge=-1.0),
+    Case("cuco_lc_300K", _cuco_linear, **LC, filling=("fermi", 300.0)),
+    Case("c6h6_lc_mp", _c6h6_rattled, **LC, filling=("mp", 1000.0, 2)),
+    # with the rest of the Hamiltonian
+    Case("ch3oh_lc_dftb3_d3", _meoh, **LC, dftb3=DFTB3_3OB, dispersion=D3BJ_3OB,
+         note="the full third order (DFTB+ refuses only the on-site ThirdOrder)"),
+    Case("ch3oh_lc_field_pc", _meoh, **LC, efield=FIELD, point_charges=PC3),
+    Case("h2o_lc_gbsa", _water, **LC, solvation=GBSA_WATER),
+    Case("h2co_lc_plusu", _h2co, **LC, plus_u=U_O),
+    Case("cuh_lc_plusu_300K", _cuh, **LC, filling=("fermi", 300.0),
+         plus_u={"groups": {"Cu": [("d", 0.05)]}},
+         note="+U on Cu d: the block populations come from DeltaP_in, mixed from the first "
+              "iteration (no unmixed first output without spin).  U - J = 0.05 Ha: with LC on "
+              "this semi-local set, 0.15 Ha (U_CU) makes the SCC of Cu molecules diverge"),
+    Case("hco_lc_plusu_spin", _hco, **LC, plus_u=U_O,
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO}),
+    Case("h2o_lc_onsite", _water, **LC, onsite=ONS),
+    Case("ch3oh_lc_anderson", _meoh, **LC, mixer="anderson"),
+    Case("h2o_lc_custom_hubbards", _water, **LC, hubbard={"O": 0.5, "H": 0.45},
+         note="tau = 3.2 U of the custom Hubbard values"),
+    # restart files with the density matrix (charges.bin / charges.dat): run 2 starts from run 1's
+    # populations and DeltaP_in
+    Case("h2o_lc_read_charges", _water, **LC, read_charges={"text": False}),
+    Case("ch3_lc_spin_read_charges_text", _ch3, **LC, read_charges={"text": True},
+         spin={"unpaired_electrons": 1.0, "spin_constants": W_HCO},
+         note="DeltaP_in of both spin channels (up, down) after the (q, m) populations"),
+    Case("h2co_lc_plusu_read_charges", _h2co, **LC, plus_u=U_O, read_charges={"text": False},
+         note="blocks, then the density matrix"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

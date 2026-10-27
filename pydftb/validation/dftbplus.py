@@ -132,6 +132,25 @@ def truncate_block(spec) -> str:
             f"    HardCutOff = {'Yes' if spec.get('hard_cutoff', True) else 'No'}\n  }}\n")
 
 
+def hybrid_block(spec) -> str:
+    """Hamiltonian lines ``Hybrid`` (M6h-1) of pydftb's ``hybrid`` option: "lc", "cam" or
+    {"type", "screening" ("matrix", "neighbour", "threshold"), "threshold", "cutoff_reduction"
+    (Bohr)}; DFTB+'s default screening (MatrixBased) is written out."""
+    if not spec:
+        return ""
+    from ..hybrid import Hybrid
+    h = Hybrid.make(spec)
+    red = f"      CutoffReduction [Bohr] = {_f(h.cutoff_reduction)}\n"
+    screening = {
+        "matrix": "MatrixBased {}\n",
+        "neighbour": "NeighbourBased {\n" + red + "    }\n",
+        "threshold": ("Thresholded {\n"
+                      f"      Threshold = {_f(1e-6 if h.threshold is None else h.threshold)}\n"
+                      + red + "    }\n"),
+    }[h.screening]
+    return f"  Hybrid = {h.kind.upper()} {{\n    Screening = {screening}  }}\n"
+
+
 def dftb3_block(opts, labels=None) -> str:
     """HSD lines for pydftb's third_order / hubbard_derivs / h_damping options.
 
@@ -1177,7 +1196,8 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
                           ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
                           ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite"),
                           ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy"),
-                          ("e_halogen", "Halogen correction energy")]:
+                          ("e_halogen", "Halogen correction energy"),
+                          ("e_fock", "Energy Fock")]:
             m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
             if m:
                 res[key] = float(m.group(1))

@@ -157,6 +157,9 @@ def evaluate(calc, species, positions, cell=None, pbc=None, params: Params | Non
     if getattr(calc, "force_evaluation", "traditional") != "traditional":
         raise NotImplementedError("pydftb.autodiff does not support the dynamics force "
                                   "evaluations of XL-BOMD: NumPy engine only (milestone M6e)")
+    if getattr(calc, "hybrid", None) is not None:
+        raise NotImplementedError("pydftb.autodiff does not support hybrid functionals: NumPy "
+                                  "engine only (milestone M6h)")
     if getattr(calc, "numpy_only_options", None):
         raise NotImplementedError(f"pydftb.autodiff does not support "
                                   f"{', '.join(calc.numpy_only_options)}: NumPy engine only "

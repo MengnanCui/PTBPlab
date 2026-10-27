@@ -1,0 +1,190 @@
+{
+ "schema": 1,
+ "case": "h2o_lc_gbsa",
+ "note": "",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "efield": null,
+  "point_charges": null,
+  "site_potentials": null,
+  "solvation": {
+   "model": "gb",
+   "solvent": {
+    "epsilon": 80.2,
+    "molecular_mass": 18.0,
+    "density": 1.0
+   },
+   "free_energy_shift": 0.0018586867231236784,
+   "born_scale": 1.55243817,
+   "born_offset": 0.02462811043694508,
+   "descreening": {
+    "H": 0.71893869,
+    "C": 0.74298311,
+    "N": 0.9026123,
+    "O": 0.75369019
+   },
+   "sasa": {
+    "probe_radius": 1.843075777670416,
+    "surface_tension": {
+     "H": -0.33498306,
+     "C": -0.74769065,
+     "N": -2.31291292,
+     "O": 0.91797911
+    }
+   },
+   "hbond": {
+    "H": -0.07172800544988973,
+    "C": -0.002548469535762511,
+    "N": -0.01976849501504001,
+    "O": -0.00846247682858728
+   }
+  },
+  "rescale_fields": true,
+  "charge": 0.0,
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc"
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_ktq4h0ux/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  Solvation = GeneralisedBorn {\n    Solvent = fromConstants {\n      Epsilon = 80.2\n      MolecularMass [amu] = 18.0\n      Density [kg/l] = 1.0\n    }\n    FreeEnergyShift = 0.0018586867231236784\n    BornScale = 1.55243817\n    BornOffset = 0.02462811043694508\n    Descreening = Values { H = 0.71893869; C = 0.74298311; N = 0.9026123; O = 0.75369019 }\n    SASA {\n      ProbeRadius = 1.843075777670416\n      SurfaceTension = Values { H = -0.33498306; C = -0.74769065; N = -2.31291292; O = 0.91797911 }\n    }\n    HBondCorr = Yes\n    HBondStrength = Values { H = -0.07172800544988973; C = -0.002548469535762511; N = -0.01976849501504001; O = -0.00846247682858728 }\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -4.0249081946,
+  "free_energy": -4.0249081946,
+  "e_zero": -4.0249081946,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0299445342,
+  "e_band": -3.979930085,
+  "e_solv": -0.0092856234,
+  "e_fock": -0.1046921744,
+  "fermi": -0.0750413081764586,
+  "forces": [
+   [
+    0.00317815355274579,
+    0.0806701406796512,
+    0.0962464590783634
+   ],
+   [
+    -0.00280405673947966,
+    0.0112173680049533,
+    -0.0192735410923196
+   ],
+   [
+    -0.000374096813266136,
+    -0.0918875086846045,
+    -0.0769729179860438
+   ]
+  ],
+  "charges_net": [
+   -0.587275690370294,
+   0.245795519626071,
+   0.341480170744217
+  ],
+  "dipole": [
+   -0.08758851,
+   -0.16177609,
+   -1.0071624
+  ],
+  "n_scc": 17,
+  "scc_errors": [
+   0.68725821,
+   0.523859,
+   0.17763666,
+   0.062397963,
+   0.013266486,
+   0.0040431141,
+   0.0015871962,
+   8.5773794e-05,
+   4.3755134e-05,
+   7.3908635e-06,
+   5.7672316e-06,
+   1.2473426e-06,
+   6.11659e-07,
+   6.2062796e-08,
+   1.0325422e-09,
+   3.121137e-09,
+   2.9748981e-12
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08
+ }
+}

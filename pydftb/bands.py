@@ -154,8 +154,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     ``engine`` is a :class:`pydftb.DFTB`; positions and cell in Bohr.  ``populations`` is the
     vector the SCC loop mixes, normally ``DFTBResult.q_in`` (DFTB+'s ``charges.bin``): site
     populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
-    shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`);
-    None = the reference populations.
+    shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`; with a
+    hybrid functional (molecules) followed by the packed DeltaP_in, whose exchange H_x[DeltaP_in]
+    is added: a fresh build, also for the threshold screening); None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
     band-structure run; ``scc_fermi`` (Hartree, one value or one per spin) is kept as the
@@ -175,6 +176,10 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     n_expected = 4 * nsh if pauli else len(st.q0) if st.spin is None else 2 * nsh
     if st.block is not None:
         n_expected = st.block.size
+    hyb_dp = None
+    if getattr(engine, "hybrid", None) is not None and q.shape != (n_expected,):   # M6h-1
+        q, rho = engine._split_hybrid_vector(st.basis, q)
+        hyb_dp = [r + np.tril(r, -1).T for r in rho]
     if q.shape != (n_expected,):
         raise ValueError(f"populations need {n_expected} entries (the SCC's mixed vector, "
                          f"DFTBResult.q_in), got shape {q.shape}")
@@ -228,6 +233,10 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
                 h = np.concatenate([h + hs, h - hs])                 # up, down
                 s = np.concatenate([s, s])
+        if hyb_dp is not None:                        # + H_x[DeltaP_in] (M6h-1, molecules)
+            terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real)
+            terms.reset(True)                         # the threshold build takes all of DeltaP
+            h = h + np.stack(terms.fock(hyb_dp))
         solver.prepare(s)
         e, c = solver.eig(h)
         n = len(kc)

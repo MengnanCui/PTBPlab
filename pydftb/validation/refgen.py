@@ -161,7 +161,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
                     **pauli_options(case, labels), **block_options(case, labels),
                     **environment_options(case), **casida_options(case, casida_solver),
                     **scc_start_options(case), **fill_options(case, labels),
-                    **corrections_options(case), **analysis_options(case))
+                    **corrections_options(case), **analysis_options(case),
+                    **({"hybrid": case.hybrid} if case.hybrid is not None else {}))
         if switch is not None:
             opts["type_switching"] = [switch]
         q_init = options.pop("q_init", None)
@@ -260,6 +261,17 @@ def corrections_ase_options(case: Case) -> dict:
     if case.dipole_correction is not None:
         out["dipole_correction"] = case.dipole_correction
     return out
+
+
+def hybrid_ase_options(case: Case) -> dict:
+    """:class:`pydftb.ase_calc.PyDFTB` options of a hybrid case (M6h-1): ``cutoff_reduction``
+    in Angstrom."""
+    if case.hybrid is None:
+        return {}
+    spec = case.hybrid
+    if isinstance(spec, dict) and "cutoff_reduction" in spec:
+        spec = {**spec, "cutoff_reduction": spec["cutoff_reduction"] * BOHR}
+    return {"hybrid": spec}
 
 
 def dftbplus_binary(case: Case) -> str | None:
@@ -417,6 +429,7 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
                  + dftbplus.custom_hubbards_block(case.hubbard, set(inp["labels"]))
                  + dftbplus.custom_occupations_block(case.occupations)
                  + dftbplus.truncate_block(case.truncate_sk)
+                 + dftbplus.hybrid_block(case.hybrid)
                  + dftbplus.corrections_block(case.h5, case.halogen, case.dipole_correction,
                                               inp["labels"]))
         if case.casida and case.casida.get("spin_constants") and not case.spin:
@@ -623,6 +636,8 @@ def regenerate(names=None, threads: int = 1):
                          **({"selected_shells": case.selected_shells}
                             if case.selected_shells else {}),
                          **({"fd_delta": case.fd_delta} if case.fd_delta is not None else {}),
+                         **({"hybrid": case.hybrid, "charge": case.charge}
+                            if case.hybrid is not None else {}),
                          **({"hessian": case.hessian} if case.hessian is not None else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
@@ -652,7 +667,9 @@ def regenerate(names=None, threads: int = 1):
                           or case.corrections and k in ("scc_errors", "e_3rd", "e_halogen")
                           or case.analysis and k in ("scc_errors", "e_3rd", "e_spin", "spins",
                                                      "e_ls", "e_plus_u", "e_onsite", "e_ext",
-                                                     "e_solv", "e_halogen", "analysis")},
+                                                     "e_solv", "e_halogen", "analysis")
+                          or case.hybrid is not None and k in ("scc_errors", "e_fock", "e_3rd",
+                                                               "e_spin", "spins")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -857,6 +874,10 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.track_scc:
         dev.update(_compare_scc_start(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
                                       **backend))
+    if case.hybrid is not None:                                       # M6h-1
+        terms = [abs(getattr(res, k) - ref[k]) for k in ("e_fock", "e_3rd", "e_spin")
+                 if k in ref]
+        dev["e_terms"] = max([dev.get("e_terms", 0.0)] + terms)
     if case.overrides:
         dev.update(_compare_fill(case, ref, res))
     if case.corrections:

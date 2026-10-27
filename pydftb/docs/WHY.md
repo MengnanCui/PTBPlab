@@ -45,7 +45,7 @@ DFTB+ 的 GPU 支持有限：MAGMA 只能单机，跨节点只有 ELPA-GPU。pyd
 
 pydftb 的目标是**平滑、带力、可做分子动力学、支持周期体系**的多套参数（M5、M8 阶段）。离散多类型的机制已在 M0 打好基础（`System` 的类型标签、`write_typed_copies`），并已与 DFTB+ 对照验证。**引擎一侧的平滑切换已经有了**（M5a，`DFTB(type_switching=…)`）：每个原子按配位数在它的类型之间取权重，H0、S 与排斥能按权重混合，力与应力含权重的导数，周期体系与 MD 都能用；权重恰为 0/1 时与 DFTB+ 的固定类型逐位对应（`reports/M5a-type-switching.html`）。PTBP 一侧的按类型拟合也已经有了（M5b）：多元素数据集默认每个元素一套 r0_w、r0_d、σ_rep，也可以声明同一元素的几个类型并用上述切换拟合（`reports/M5b-ptbp-types.html`）。电池算例等有 Li 的 DFT 数据再做。
 
-这条路上有一个隐藏的坑：两套参数的 Hubbard U 只要相差 3e-6 到 1e-3，DFTB+ 的 γ 公式就会在数值上失效，DFTB3 下实测总能量错 0.5 eV，而且没有任何警告。pydftb 已在 M2b 改用数值稳定的积分形式（`reports/M2b-dftb3.html`）。
+这条路上有一个隐藏的坑：两套参数的 Hubbard U 只要相差 3e-6 到 1e-3，DFTB+ 的 γ 公式就会在数值上失效，DFTB3 下实测总能量错 0.5 eV，而且没有任何警告。pydftb 已在 M2b 改用数值稳定的积分形式（`reports/M2b-dftb3.html`）；杂化泛函的 γ（M6h-1）有同样的问题（|ΔU| = 1e-6 时错 2.2），也用了积分形式。
 
 ## 5. 与 PTBP 一体化
 
@@ -53,6 +53,6 @@ pydftb 的目标是**平滑、带力、可做分子动力学、支持周期体�
 
 ## 什么时候仍然应该用 DFTB+
 
-- 需要 pydftb 还没实现的功能（见 `ROADMAP.md`），例如长程校正（M6h）、输运、实时 TD（M6 正在按顺序补齐；非共线自旋与自旋轨道耦合（M6a）、DFTB+U 与 onsite 修正（M6b）、外电场、点电荷与隐式溶剂（M6c）、激发态 Casida（M6d）、激发态的力与 XL-BOMD（M6e）、DFTB+ 的混合器、初始电荷与自旋、电荷重启文件（M6f-1）、固定费米能级、按 k 点填充与参数覆盖（M6f-2）、H5、卤素修正与偶极修正（M6f-3）、按原子的能量、CM5、静电势与本征向量文件（M6f-4a）、Pipek–Mezey 局域化、键分析与跃迁电荷（M6f-4b）、一个原子的壳层来自几个 SKF（SelectedShells，M6f-5）、极化率与响应核（M6g-1）、坐标导数、Born 电荷、数值 Hessian 与简正模（M6g-2）、+U 与 onsite 修正下的响应与点电荷导数（M6g-3a）、非共线自旋与 SOC 下的响应（M6g-3b）已完成，只有 NumPy 引擎）。
+- 需要 pydftb 还没实现的功能（见 `ROADMAP.md`），例如 TD-LC 与周期体系的杂化泛函（M6h-2、M6h-3）、输运、实时 TD（M6 正在按顺序补齐；非共线自旋与自旋轨道耦合（M6a）、DFTB+U 与 onsite 修正（M6b）、外电场、点电荷与隐式溶剂（M6c）、激发态 Casida（M6d）、激发态的力与 XL-BOMD（M6e）、DFTB+ 的混合器、初始电荷与自旋、电荷重启文件（M6f-1）、固定费米能级、按 k 点填充与参数覆盖（M6f-2）、H5、卤素修正与偶极修正（M6f-3）、按原子的能量、CM5、静电势与本征向量文件（M6f-4a）、Pipek–Mezey 局域化、键分析与跃迁电荷（M6f-4b）、一个原子的壳层来自几个 SKF（SelectedShells，M6f-5）、极化率与响应核（M6g-1）、坐标导数、Born 电荷、数值 Hessian 与简正模（M6g-2）、+U 与 onsite 修正下的响应与点电荷导数（M6g-3a）、非共线自旋与 SOC 下的响应（M6g-3b）、分子的 LC/CAM 杂化泛函（M6h-1）已完成，只有 NumPy 引擎）。
 - 需要经过长期生产检验的稳定性。
 - 性能因场景而异。按 PTBP 的真实设置（按壳层分辨 SCC 等）处理铜数据集时，pydftb 的 DFTB 阶段比经 ASE 调用的 DFTB+ 快 1.8 倍（M1 报告）；在别的体系上要另行测量。

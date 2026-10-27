@@ -276,6 +276,9 @@ class SKFile:
     repulsive: Repulsive | None = None       # spline if present, else polynomial
     poly_repulsive: Repulsive | None = None  # polynomial part only (DFTB+ PolynomialRepulsive)
     _coef: np.ndarray | None = field(default=None, repr=False)
+    # the RangeSep section of a hybrid parametrisation (M6h): (kind, omega, alpha, beta) with
+    # kind "lc", "global" or "cam" (DFTB+'s classification); None without the section
+    range_sep: tuple | None = None
 
     @classmethod
     def read_cached(cls, path: str, homo: bool | None = None) -> "SKFile":
@@ -343,7 +346,7 @@ class SKFile:
             rep = poly_rep
         return cls(dr=dr, table=table, homo=homo, columns=columns, onsite=onsite,
                    hubbard=hubbard, occupation=occ, mass=mass, repulsive=rep,
-                   poly_repulsive=poly_rep)
+                   poly_repulsive=poly_rep, range_sep=_parse_range_sep(lines, path))
 
     # ------------------------------------------------------------------
     @property
@@ -526,6 +529,43 @@ def _parse_spline(lines: list[str]) -> Repulsive:
                      coeffs=np.array(coeffs))
 
 
+def _parse_range_sep(lines: list[str], path: str) -> tuple | None:
+    """The ``RangeSep`` section of a hybrid parametrisation (M6h; DFTB+ oldskdata.F90
+    parseHybridXcTag): a line ``RangeSep`` (from the first column) anywhere in the file, then
+    ``LC omega`` or ``CAM omega alpha beta``.  Returns (kind, omega, alpha, beta), kind as DFTB+
+    classifies CAM: alpha = beta = 0 none (None), alpha = 0 and beta = 1 "lc", beta = 0
+    "global", else "cam"."""
+    for i, ln in enumerate(lines):
+        if ln.rstrip() != "RangeSep":
+            continue
+        fields = lines[i + 1].replace(",", " ").split() if i + 1 < len(lines) else []
+        tag = fields[0].lower() if fields else ""
+        try:
+            if tag == "lc":
+                kind, omega, alpha, beta = "lc", float(fields[1]), 0.0, 1.0
+            elif tag == "cam":
+                omega, alpha, beta = (float(x) for x in fields[1:4])
+                eps = np.finfo(float).eps
+                if abs(alpha) < eps and abs(beta) < eps:
+                    return None
+                kind = ("lc" if abs(alpha) < eps and abs(beta - 1.0) < eps
+                        else "global" if abs(beta) < eps else "cam")
+            elif fields:
+                raise ValueError(f"Unknown hybrid xc-functional method in SK-file '{path}' "
+                                 "(as DFTB+: RangeSep needs LC or CAM)")
+            else:
+                raise IndexError
+        except (IndexError, ValueError) as exc:
+            if "Unknown hybrid" in str(exc):
+                raise
+            raise ValueError(f"Error in reading hybrid xc-functional parameters in SK-file "
+                             f"'{path}'") from exc
+        if omega < 0.0:
+            raise ValueError(f"Range-separation parameter is negative in SK-file '{path}'")
+        return kind, omega, alpha, beta
+    return None
+
+
 @dataclass
 class SKPair:
     """Ordered pair (A, B) with integrals from both A-B and B-A files."""
@@ -604,6 +644,35 @@ class SKSet:
 
     def file_name(self, a: str, b: str) -> str:
         return os.path.join(self.path, self.template.format(a=a, b=b))
+
+    # ---- hybrid functionals (milestone M6h) ---------------------------------------------------
+    @property
+    def has_range_sep(self) -> bool:
+        """Whether any file of the set has a ``RangeSep`` section (a hybrid parametrisation)."""
+        return any(f.range_sep is not None for f in self.files.values())
+
+    def range_sep(self) -> tuple:
+        """(kind, omega, alpha, beta) of the set's ``RangeSep`` sections: every homonuclear file
+        and at least one file of every other label pair must have one, and all must agree.
+        DFTB+ reads the A-B files with A <= B in its species order, requires the section in each
+        and silently uses the last one read: pydftb asks for one value."""
+        values = {}
+        for (a, b), f in self.files.items():
+            if f.range_sep is not None:
+                values[(a, b)] = f.range_sep
+        for a in self.elements:
+            for b in self.elements:
+                if (a, b) not in values and (a == b or (b, a) not in values):
+                    raise ValueError(
+                        "Hybrid xc-functional calculation requested, but SK-file "
+                        f"'{self.file_name(self._file_label(a), self._file_label(b))}' is not a "
+                        "suitable parametrization: no RangeSep section (as in DFTB+)")
+        distinct = sorted(set(values.values()))
+        if len(distinct) > 1:
+            where = "; ".join(f"{a}-{b}: {v}" for (a, b), v in sorted(values.items()))
+            raise ValueError("the SK files disagree on the hybrid parameters (kind, omega, alpha, "
+                             f"beta) ({where}); DFTB+ would silently use the last file it reads")
+        return distinct[0]
 
     def shells(self, el: str) -> list[int]:
         if el in self.groups:                                         # M6f-5

@@ -99,3 +99,67 @@ d6fc694312fd27cc6dd4e9cb9983132176e7742bdfe325a0d6ef97e36bc201f0  Cu-Cu2.skf
 6e6959c48fe270ec0e792fdebc6c00f3fd47e9f18bb8a636e78ba37ef5ff0198  Cu2-Cu.skf
 5e51be114fd91dd2877193f953e57df2a5a6e8dc154c0916048cf88501a168a6  Cu2-Cu2.skf
 ```
+
+## `ptbp_hcocu_lc/`, `ptbp_hcocu_cam/`, `ptbp_hcocu_global/` — hybrid functionals (milestone M6h-1)
+
+Generated with `python -m pydftb.validation.make_hybrid_sets` (deterministic: gzip without a time
+stamp; a second run gives byte-identical files): copies of `ptbp_hcocu/` with a `RangeSep`
+section inserted before `<Documentation>` in every file, as in DFTB+'s ob2-1-1 files:
+
+- `ptbp_hcocu_lc`: H, C, O, Cu with `LC 0.3` (LC-DFTB, omega = 0.3 / Bohr)
+- `ptbp_hcocu_cam`: H, C, O with `CAM 0.3 0.19 0.46` (the values of DFTB+'s CAM tests)
+- `ptbp_hcocu_global`: H, C, O with `CAM 0.0 0.2 0.0` (a global hybrid: beta = 0)
+
+The integrals, on-site data and repulsives are those of the semi-local `ptbp_hcocu` files:
+the long-range exchange is added to a parametrisation that already holds semi-local exchange.
+For testing pydftb against DFTB+ only, not a physical parametrisation. The SHA-256 of the
+uncompressed files:
+
+`ptbp_hcocu_lc/`:
+
+```
+466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b  H-H.skf
+c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946  H-C.skf
+f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe  H-O.skf
+8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f  H-Cu.skf
+ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e  C-H.skf
+bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62  C-C.skf
+7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261  C-O.skf
+ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51  C-Cu.skf
+cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2  O-H.skf
+96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37  O-C.skf
+6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0  O-O.skf
+2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19  O-Cu.skf
+6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db  Cu-H.skf
+51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8  Cu-C.skf
+6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493  Cu-O.skf
+42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7  Cu-Cu.skf
+```
+
+`ptbp_hcocu_cam/`:
+
+```
+fa67e54fba47f60bb6720980ddb64574982ba9cb2f423cfab31c582d1f15622b  H-H.skf
+6f8166cf12670c76c1f383f5cf2aa8929dc51648381860c95e31efaaf90d4de0  H-C.skf
+5aa3c3de3c55cded2ed0280ba8d042147b06b6df4fe206409ae76d8f3f7f5f6d  H-O.skf
+444a1a8d140e3fbadad1de919624cf700393282f5c26f613d947b1951332eaa5  C-H.skf
+d5ceacd37666374025514755ecd5851b6bdc6221dcc1500b201411e210feadf9  C-C.skf
+de35b88b0e458ba86cd4367e142330ae4db87cb5a47069370c3bacd258d46550  C-O.skf
+09344d5e088ef0c02a547140fe8be5951eaa9670d1dee24d24590c13bc5c7e1e  O-H.skf
+ab3a20e49fdc4c627b4e4af6c14d078edd3e22b4a1489e593b9f820e4af30351  O-C.skf
+2718f1c6a0c729326bff3bbaf65a9039a0381d15a09d84b20637f399b5a69486  O-O.skf
+```
+
+`ptbp_hcocu_global/`:
+
+```
+ce15ed15eaf96bb35bfbab79aafc529fd7c3c4c225d875b9dc1fe8edb652533e  H-H.skf
+a8019bb44a182a96069f0ac29bc889442eebe6c428a42a813b93b51ab78a4216  H-C.skf
+ddf2eb4148d4e0f4e90e8239cb102b4b9062247345e38df62f5cb47105d43c95  H-O.skf
+c223a8f6b76d07159692d850723fd5f2f42b8f0b8520b757f39ab68c94f3fe81  C-H.skf
+d2d63c33ef40af8eb0e8bc43e16c1c2bf34af8396e4a7657d0403bd7b3cf0858  C-C.skf
+b5c96c29ec54d6b2864bc3b72622c42a1a68548126678d142dcc3ecbe139000c  C-O.skf
+78353e6846e44bdaf4fe00f9b66c0c6221c09b83e4218aecc66c450ffe0710c4  O-H.skf
+9a30d0a3ac51ee07824e824b65947a3440024dc9dfebf627cd1b679c55f9ba23  O-C.skf
+a841a144f55cdf1d86d9f9fb8aff124a5f54b17bc96f6fb215be11d1e8cab1d6  O-O.skf
+```

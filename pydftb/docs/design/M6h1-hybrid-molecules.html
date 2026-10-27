@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-1 分子的杂化泛函设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6h-1</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-1 · 设计</p>
+    <h1>长程校正（一）：分子的 LC 与 CAM 杂化泛函</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-27</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6h1-hybrid-molecules.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6h 的第一块：分子（非周期）的长程校正 LC-DFTB 与 CAM 杂化泛函（含 β = 0 的全局杂化）的基态——能量、哈密顿量、SCC、力、共线自旋、三种 Screening。交换项依赖整个密度矩阵，不只是 Mulliken 电荷，所以 SCC 要混合整个 ΔP。只做 NumPy 引擎，不开杂化时逐位不变。后续：M6h-2 TD-LC（Casida 与激发态的力），M6h-3 周期体系，M6h-4 杂化泛函下的响应。</p>
+    <ul>
+      <li><strong>DFTB+ 的做法</strong>（第一节）：<code>Hybrid = LC {…} | CAM {…}</code>；ω、α、β 只来自 SK 文件末尾的 <code>RangeSep</code> 段；默认 <code>Screening = MatrixBased</code>（精确）。交换的哈密顿量 H<sub>x</sub> = c[(SΔPS)∘Γ + ((SΔP)∘Γ)S + S(ΔP∘Γ)S + S((ΔPS)∘Γ)]，c = −1/8，自旋时每个自旋 −1/4；能量 ½Σ H<sub>x</sub>[ΔP<sub>in</sub>]∘ΔP<sub>in</sub>；混合器混 ΔP 的下三角，输入电荷与块布居都由混合后的 ΔP<sub>in</sub> 导出；力用 ΔP<sub>out</sub>。</li>
+      <li><strong>原型已与 DFTB+ 25.1 逐轮一致</strong>（第二节，探针 P34–P38）：LC、CAM、全局杂化、自旋，ob2 与我们自己的参数集，三种 Screening；SCC 轮数相同（Thresholded 1e-8 时差 1 轮），每轮 SCC 误差在 DFTB+ 打印的 8 位内相同，总能量差 ≤ 6.3e-13 Ha，电荷 ≤ 7e-13，力 ≤ 9e-12（用 DFTB+ 的 SK 差分步长）。</li>
+      <li><strong>pydftb 的做法</strong>（第三、四节）：<code>DFTB(sk, hybrid="lc" | "cam" | {…})</code>；新模块 <code>pydftb/hybrid.py</code>（γ<sub>HF</sub>、γ<sub>LR</sub> 及导数、P<sub>0</sub>、三种 Screening 的 Fock 矩阵、能量与梯度）；SCC 的混合向量换成打包的 ΔP，其余路径（自旋、+U/onsite 块势、外场、点电荷、溶剂、色散）不动，输入布居由 ΔP<sub>in</sub> + P<sub>0</sub> 经现有的布居函数得到。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 6.3e-13</span><span class="lbl">原型与 DFTB+ 25.1 的总能量之差（Ha，13 个探针算例）</span></li>
+      <li><span class="num">0</span><span class="lbl">SCC 轮数之差（Thresholded 1e-8 除外，差 1 轮）</span></li>
+      <li><span class="num">3</span><span class="lbl">Screening：MatrixBased、NeighbourBased、Thresholded，都逐位复现 DFTB+ 的算法</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为与原型</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#bugs">六、DFTB+ 的问题与 pydftb 的做法</a></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码 041e723（25.1 之后 132 个提交；<code>dftb/hybridxc.F90</code>、<code>dftb/rshgamma.F90</code>、<code>type/oldskdata.F90</code>、<code>dftbplus/parser.F90</code>、<code>dftbplus/main.F90</code>），行为以 25.1 的二进制为准。</p>
+      <ul>
+        <li><strong>输入</strong>：<code>Hamiltonian = DFTB { Hybrid = LC {…} | CAM {…} }</code>，要求 <code>SCC = Yes</code>。
+          <ul>
+            <li><code>Screening</code> 默认 <code>MatrixBased</code>（稠密、精确；手册写的默认 Thresholded 是旧版本的）；<code>NeighbourBased { CutoffReduction = 0 }</code>；<code>Thresholded { Threshold = 1e-6, CutoffReduction = 0 }</code>（只用于分子）。</li>
+            <li>没有 ω、α、β 的 HSD 覆盖，只来自 SK 文件。<code>LC</code> 要求 LC 的 SK 文件；<code>CAM</code> 接受 LC、全局、CAM 三种文件。手册里的 <code>Hybrid = Global</code> 解析器不认：全局杂化写成 <code>CAM</code> 加 β = 0 的文件。</li>
+            <li>解析器版本 ≤ 13 的 <code>RangeSeparated</code> 被改名为 <code>Hybrid</code>，没有 <code>Screening</code> 的旧 LC 输入补上 <code>Thresholded {}</code>。</li>
+          </ul>
+        </li>
+        <li><strong>SK 文件的 <code>RangeSep</code> 段</strong>：整行为 <code>RangeSep</code>，下一行 <code>LC ω</code> 或 <code>CAM ω α β</code>（ob2 等放在样条之后、<code>&lt;Documentation&gt;</code> 之前）。CAM 按 α、β 重新归类：α ≈ β ≈ 0 报错，α ≈ 0、β ≈ 1 为 LC，β ≈ 0 为全局；ω &lt; 0 报错。DFTB+ 按物种顺序读每个 A ≤ B 的文件（含异核），缺这一段就报错；文件之间<strong>不检查一致</strong>，最后读到的为准。</li>
+        <li><strong>γ</strong>（<code>rshgamma.F90</code>）：τ = 3.2 U（第一个壳层的 U，即非按壳层 SCC 时的 U）；γ = α γ<sub>HF</sub> + β γ<sub>LR</sub>(ω)，系数小于 100 ε 的项不算。
+          <ul>
+            <li>在位（R &lt; 1e-5 Bohr）：γ<sub>HF</sub> = 5τ/16 = U；γ<sub>LR</sub> = 5τ/16 − τ³[(5τ⁶ + 15τ⁴ω² − 5τ²ω⁴ + ω⁶)/16 − ωτ⁵]/(τ² − ω²)⁴。</li>
+            <li>同 U（|τ<sub>A</sub> − τ<sub>B</sub>| &lt; 3.125e-6）与异 U 的闭式，及其对 R 的解析导数（异 U 用 Y 子式）。</li>
+          </ul>
+        </li>
+        <li><strong>密度与 Fock 矩阵</strong>：ΔP = P − P<sub>0</sub>，P<sub>0</sub> 是对角的参考布居 q<sub>0,μ</sub>（分子 S<sub>μμ</sub> = 1；自旋时每个自旋一半）。MatrixBased：H<sub>x</sub>[ΔP] = c[(SΔPS)∘Γ + ((SΔP)∘Γ)S + S(ΔP∘Γ)S + S((ΔPS)∘Γ)]，Γ 是按轨道展开的原子对 γ，即 H<sub>μν</sub> = c Σ<sub>αβ</sub> S<sub>μα</sub>ΔP<sub>αβ</sub>S<sub>βν</sub>(γ<sub>μν</sub> + γ<sub>μβ</sub> + γ<sub>αβ</sub> + γ<sub>αν</sub>)；它加在 SCC 与自旋的移动之后，每个自旋一份，用的是本轮的输入 ΔP<sub>in</sub>。</li>
+        <li><strong>能量</strong>：E<sub>Fock</sub> = ½ Σ<sub>σ</sub> Σ H<sub>x</sub>[ΔP<sub>in</sub>]∘ΔP<sub>in</sub>（detailed.out 的 “Energy Fock”，计入电子能量；results.tag 没有单独一项）。E<sub>H0</sub> 用输出密度、E<sub>SCC</sub> 用输出电荷（RecomputeAfterDensity），所以各项只在收敛时自洽。</li>
+        <li><strong>SCC</strong>（<code>main.F90</code> <code>getNextInputDensityReal</code>）：
+          <ul>
+            <li>混合器混稠密的 ΔP<sub>in</sub>（nOrb² × nSpin，只有下三角，上三角为零）；误差 max|ΔP<sub>out</sub> − ΔP<sub>in</sub>|；收敛条件还要求 iSCC ≥ minSccIter（自旋或 +U 时 2），读入电荷或几何步 &gt; 0 时不要求。</li>
+            <li>ΔP<sub>in</sub> 从 0 开始（第一轮没有交换项），q<sub>in</sub> = q<sub>0</sub>；自旋时第一个几何步的第一轮不混合，直接 ΔP<sub>in</sub> := ΔP<sub>out</sub>（块布居同样）。</li>
+            <li>混合之后 q<sub>in</sub> = Mulliken(ΔP<sub>in</sub>) + q<sub>0</sub>（自旋时各加一半），块布居 = 块 Mulliken(ΔP<sub>in</sub>)，对角换成 q<sub>in</sub>；SCC、自旋、+U/onsite 的势都由它们给出。</li>
+            <li>几何步之间沿用 ΔP<sub>in</sub>（MD 第二步的第一轮误差 4e-3，从零开始时是 0.93）。</li>
+          </ul>
+        </li>
+        <li><strong>三种 Screening（分子）</strong>：
+          <ul>
+            <li>NeighbourBased：同 MatrixBased，只是距离超过 CAM 截断（最大 SK 截断 − CutoffReduction）的原子对的 S 块当作零；CutoffReduction = 0 时与 MatrixBased 相同。</li>
+            <li>Thresholded：增量构建，H<sub>prev</sub> += ΔH[ΔΔP]，ΔΔP = ΔP<sub>in</sub> − 上一次的 ΔP<sub>in</sub>；原子块按 max|S| 排序，max|ΔΔP|·max|S<sub>CA</sub>|（再乘 max|S<sub>DB</sub>|）小于阈值的跳过；只算下三角再对称化；系数固定 −1/8（不能用于自旋）；几何改变时 H<sub>prev</sub> 与上一次的 ΔP 清零。</li>
+            <li>力不受 Screening 影响：分子的梯度总用完整的 SK 近邻表与 ΔP<sub>out</sub>，所以 CutoffReduction &gt; 0 或 Thresholded 时力与能量不完全自洽。</li>
+          </ul>
+        </li>
+        <li><strong>力</strong>：∂E<sub>x</sub>/∂R 在固定 ΔP<sub>out</sub> 下由两部分组成：S 的导数（四项的“交换”结构）与 γ 的导数（所有原子对）；本征方程的 dS 项已在能量加权密度矩阵里（H 含 H<sub>x</sub>）。<strong>不算应力</strong>（初始化时静默关掉）。</li>
+        <li><strong>拒绝</strong>：非 SCC；SOC；按壳层 SCC；<code>ThirdOrder</code>（只查这一个，<code>ThirdOrderFull</code> 能算）；XL-BOMD；按原子的能量；坐标导数与有限频率的响应；非共线只用 MatrixBased 且只用于分子；Thresholded 加自旋；TD-LC 只能用 Stratmann，不能用窗口、分数占据、onsite 修正、周期体系、一般的 CAM。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为与原型</h2>
+      <p>探针 P34–P38（草稿目录 <code>m6h/</code>）。原型 <code>lcproto.py</code> 在 pydftb 现有的 SCC 上加 γ<sub>HF</sub>/γ<sub>LR</sub>（照抄 <code>rshgamma.F90</code>）、P<sub>0</sub>、四项 H<sub>x</sub>、ΔP 下三角的混合与力，对照 DFTB+ 25.1。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P34 DFTB+ 自己的测试</td><td>测试参数 <code>dftbplus/testparams</code>（固定在 1f5aefe，与当前 HEAD 只差 README）：C18H12 的 matrix、nbscreening、force-lc、force-cam、force-hyb，CH3 与 CH3-matrix（自旋），苯二价阳离子（自旋），CH3-default-compat（旧输入转成 Thresholded）</td><td>25.1 复现 <code>_autotest.tag</code>：能量 ≤ 4.8e-10，力 ≤ 1e-9；detailed.out 的标签是 “Energy Fock”。</td></tr>
+          <tr><td>P36 原型对 ob2</td><td>C18H12 的 LC、CAM（ω 0.3、α 0.19、β 0.46）、全局（α 0.2）、CH3 的 LC 自旋（按壳层的自旋常数）；MatrixBased，Broyden 0.2，SCC 容差 1e-10</td><td>轮数 23/22/17/12 全同；每轮误差在 8 位内相同；E<sub>Fock</sub> ≤ 2.5e-11，总能量 ≤ 2.8e-13，电荷 ≤ 9.1e-14，力 ≤ 2.1e-9（与不加杂化时相同：DFTB+ 的 SK 导数是差分）。</td></tr>
+          <tr><td>P35 自己的参数集</td><td><code>ptbp_hcocu</code> 的每个文件加 <code>RangeSep</code> 段（LC 0.3、CAM、全局、LC 0.5）：H<sub>2</sub>O、H<sub>2</sub>CO、C<sub>2</sub>H<sub>4</sub>、CH<sub>3</sub>OH、CH<sub>3</sub> 自旋、CuCO（Cu 的 d 壳层，300 K）；pydftb 用 DFTB+ 的 SK 差分步长 2<sup>−13</sup> Bohr</td><td>轮数全同（CuCO 49 轮）；总能量 ≤ 6.3e-13，电荷 ≤ 7e-13，力 ≤ 9e-12。Cu<sub>4</sub>CO 在 300 K 与 1000 K 时 DFTB+ 500 轮都不收敛，不作参考。</td></tr>
+          <tr><td>P35 SK 文件的检查</td><td>C–H 缺这一段；H–C 缺；H–H 写 ω = 0.5、其余 0.3</td><td>C–H 缺：DFTB+ 报错（物种顺序 C、H、O，读 C–H）；H–C 缺：照常运行；ω 不一致：静默地用最后读到的 H–H 的 0.5（与原型用 0.5 时一致到 3e-14）。</td></tr>
+          <tr><td>P37 Screening</td><td>C18H12（ob2）：NeighbourBased 的 CutoffReduction 0 与 4 Å，Thresholded 1e-6 与 1e-8</td><td>Neighbour(0) 与 Matrix 相同；Neighbour(4 Å) 总能量变 0.021 Ha，原型复现到 9.9e-14、轮数相同；Thresholded 1e-6 使能量偏离精确值 1.5e-6，原型复现到 9.9e-14、27 轮相同；1e-8 时 34 对 33 轮、能量 9.1e-13。</td></tr>
+          <tr><td>P38 组合</td><td>H<sub>2</sub>CO 的 LC 加各种选项</td><td>能算：<code>ThirdOrderFull</code>、+U、onsite、自旋（NeighbourBased）、外场、点电荷、D3、MP 展宽、极化率、MD、Casida（Stratmann）。拒绝：<code>ThirdOrder</code>、按壳层 SCC、Thresholded 加自旋、按原子的能量、坐标导数、XL-BOMD。MD 中 ΔP<sub>in</sub> 跨几何步沿用。</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>SK 导数的差分</strong>：DFTB+ 的 H<sub>0</sub>、S 对坐标的导数是步长 2<sup>−13</sup> Bohr 的中心差分，pydftb 默认用精确导数；扭曲的水分子上两者差 1.2e-6 Ha/Bohr（与杂化无关），参考算例照旧用 <code>fd_delta</code> 复现 DFTB+。</p>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>sk = ParamSet("ob2-1-1/shift", max_l={"C": 1, "H": 0}).skset(labels)   # 带 RangeSep 的 SK 文件
+r = DFTB(sk, hybrid="lc").calculate(labels, pos)            # MatrixBased（DFTB+ 的默认）
+r.e_fock                                                     # DFTB+ "Energy Fock"，已计入 energy
+DFTB(sk, hybrid={"type": "cam", "screening": "neighbour", "cutoff_reduction": 4.0})   # Bohr
+DFTB(sk, hybrid={"type": "lc", "screening": "threshold", "threshold": 1e-6})</code></pre>
+      <ul>
+        <li><strong>选项</strong>：<code>hybrid</code> 为 <code>"lc"</code>、<code>"cam"</code> 或字典（<code>type</code>、<code>screening</code> = <code>"matrix"</code> | <code>"neighbour"</code> | <code>"threshold"</code>、<code>threshold</code>、<code>cutoff_reduction</code>，长度用 Bohr）。ω、α、β 只取自 SK 文件，与 DFTB+ 相同。</li>
+        <li><strong>SK 文件</strong>：<code>SKFile.range_sep</code> 读出这一段并按 DFTB+ 的规则归类；<code>SKSet.range_sep</code> 汇总：每个同核文件、每对元素至少一个方向的文件要有这一段，<strong>所有出现的值必须相同</strong>（比 DFTB+ 严）。LC 要求 LC 的文件，CAM 接受三种；文件带这一段而没有开 <code>hybrid</code> 时报错（与 DFTB+ 相同）。</li>
+        <li><strong>结果</strong>：新字段 <code>DFTBResult.e_fock</code>（不开杂化时为 0）；<code>terms</code> 加 “Fock”；<code>q_in</code>、<code>q_out</code> 为 [布居 | 打包的 ΔP]（布居照不开杂化时的布局，ΔP 取下三角、每个自旋一段），<code>scc_errors</code> 是 max|ΔP<sub>out</sub> − ΔP<sub>in</sub>|。<code>q_init</code> 接受整个向量，或只有布居（ΔP<sub>in</sub> = 0，相当于 DFTB+ 读入不带密度矩阵的电荷文件）；ASE 计算器的 <code>reuse_charges</code> 与 <code>SCC</code> 的重启传整个向量，几何步之间沿用 ΔP<sub>in</sub> 与布居本身（DFTB+ 也不按新的重叠重算 q<sub>in</sub>）。</li>
+        <li><strong>能用</strong>：共线自旋（固定或自由总自旋）、Fermi/Gauss/MP 展宽、+U 与 onsite 修正、<code>third_order="full"</code>、外场、点电荷、隐式溶剂、色散、H5 与卤素修正、自定义 Hubbard 与参考占据、全部混合器、结构优化与 MD。</li>
+        <li><strong>拒绝</strong>（按 DFTB+ 的文字或注明里程碑）：周期体系（M6h-3）、torch 与自动求导、非 SCC、SOC、非共线（M6h-1 之后）、按壳层 SCC、<code>third_order="onsite"</code>、XL-BOMD、按原子的能量、Casida（M6h-2）、极化率与响应核（M6h-4）、坐标导数、<code>TruncateSKRange</code>（DFTB+ 静默忽略）、SelectedShells、类型切换、Thresholded 加自旋。</li>
+        <li><strong>电荷文件</strong>：DFTB+ 的 charges.bin/dat（格式 8）在布居与块之后存每个自旋的 ΔP<sub>in</sub>（整个 N × N，按列，每个值一条记录；DFTB+ 的矩阵只有下三角）。<code>charge_data</code> 写出、<code>populations_from_file</code> 读入；文件没有密度矩阵时只给布居（ΔP<sub>in</sub> = 0，与 DFTB+ 相同），不开杂化的计算忽略文件里的密度矩阵。DFTB+ 拒绝 Thresholded 的重启，pydftb 允许（第一次构建用整个 ΔP）。</li>
+        <li><strong>本征态</strong>：<code>bands.eigenstates</code>（<code>SCC.states()</code>、<code>PyDFTB.states()</code>）从 <code>q_in</code> 重建 SCC 最后一轮的哈密顿量，含 H<sub>x</sub>[ΔP<sub>in</sub>]；Thresholded 时是一次完整的构建，不是 SCC 累加的那个（差在阈值量级）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <h3>新模块 <code>pydftb/hybrid.py</code></h3>
+        <ul>
+          <li><code>gamma_hf</code>、<code>gamma_lr</code>、<code>gamma_cam</code> 与导数：逐行移植 <code>rshgamma.F90</code>（在位、同 U、异 U 三支，阈值 1e-5 Bohr 与 3.125e-6，100 ε 的系数规则），对原子对向量化。</li>
+          <li><code>Hybrid</code>（选项归一化，<code>pydftb.Hybrid</code>）与 <code>HybridTerms</code>（只依赖几何，进 <code>_Setup.hybrid</code>）：原子对 γ 与按轨道展开的 Γ，稠密 S，P<sub>0</sub>（参考占据按 <code>_reference_shell_populations</code>，含 <code>reference_occupations</code>），CAM 近邻掩码，Thresholded 的状态。</li>
+          <li><code>fock(ΔP, nspin)</code>：MatrixBased 四个矩阵乘；NeighbourBased 用截断的 S；Thresholded 按原子对 (A, B ≤ A) 向量化 C、D 的掩码与权重，ΔH<sub>AB</sub> = S<sub>·A</sub><sup>T</sup>(ΔΔP∘W)S<sub>·B</sub>，再对称化、累加。</li>
+          <li><code>energy</code> 与 <code>gradient(ΔP_out)</code>：∂E/∂S = c[(D∘Γ)SD + ((DS)∘Γ)D + (DS)(D∘Γ) + D((SD)∘Γ)]（对称）在成对元素上加进 dS 的系数；∂E/∂Γ = c[D∘(SDS) + (DS)∘(SD)] 按原子对求和后乘 γ′(R)。自旋时对两个自旋求和，c = −1/4。</li>
+        </ul>
+        <h3>计算器</h3>
+        <ul>
+          <li><code>_setup</code>：<code>hybrid</code> 选项时建 <code>HybridTerms</code>；<code>_SCCState.hybrid</code> 存 ΔP<sub>in</sub>、ΔP<sub>out</sub>、E<sub>Fock</sub> 与打包的向量。golden 用 <code>--allow-new</code> 放过 <code>_Setup.hybrid</code>、<code>_SCCState.hybrid</code>、<code>DFTBResult.e_fock</code> 三个新字段。</li>
+          <li><code>_scc</code> 的杂化分支：x<sub>in</sub> = 0（或 <code>q_init</code>）；每轮 H += H<sub>x</sub>[ΔP<sub>in</sub>]（每个自旋）；求解后 x<sub>out</sub> = pack(ρ<sub>out</sub> − P<sub>0</sub>)，误差与混合都在 x 上；q<sub>in</sub> = <code>_populations(ρ<sub>in</sub> = ΔP<sub>in</sub> + P<sub>0</sub>)</code>，于是 SCC 位点、自旋壳层、块向量三种布局都由现有代码给出，与 DFTB+ 的“Mulliken(ΔP<sub>in</sub>) + q<sub>0</sub>、块 Mulliken 对角换成 q<sub>in</sub>”完全相同（同一原子内 S 为单位阵，P<sub>0</sub> 的非对角块为零）。</li>
+          <li>第一轮规则按 DFTB+ 的杂化分支：只有自旋（及两分量）时第一轮不混合；min_iter 照 <code>getMinSccIters</code>（自旋或 +U 时 2），给出 <code>q_init</code> 时为 1；onsite 修正第一轮不加的规则不变。</li>
+          <li><code>_energies</code>：E<sub>Fock</sub> 计入 <code>energy</code> 与 <code>free_energy</code>；<code>DFTBResult.q_in/q_out</code> 为 [布居 | 打包的 ΔP]。</li>
+          <li><code>_gradient</code>：交换项的 dS 系数加在 <code>coef_s</code> 上（与带结构项一起走 <code>_add_pair_terms</code>），γ′ 项按原子加。</li>
+          <li>写出：detailed.out 风格的能量行加 “Energy Fock”；charges.bin/dat 带密度矩阵（<code>ChargeData.rho</code>）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>参数集</strong>：脚本 <code>python -m pydftb.validation.make_hybrid_sets</code> 由 <code>ptbp_hcocu</code> 生成 <code>ptbp_hcocu_lc</code>（LC 0.3）、<code>ptbp_hcocu_cam</code>（CAM 0.3 0.19 0.46）、<code>ptbp_hcocu_global</code>（CAM 0 0.2 0），每个文件在 <code>&lt;Documentation&gt;</code> 之前插入 <code>RangeSep</code> 段，逐字节可重现，写进 PROVENANCE。ob2 等 DFTB+ 测试参数（ob2 为 CC-BY-SA 4.0，其余没有许可证）只在本地对照，不入库。</li>
+          <li><strong>工具</strong>：<code>cases.py</code> 的 <code>hybrid</code> 字段；<code>dftbplus.py</code> 写 <code>Hybrid</code> 块、解析 “Energy Fock”；refgen 比较 <code>e_terms</code> 的 Fock 项与每轮 SCC 误差；dynamics 的结构优化与 MD 参考（ΔP 跨步沿用、每步 SCC 轮数）；读写电荷文件的两次运行（run 1 写、run 2 读）。</li>
+          <li><strong>30 个参考算例与 3 个动力学参考</strong>：H<sub>2</sub>O、CH<sub>3</sub>OH、苯的 LC，H<sub>2</sub>CO 的 CAM，C<sub>2</sub>H<sub>4</sub> 的全局杂化，<code>"cam"</code> 用 LC 的文件；NeighbourBased（截断 10 Bohr）与 Thresholded（1e-6；1e-4 加截断 4 Bohr）；自旋：CH<sub>3</sub>、HCO（NeighbourBased）、O<sub>2</sub> 三重态（CAM）、闭壳层按自旋算、H<sub>2</sub>O<sup>+</sup>、CH<sub>3</sub> 的自由总自旋；OH<sup>−</sup>、CuCO（d 壳层、300 K）、苯的 MP 展宽；与 <code>ThirdOrderFull</code> 加 D3、外场加点电荷、GBSA、+U（H<sub>2</sub>CO 的 O p、CuH 的 Cu d、HCO 自旋）、onsite、Anderson 混合器、自定义 Hubbard 的组合；三个读写电荷文件的重启（二进制、文本加自旋、+U 的块）；H<sub>2</sub>O 的结构优化、H<sub>2</sub>O 与 CH<sub>3</sub> 自旋的 MD（每步的 SCC 轮数）。</li>
+          <li><strong>自洽测试</strong>（<code>tests/test_hybrid.py</code>，69 项）：γ<sub>HF</sub>、γ<sub>LR</sub>（同 U、几乎相同的 U、异 U 三支）对倒空间积分（指数密度、库仑与长程核）一致到 1.4e-13；在位与远距极限、ω = 0、CAM 的系数规则；解析导数对差分；H<sub>x</sub> 线性、对称、自伴，等于 ∂E<sub>x</sub>/∂ΔP，四个矩阵乘等于 DFTB+ 的轨道求和；力对能量的差分（8 个算例，MatrixBased）；截断时力不是能量的导数；闭壳层按自旋算与不按自旋算相同；Neighbour(0) 与阈值 0 等于 Matrix；重启向量、电荷文件的往返、本征态；SK 文件的检查与归类；选项与拒绝。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="bugs">
+      <h2>六、DFTB+ 的问题与 pydftb 的做法</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 的情况</th><th>pydftb</th></tr></thead>
+        <tbody>
+          <tr><td>手册写 Screening 默认 Thresholded、有 <code>Hybrid = Global</code>；代码默认 MatrixBased、没有 Global</td><td>照代码：默认 matrix，全局杂化用 <code>"cam"</code> 加 β = 0 的文件</td></tr>
+          <tr><td>SK 文件之间不检查 ω、α、β 是否一致：类型取第一个物种的文件，参数取最后读到的文件；只检查 A ≤ B（物种顺序）的文件</td><td>所有出现的值必须一致，否则报错；每对元素任一方向的文件有这一段即可</td></tr>
+          <tr><td>只拒绝 <code>ThirdOrder</code>，<code>ThirdOrderFull</code> 能算</td><td>支持 <code>"full"</code>（参考算例 ch3oh_lc_dftb3_d3 与 DFTB+ 一致），拒绝 <code>"onsite"</code></td></tr>
+          <tr><td>拒绝 Thresholded 的重启（读电荷文件）</td><td>允许：重启时第一次构建用整个 ΔP</td></tr>
+          <tr><td>异 U 的 γ 闭式在 U 几乎相同时严重抵消（|ΔU| = 1e-6 时 γ<sub>LR</sub> 错 2.2，1e-4 时 2.4e-7）</td><td>τ 相差 5 % 以内用 Hermite–Genocchi 积分（与 M2b 的 SCC γ 相同），其余照抄</td></tr>
+          <tr><td>CutoffReduction &gt; 0 或 Thresholded 时，力用完整的近邻表，与能量不自洽</td><td>复现（参考对照）；测试记录不自洽的大小</td></tr>
+          <tr><td>杂化时静默忽略 <code>TruncateSKRange</code></td><td>拒绝这个组合</td></tr>
+          <tr><td>周期体系 TruncatedAndDamped 下 HF 部分的导数用了 LR 的阻尼系数（M6h-3 再验证）</td><td>M6h-3</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li>周期体系（Γ 点与 k 点、截断的库仑）在 M6h-3；TD-LC 在 M6h-2；响应在 M6h-4；非共线的杂化（DFTB+ 只用 MatrixBased、只用于分子）在 M6h-1 之后补。</li>
+        <li><strong>规模</strong>：MatrixBased 每轮四个 N × N 矩阵乘，Broyden 存 N(N+1)/2 × 轮数的向量；几千个轨道以内可以，更大的体系应换 NeighbourBased 的稀疏实现（不在本块）。</li>
+        <li><strong>Thresholded</strong> 的增量算法对舍入敏感：SCC 误差降到阈值附近以后，筛选的取舍随舍入翻转，末尾的轮数在两个程序之间不同（结果相同）。参考算例用 SCC 容差 1e-6（两边都在第 19 轮停，每轮误差相同到 5e-8）。</li>
+        <li><strong>简并的半满壳层</strong>：OH 自由基少数自旋的 π 对只有一个电子，交换（或 +U）让对称性破缺，破缺的方向由舍入决定；两个程序到达等价而取向不同的解，能量相同到 1e-11，轨道布居与轮数不同。这样的体系不能逐轮对照，参考算例用弯曲的 HCO 自由基；CuCO（奇数电子）加 +U 时两边的 SCC 都发散，换成闭壳层的 CuH。</li>
+        <li>金属团簇（Cu<sub>4</sub>CO）加 LC 时 DFTB+ 的默认 Broyden 不收敛，pydftb 相同；需要时换混合器或减小混合参数。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

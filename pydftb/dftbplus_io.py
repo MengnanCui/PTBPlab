@@ -12,7 +12,10 @@ Charge restart files ``charges.bin`` / ``charges.dat`` (DFTB+ ``dftb/sccinit.F90
   orbital, as DFTB+'s ``OrbitalEquiv_expand`` leaves it;
 * the numbers of atomic dipoles and quadrupoles (always written, ``0 0`` in DFTB);
 * with DFTB+U or onsite corrections, every atom's block populations, row by row per channel
-  and atom (and the imaginary blocks with dual spin-orbit coupling).
+  and atom (and the imaginary blocks with dual spin-orbit coupling);
+* with a hybrid functional (milestone M6h-1, molecules), the density-matrix difference
+  DeltaP_in = P - P0 of every spin channel (up, down), the whole N x N matrix column by column,
+  one value per record; DFTB+'s matrices hold the lower triangle (the upper one zero).
 
 ``charges.bin`` is a Fortran stream file (no record markers, 4-byte integers and logicals);
 ``charges.dat`` is the same in Fortran list-directed text, written here exactly as gfortran
@@ -54,11 +57,12 @@ class ChargeData:
     checksum: np.ndarray | None = None    # (n_spin,) as read; None: computed when written
     version: int = RESTART_FORMAT
     multipolar: bool = True               # DFTB+ always writes the multipole record
-    density_matrix: bool = False          # hybrid functionals' restart data (not supported)
+    density_matrix: bool = False          # hybrid functionals' restart data (M6h-1)
     kpoint_info: bool = False
     n_dipole: int = 0
     n_quadrupole: int = 0
     extra: dict = field(default_factory=dict)
+    rho: np.ndarray | None = None         # (n_spin, N, N) DeltaP_in of a hybrid run (M6h-1)
 
     @property
     def n_spin(self) -> int:
@@ -206,11 +210,18 @@ def read_charges(path, norb_atom, text: bool | None = None) -> ChargeData:
         blocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
     if iblock:
         iblocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
-    if rho:
-        raise ValueError("the charge file has density-matrix data (hybrid functionals), which "
-                         "pydftb does not read")
+    dmat = None
+    if rho:                                      # hybrid functionals (M6h-1)
+        if kpoint_info:
+            raise ValueError("the charge file has k-point density matrices (periodic hybrid "
+                             "calculations, milestone M6h-3), which pydftb does not read")
+        if n_atom_file != len(norb_atom):
+            raise ValueError("the charge file's density matrix needs all atoms of the system")
+        n = int(edges[-1])                       # deltaRhoIn(kk, jj, ii), one value per record
+        rd.start()
+        dmat = rd.reals(n_spin * n * n).reshape(n_spin, n, n).transpose(0, 2, 1).copy()
     return ChargeData(q, norb_atom, blocks, iblocks, checksum, version, multipolar, rho,
-                      kpoint_info, n_dip, n_quad)
+                      kpoint_info, n_dip, n_quad, rho=dmat)
 
 
 def _read_blocks(rd, norb_atom, n_atom_file, n_spin) -> list:
@@ -232,11 +243,14 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
     computed from the populations."""
     if text is None:
         text = str(path).endswith(".dat")
-    if data.density_matrix or data.kpoint_info or data.n_dipole or data.n_quadrupole:
-        raise ValueError("pydftb writes only populations and blocks")
+    if data.kpoint_info or data.n_dipole or data.n_quadrupole:
+        raise ValueError("pydftb writes only populations, blocks and a molecule's density matrix")
+    if data.density_matrix and data.rho is None:
+        raise ValueError("density_matrix is set but there is no density matrix (rho)")
     norb = np.asarray(data.norb_atom, int)
     edges = np.concatenate([[0], np.cumsum(norb)])
-    head_flags = [data.blocks is not None, data.iblocks is not None, False, False, True]
+    head_flags = [data.blocks is not None, data.iblocks is not None, data.rho is not None, False,
+                  True]
     checksum = data.sums()
     rows = []                                   # (kind, values) records in order
     rows.append(("i", [RESTART_FORMAT]))
@@ -252,6 +266,12 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
             for a in range(data.n_atom):
                 for ii in range(int(norb[a])):
                     rows.append(("r", np.asarray(blocks[a][s, :, ii], float)))
+    if data.rho is not None:                    # column by column, one value per record
+        rho = np.asarray(data.rho, float)
+        if rho.shape != (data.n_spin, edges[-1], edges[-1]):
+            raise ValueError(f"the density matrix has shape {rho.shape}, not "
+                             f"{(data.n_spin, int(edges[-1]), int(edges[-1]))}")
+        rows.extend(("r", [x]) for x in rho.transpose(0, 2, 1).ravel())
     tmp = f"{path}.tmp"
     if text:
         with open(tmp, "w") as f:

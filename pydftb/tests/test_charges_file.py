@@ -1,8 +1,9 @@
 """DFTB+'s charge restart files charges.bin / charges.dat (milestone M6f-1).
 
 Byte-for-byte round trips of the files DFTB+ 25.1 wrote for the frozen references
-*_read_charges* (binary and text, every layout), pydftb's own files read back, DFTB+'s checks
-on reading, and the older formats 4-7.  Restarting from DFTB+'s files against DFTB+ itself is
+*_read_charges* (binary and text, every layout; with a hybrid functional also the density
+matrix, M6h-1), pydftb's own files read back, DFTB+'s checks on reading, and the older formats
+4-7.  Restarting from DFTB+'s files against DFTB+ itself is
 in test_reference.py.
 """
 import base64
@@ -23,7 +24,8 @@ READ_CASES = sorted(c.name for c in refgen.CASES if c.read_charges is not None)
 def _engine(name):
     """The case's DFTB engine, labels and positions (Bohr)."""
     case, sk, labels, pos, cell, kpts, opts = _system(name)
-    opts = {**opts, **refgen.pauli_options(case, labels), **refgen.block_options(case, labels)}
+    opts = {**opts, **refgen.pauli_options(case, labels), **refgen.block_options(case, labels),
+            **({"hybrid": case.hybrid} if case.hybrid is not None else {})}       # M6h-1
     calc = DFTB(sk, smearing=tuple(case.filling), kpts=kpts, scc_tol=1e-10, max_scc=500, **opts)
     return case, calc, labels, pos, cell
 

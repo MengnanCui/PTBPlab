@@ -44,6 +44,7 @@ from . import analysis as _analysis
 from . import blockpot, external
 from . import casida as _casida
 from . import casida_grad as _cgrad
+from . import hybrid as _hybrid
 from . import corrections as _corrections
 from . import solvation as _solvation
 from .backend import ops
@@ -145,6 +146,9 @@ class DFTBResult:
     analysis: object | None = None       # pydftb.analysis.AnalysisResult
     # M5a: smooth type switching, {type label: (n_atom,) weights} for every type of every switch
     type_weights: dict | None = None
+    # M6h: hybrid functionals, the exchange of DeltaP (DFTB+ "Energy Fock"), a part of energy;
+    # q_in and q_out are then [populations | the mixed DeltaP (every spin channel's lower triangle)]
+    e_fock: float = 0.0
 
     @property
     def e_total(self) -> float:
@@ -183,7 +187,7 @@ class DFTBResult:
                 "LS": self.e_ls, "+U": self.e_plus_u, "onsite": self.e_onsite,
                 "ext": self.e_ext, "solvation": self.e_solv,
                 "repulsive": self.e_rep, "dispersion": self.e_disp, "halogen": self.e_halogen,
-                "-TS": -self.ts}
+                "Fock": self.e_fock, "-TS": -self.ts}
 
 
 @dataclass(frozen=True)
@@ -231,6 +235,7 @@ class _Setup:
     halogenx: "_corrections.HalogenTerms | None" = None    # halogen correction (M6f-3)
     dipole_corr: "_corrections.DipoleSetup | None" = None  # dipole correction (M6f-3)
     switching: "_typeswitch.TypeMixing | None" = None      # type weights (M5a)
+    hybrid: "_hybrid.HybridTerms | None" = None              # hybrid functionals (M6h)
 
     @property
     def kw_dev(self):
@@ -241,6 +246,17 @@ class _Setup:
     def smat_precise(self):
         """The overlap stack in double precision (for the Cholesky factor)."""
         return self.smat if self.dev is None else self.dev.smat_precise
+
+
+@dataclass
+class _HybridState:
+    """The exchange of the last SCC iteration (M6h): DeltaP of the input and output densities
+    per spin channel, their packed vectors (what the SCC mixes) and E_Fock of the input."""
+    dp_in: list
+    dp_out: list
+    x_in: np.ndarray
+    x_out: np.ndarray
+    e_fock: float
 
 
 @dataclass
@@ -294,6 +310,7 @@ class _SCCState:
     error: float
     vs_orb: np.ndarray | None = None   # spin potential per orbital (+ for up, - for down)
     errors: list | None = None         # max |q_out - q_in| of every SCC iteration (M6f)
+    hybrid: "_HybridState | None" = None   # hybrid functionals (M6h): DeltaP in and out
 
 
 class DFTB:
@@ -445,6 +462,16 @@ class DFTB:
                           ``sk`` with equal basis, on-site energies, Hubbard values, occupations
                           and masses (and equal per-label options); NumPy only, not with Casida,
                           XL-BOMD or the analysis outputs.
+    hybrid : "lc" | "cam" | dict | Hybrid  a range-separated hybrid functional (DFTB+
+                          ``Hybrid``, milestone M6h-1; molecules): LC-DFTB or CAM, omega, alpha
+                          and beta from the SK files' ``RangeSep`` section; a dict sets
+                          ``type``, ``screening`` ("matrix", "neighbour", "threshold"),
+                          ``threshold`` and ``cutoff_reduction`` (Bohr), see
+                          :class:`pydftb.hybrid.Hybrid`.  ``DFTBResult.e_fock`` is the exchange
+                          (in ``energy``); ``q_in``/``q_out`` are then [populations | packed
+                          DeltaP], what the SCC carries between geometries.  SK files with a
+                          ``RangeSep`` section need it (as DFTB+) unless ``hybrid=False``.
+                          NumPy only.
 
     Two-component calculations and block potentials (``plus_u``, ``onsite_corrections``) are
     NumPy only (not ``backend="torch"`` or :mod:`pydftb.autodiff`; two-component not the SP2
@@ -483,7 +510,7 @@ class DFTB:
                  fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None, analysis=None, type_switching=None):
+                 dipole_correction=None, analysis=None, type_switching=None, hybrid=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -669,6 +696,71 @@ class DFTB:
                 warnings.warn(f"scc_tol = {scc_tol:g} is below what float32 can resolve "
                               "(about 1e-6); the SCC may not converge", RuntimeWarning,
                               stacklevel=2)
+        # range-separated hybrid functionals (M6h-1)
+        self.hybrid = None if hybrid is False else _hybrid.Hybrid.make(hybrid)
+        self._range_sep = None
+        if self.hybrid is not None:
+            self._range_sep = self._check_hybrid()
+        elif hybrid is None and getattr(self.sk, "has_range_sep", False):
+            tagged = sorted(f"{a}-{b}" for (a, b), f in self.sk.files.items()
+                            if f.range_sep is not None)
+            raise ValueError(f"the SK files {tagged} are a hybrid parametrisation (RangeSep): set "
+                             "hybrid='lc' or 'cam' (DFTB+: 'Hybrid SK-file provided, but the "
+                             "hybrid block is missing'), or hybrid=False to ignore it")
+
+    def _check_hybrid(self) -> tuple:
+        """The conditions of a hybrid functional (M6h-1): DFTB+'s (initprogram
+        ensureHybridXcReqs, parser parseHybridBlock) and the parts pydftb has not extended to it
+        yet; returns the SK files' (kind, omega, alpha, beta)."""
+        hy = self.hybrid
+        if self.backend.is_torch:
+            raise ValueError("hybrid functionals are implemented for the NumPy backend only "
+                             "(milestone M6h)")
+        rs = self.sk.range_sep()
+        if hy.kind == "lc" and rs[0] != "lc":
+            raise ValueError(f"Requested hybrid functional type conflict with provided SK-file(s) "
+                             f"(as DFTB+: 'lc' needs LC files, these are {rs[0]!r}; use 'cam')")
+        a = self.analysis
+        dftbp = None                       # DFTB+'s refusals, in its words
+        if not self.scc:
+            dftbp = "Hybrid calculations require SCC = Yes"
+        elif self.spin_orbit is not None:
+            dftbp = "Hybrid calculations not currently implemented for spin orbit coupling"
+        elif self.sk.shell_resolved:
+            dftbp = "Hybrid functionality currently does not yet support shell-resolved SCF"
+        elif self.third_order == "onsite":
+            dftbp = ("Hybrid calculations not currently implemented for 3rd-order DFTB "
+                     "(third_order='full' works)")
+        elif hy.screening == "threshold" and self.spin:
+            dftbp = ("Spin-unrestricted calculation for thresholded range-separation not yet "
+                     "implemented")
+        elif a is not None and a.atom_energies:
+            dftbp = ("Atomic resolved energies cannot be calculated with hybrid functionals at "
+                     "the moment")
+        elif a is not None and a.coord_derivatives is not False:
+            dftbp = "Coordinate derivative perturbations do not yet work with hybrid functionals"
+        if dftbp:
+            raise ValueError(f"{dftbp} (as in DFTB+)")
+        why = None                         # not (yet) in pydftb
+        if self.noncolinear:
+            why = ("non-collinear spin (DFTB+ has it for the matrix screening of molecules) is not "
+                   "supported yet")
+        elif self.casida is not None:
+            why = "Casida excitations (TD-LC) are milestone M6h-2"
+        elif a is not None and (a.polarisability is not False or a.response_kernel is not False
+                                or a.external_charge_derivatives is not False):
+            why = "the response analyses are milestone M6h-4"
+        elif self.truncate_sk_range is not None:
+            why = "truncate_sk_range is refused (DFTB+ silently ignores it then)"
+        elif getattr(self.sk, "selected", False):
+            why = "selected_shells is not supported"
+        elif self.type_switching is not None:
+            why = "type switching is not supported"
+        elif self.force_evaluation != "traditional":
+            why = "only force_evaluation='traditional' is supported"
+        if why:
+            raise ValueError(f"hybrid functionals: {why}")
+        return rs
 
     @staticmethod
     def _check_noncolinear(scc, spin_constants, solver, unpaired_electrons, relax_total_spin):
@@ -1047,9 +1139,14 @@ class DFTB:
     def charge_data(self, species, result: DFTBResult) -> ChargeData:
         """``result``'s input populations of the last SCC iteration (``q_in``, what DFTB+
         writes) as a DFTB+ charge file (:func:`pydftb.dftbplus_io.write_charges`): every class
-        total on its first orbital, collinear spin as (q, m), blocks per atom."""
+        total on its first orbital, collinear spin as (q, m), blocks per atom; with a hybrid
+        functional also DeltaP_in of every spin channel (up, down), its lower triangle as DFTB+
+        keeps it (M6h-1)."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         vec = np.asarray(result.q_in, float)
+        rho = None
+        if self.hybrid is not None:                        # [populations | packed DeltaP]
+            vec, rho = self._split_hybrid_vector(basis, vec)
         n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
         blocks = iblocks = None
         if block is not None:
@@ -1068,7 +1165,24 @@ class DFTB:
             q_orb = np.stack([q_orb[0] + q_orb[1], q_orb[0] - q_orb[1]])
             blocks = None if blocks is None else [np.stack([b[0] + b[1], b[0] - b[1]])
                                                   for b in blocks]
-        return ChargeData(q_orb, np.asarray(basis.norb_atom, int), blocks, iblocks)
+        return ChargeData(q_orb, np.asarray(basis.norb_atom, int), blocks, iblocks,
+                          density_matrix=rho is not None, rho=rho)
+
+    def _split_hybrid_vector(self, basis: Basis, vec) -> tuple:
+        """A hybrid run's mixing vector -> (populations, DeltaP per spin channel as DFTB+ keeps
+        it: the lower triangle, the upper one zero)."""
+        n = basis.norb
+        tril = np.tril_indices(n)
+        nspin = 2 if self.spin else 1
+        k = len(tril[0])
+        if len(vec) <= k * nspin:
+            raise ValueError("the result is not one of this hybrid calculation (q_in has no "
+                             "density matrix)")
+        pops, x = vec[:len(vec) - k * nspin], vec[len(vec) - k * nspin:]
+        rho = np.zeros((nspin, n, n))
+        for c in range(nspin):
+            rho[c][tril] = x[c * k:(c + 1) * k]
+        return pops, rho
 
     @staticmethod
     def _atom_blocks(basis: Basis, block, per_block) -> list:
@@ -1084,10 +1198,25 @@ class DFTB:
         path), as DFTB+ ``ReadInitialCharges`` takes it: populations summed over every class;
         DFTB+'s checks of the spin channels, checksums (1e-7), electron count and collinear
         magnetisation (1e-3; not with ``skip_charge_test``, DFTB+ ``SkipChargeTest``, or a
-        fixed Fermi level)."""
+        fixed Fermi level).  With a hybrid functional (M6h-1): the populations followed by the
+        file's DeltaP_in (its lower triangle), or the populations alone (DeltaP_in = 0, as
+        DFTB+) when the file has no density matrix; a non-hybrid calculation ignores one."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         if not isinstance(data, ChargeData):
             data = dftbplus_io.read_charges(data, basis.norb_atom, text)
+        q = self._file_populations(basis, site_of_orb, rep, block, data, skip_charge_test)
+        if self.hybrid is None or data.rho is None:
+            return q
+        nspin = 2 if self.spin else 1
+        if data.rho.shape != (nspin, basis.norb, basis.norb):
+            raise ValueError(f"the charge file's density matrix has shape {data.rho.shape}, this "
+                             f"calculation needs {(nspin, basis.norb, basis.norb)}")
+        tril = np.tril_indices(basis.norb)
+        return np.concatenate([q] + [np.asarray(m, float)[tril] for m in data.rho])
+
+    def _file_populations(self, basis, site_of_orb, rep, block, data: ChargeData,
+                          skip_charge_test: bool) -> np.ndarray:
+        """The populations part of :meth:`populations_from_file`."""
         n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
         if data.n_spin != n_chan:
             raise ValueError(f"the charge file has {data.n_spin} spin channels, this calculation "
@@ -1149,6 +1278,9 @@ class DFTB:
         """DFTB+'s conditions for XL-BOMD (initprogram): SCC, Fermi filling, a dynamics force
         evaluation; no spin, DFTB+U, onsite corrections, external fields or charges, solvation;
         the legacy on-site third order fails in DFTB+'s energy (scc.F90)."""
+        if getattr(self, "hybrid", None) is not None:
+            raise ValueError("XL-BOMD: Hybrid calculations not currently implemented for XLBOMD "
+                             "(as in DFTB+)")
         if self.type_switching is not None:
             raise ValueError("XL-BOMD does not support type switching (milestone M5a)")
         why = None
@@ -1451,10 +1583,26 @@ class DFTB:
         if self.dipole_correction is not None:
             dipole_corr = self.dipole_correction.setup(pos, cell if periodic else None,
                                                        pbc if periodic else None)
+        hybrid = None
+        if self.hybrid is not None:                                   # M6h-1
+            if periodic:
+                raise ValueError("hybrid functionals are implemented for molecules only "
+                                 "(periodic systems: milestone M6h-3)")
+            if matrices:
+                hybrid = self._hybrid_terms(species, pos, basis, np.asarray(smat[0]).real)
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
                       pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
-                      dipole_corr=dipole_corr, switching=mix)
+                      dipole_corr=dipole_corr, switching=mix, hybrid=hybrid)
+
+    def _hybrid_terms(self, species, pos, basis: Basis, smat) -> "_hybrid.HybridTerms":
+        """The exchange terms of a molecule's geometry (M6h-1): tau from the first shell's
+        Hubbard U, P0 from the reference shell populations spread over their orbitals."""
+        ls = np.asarray(basis.shell_l)
+        q0_orb = (self._reference_shell_populations(basis) / (2 * ls + 1))[basis.orb_shell]
+        return _hybrid.HybridTerms(self.hybrid, self._range_sep,
+                                   [self.sk.hubbard[lab][0] for lab in species], pos,
+                                   basis.orb_atom, smat, q0_orb, self.sk.cutoff)
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -1882,6 +2030,8 @@ class DFTB:
             -> _SCCState:
         """The SCC loop; ``control`` (XL-BOMD, M6e) sets the iterations and tolerance by
         DFTB+'s rules: no mixing after the last iteration, no warning when unconverged."""
+        if st.hybrid is not None:                                     # M6h-1
+            return self._scc_hybrid(st, q_init, forces, timings)
         b = self.backend
         if b.is_torch:
             from .backend.torch_solver import TorchSolver
@@ -1966,6 +2116,102 @@ class DFTB:
                           "iteration's results", RuntimeWarning, stacklevel=3)
         return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
                          converged, diff, vs_orb, errors if self.scc else None)
+
+    def _scc_hybrid(self, st: _Setup, q_init, forces, timings) -> _SCCState:
+        """The SCC with a hybrid functional (M6h-1; DFTB+ main.F90 getNextInputDensityReal):
+        the mixer works on DeltaP = P - P0 (the lower triangle of every spin channel); the
+        Hamiltonian adds H_x[DeltaP_in] to every channel; the error is max|DeltaP_out -
+        DeltaP_in|; after mixing, the input populations (sites, spin shells or blocks) are those
+        of DeltaP_in + P0, as DFTB+'s Mulliken(DeltaP_in) + q0 and block Mulliken.  DFTB+'s rules:
+        DeltaP_in = 0 at the start (no exchange in the first iteration), the first output taken
+        unmixed with spin only, at least two iterations with spin or +U unless it starts from given
+        populations, no mixing after the last iteration.  ``q_init``: the populations (DeltaP_in
+        = 0, as a DFTB+ charge file without a density) or [populations | packed DeltaP], what
+        DFTB+ carries from one geometry step to the next (``DFTBResult.q_in``)."""
+        hy = st.hybrid
+        threads = self.k_threads if self.k_threads.n > 1 else None
+        solver = (self.solver if not isinstance(self.solver, str)
+                  else SOLVERS[self.solver](threads=threads))
+        t1 = time.perf_counter()
+        s = st.smat_precise
+        solver.prepare(s if st.spin is None else np.concatenate([s, s]))
+        t_diag = time.perf_counter() - t1
+        nspin = 1 if st.spin is None else 2
+        mixer = make_mixer(self.mixer, self.mixing)
+        p0 = [hy.reference(nspin)] * nspin
+        q_start = self._initial_populations(st)
+        npop = len(q_start)
+        if q_init is None:
+            q_in, x_in = q_start, np.zeros(hy.packed_size * nspin)
+        else:
+            q_init = np.asarray(q_init, float)
+            if len(q_init) not in (npop, npop + hy.packed_size * nspin):
+                raise ValueError(f"q_init of a hybrid calculation: {npop} populations, or those "
+                                 f"and the {hy.packed_size * nspin} elements of the packed "
+                                 f"DeltaP; not {len(q_init)} values")
+            q_in = q_init[:npop].copy()
+            x_in = (q_init[npop:].copy() if len(q_init) > npop
+                    else np.zeros(hy.packed_size * nspin))
+        dp_in = hy.unpack(x_in, nspin)
+        hy.reset(q_init is not None)
+        first_out = st.spin is not None and q_init is None
+        min_iter = 1
+        if q_init is None and (st.spin is not None
+                               or (st.block is not None and st.block.has_u)):
+            min_iter = 2                          # DFTB+ getMinSccIters
+        max_iter, tol = self.max_scc, self.scc_tol
+        h0 = self._with_net(st, st.h0)
+        errors, converged, diff = [], False, 0.0
+        for nit in range(1, max_iter + 1):
+            v_orb, vs_orb = self._potentials(st, q_in)
+            fock = hy.fock(dp_in)
+            e_fock = hy.energy(fock, dp_in)
+            if st.block is not None:
+                pots = self._block_potentials(st, q_in, onsite=nit > 1 or q_init is not None)
+                h = self._block_hamiltonian(st, h0, st.smat, v_orb, vs_orb, pots, None)
+            else:
+                v = np.asarray(v_orb)
+                h = h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
+                if vs_orb is not None:
+                    vs = np.asarray(vs_orb)
+                    hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
+                    h = np.concatenate([h + hs, h - hs])          # up, down
+            h = h + np.stack(fock)
+            t1 = time.perf_counter()
+            rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=False)
+            t_diag += time.perf_counter() - t1
+            q_orb, q_out = self._populations(st, rho)
+            dp_out = [np.asarray(rho[i]).real - p0[i] for i in range(nspin)]
+            x_out = hy.pack(dp_out)
+            diff = np.abs(x_out - x_in).max()
+            errors.append(float(diff))
+            if self.verbose:
+                print(f"SCC {nit:3d}  max dDeltaP = {diff:.3e}")
+            if diff < tol and nit >= min_iter:
+                converged = True
+                break
+            if nit == max_iter:
+                break                      # DFTB+: no mixing after the last iteration
+            if nit == 1 and first_out:
+                x_in, q_in = x_out, q_out  # DFTB+: the spin guess is not mixed in
+            else:
+                x_in = mixer.mix(x_in, x_out)
+                dp = hy.unpack(x_in, nspin)
+                q_in = self._populations(st, np.stack([d + p for d, p in zip(dp, p0)]))[1]
+            dp_in = hy.unpack(x_in, nspin)
+        if forces:
+            t1 = time.perf_counter()
+            rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=True)
+            t_diag += time.perf_counter() - t1
+        timings["diag"] = t_diag
+        timings["scc_iter"] = nit
+        if not converged and self.warn_unconverged:
+            warnings.warn(f"SCC not converged after {nit} iterations (max |dDeltaP| = "
+                          f"{diff:.2e} > {self.scc_tol:.1e}); returning the last iteration's "
+                          "results", RuntimeWarning, stacklevel=3)
+        state = _HybridState(dp_in, dp_out, x_in, x_out, e_fock)
+        return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
+                         converged, diff, vs_orb, errors, hybrid=state)
 
     def _energies_pauli(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         """Energies and populations of a two-component calculation (from the last output,
@@ -2094,12 +2340,18 @@ class DFTB:
         if st.halogenx is not None or st.dipole_corr is not None:   # M6f-3
             e_scc, energy = self._correction_energies(st, dq_atom, e_scc, energy, extra)
         extra["dipole"] = self._dipole(st, dq_atom)
+        q_in, q_out = sc.q_in, sc.q_out
+        if sc.hybrid is not None:                                    # M6h-1
+            energy = energy + sc.hybrid.e_fock
+            extra["e_fock"] = sc.hybrid.e_fock
+            q_in = np.concatenate([sc.q_in, sc.hybrid.x_in])
+            q_out = np.concatenate([sc.q_out, sc.hybrid.x_out])
         return DFTBResult(energy, energy - sc.ts, e_band, e_scc, e_rep, sc.ts, mu, q_atom,
                           None if sc.evals is None else list(sc.evals), n_scc=sc.n_iter,
                           converged=sc.converged, q_shell=q_shell, q_orbital=sc.q_orb,
                           occupations=occ, scc_error=sc.error, kpoints=st.kpts,
-                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=sc.q_in,
-                          q_out=sc.q_out, **extra)
+                          kweights=st.kw, e_3rd=e_3rd, e_disp=e_disp, q_in=q_in,
+                          q_out=q_out, **extra)
 
     def _gradient(self, st: _Setup, sc: _SCCState, virial: bool = False, xl: bool = False):
         """dE/dR (n_atom, 3) and, if requested, the virial dE/d(strain) (3, 3).
@@ -2133,6 +2385,8 @@ class DFTB:
             coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
         if st.block is not None:                         # block potentials' dS part (M6b)
             coef_s = coef_s + self._block_force_coefficient(st, sc)
+        if st.hybrid is not None:                        # the exchange's dS part (M6h-1)
+            coef_s = coef_s + st.hybrid.pair_coefficient(sc.hybrid.dp_out, pb)
         grad, gp = self._add_pair_terms(st, grad, p_e, coef_s)
         sw = None
         if st.switching is not None and st.switching.active.any():    # M5a: weights' gradient
@@ -2157,6 +2411,8 @@ class DFTB:
             grad = grad + g_3rd
         if st.disp is not None:
             grad = grad + st.disp.gradient
+        if st.hybrid is not None:                        # the exchange's gamma part (M6h-1)
+            grad = grad + st.hybrid.gamma_gradient(sc.hybrid.dp_out)
         dq_atom = None
         if st.ext is not None or st.solv is not None:                # M6c
             dq_atom = ops.segment_sum(dq, st.site_atom, natom)

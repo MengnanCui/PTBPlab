@@ -24,6 +24,7 @@ from .constants import BOHR, HARTREE, MIN_TEMP, VOLT_PER_ANGSTROM_AU
 from .dftbplus_io import write_charges
 from .dispersion import make_dispersion
 from .external import PointCharges
+from .hybrid import Hybrid
 from .kpoints import monkhorst_pack, reduce_time_reversal
 from .occupations import Smearing
 from .parallel import as_kthreads
@@ -38,6 +39,15 @@ def _fermi_au(value):
         return None
     v = np.asarray(value, float) / HARTREE
     return float(v) if v.ndim == 0 else tuple(float(x) for x in v)
+
+
+def _hybrid_au(spec):
+    """``hybrid`` with ``cutoff_reduction`` from Angstrom to Bohr (M6h-1)."""
+    if isinstance(spec, dict) and "cutoff_reduction" in spec:
+        return {**spec, "cutoff_reduction": float(spec["cutoff_reduction"]) / BOHR}
+    if isinstance(spec, Hybrid):
+        return replace(spec, cutoff_reduction=spec.cutoff_reduction / BOHR)
+    return spec
 
 
 def _truncation_au(spec):
@@ -170,6 +180,11 @@ class PyDFTB(Calculator):
     the types; the weights of the last calculation are ``raw.type_weights``.
     Milestone M6f-5: ``selected_shells`` (DFTB+ ``SelectedShells``), a label's shells taken from
     several SK files, as in :class:`pydftb.ParamSet`.
+    Milestone M6h-1: ``hybrid`` ("lc", "cam", a dict or a :class:`pydftb.Hybrid`, as in
+    :class:`pydftb.DFTB`; ``cutoff_reduction`` in Angstrom): a range-separated hybrid functional
+    for molecules, with
+    SK files that have a ``RangeSep`` section; ``reuse_charges`` then carries the density matrix
+    between geometry steps, as DFTB+ does.
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole", "energies"]
@@ -195,7 +210,7 @@ class PyDFTB(Calculator):
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
                  dipole_correction=None, analysis=None, type_switching=None,
-                 selected_shells=None, **kwargs):
+                 selected_shells=None, hybrid=None, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved,
                                selected_shells=selected_shells)
@@ -230,7 +245,7 @@ class PyDFTB(Calculator):
                                 truncate_sk_range=_truncation_au(truncate_sk_range), h5=h5,
                                 halogen_correction=halogen_correction,
                                 dipole_correction=_dipole_correction_au(dipole_correction),
-                                analysis=_analysis_au(analysis))
+                                analysis=_analysis_au(analysis), hybrid=_hybrid_au(hybrid))
         self.type_switching = None                    # M5a
         if type_switching is not None:
             self.type_switching = check_switches(

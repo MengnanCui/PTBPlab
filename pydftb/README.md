@@ -492,6 +492,36 @@ H5 and the halogen correction recognise elements, DFTB+ species names (type labe
 `O2` differ).  NumPy engine only.  Details:
 [`docs/reports/M6f3-corrections.html`](docs/reports/M6f3-corrections.html).
 
+### Range-separated hybrid functionals (LC, CAM)
+
+DFTB+'s `Hybrid = LC {}` and `CAM {}` for molecules (milestone M6h-1; NumPy engine only).  The
+SK files hold the functional: their `RangeSep` section (`LC omega` or `CAM omega alpha beta`,
+as in DFTB+'s ob2 files) gives omega, alpha and beta; the option picks DFTB+'s type and
+screening:
+
+```python
+calc = DFTB(sk, hybrid="lc")                    # LC files; "cam" takes CAM, global or LC files
+DFTB(sk, hybrid={"type": "lc", "screening": "neighbour", "cutoff_reduction": 2.0})   # Bohr
+DFTB(sk, hybrid={"type": "lc", "screening": "threshold", "threshold": 1e-6})
+r = calc.calculate(labels, pos, forces=True)
+r.e_fock                                        # DFTB+ "Energy Fock", a part of energy
+atoms.calc = PyDFTB(skdir, hybrid="lc", reuse_charges=True)   # cutoff_reduction in Angstrom
+```
+
+The exchange acts on DeltaP = P - P0, and the SCC mixes DeltaP with DFTB+'s rules (the first
+iteration, the least number of iterations), so it takes DFTB+'s iterations; the error of an
+iteration is max |DeltaP_out - DeltaP_in|.  `r.q_in` is [populations | packed DeltaP_in]:
+restarts (`q_init`, `reuse_charges`, `SCC` from one geometry to the next) carry the density
+matrix as DFTB+ does between geometry steps, and the charge files hold it (format 8, DFTB+'s
+layout).  With collinear spin, smearing, DFTB+U and onsite corrections, the full third order,
+D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics drivers.  SK
+files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
+`hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
+shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
+coordinate derivatives, XL-BOMD; not yet in pydftb: periodic systems (M6h-3), Casida (M6h-2),
+the response analyses (M6h-4), non-collinear spin, torch and `pydftb.autodiff`.  Details:
+[`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
+
 ### Analysis outputs
 
 DFTB+'s `Analysis` outputs (atom-resolved energies, net populations, CM5 charges, the

@@ -106,6 +106,8 @@ class SCC:
         r = self.result
         if block_terms(self.options):          # DFTB+U / onsite: the block vector (M6b)
             return r.q_in
+        if self.options.get("hybrid") not in (None, False):   # [populations | DeltaP] (M6h-1)
+            return r.q_in
         if r.q_spin is not None:
             return r.q_spin.ravel()
         return r.q_shell if self.params.shell_resolved else r.charges
