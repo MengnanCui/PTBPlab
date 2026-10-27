@@ -1754,15 +1754,16 @@ CASES += [
     Case("cuo_chain_soc_plusu_kernel_k422", _cuo_chain, kgrid=(4, 2, 2), time_reversal=False,
          filling=("fermi", 1000.0), spin_orbit={"xi": XI_CUO}, plus_u=U_CU,
          ewald_tolerance=1e-12, torch=False,
-         tol={**TOL_SKEW, "kernel_dftbp": 1.0, "dmdV": 1e-7, "dedV": 5e-9, "n_scc": 1,
+         tol={**TOL_SKEW, "kernel_dftbp": 1.0, "dmdV": 1e-6, "dedV": 5e-9, "n_scc": 1,
               "scc_errors": 1.0},
          analysis={"response_kernel": True, "skew_compat": True},
          note="periodic, k-points: no finite fields; pydftb's physical kernel is checked by "
               "differences in site potentials (test_response_pauli); 'kernel_dftbp' records "
               "DFTB+'s error (75 %), the rest is compared with DFTB._response_skew_compat.  "
               "Without moments (1e-11) the magnetisation response is noise, ~2.5e-7 in both "
-              "codes; the 63-iteration metallic SCC ends one iteration apart and the ground "
-              "states agree to ~1e-9 (N_F 4e-9, the level derivatives 2e-9)"),
+              "codes and in each environment (dmdV 1e-6); the 63-iteration metallic SCC ends "
+              "one iteration apart and the ground states agree to ~1e-9 (N_F 4e-9, the level "
+              "derivatives 2e-9)"),
     # coordinate derivatives: DFTB+ refuses them, its differences are the reference
     Case("oh_noncolinear_dx", _oh, **_OHNC, **DX, tol=TOL_BDX, analysis=COORD_FD, hessian={}),
     Case("oh_noncolinear_soc_dx", _oh, **_OHNC, spin_orbit=SOC_O, **DX, tol=TOL_BDX,

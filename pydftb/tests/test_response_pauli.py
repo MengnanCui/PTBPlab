@@ -139,7 +139,8 @@ def test_external_charge_derivatives_against_differences():
 def test_periodic_kernel_against_site_potential_differences():
     """A periodic metal with dual spin-orbit coupling and +U (k-points, complex spinors, real
     and skew block channels): the response kernel dN_B/dV_A against differences in a gross site
-    potential on A.  Without the skew channels (DFTB+ 25.1) the kernel is 40 % off here."""
+    potential on A.  Without the skew channels (DFTB+ 25.1) the kernel is 40 % off here.  The
+    chain has no moments: the magnetisation rows are noise (the differences' ~1e-12 / h)."""
     chain = C._cuo_chain()
     labels = chain.get_chemical_symbols()
     p = ParamSet(SKF, max_l={e: C.MAXL[e] for e in set(labels)})
@@ -160,7 +161,8 @@ def test_periodic_kernel_against_site_potential_differences():
             vals.append(np.vstack([r.charges, np.zeros((3, len(labels)))
                                    if r.magmoms is None else np.asarray(r.magmoms).T]))
         fd = (8 * (vals[1] - vals[2]) - (vals[0] - vals[3])) / (12 * h)
-        assert np.abs(ker.atom[0, a] - fd).max() < 2e-9 * np.abs(fd).max()
+        assert np.abs(ker.atom[0, a, 0] - fd[0]).max() < 2e-9 * np.abs(fd[0]).max()
+        assert np.abs(ker.atom[0, a, 1:] - fd[1:]).max() < 1e-7
     DFTB._response_skew_compat = True
     try:
         compat = run({"response_kernel": True, "perturbation": EXACT}).analysis.response_kernel

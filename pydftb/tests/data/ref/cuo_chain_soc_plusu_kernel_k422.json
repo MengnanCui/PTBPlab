@@ -1,7 +1,7 @@
 {
  "schema": 1,
  "case": "cuo_chain_soc_plusu_kernel_k422",
- "note": "periodic, k-points: no finite fields; pydftb's physical kernel is checked by differences in site potentials (test_response_pauli); 'kernel_dftbp' records DFTB+'s error (75 %), the rest is compared with DFTB._response_skew_compat.  Without moments (1e-11) the magnetisation response is noise, ~2.5e-7 in both codes; the 63-iteration metallic SCC ends one iteration apart and the ground states agree to ~1e-9 (N_F 4e-9, the level derivatives 2e-9)",
+ "note": "periodic, k-points: no finite fields; pydftb's physical kernel is checked by differences in site potentials (test_response_pauli); 'kernel_dftbp' records DFTB+'s error (75 %), the rest is compared with DFTB._response_skew_compat.  Without moments (1e-11) the magnetisation response is noise, ~2.5e-7 in both codes and in each environment (dmdV 1e-6); the 63-iteration metallic SCC ends one iteration apart and the ground states agree to ~1e-9 (N_F 4e-9, the level derivatives 2e-9)",
  "dftbplus": {
   "version": "DFTB+ development version (commit: a23bfb2)",
   "parser_version": 14,
@@ -226,7 +226,7 @@
   "band_kpoints": null,
   "regions": null
  },
- "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_ap4yhyc3/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Cu = \"d\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  KPointsAndWeights = {\n    -0.375 -0.25 -0.25 0.0625\n    -0.375 -0.25 0.25 0.0625\n    -0.375 0.25 -0.25 0.0625\n    -0.375 0.25 0.25 0.0625\n    -0.125 -0.25 -0.25 0.0625\n    -0.125 -0.25 0.25 0.0625\n    -0.125 0.25 -0.25 0.0625\n    -0.125 0.25 0.25 0.0625\n    0.125 -0.25 -0.25 0.0625\n    0.125 -0.25 0.25 0.0625\n    0.125 0.25 -0.25 0.0625\n    0.125 0.25 0.25 0.0625\n    0.375 -0.25 -0.25 0.0625\n    0.375 -0.25 0.25 0.0625\n    0.375 0.25 -0.25 0.0625\n    0.375 0.25 0.25 0.0625\n  }\n  SpinOrbit {\n    Dual = Yes\n    Cu [Hartree] = { 0.0 0.0 0.01 }\n    O [Hartree] = { 0.0 0.006 }\n  }\n  OrbitalPotential {\n    Functional = {fll}\n    Cu {\n      Shells = {3}\n      UJ = 0.15\n    }\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  ResponseKernel {\n  }\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_8n6n_j26/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    Cu = \"d\"\n    O = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 1000.0\n  }\n  KPointsAndWeights = {\n    -0.375 -0.25 -0.25 0.0625\n    -0.375 -0.25 0.25 0.0625\n    -0.375 0.25 -0.25 0.0625\n    -0.375 0.25 0.25 0.0625\n    -0.125 -0.25 -0.25 0.0625\n    -0.125 -0.25 0.25 0.0625\n    -0.125 0.25 -0.25 0.0625\n    -0.125 0.25 0.25 0.0625\n    0.125 -0.25 -0.25 0.0625\n    0.125 -0.25 0.25 0.0625\n    0.125 0.25 -0.25 0.0625\n    0.125 0.25 0.25 0.0625\n    0.375 -0.25 -0.25 0.0625\n    0.375 -0.25 0.25 0.0625\n    0.375 0.25 -0.25 0.0625\n    0.375 0.25 0.25 0.0625\n  }\n  SpinOrbit {\n    Dual = Yes\n    Cu [Hartree] = { 0.0 0.0 0.01 }\n    O [Hartree] = { 0.0 0.006 }\n  }\n  OrbitalPotential {\n    Functional = {fll}\n    Cu {\n      Shells = {3}\n      UJ = 0.15\n    }\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  ResponseKernel {\n  }\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
  "reference": {
   "energy": -10.6475837813,
   "free_energy": -10.6538897467,
@@ -30146,7 +30146,7 @@
   "orbital": 1e-06,
   "eigenvalues": 1e-07,
   "dmdE": 1e-08,
-  "dmdV": 1e-07,
+  "dmdV": 1e-06,
   "pol_fd": 1e-08,
   "pol_dftbp": 0.001,
   "kernel_dftbp": 1.0
