@@ -135,6 +135,18 @@ def _type_model(dft_input):
     return model
 
 
+def _print_composition_factors(dft_center, bolt_f):
+    """The Boltzmann factors per composition, when the EOS groups have several (M5b-4: they are
+    computed within each composition, utils.data.get_bolt_factor); nothing for one composition."""
+    comps = [data.composition(a) for a in dft_center]
+    if len(set(comps)) < 2:
+        return
+    print(f"Boltzmann factors within each of the {len(set(comps))} compositions (3000 K; the "
+          f"energies per atom of different compositions are not compared):")
+    for comp in dict.fromkeys(comps):
+        print(f"  {comp}: {[float(b) for b, c in zip(bolt_f, comps) if c == comp]}")
+
+
 def _resolve_n_calls(types):
     """--n-calls, or its default (M5b-2): 11 for up to 2 optimised dimensions, 10 + 5 x dims
     above (utils.typemodel.default_n_calls)."""
@@ -289,6 +301,7 @@ if ptbp_args.optimization_option is not None:
             elif ptbp_args.multi_element is None:
                 print("Set boltmann factor for Elementary System!")
                 bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'boltzmann', 3000)
+                _print_composition_factors(dft_center, bolt_f)          # M5b-4
             else:
                 print("Set boltmann factor for Binary System!")
                 bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
@@ -450,6 +463,7 @@ Boltzmann factor: {bolt_f.tolist()}
             if ptbp_args.multi_element is None:
                 print("Set boltmann factor for Elementary System!")
                 bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'boltzmann', 3000)
+                _print_composition_factors(dft_center, bolt_f)          # M5b-4
             else:
                 print("Set boltmann factor for Binary System!")
                 bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)

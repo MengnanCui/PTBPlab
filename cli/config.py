@@ -24,7 +24,8 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
                     #   (r0_w, r0_d, sigma_rep) PTBP published
     shared_parameters: # bool: one (r0_w, r0_d, sigma_rep) for all elements (before M5b);
                     #   default false: one set per element, the loss's penalty the geometric
-                    #   mean of the sets' penalties
+                    #   mean of the sets' penalties; with multi_element the listed elements
+                    #   share one set (a multi_element of every element is refused)
     types:          # list of {element, labels, centre, width[, cutoff, start]}: switched types
                     #   (M5b, pydftb only); with mode energygeometry a type may get no data (a
                     #   warning is printed): prefer reaction or dataset

@@ -81,6 +81,14 @@ import utils.plot as plot
 # version stays: successful losses are the same, only the failed points' values changed.
 LOSS_VERSION = 3
 SHARED_LOSS_VERSION = 2
+# M5b-4: the Boltzmann factors of the energygeometry loss are computed within each composition
+# (utils.data.get_bolt_factor; before, the energies per atom of all EOS groups were compared, so
+# only the lowest-energy composition kept a weight).  The meta file of an energygeometry run with
+# Boltzmann weights (no --multi_element) on EOS groups of several compositions records it as
+# "boltzmann": BOLTZMANN_PER_COMPOSITION, and such a run does not resume a checkpoint without it
+# (its losses used the old factors).  One composition, --multi_element (identical weights) and
+# dataset/reaction: the factors did not change, the meta file is that of before, byte for byte.
+BOLTZMANN_PER_COMPOSITION = "per composition"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +181,25 @@ def _eos_fit(atoms_list) -> tuple:
     if isinstance(hit, str):
         raise RuntimeError(hit)
     return hit
+
+
+def _loss_at_result(res, recorded, where: str):
+    """The loss to pair with L-BFGS-B's result x in the sigma_rep search (M5b-4): ``res.fun``,
+    unless the objective recorded a different loss at exactly x (``recorded``; None: x was not
+    recorded).  scipy's L-BFGS-B can return x together with fun of another evaluation: a line
+    search that fails puts x back to the previous iterate but leaves fun at the last trial point.
+    On a jumpy loss (an EOS fit that switches between two solutions when sigma changes by ~1e-9)
+    the two differ a lot: sigma* = 0.5926215820 came back with mu = 74.874 while mu(sigma*) =
+    1.7954559 (M5b-3 report, section 8).  Without a mismatch ``res.fun`` itself is returned."""
+    if recorded is None:
+        return res.fun
+    have, fun = float(recorded), float(res.fun)
+    if have == fun or (math.isnan(have) and math.isnan(fun)):
+        return res.fun
+    print(f"{where}: L-BFGS-B returned sigma_rep = {[float(v) for v in np.atleast_1d(res.x)]} "
+          f"with mu = {fun!r}, the loss of another evaluation (scipy: "
+          f"{getattr(res, 'message', '')}); the loss at this sigma_rep, {have!r}, is used")
+    return recorded
 
 
 def penalty_radius(dataset, opt_elem=()) -> float:
@@ -1059,6 +1086,8 @@ class Loss():
 
         Note that please set a bigger upper boundary for Hydrogen eg. c1 = 1.5
 
+        Returns (sigma*, the loss at sigma*): L-BFGS-B's result paired with the loss recorded at
+        its x (M5b-4: scipy can return the loss of another evaluation, _loss_at_result).
         """
         # Set search boundary
         r0_w, r0_d, p = conf_parameters
@@ -1081,15 +1110,26 @@ class Loss():
         # scipy >=1.11 makes brute return res_brute[0] as a 0-d ndarray; wrap to a
         # plain 1-d list so minimize's x0-shape check accepts it.
         x0_bfgs = [float(np.atleast_1d(res_brute[0])[0])]
+        # every evaluation of L-BFGS-B by its sigma (M5b-4): its result may pair x with the loss
+        # of another evaluation, see _loss_at_result
+        seen = {}
+
+        def recorded(objective):
+            def fun(sigma, *args):
+                mu = objective(sigma, *args)
+                seen[float(np.atleast_1d(sigma)[0])] = mu
+                return mu
+            return fun
+
         if self.args_input.optimization_option.lower() in ('dataset', 'reaction'):
-            res_bfgs = minimize(self.unparallel_repulsion, x0_bfgs, method='L-BFGS-B',bounds=bounds, options={'disp':True,'maxfun':20,'ftol':1e-3}, args=conf_args)
+            res_bfgs = minimize(recorded(self.unparallel_repulsion), x0_bfgs, method='L-BFGS-B',bounds=bounds, options={'disp':True,'maxfun':20,'ftol':1e-3}, args=conf_args)
 
         elif self.args_input.optimization_option.lower() == 'energygeometry':
-            res_bfgs = minimize(self.parallel_repulsion, x0_bfgs, method='L-BFGS-B',bounds=bounds, options={'disp':True,'maxfun':20,'ftol':1e-3}, args=conf_args)
+            res_bfgs = minimize(recorded(self.parallel_repulsion), x0_bfgs, method='L-BFGS-B',bounds=bounds, options={'disp':True,'maxfun':20,'ftol':1e-3}, args=conf_args)
 
 
         sigma_rep = res_bfgs.x[0]
-        mu = res_bfgs.fun
+        mu = _loss_at_result(res_bfgs, seen.get(float(sigma_rep)), "Search time 2")
         print(f"Search time 2: sigma_rep = {sigma_rep}, mu = {mu}")
 
 
@@ -1446,7 +1486,8 @@ class Loss():
         own on the 11-point grid with the others at their current values (kept only if
         better), then L-BFGS-B over all n together (ftol 1e-3, at most 20 n evaluations); the
         grids and L-BFGS-B again while the grids improve the joint minimum (at most 3 rounds).
-        A grid of 11^n points would not be affordable.
+        A grid of 11^n points would not be affordable.  L-BFGS-B's x goes with the loss
+        recorded at x (M5b-4: scipy can return the loss of another evaluation, _loss_at_result).
         """
         from utils import loss_grad
         model = self.types
@@ -1462,15 +1503,24 @@ class Loss():
             # at every sigma tried).
             step.physrep_all([0.5 * (c0 + c1)] * n).write_skf('ptbp')
 
+        seen = {}                    # every evaluation by its sigma vector (M5b-4)
+
         def f(svec):
             svec = [float(v) for v in np.atleast_1d(np.asarray(svec, dtype=float))]
             parts = {}
             mu = float(loss_grad.mu(step, svec, parts))
             self._log_typed(x, svec, parts, mu)
+            seen[tuple(svec)] = mu
             return mu
 
         def first(s):
             return float(np.atleast_1d(s)[0])
+
+        def at_result(res, where):
+            """L-BFGS-B's loss at its x: the recorded one if scipy paired x with another
+            evaluation's loss (M5b-4, _loss_at_result)."""
+            key = tuple(float(v) for v in np.atleast_1d(res.x))
+            return float(_loss_at_result(res, seen.get(key), where))
 
         if n == 1:
             res_brute = brute(f, (srange,), Ns=11, full_output=True, disp=True, workers=1)
@@ -1478,8 +1528,9 @@ class Loss():
             res = minimize(f, [first(res_brute[0])], method='L-BFGS-B',
                            bounds=Bounds(c0, c1, keep_feasible=True),
                            options={'maxfun': 20, 'ftol': 1e-3})
-            print(f"Search time 2: sigma_rep = {res.x[0]}, mu = {res.fun}")
-            return [float(res.x[0])], float(res.fun)
+            mu = at_result(res, "Search time 2")
+            print(f"Search time 2: sigma_rep = {res.x[0]}, mu = {mu}")
+            return [float(res.x[0])], mu
 
         # 1. one sigma for every set
         res_brute = brute(lambda s: f([first(s)] * n), (srange,), Ns=11, full_output=True,
@@ -1509,8 +1560,9 @@ class Loss():
             res = minimize(f, cur, method='L-BFGS-B', bounds=Bounds([c0] * n, [c1] * n,
                                                                       keep_feasible=True),
                            options={'maxfun': 20 * n, 'ftol': 1e-3})
-            if float(res.fun) < f_cur:             # L-BFGS-B ends no higher than it starts
-                cur, f_cur = [float(v) for v in res.x], float(res.fun)
+            fun = at_result(res, f"Search time 3.{rnd + 1}")
+            if fun < f_cur:                        # L-BFGS-B ends no higher than it starts
+                cur, f_cur = [float(v) for v in res.x], fun
             print(f"Search time 3.{rnd + 1} (L-BFGS-B, all sets): sigma_rep = {cur}, mu = {f_cur}")
         return list(cur), f_cur
 
@@ -1891,6 +1943,39 @@ class Loss():
             optimizer='parallel_bo',
         )
 
+    def boltzmann_record(self):
+        """The meta file's "boltzmann" entry (M5b-4): BOLTZMANN_PER_COMPOSITION for the
+        energygeometry loss with Boltzmann weights (no --multi_element) on EOS groups of several
+        compositions, the runs whose factors and losses changed in M5b-4; None otherwise (no
+        entry: the meta file of before)."""
+        args = self.args_input
+        if str(getattr(args, 'optimization_option', '') or '').lower() != 'energygeometry':
+            return None
+        if getattr(args, 'multi_element', None) is not None:
+            return None
+        comps = data.group_compositions(self.dft_input, getattr(args, 'eos_points', 11) or 11)
+        return BOLTZMANN_PER_COMPOSITION if len(set(comps)) > 1 else None
+
+    def _check_boltzmann_record(self, meta):
+        """Refuse to resume a checkpoint whose Boltzmann factors are not this run's (M5b-4);
+        returns ``meta``."""
+        want = self.boltzmann_record()
+        have = meta.get("boltzmann") if isinstance(meta, dict) else None
+        if have == want:
+            return meta
+        if have is None:
+            found = ("was written before M5b-4: its energygeometry losses weighted the EOS groups "
+                     "of different compositions with Boltzmann factors over all of them (only the "
+                     "lowest-energy composition counted)")
+        else:
+            found = f"records Boltzmann factors {have!r} (EOS groups of several compositions)"
+        this = ("computes the factors within each composition" if want is not None else
+                "has no such factors (one composition, --multi_element or another mode)")
+        raise RuntimeError(
+            f"{self.args_input.checkpoint} {found}; this run {this}, so its losses differ. "
+            f"Mixing the two would corrupt the Bayesian model: delete it (or use another "
+            f"--checkpoint) to start afresh.")
+
     def _check_checkpoint_meta(self, meta_path):
         """Refuse to resume a checkpoint whose losses were computed on another scale; returns
         the meta file's record (its failed evaluations, M5b-2)."""
@@ -1900,7 +1985,7 @@ class Loss():
                 meta = json.load(fh)
         if self.typed:                                       # M5b: the types must be the same
             if self.types.matches_meta(meta):
-                return meta
+                return self._check_boltzmann_record(meta)
             raise RuntimeError(
                 f"{self.args_input.checkpoint} has "
                 + ("no record of its loss definition" if meta is None else f"loss record {meta}")
@@ -1910,7 +1995,7 @@ class Loss():
                 f"to start afresh.")
         if (meta is not None and meta.get("ptbp_loss_version") == SHARED_LOSS_VERSION
                 and abs(meta.get("penalty_radius_bohr", -1.0) - self.cov_radius) < 1e-5):
-            return meta
+            return self._check_boltzmann_record(meta)
         found = ("no record of its loss definition (written before PTBP fixed the penalty "
                  "radius, which was always 0.5 Bohr)" if meta is None else f"loss record {meta}")
         raise RuntimeError(
@@ -1991,6 +2076,9 @@ class Loss():
         else:
             meta = {"ptbp_loss_version": SHARED_LOSS_VERSION,
                     "penalty_radius_bohr": self.cov_radius, "mode": mode}
+        boltzmann = self.boltzmann_record()          # M5b-4: only several compositions add it
+        if boltzmann is not None:
+            meta = dict(meta, boltzmann=boltzmann)
         with open(meta_path, 'w') as fh:
             # M5b-2: the failed evaluations of a resumed checkpoint, only when it has some (a
             # run without failures writes the meta file of before)

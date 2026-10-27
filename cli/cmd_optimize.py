@@ -117,7 +117,9 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    dest='shared_parameters',
                    help="One (r0_w, r0_d, sigma_rep) for all elements, as before M5b. Default: "
                         "one set per element (per type), the penalty being the geometric mean "
-                        "of the sets' penalties.")
+                        "of the sets' penalties. With --multi-element the listed elements share "
+                        "one set and the others keep PTBP's; a --multi-element of every element "
+                        "of the dataset is refused.")
     p.add_argument('--switch', nargs=4, action='append', default=None,
                    metavar=('ELEMENT', 'LABELS', 'CENTRE', 'WIDTH'), dest='switch',
                    help="Split ELEMENT into types that switch smoothly with the coordination "
