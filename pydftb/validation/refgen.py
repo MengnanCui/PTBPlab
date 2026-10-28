@@ -1174,13 +1174,16 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
         dev["bonds"], dev["bonds_file"] = worst, file_dev
     if "response" in r:                                               # M6g-1
         periodic = inp["cell_angstrom"] is not None
-        if case.analysis.get("skew_compat"):     # M6g-3b: DFTB+ 25.1 drops the skew blocks
-            dev.update(_compare_skew(ref, r["response"], a))
-            DFTB._response_skew_compat = True
+        compat = [attr for key, attr in RESPONSE_COMPAT if case.analysis.get(key)]
+        if compat:              # DFTB+ gets these wrong: pydftb's own, then as DFTB+ (testing)
+            dev.update(_compare_compat(ref, r["response"], a))
+            for attr in compat:
+                setattr(DFTB, attr, True)
             try:
                 res = run_pydftb(case, inp, **run)
             finally:
-                DFTB._response_skew_compat = False
+                for attr in compat:
+                    setattr(DFTB, attr, False)
         if case.analysis.get("eta_compat"):      # DFTB+'s eta term of reduced k-point sets
             dev["dqdE_default"] = _compare_response(r["response"], res, periodic).get("dqdE",
                                                                                      0.0)
@@ -1206,11 +1209,18 @@ def _compare_analysis(case: Case, inp: dict, ref: dict, res, **run) -> dict:
     return dev
 
 
-def _compare_skew(ref: dict, r: dict, a) -> dict:
-    """M6g-3b, dual spin-orbit coupling with block potentials: pydftb's polarisability (with the
-    skew block channels) against DFTB+'s finite fields ("pol_fd") and against DFTB+ 25.1's
-    analytic value ("pol_dftbp", which leaves the skew block response out), both relative; the
-    kernel's charge part against DFTB+'s ("kernel_dftbp", relative: DFTB+'s error)."""
+# the analysis keys of the responses DFTB+ gets wrong and the DFTB switches that do the same
+RESPONSE_COMPAT = (("skew_compat", "_response_skew_compat"),        # M6g-3b: dual SOC + blocks
+                   ("blocks_compat", "_response_blocks_compat"),    # M6h-4: hybrid + blocks, B26
+                   ("pc_compat", "_response_pc_compat"))            # M6h-4: point charges, B27
+
+
+def _compare_compat(ref: dict, r: dict, a) -> dict:
+    """Responses DFTB+ gets wrong (M6g-3b: dual spin-orbit coupling with block potentials,
+    whose skew block response DFTB+ 25.1 leaves out; M6h-4: a hybrid with block potentials, B26,
+    and point charges in 25.1, B27): pydftb's polarisability against DFTB+'s finite fields
+    ("pol_fd") and against DFTB+'s analytic value ("pol_dftbp": DFTB+'s error), both relative;
+    the kernel's charge part against DFTB+'s ("kernel_dftbp", relative: DFTB+'s error)."""
     dev = {}
     pol, ker = a.polarisability, a.response_kernel
     if pol is not None and pol.tensor is not None:

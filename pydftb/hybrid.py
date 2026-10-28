@@ -767,6 +767,17 @@ class HybridTerms:
         c = -0.125 if len(dps) == 1 else -0.25
         return [c * self._four_terms(s, d) for d in dps]
 
+    def response_fock(self, dps) -> list:
+        """H_x of first-order densities (M6h-4), every channel's with leading batch axes: the
+        exact operator, for the threshold screening its limit (the pairs within the CAM cutoff,
+        as its increments) without touching the screening's state."""
+        if self.pauli:
+            raise ValueError("hybrid functionals: the two-component response is milestone "
+                             "M6h-4b")
+        s = self.S if self.spec.screening == "matrix" else self.S_cam
+        c = -0.125 if len(dps) == 1 else -0.25
+        return [c * self._four_terms(s, d) for d in dps]
+
     def _four_terms(self, s, d):
         return four_terms(s, self.G, d)
 

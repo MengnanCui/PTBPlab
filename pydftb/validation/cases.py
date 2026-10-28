@@ -7,7 +7,7 @@ the exact coordinates, so tests never depend on ASE builder details.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 import numpy as np
@@ -2426,5 +2426,100 @@ CASES += [
     Case("diamond2_centred_lc_k222_neighbour_t6", _centred(_diamond2, 1 / 8),
          **{**LC_GAMMA, "hybrid": T6, "scc_tol": 3e-7, "tol": TOL_HYB_T6}, folding=(2, 2, 2),
          note="the nearly zero step is the 14th"),
+]
+
+# ---- milestone M6h-4: responses with a hybrid functional (molecules and the Gamma point), the
+# ground states of the cases above.  Against DFTB+ 25.1, the point charges' derivatives against
+# the development build; DFTB+'s response SCC converged to PerturbSccTol = 1e-11.  DFTB+ never
+# updates a hybrid response's block populations (B26): "blocks_compat" compares pydftb's own
+# polarisability with DFTB+'s finite fields ("pol_fd", relative; "field_fd": the runs) and with
+# its analytic value ("pol_dftbp", DFTB+'s error), then everything with
+# DFTB._response_blocks_compat.  DFTB+ 25.1 adds the point charges' potential to every response
+# (B27, without a hybrid too; fixed in the development build): "pc_compat", the same with
+# DFTB._response_pc_compat.  With the Thresholded screening pydftb gives the exact response,
+# DFTB+'s carries its screening error
+TOL_HRESP = {**TOL_HYB, **TOL_RESPONSE}
+TOL_HRESP_COMPAT = {**TOL_HRESP, "pol_fd": 1e-8, "pol_dftbp": 0.5, "kernel_dftbp": 0.5}
+BLOCKS_FD = {"polarisability": True, "blocks_compat": True, "field_fd": True}
+PC_FD = {"polarisability": True, "pc_compat": True, "field_fd": True}
+_BEFORE_M6H4 = {c.name: c for c in CASES}
+
+
+def _hresp(base: str, name: str, analysis: dict, tol: dict = TOL_HRESP, **kw) -> Case:
+    """An M6h-4 case: the hybrid case ``base`` with a response analysis."""
+    return replace(_BEFORE_M6H4[base], name=name, analysis=analysis, tol=tol, **kw)
+
+
+CASES += [
+    # molecules: the three screenings, LC, CAM and global, spin, metals, DFTB3, ions
+    _hresp("h2o_lc", "h2o_lc_pol", POL),
+    _hresp("h2o_lc", "h2o_lc_kernel", KERNEL),
+    _hresp("h2o_lc", "h2o_lc_kernel_rpa", {"response_kernel": {"rpa": True}},
+           note="the bare response (DFTB+: no response iterations, no exchange)"),
+    _hresp("h2o_lc", "h2o_lc_threshold_pol", POL,
+           tol={**TOL_HRESP, "pol": 1e-5, "dqdE": 1e-5, "dedE": 1e-5, "response_text": 2e-4},
+           hybrid={"type": "lc", "screening": "threshold"},
+           note="pydftb's response is the exact one; DFTB+ continues the ground state's "
+                "screened increments (alpha off by 3.9e-6, a last printed digit; 22/17/25 "
+                "response iterations instead of 12)"),
+    _hresp("c6h6_lc_neighbour_10", "c6h6_lc_neighbour_10_pol", POL),
+    _hresp("h2co_cam", "h2co_cam_pol", POL),
+    _hresp("c2h4_global", "c2h4_global_pol", POL),
+    _hresp("ch3_lc_spin", "ch3_lc_spin_pol", POL),
+    _hresp("ch3_lc_spin", "ch3_lc_spin_kernel", KERNEL),
+    _hresp("o2_cam_triplet", "o2_cam_triplet_pol", POL),
+    _hresp("h2o_cation_lc_spin", "h2o_cation_lc_spin_pol", POL),
+    _hresp("hco_lc_spin_neighbour", "hco_lc_spin_neighbour_pol", POL),
+    _hresp("ch3oh_lc_dftb3_d3", "ch3oh_lc_dftb3_pol", POL, dispersion=None,
+           note="no dispersion (DFTB+ refuses it with a response)"),
+    _hresp("oh_anion_lc", "oh_anion_lc_pol", POL),
+    _hresp("cuco_lc_300K", "cuco_lc_300K_pol", POL,
+           note="metallic: dE_F/dE and N_F; the x, y rows are zero (all atoms on the z axis)"),
+    _hresp("cuco_lc_300K", "cuco_lc_300K_kernel", KERNEL),
+    _hresp("cuco_lc_300K", "cuco_lc_spin_300K_pol", POL,
+           spin={"unpaired_electrons": 1.0, "spin_constants": {**W_HCO, "Cu": W_SPIN["Cu"]}},
+           note="an unstable SCC solution: the response equation has three negative "
+                "eigenvalues (-0.49 the lowest); MINRES and a warning, DFTB+'s mixing finds "
+                "the same response"),
+    # block potentials (B26): pydftb's own response against DFTB+'s finite fields
+    _hresp("h2co_lc_plusu", "h2co_lc_plusu_pol", BLOCKS_FD, tol=TOL_HRESP_COMPAT),
+    _hresp("hco_lc_plusu_spin", "hco_lc_plusu_spin_pol", BLOCKS_FD, tol=TOL_HRESP_COMPAT),
+    _hresp("h2o_lc_onsite", "h2o_lc_onsite_pol", BLOCKS_FD, tol=TOL_HRESP_COMPAT),
+    _hresp("hco_lc_onsite_spin", "hco_lc_onsite_spin_pol", BLOCKS_FD, tol=TOL_HRESP_COMPAT),
+    _hresp("cuh_lc_plusu_300K", "cuh_lc_plusu_300K_pol", BLOCKS_FD, tol=TOL_HRESP_COMPAT),
+    # point charges (B27): the same against DFTB+'s finite fields
+    _hresp("ch3oh_lc_field_pc", "ch3oh_lc_field_pc_pol", PC_FD, tol=TOL_HRESP_COMPAT),
+    Case("ch3oh_field_pc_pol", _meoh, efield=FIELD, point_charges=PC3, torch=False,
+         tol={**TOL_RESP, "pol_fd": 1e-8, "pol_dftbp": 0.5}, analysis=PC_FD,
+         note="no hybrid: DFTB+ 25.1's polarisability with point charges is wrong too (0.72)"),
+    Case("ch3oh_field_pc_kernel", _meoh, efield=FIELD, point_charges=PC3, torch=False,
+         tol={**TOL_RESP, "kernel_dftbp": 0.5}, analysis={**KERNEL, "pc_compat": True},
+         note="no hybrid: DFTB+ 25.1's response kernel with point charges (dq/dV off by 0.23)"),
+    # the Gamma point
+    _hresp("co2_crystal_lc", "co2_crystal_lc_kernel", KERNEL),
+    _hresp("co2_crystal_lc", "co2_crystal_lc_pol", POL,
+           note="periodic: the charge response only (DFTB+ warns)"),
+    _hresp("co2_crystal_lc_neighbour", "co2_crystal_lc_neighbour_kernel", KERNEL),
+    _hresp("co2_crystal_lc_damped_rc8", "co2_crystal_lc_damped_rc8_kernel", KERNEL),
+    _hresp("o2_box_lc_spin", "o2_box_lc_spin_kernel", KERNEL),
+    _hresp("cu4_lc_1000K", "cu4_lc_1000K_kernel", KERNEL,
+           tol={**TOL_HRESP, "dqdV": 5e-9, "dqnet": 2e-8},
+           note="an unstable SCC solution (five eigenvalues of the response equation near -1.7: "
+                "exchange in a hot metal): MINRES (54 iterations) and a warning; DFTB+'s mixing "
+                "takes 55 iterations, its per-orbital kernel within 1.8e-9"),
+    _hresp("co2_crystal_lc_onsite", "co2_crystal_lc_onsite_kernel",
+           {**KERNEL, "blocks_compat": True}, tol=TOL_HRESP_COMPAT),
+    _hresp("co2_crystal_lc_plusu", "co2_crystal_lc_plusu_kernel",
+           {**KERNEL, "blocks_compat": True}, tol=TOL_HRESP_COMPAT),
+    _hresp("co2_crystal_lc_field_pc", "co2_crystal_lc_field_pc_pol",
+           {**POL, "pc_compat": True}, tol=TOL_HRESP_COMPAT),
+    # the development build: the point charges' derivatives, and B27 fixed
+    _hresp("h2o_lc", "h2o_lc_pc_extq", EXTQ, tol={**TOL_HRESP, "dqdxext": 1e-9,
+                                                  "extq_text": 2e-8},
+           point_charges=PC3, dftbplus="dev"),
+    _hresp("ch3oh_lc_field_pc", "ch3oh_lc_field_pc_extq", EXTQ,
+           tol={**TOL_HRESP, "dqdxext": 1e-9, "extq_text": 2e-8}, dftbplus="dev"),
+    _hresp("h2o_lc", "h2o_lc_pc_pol", POL, point_charges=PC3, dftbplus="dev",
+           note="the development build's response has no point-charge potential (B27 fixed)"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

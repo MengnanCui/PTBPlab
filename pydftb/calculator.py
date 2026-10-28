@@ -509,6 +509,13 @@ class DFTB:
     # starting block populations, as DFTB+ 25.1, whose getNextInputDensityCplx never updates
     # them (with spin those of the first output; B20, M6h-3b)
     _dftbp_stale_blocks = False
+    # test use only: a hybrid's response without the response of the block potentials (+U,
+    # onsite corrections), as DFTB+, whose response SCC never updates the block populations
+    # with a hybrid (B26, M6h-4)
+    _response_blocks_compat = False
+    # test use only: the polarisability and the response kernel with the point charges'
+    # potential added to the perturbation, as DFTB+ 25.1's response SCC (B27, M6h-4)
+    _response_pc_compat = False
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
@@ -760,6 +767,8 @@ class DFTB:
                      "the moment")
         elif a is not None and a.coord_derivatives is not False:
             dftbp = "Coordinate derivative perturbations do not yet work with hybrid functionals"
+        elif a is not None and _finite_frequencies(a):
+            dftbp = "Finite frequency hybrid xc-functional calculation not currently supported"
         elif self.casida is not None:                           # TD-LC (M6h-2)
             cas = self.casida
             if rs[0] == "cam":
@@ -777,9 +786,9 @@ class DFTB:
         if self.casida is not None and self.casida.solver == "arpack":
             why = ("the 'arpack' Casida solver works on the Hermitian Omega, which TD-LC does not "
                    "have: use 'exact' or 'davidson' (DFTB+ uses its Stratmann solver)")
-        elif a is not None and (a.polarisability is not False or a.response_kernel is not False
-                                or a.external_charge_derivatives is not False):
-            why = "the response analyses are milestone M6h-4"
+        elif self.noncolinear and _response_analyses(a):
+            why = ("the two-component response analyses are milestone M6h-4b (DFTB+ 25.1 "
+                   "crashes there)")
         elif self.truncate_sk_range is not None:
             why = "truncate_sk_range is refused (DFTB+ silently ignores it then)"
         elif getattr(self.sk, "selected", False):
@@ -1793,6 +1802,9 @@ class DFTB:
                              "currently unavailable (as DFTB+)")
         if gamma_only:
             return None
+        if _response_analyses(self.analysis):
+            raise ValueError("hybrid functionals: the response analyses at k-points are "
+                             "milestone M6h-4b (DFTB+ 25.1 crashes there)")
         nfold = folding_of(kpts, kw)
         if nfold is None:
             raise ValueError("Hybrid functionals using integration with k-points requires a "
@@ -2946,6 +2958,21 @@ class DFTB:
             grad = ops.scatter_add(grad, j, g)
             w += g.T @ vec
         return grad, w
+
+
+def _response_analyses(a) -> bool:
+    """Whether an analysis spec asks for a response (the polarisability, the response kernel or
+    the external charge derivatives; M6g)."""
+    return a is not None and (a.polarisability is not False or a.response_kernel is not False
+                              or a.external_charge_derivatives is not False)
+
+
+def _finite_frequencies(a) -> bool:
+    """Whether the polarisability or the response kernel asks for a frequency other than 0."""
+    from . import response as _response
+    return any(spec is not False and np.any(_response.frequencies(spec, what) != 0.0)
+               for what, spec in (("polarisability", a.polarisability),
+                                  ("response_kernel", a.response_kernel)))
 
 
 def _per_atom(values, natom: int, name: str) -> np.ndarray:

@@ -57,7 +57,10 @@ point charges, which DFTB+ leaves out) acts like an external potential.
 
 NumPy engine only; collinear spin, k-points, DFTB+U and onsite corrections (M6g-3a) included
 (coordinate derivatives: molecules); two-component calculations (non-collinear spin, spin-orbit
-coupling; M6g-3b) branch to :mod:`pydftb.response_pauli`.
+coupling; M6g-3b) branch to :mod:`pydftb.response_pauli`, hybrid functionals (M6h-4) to
+:mod:`pydftb.response_hybrid`.  ``DFTB._response_pc_compat`` (testing) adds the point charges'
+potential to the perturbation of the polarisability and the (SCC) kernel, as DFTB+ 25.1 does
+(its response SCC takes the potential of the charges with the induced one; B27).
 """
 from __future__ import annotations
 
@@ -743,6 +746,14 @@ def fermi_derivative(gs: GroundState, v_tot, vb=None, d_blk=None) -> np.ndarray:
 
 
 # ---- the two analyses ----------------------------------------------------------------------
+def point_charge_shift(st, gs: GroundState) -> np.ndarray:
+    """The point charges' potential on every shell (zero without them): what DFTB+ 25.1's
+    response SCC adds to the induced potential from its second iteration on (B27)."""
+    if st.ext is None or st.ext.v_pc is None:
+        return np.zeros(gs.nshell)
+    return np.asarray(st.ext.v_pc, float)[gs.shell_atom]
+
+
 def _sum_atoms(x, orb_atom, natom):
     """Sum the last (orbital) axis over atoms."""
     out = np.zeros(x.shape[:-1] + (natom,))
@@ -773,6 +784,9 @@ def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.polarisability(calc, st, sc, spec, opts)
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
+        from . import response_hybrid
+        return response_hybrid.polarisability(calc, st, sc, spec, opts)
     omegas = frequencies(spec, "polarisability")
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
@@ -780,6 +794,8 @@ def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     periodic = st.cell is not None and bool(np.any(st.pbc))
     pos = np.asarray(st.pos, float)
     v_ext = pos[gs.shell_atom]                           # (n_shell, 3)
+    if getattr(calc, "_response_pc_compat", False):      # DFTB+ 25.1 (B27)
+        v_ext = v_ext + point_charge_shift(st, gs)[:, None]
     nw, nqm = len(omegas), gs.nspin
     orb = np.zeros((nw, 3, nqm, gs.norb))
     dei = []
@@ -805,6 +821,9 @@ def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.response_kernel(calc, st, sc, spec, opts)
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
+        from . import response_hybrid
+        return response_hybrid.response_kernel(calc, st, sc, spec, opts)
     spec_d = {} if spec is True else dict(spec)
     rpa = bool(spec_d.get("rpa", False)) or not calc.scc
     omegas = frequencies(spec, "response_kernel")
@@ -812,6 +831,8 @@ def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     kernel = scc_kernel(calc, st, sc)
     channels = block_channels(st)
     v_ext = np.eye(gs.natom)[gs.shell_atom]              # (n_shell, n_atom)
+    if getattr(calc, "_response_pc_compat", False) and not rpa:      # DFTB+ 25.1 (B27)
+        v_ext = v_ext + point_charge_shift(st, gs)[:, None]
     nw, nqm = len(omegas), gs.nspin
     orb = np.zeros((nw, gs.natom, nqm, gs.norb))
     net = np.zeros((nw, gs.natom, gs.natom))
@@ -1241,6 +1262,9 @@ def external_charge_derivatives(calc, st, sc, spec, opts: dict) -> ExternalCharg
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.external_charge_derivatives(calc, st, sc, spec, opts)
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
+        from . import response_hybrid
+        return response_hybrid.external_charge_derivatives(calc, st, sc, spec, opts)
     ncharge = len(st.ext.pc.charges)
     sel = external_charge_selection(spec, ncharge)
     charges = np.arange(ncharge) if sel is None else sel

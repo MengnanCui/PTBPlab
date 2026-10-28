@@ -520,8 +520,8 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: the response analyses (M6h-4), torch
-and `pydftb.autodiff`.  Details:
+coordinate derivatives, XL-BOMD; not yet in pydftb: torch and `pydftb.autodiff` (the
+response analyses: M6h-4, below).  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
 
 TD-LC (milestone M6h-2): `casida=` with LC files gives DFTB+'s TD-LC-DFTB.  The long-range
@@ -640,6 +640,34 @@ the SCC stalls at errors of 1e-5); every geometry starts with a whole build, a b
 one screened build of DeltaP, and the forces are the unscreened formula at the screened
 density, as DFTB+'s.  None (the default) builds the whole operator.  Details:
 [`docs/reports/M6h3c-hybrid-mic-threshold.html`](docs/reports/M6h3c-hybrid-mic-threshold.html).
+
+Responses with a hybrid functional (milestone M6h-4; molecules and the Gamma point, static):
+the polarisability, the response kernel (also RPA) and the point charges' derivatives of
+`analysis=` (as M6g), with the three screenings, LC, CAM and global hybrids, collinear spin,
+metals, DFTB3, DFTB+U, onsite corrections, fields and point charges:
+
+```python
+r = DFTB(sk_lc, hybrid="lc", analysis={"polarisability": True}).calculate(labels, pos)
+r.analysis.polarisability.tensor[0]          # d mu_j / d E_i, M6g's result classes
+```
+
+The exchange of the first-order density matrix enters the first-order Hamiltonian, so the
+response is solved in the space of occupied-virtual level pairs: (I + T^T K T) z = T^T H_ext
+with chi0 = -T T^T (the static pair weights of M6g, the Fermi level's move a projection) and K
+the response potentials (gamma and the third order's Hessian, the spin constants, the block
+kernel, the exchange), a symmetric system that MINRES solves for all directions or atoms at once
+(one batched exchange build per iteration; DFTB+ iterates its mixer instead).  The exchange is
+negative and can make it indefinite: the SCC solution of a hot metal or an open-shell d system
+can be a saddle point (Cu4 with LC at 1000 K), whose response pydftb still gives, with a warning.
+The Thresholded screening's response is the exact one (DFTB+ continues the ground state's
+screened increments: 3.9e-6 of water's alpha).  Unlike DFTB+, the +U and onsite potentials
+respond (DFTB+ never updates the block populations of a hybrid's response, 3-13 % of alpha) and
+the point charges' potential is not added to the perturbation (DFTB+ 25.1 adds it to every
+response, with or without a hybrid; fixed in the development version); the class attributes
+`DFTB._response_blocks_compat` and `DFTB._response_pc_compat` (testing) do as DFTB+.
+Refused: finite frequencies and coordinate derivatives (as DFTB+), k-points and two-component
+spin (DFTB+ 25.1 crashes; milestone M6h-4b).  Details:
+[`docs/reports/M6h4-hybrid-response.html`](docs/reports/M6h4-hybrid-response.html).
 
 ### Analysis outputs
 

@@ -1,0 +1,312 @@
+{
+ "schema": 1,
+ "case": "h2o_lc_threshold_pol",
+ "note": "pydftb's response is the exact one; DFTB+ continues the ground state's screened increments (alpha off by 3.9e-6, a last printed digit; 22/17/25 response iterations instead of 12)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": null,
+  "analysis": {
+   "polarisability": true
+  },
+  "fd_delta": 0.0001220703125,
+  "hybrid": {
+   "type": "lc",
+   "screening": "threshold"
+  },
+  "charge": 0.0
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "O",
+   "H",
+   "H"
+  ],
+  "positions_angstrom": [
+   [
+    0.08121726818316209,
+    -0.03058782068250377,
+    0.09285341238682722
+   ],
+   [
+    -0.05364843110780853,
+    0.806509381466234,
+    -0.5921239348440142
+   ],
+   [
+    0.087240588210824,
+    -0.8012993450447552,
+    -0.46109504519714506
+   ]
+  ],
+  "cell_angstrom": null,
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "O": 1,
+   "H": 0
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_5yeush3j/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    O = \"p\"\n    H = \"s\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  Hybrid = LC {\n    Screening = Thresholded {\n      Threshold = 1e-06\n      CutoffReduction [Bohr] = 0.0\n    }\n  }\n\n}\nAnalysis {\n  Polarisability {\n  }\n  PerturbSccTol = 1e-11\n  MaxPerturbIter = 1000\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -4.0178146353,
+  "free_energy": -4.0178146353,
+  "e_zero": -4.0178146353,
+  "e_rep": 0.039055154,
+  "e_scc": 0.0194037323,
+  "e_band": -3.9700714995,
+  "e_fock": -0.1062020221,
+  "fermi": -0.0914101026192984,
+  "forces": [
+   [
+    0.00396414501134011,
+    0.081977025302163,
+    0.105091291470246
+   ],
+   [
+    -0.00343826567834717,
+    0.0140471863118817,
+    -0.0232768739805404
+   ],
+   [
+    -0.000525879332992936,
+    -0.0960242116140446,
+    -0.081814417489706
+   ]
+  ],
+  "charges_net": [
+   -0.472726496033197,
+   0.193932869060707,
+   0.278793626972488
+  ],
+  "analysis": {
+   "response": {
+    "tags": {
+     "staticPolResponse": [
+      [
+       [
+        0.136678906932581,
+        -1.03216770866614,
+        0.547664980590696
+       ],
+       [
+        -1.0321633932036,
+        11.142382671747,
+        -1.46732196334143
+       ],
+       [
+        0.547663622967862,
+        -1.46732439938089,
+        4.32154955864408
+       ]
+      ]
+     ],
+     "staticChargeReponse": [
+      [
+       [
+        -0.397723569254963,
+        0.530367694149993,
+        -0.13264412489503
+       ]
+      ],
+      [
+       [
+        0.47985268769044,
+        -3.89730650332848,
+        3.41745381563804
+       ]
+      ],
+      [
+       [
+        -3.6052831487486,
+        2.21115105408045,
+        1.39413209466815
+       ]
+      ]
+     ],
+     "dEidEfield": [
+      [
+       [
+        [
+         0.0605583460943973,
+         0.0422921169913789,
+         0.0485565049516282,
+         0.0622863179790299,
+         -0.015687492335627,
+         0.0898042096806118
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         0.114680314610748,
+         0.0925473631661223,
+         0.111384850061378,
+         0.115465488288416,
+         0.677180739888249,
+         -0.609787259740288
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         -0.618709280695797,
+         -0.819498126135825,
+         -0.741672828568976,
+         -0.600756670161007,
+         -0.93481407861086,
+         -0.902954962758938
+        ]
+       ]
+      ]
+     ]
+    },
+    "detailed_kernel": [],
+    "detailed_main": [
+     "Atomic charge derivatives (a.u.), d q / d E_x:",
+     "   1  -0.397723569255E+00",
+     "   2   0.530367694150E+00",
+     "   3  -0.132644124895E+00",
+     "",
+     "Atomic charge derivatives (a.u.), d q / d E_y:",
+     "   1   0.479852687690E+00",
+     "   2  -0.389730650333E+01",
+     "   3   0.341745381564E+01",
+     "",
+     "Atomic charge derivatives (a.u.), d q / d E_z:",
+     "   1  -0.360528314875E+01",
+     "   2   0.221115105408E+01",
+     "   3   0.139413209467E+01",
+     "",
+     "",
+     " Electric field polarisability (a.u.)",
+     "",
+     " Static polarisability:",
+     "  0.136678906933E+00 -0.103216770867E+01  0.547664980591E+00",
+     " -0.103216339320E+01  0.111423826717E+02 -0.146732196334E+01",
+     "  0.547663622968E+00 -0.146732439938E+01  0.432154955864E+01",
+     ""
+    ],
+    "dE_band.out": [
+     " DIR x KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.164788E+01",
+     "     2    0.115083E+01",
+     "     3    0.132129E+01",
+     "     4    0.169490E+01",
+     "     5   -0.426878E+00",
+     "     6    0.244370E+01",
+     "",
+     " DIR y KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1    0.312061E+01",
+     "     2    0.251834E+01",
+     "     3    0.303094E+01",
+     "     4    0.314198E+01",
+     "     5    0.184270E+02",
+     "     6   -0.165932E+02",
+     "",
+     " DIR z KPT            1  SPIN            1  KWEIGHT    1.0000000000000000     ",
+     "     1   -0.168359E+02",
+     "     2   -0.222997E+02",
+     "     3   -0.201819E+02",
+     "     4   -0.163474E+02",
+     "     5   -0.254376E+02",
+     "     6   -0.245707E+02",
+     ""
+    ]
+   },
+   "detailed_blocks": []
+  },
+  "n_scc": 22,
+  "scc_errors": [
+   0.68725821,
+   0.52335314,
+   0.25729153,
+   0.070463196,
+   0.018771084,
+   0.0045658233,
+   0.00048423103,
+   0.00038372374,
+   9.9016934e-05,
+   1.5072436e-05,
+   2.055057e-05,
+   1.4319048e-06,
+   1.542229e-06,
+   8.3588463e-07,
+   8.1897068e-08,
+   3.8351401e-07,
+   1.2753961e-07,
+   8.2081509e-08,
+   1.211034e-08,
+   7.6710314e-10,
+   1.6126773e-09,
+   3.4394987e-11
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08,
+  "pol": 1e-05,
+  "dqdE": 1e-05,
+  "dedE": 1e-05,
+  "dEf": 1e-09,
+  "dos": 1e-08,
+  "dqdV": 1e-09,
+  "dqnet": 1e-09,
+  "dedV": 1e-09,
+  "response_text": 0.0002,
+  "dqdE_default": 0.0001
+ }
+}

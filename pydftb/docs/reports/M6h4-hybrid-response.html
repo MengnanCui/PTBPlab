@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-4 杂化泛函的响应报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6h-4</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-4 · 完成报告</p>
+    <h1>长程校正（四）：杂化泛函下的响应</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6h4-hybrid-response.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 的响应分析（M6g 的静态极化率、响应核与点电荷导数）现在也能用于杂化泛函：分子与周期体系的 Γ 点，LC、CAM 与全局杂化，三种屏蔽，以及共线自旋、金属、DFTB3、+U、onsite、外场与点电荷。一阶密度矩阵的交换进入一阶哈密顿量，响应写成占据–空轨道对空间里的对称方程，用批量的 MINRES 同时解所有方向或所有原子，每轮做一次批量的交换构建。只有 NumPy 引擎；不加杂化的计算逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：37 个参考算例全部通过（25.1 的 34 个，开发版的 3 个）。
+        <ul>
+          <li>比较 DFTB+ 的全部响应输出：极化率、dq/dE、dε/dE、核 dq/dV、在位布居、dε/dV、N<sub>F</sub>、dE<sub>F</sub>/dE、点电荷导数，以及 detailed.out 的表。分子 ≤ 1.4e-10，Γ 点 ≤ 5.8e-9（最大的是不稳定的金属 Cu<sub>4</sub> 的在位布居，DFTB+ 自己迭代了 55 轮；其余 ≤ 2.0e-9）。</li>
+          <li>基态的能量差 ≤ 9.3e-11 Ha，SCC 轮数全部相同。</li>
+        </ul>
+      </li>
+      <li><strong>独立检查</strong>（不靠 DFTB+）：
+        <ul>
+          <li>与 pydftb 自己的有限场、格点势与点电荷位置的差分相比：极化率 ≤ 1.5e-9（相对），核 ≤ 1.1e-11。</li>
+          <li>与 TD-LC Casida 对全部单重态求和得到的静态极化率相比：一致到 ≤ 6.0e-13（H<sub>2</sub>O 1.2e-14）。</li>
+          <li>去掉交换后等于 M6g 的直接解（≤ 1.6e-13），RPA 等于 M6g 的裸 χ<sub>0</sub>（≤ 1.3e-14）。</li>
+        </ul>
+      </li>
+      <li><strong>不稳定的基态</strong>：响应方程对称，但交换是负的，可能让它不定。Γ 点的 Cu<sub>4</sub>（1000 K）与自旋的 CuCO（300 K）的 SCC 解是鞍点，方程分别有 5 个与 3 个负本征值。原型的共轭梯度在这里失败，改用 MINRES，并警告“基态是鞍点”；两者都与 DFTB+ 一致。</li>
+      <li><strong>DFTB+ 的问题</strong>（第五节）：
+        <ul>
+          <li>B24、B25：k 点杂化的响应核、非共线杂化的极化率段错误。pydftb 拒绝到 M6h-4b。</li>
+          <li>B26：杂化时响应 SCC 从不更新块布居，+U 与 onsite 的块势不响应（开发版也是），α 差 2.8–13 %。</li>
+          <li>B27（25.1）：响应 SCC 把点电荷的静电势加进每一个一阶势，有没有杂化都一样，α 与核差约 4 %；开发版已修。</li>
+          <li>pydftb 默认给正确的物理（与 DFTB+ 自己的有限场一致到 ≤ 1.1e-9），两个只供验证的开关复现 DFTB+。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>（M6h-4b）：k 点、非共线、有限频率、坐标导数（DFTB+ 拒绝或崩溃）。SOC 配杂化连基态都不支持（DFTB+ 拒绝，pydftb 照做）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">37</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 1.4e-10</span><span class="lbl">分子的响应与 DFTB+ 之差（Γ 点 ≤ 5.8e-9）</span></li>
+      <li><span class="num">2–53</span><span class="lbl">MINRES 的轮数（每轮一次批量的交换构建）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的问题</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response_hybrid.py</code>（新）</td><td>
+              <ul>
+                <li><code>HybridResponse</code>：
+                  <ul>
+                    <li>基态：M6g 的 <code>GroundState</code>；每个块 D = √(−f w W)。</li>
+                    <li>费米组：一个通道，或 RelaxTotalSpin 时两个通道一组，u ∝ √(w δ)。</li>
+                    <li><code>t_apply</code>（P<sub>1</sub> = −C (D ∘ z) C<sup>T</sup>）与 <code>t_adjoint</code>（D ∘ (C<sup>T</sup> H C)，窗口的对角元投影到与 u 正交）。</li>
+                    <li>批量的核：γ 与三阶的 Hessian、自旋 W、块势（对偶块布居经 M6g-3a 的块核，以 ½(SV + VS) 进入）、交换。</li>
+                    <li><code>_minres</code>：Paige 与 Saunders 的 MINRES（Lanczos 过程加 Givens 旋转，与 SciPy 的 <code>minres</code> 相同），每轮乘一次 A，相对残差 1e-13，最多 1000 轮，Lanczos 向量的 Rayleigh 商为负时记下并警告。</li>
+                    <li><code>solve</code>：右端按 r·n<sup>2</sup> ≤ 2·10<sup>6</sup> 分块；输出布居、在位布居、本征值导数（简并组取块的本征值）与费米能级导数。</li>
+                  </ul></li>
+                <li><code>polarisability</code>、<code>response_kernel</code>（含 RPA）、<code>external_charge_derivatives</code>：返回 M6g 的结果类；有限频率时报 DFTB+ 的原话。</li>
+              </ul></td></tr>
+            <tr><td><code>hybrid.py</code></td><td><code>HybridTerms.response_fock</code>：无状态的精确交换，可带批量维；Thresholded 用 CAM 截断以内的 S（它的增量的极限），不碰筛选的状态；两分量时报错（M6h-4b）。</td></tr>
+            <tr><td><code>response.py</code></td><td>
+              <ul>
+                <li>三个入口在有杂化时转到 <code>response_hybrid</code>。</li>
+                <li><code>point_charge_shift</code>，以及非杂化路径上 B27 的开关：打开时把点电荷的势加到极化率与核（非 RPA）的扰动上；默认关闭，逐位不变。</li>
+              </ul></td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li><code>_check_hybrid</code>：去掉 M6h-4 的拒绝；有限频率按 DFTB+ 的原话拒绝；非共线配响应拒绝到 M6h-4b。</li>
+                <li><code>_check_periodic_hybrid</code>：k 点配响应拒绝到 M6h-4b。</li>
+                <li>只供验证的类属性 <code>_response_blocks_compat</code>（B26）与 <code>_response_pc_compat</code>（B27）。</li>
+              </ul></td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>cases.py</code>：37 个算例，由已有的杂化基态加上响应分析；<code>TOL_HRESP</code>、<code>TOL_HRESP_COMPAT</code>。</li>
+                <li><code>refgen.py</code>：M6g-3b 的 <code>skew_compat</code> 推广成 <code>RESPONSE_COMPAT</code>（<code>blocks_compat</code>、<code>pc_compat</code>）。先比 pydftb 自己的结果与 DFTB+ 的有限场（<code>pol_fd</code>）、DFTB+ 的解析值（<code>pol_dftbp</code>、<code>kernel_dftbp</code>，即 DFTB+ 的误差），再打开开关比全部输出。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_hybrid_response.py</code>：33 项（第四节）。</li>
+                <li><code>tests/test_hybrid.py</code>：M6h-4 的拒绝换成有限频率与两分量的拒绝。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>calc = DFTB(sk_lc, hybrid="lc", analysis={"polarisability": True})
+r = calc.calculate(labels, pos)
+r.analysis.polarisability.tensor[0]                 # d mu_j / d E_i，与 M6g 相同的结果类
+DFTB(sk_lc, hybrid="cam", plus_u=..., point_charges=pc,
+     analysis={"response_kernel": True, "external_charge_derivatives": True})</code></pre>
+      <ul>
+        <li><strong>范围</strong>：分子与 Γ 点；静态（<code>frequencies</code> 只能是 0）；所有屏蔽、自旋、金属、DFTB3、+U、onsite、外场、点电荷与格点势；RPA 的核。</li>
+        <li><strong>与 DFTB+ 不同之处</strong>：
+          <ul>
+            <li>+U 与 onsite 的块势参与响应（DFTB+ 不，B26）。</li>
+            <li>点电荷的静电势不进响应（DFTB+ 25.1 进，B27）。</li>
+            <li>Thresholded 给精确的响应：DFTB+ 的 α 带着它的筛选误差，H<sub>2</sub>O 偏 3.9e-6。</li>
+          </ul></li>
+        <li><strong>鞍点上的基态</strong>：热的金属或开壳层的 d 体系，交换可能让 SCC 的解成为鞍点。这时 pydftb 警告，给出的仍是这个驻点的响应（与 DFTB+ 相同）。</li>
+        <li><strong>耗时</strong>：每轮每个右端一次交换构建。240 个轨道的 (H<sub>2</sub>O)<sub>40</sub>（LC，一个线程，19 轮）极化率 0.5 s，核（120 个原子）23 s、内存 0.4 GB。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>基态是已有的杂化算例（<code>ptbp_hcocu_lc</code>、<code>_cam</code>、<code>_global</code>），加上 <code>Analysis</code> 块；DFTB+ 的响应收敛到 <code>PerturbSccTol = 1e-11</code>。容差 <code>TOL_HRESP</code>：极化率与 dq/dE 1e-8，核 1e-9，基态同 M6h（能量 1e-8，SCC 轮数相同）。下表的“响应”是各项输出中最大的差；“DFTB+ 的误差”是 pydftb 默认的结果与 DFTB+ 解析值的相对差，“有限场”是它与 DFTB+ 自己的有限场（四点公式，h = 5e-4 a.u.）的相对差。</p>
+      <h3>分子</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>响应</th><th>SCC 轮数</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_lc_pol</code></td><td>LC，MatrixBased</td><td>α 2.8e-13</td><td>17/17</td></tr>
+          <tr><td><code>h2o_lc_kernel</code></td><td>响应核</td><td>dq/dV 1.1e-13，在位 1.2e-13</td><td>17/17</td></tr>
+          <tr><td><code>h2o_lc_kernel_rpa</code></td><td>RPA：裸的 χ<sub>0</sub>（DFTB+ 不迭代）</td><td>1.9e-14</td><td>17/17</td></tr>
+          <tr><td><code>h2o_lc_threshold_pol</code></td><td>Thresholded（容差 1e-5）*</td><td>α 3.9e-6</td><td>22/22</td></tr>
+          <tr><td><code>c6h6_lc_neighbour_10_pol</code></td><td>NeighbourBased，CutoffReduction 10</td><td>dq/dE 3.2e-12</td><td>26/26</td></tr>
+          <tr><td><code>h2co_cam_pol</code></td><td>CAM</td><td>α 2.1e-12</td><td>25/25</td></tr>
+          <tr><td><code>c2h4_global_pol</code></td><td>全局杂化</td><td>α 5.8e-13</td><td>18/18</td></tr>
+          <tr><td><code>ch3_lc_spin_pol</code>、<code>_kernel</code></td><td>共线自旋</td><td>磁化的 dm/dE 6.4e-11，核 3.7e-12</td><td>21/21</td></tr>
+          <tr><td><code>o2_cam_triplet_pol</code></td><td>CAM 三重态</td><td>1.2e-13</td><td>8/8</td></tr>
+          <tr><td><code>h2o_cation_lc_spin_pol</code></td><td>阳离子，自旋</td><td>2.4e-13</td><td>19/19</td></tr>
+          <tr><td><code>hco_lc_spin_neighbour_pol</code></td><td>自旋，NeighbourBased</td><td>8.0e-12</td><td>29/29</td></tr>
+          <tr><td><code>ch3oh_lc_dftb3_pol</code></td><td>DFTB3（三阶的 Hessian），不加色散</td><td>dq/dE 8.7e-11</td><td>22/22</td></tr>
+          <tr><td><code>oh_anion_lc_pol</code></td><td>阴离子</td><td>1.1e-13</td><td>20/20</td></tr>
+          <tr><td><code>cuco_lc_300K_pol</code>、<code>_kernel</code></td><td>金属：dE<sub>F</sub>/dE 5.4e-13，N<sub>F</sub> 1.1e-13；x、y 行为零（原子都在 z 轴上）</td><td>α 1.4e-10，核 7.5e-11</td><td>49/49</td></tr>
+          <tr><td><code>cuco_lc_spin_300K_pol</code></td><td>自旋 CuCO：方程有三个负本征值（鞍点），MINRES 与警告</td><td>5.5e-11</td><td>74/74</td></tr>
+        </tbody>
+      </table></div>
+      <h3>DFTB+ 算错的组合</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>开关下的响应</th><th>DFTB+ 的误差</th><th>与有限场</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2co_lc_plusu_pol</code></td><td>+U（B26）</td><td>1.0e-12</td><td>5.9 %</td><td>5.0e-11</td></tr>
+          <tr><td><code>hco_lc_plusu_spin_pol</code></td><td>+U，自旋（B26）</td><td>6.2e-12</td><td>13 %</td><td>9.2e-10</td></tr>
+          <tr><td><code>h2o_lc_onsite_pol</code></td><td>onsite（B26）</td><td>1.1e-12</td><td>10 %</td><td>6.5e-12</td></tr>
+          <tr><td><code>hco_lc_onsite_spin_pol</code></td><td>onsite，自旋（B26）</td><td>2.0e-12</td><td>4.0 %</td><td>1.4e-11</td></tr>
+          <tr><td><code>cuh_lc_plusu_300K_pol</code></td><td>+U，金属（B26）</td><td>8.8e-13</td><td>2.8 %</td><td>1.1e-9</td></tr>
+          <tr><td><code>ch3oh_lc_field_pc_pol</code></td><td>外场加点电荷（B27）</td><td>1.7e-12</td><td>4.3 %</td><td>6.5e-12</td></tr>
+          <tr><td><code>ch3oh_field_pc_pol</code></td><td>同上，不加杂化（B27）</td><td>2.7e-13</td><td>4.3 %</td><td>4.1e-12</td></tr>
+          <tr><td><code>ch3oh_field_pc_kernel</code></td><td>响应核，不加杂化（B27）</td><td>6.6e-14</td><td>3.9 %</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Γ 点</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>响应</th><th>SCC 轮数</th></tr></thead>
+        <tbody>
+          <tr><td><code>co2_crystal_lc_kernel</code></td><td>干冰晶胞，MatrixBased</td><td>dq/dV 1.9e-10，在位 6.2e-10</td><td>27/27</td></tr>
+          <tr><td><code>co2_crystal_lc_pol</code></td><td>周期体系：只有电荷响应（DFTB+ 警告）</td><td>dε/dE 7.3e-10</td><td>27/27</td></tr>
+          <tr><td><code>co2_crystal_lc_neighbour_kernel</code></td><td>NeighbourBased</td><td>6.3e-10</td><td>27/27</td></tr>
+          <tr><td><code>co2_crystal_lc_damped_rc8_kernel</code></td><td>阻尼截断，截断半径 8</td><td>6.3e-10</td><td>29/29</td></tr>
+          <tr><td><code>o2_box_lc_spin_kernel</code></td><td>自旋</td><td>5.4e-10</td><td>10/10</td></tr>
+          <tr><td><code>cu4_lc_1000K_kernel</code></td><td>金属，鞍点：五个约 −1.7 的本征值；MINRES 53 轮，DFTB+ 55 轮 †</td><td>dq/dV 1.8e-9，在位 5.8e-9</td><td>54/54</td></tr>
+          <tr><td><code>co2_crystal_lc_onsite_kernel</code></td><td>onsite（B26，开关下；DFTB+ 的误差 1.7 %）</td><td>6.2e-10</td><td>27/27</td></tr>
+          <tr><td><code>co2_crystal_lc_plusu_kernel</code></td><td>+U（B26，开关下；4.0 %）</td><td>5.6e-10</td><td>29/29</td></tr>
+          <tr><td><code>co2_crystal_lc_field_pc_pol</code></td><td>外场加点电荷（B27，开关下）</td><td>dε/dE 2.0e-9</td><td>28/28</td></tr>
+        </tbody>
+      </table></div>
+      <h3>开发版（041e723）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>响应</th><th>SCC 轮数</th></tr></thead>
+        <tbody>
+          <tr><td><code>h2o_lc_pc_extq</code></td><td>点电荷导数</td><td>2.3e-15</td><td>17/17</td></tr>
+          <tr><td><code>ch3oh_lc_field_pc_extq</code></td><td>点电荷导数，外场</td><td>4.7e-13</td><td>22/22</td></tr>
+          <tr><td><code>h2o_lc_pc_pol</code></td><td>点电荷下的极化率，不开 B27 的开关（开发版已修）</td><td>α 2.9e-13</td><td>17/17</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>* Thresholded：DFTB+ 的响应接着基态的筛选增量累加，α 偏 3.9e-6，响应迭代 22/17/25 轮（MatrixBased 12 轮）；打印的数差最后一位，文本容差放到 2e-4。pydftb 给精确的响应。</li>
+        <li>† Cu<sub>4</sub> 1000 K 的每个轨道的核差 1.8e-9（容差 5e-9）、在位布居 5.8e-9（2e-8）：鞍点上 DFTB+ 的混合收敛慢，这是它收敛到 1e-11 的余量。pydftb 的解与稠密直接解一致。</li>
+        <li>detailed.out 的表与 dE_band.out 的文本：除数值外逐字节相同，数值在容差内。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <p><code>tests/test_hybrid_response.py</code> 的 33 项（不需要 DFTB+）：</p>
+      <ul>
+        <li><strong>方程</strong>：
+          <ul>
+            <li>H<sub>2</sub>O、CH<sub>3</sub> 自旋、H<sub>2</sub>CO +U、CuCO 金属、CO<sub>2</sub> 晶体 onsite 的稠密 I + T<sup>T</sup>KT 对称到 1e-13（相对），并且正定。</li>
+            <li>MINRES 与稠密直接解相同：H<sub>2</sub>O 4.2e-16、CuCO 5.7e-14、不定的自旋 CuCO 1.3e-13（相对），后者给出警告。</li>
+            <li>分块的右端（每块一个）与一起解的结果相同到 1e-12。</li>
+          </ul></li>
+        <li><strong>M6g 的极限</strong>：
+          <ul>
+            <li>RPA 等于 M6g 的裸 χ<sub>0</sub>（≤ 1.3e-14，含金属与 Γ 点 onsite）。</li>
+            <li>去掉交换后等于 M6g 的直接解，≤ 1.6e-13。覆盖自旋 W、+U、DFTB3 的 Hessian、金属的费米移动、Γ 点 onsite、金属 +U。</li>
+          </ul></li>
+        <li><strong>差分</strong>（scc_tol 1e-13，四点公式）：
+          <ul>
+            <li>极化率对有限场：H<sub>2</sub>O、CH<sub>3</sub> 自旋、CuCO 金属、H<sub>2</sub>CO +U、HCO onsite 自旋、CH<sub>3</sub>OH 外场加点电荷，相对差 ≤ 1.5e-9（金属），其余 ≤ 2.5e-10。</li>
+            <li>核对 Gross 格点势：CO<sub>2</sub> 晶体 onsite 4.8e-12，H<sub>2</sub>CO +U 1.1e-11。</li>
+            <li>点电荷导数对移动点电荷：H<sub>2</sub>O。</li>
+          </ul></li>
+        <li><strong>TD-LC 的求和</strong>：α<sub>ij</sub> = 2 Σ<sub>n</sub> μ<sub>n,i</sub> μ<sub>n,j</sub> / ω<sub>n</sub> 对全部单重态（精确解），H<sub>2</sub>O 与 CH<sub>3</sub>OH 与 CPKS 的 α 相同到 1e-10 的界（实测 1.2e-14 与 5.9e-14；C<sub>6</sub>H<sub>6</sub> 的 225 个态 6.0e-13）。</li>
+        <li><strong>屏蔽与开关</strong>：
+          <ul>
+            <li>Thresholded 的响应算符等于 MatrixBased 的四项公式（1e-14），两次计算逐位相同，筛选的状态不变。</li>
+            <li>B26 的开关等于去掉块通道的响应，并且与默认的不同。</li>
+            <li>B27 的开关：dq/dE 正好多出 Σ<sub>A</sub> v<sub>pc,A</sub> dq/dV<sub>A</sub>（1e-10，有与没有杂化）。</li>
+          </ul></li>
+        <li><strong>拒绝</strong>：k 点、有限频率、坐标导数、非共线，各按其原话。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的问题</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+</th><th>证据</th><th>pydftb 的做法</th></tr></thead>
+        <tbody>
+          <tr><td>B24（新，25.1）：k 点杂化的 <code>ResponseKernel</code> 段错误（复数路径 <code>dRhoCmplx</code> 本来就没有交换项）</td><td>P90：金刚石 2×2×2 LC，返回码 −11，停在 “Derivative with respect to potential at atom 1”</td><td>拒绝到 M6h-4b</td></tr>
+          <tr><td>B25（新，25.1）：非共线杂化的 <code>Polarisability</code> 段错误（<code>dRhoPauli</code> 也没有交换项）</td><td>P90：HCO LC，返回码 −11，停在 “Polarisabilty for field along x”</td><td>拒绝到 M6h-4b</td></tr>
+          <tr><td>B26（新，25.1 与开发版）：杂化时响应 SCC 的 dqBlockIn 从不更新（只有非杂化的分支更新），+U 与 onsite 的块势不响应</td><td>8 个算例：DFTB+ 的 α 或核差 1.7–13 %；去掉块响应后一致到 ≤ 2e-10；pydftb 带块响应的 α 与 DFTB+ 自己的有限场一致到 ≤ 1.1e-9</td><td>给正确的物理；<code>_response_blocks_compat</code> 复现</td></tr>
+          <tr><td>B27（新，25.1）：响应 SCC 从第二轮起用 <code>getShiftPerAtom</code>，其中含点电荷的静电势（<code>extCharges%addShiftPerAtom</code>），收敛后等于把它加到每一个扰动上；与杂化无关，开发版用 <code>isOnlyInternalShifts</code> 修正</td><td>CH<sub>3</sub>OH 外场加点电荷：α 差 4.3 %，核差 3.9 %（不加杂化也一样）；开关下 ≤ 2e-12；开发版不开开关就对上</td><td>给正确的物理；<code>_response_pc_compat</code> 复现 25.1</td></tr>
+          <tr><td>Thresholded 的响应接着基态的筛选历史（不是错误）</td><td>α 偏 3.9e-6，轮数 22/17/25 对 12</td><td>给精确的响应</td></tr>
+          <tr><td>鞍点上的基态（不是错误）</td><td>Γ 点 Cu<sub>4</sub> 1000 K、自旋 CuCO 300 K：响应方程不定；DFTB+ 的混合仍收敛（55 轮）</td><td>MINRES，警告</td></tr>
+          <tr><td>TD-LC 的核用未屏蔽的长程 γ（M6h-2，不是错误）</td><td>C<sub>6</sub>H<sub>6</sub> NeighbourBased 缩减 10 时，Casida 的求和与 CPKS 差 4.3e-3，MatrixBased 6.0e-13</td><td>照 DFTB+；CPKS 用基态的算符</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6h-3c 的文档提交 <code>ba68f99</code> 逐字节比较</td><td>conda 1439 个计算、658441 个字段，最小环境 1373 个计算、643592 个字段，都逐位相同（不需要 <code>--allow-new</code>：旧计算没有新字段）；37 个新算例的 111 个计算不在比较之列</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>504 个算例全部通过；torch 74 个通过，430 个按设计跳过（只有 NumPy 的物理，含 37 个新算例）；34 条动力学参考全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1624 个通过 / 430 个跳过（比 M6h-3c 多 72 个：37 个参考算例、<code>test_hybrid_response.py</code> 的 33 项、<code>test_hybrid.py</code> 的拒绝多 2 项）；最小环境 1375 / 558，torch 1579 / 475</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>求解器</strong>：原型与设计初稿用共轭梯度，假定方程正定。实现时两个金属算例在第 31 轮遇到负曲率，稠密的算符确有负本征值（SCC 的解是鞍点），所以改用 MINRES，加了警告与对应的测试；设计文档已改。</li>
+        <li><strong>MINRES 的写法</strong>：第一版按共轭残差的写法（递推 r、p、Ap）。第一次门槛运行时，最小环境里 Γ 点 Cu<sub>4</sub> 的核停在相对残差 1.5e-12，到 1000 轮报错；conda 环境（numpy 与 BLAS 都不同）收敛。共轭残差的递推要除以 r<sup>T</sup>Ar，方程不定时这个数可以接近零；Paige 与 Saunders 的 Lanczos 写法没有这个除法，SciPy 的 <code>minres</code> 也用它。改写后两个环境都在 53 轮收敛，各算例的轮数相同，与 DFTB+ 的差不变；门槛重跑。</li>
+        <li><strong>算例数</strong>：设计约 25 个，实际 37 个。多出的是 P93 的组合（+U 加自旋、onsite、金属 +U、Γ 点的金属与自旋、CAM 三重态、阳离子），以及两个不加杂化的 B27 算例。</li>
+        <li><strong>Thresholded 的文本容差</strong>：α 的差 3.9e-6 让打印的数差最后一位，文本容差从 1e-4 放到 2e-4（JSON 里的容差是冻结的，这个算例重新生成）。</li>
+        <li><strong>差分检查</strong>：设计写有限场与格点势的差分，实际也加了移动点电荷的差分（点电荷导数）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6h-4b</strong>：DFTB+ 拒绝或崩溃的四项，都用差分或 Casida 验证。
+          <ul>
+            <li>k 点：复数的 P<sub>1</sub>(k) 与全网格的交换。</li>
+            <li>非共线：两分量的 P<sub>1</sub>；没有 SOC 时整体的自旋转动是零模，要从解里去掉。SOC 配杂化的基态 DFTB+ 就拒绝，要先做基态。</li>
+            <li>有限频率：P<sub>1</sub> 的对称与反对称部分（X + Y 与 X − Y）都进交换，库仑项只看对称部分。草稿目录里的原型与 TD-LC 对全部单重态的求和一致到 2e-13（相对，H<sub>2</sub>O、CH<sub>3</sub>OH、C<sub>6</sub>H<sub>6</sub>，含第一激发以上的频率）；离激发能很近时 MINRES 收敛慢，求解器还要再定。</li>
+            <li>坐标导数：交换在固定密度下的坐标导数。</li>
+          </ul></li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26：需要你同意再提交 issue。B27 开发版已修，不必报告。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6h4-hybrid-response.html">← M6h-4 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>
