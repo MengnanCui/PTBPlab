@@ -116,7 +116,9 @@ class PyDFTB(Calculator):
     max_l : optional {label: l}; default is the ASE/PTBP rule (highest occupied
             shell in the homonuclear SKF).
     kpts  : None (Gamma), (n1, n2, n3) Monkhorst-Pack grid, a k-point density
-            (float, ASE ``kptdensity2monkhorstpack``), explicit
+            (float, ASE ``kptdensity2monkhorstpack``), ASE's ``{"size": (n1, n2, n3)}`` or
+            ``{"density": d}`` with ``"gamma": True`` for the Gamma-centred grid (DFTB+'s
+            SupercellFolding without shift, which periodic hybrids need), explicit
             ``{"kpts": (nk,3) fractional, "weights": (nk,)}``, or a band path (ASE
             ``BandPath`` or ``{"path": "GXWLGK", "npoints": 100}``: the path points in
             order, equal weights, as ASE + DFTB+; for a band structure after an SCC on a
@@ -189,8 +191,9 @@ class PyDFTB(Calculator):
     several SK files, as in :class:`pydftb.ParamSet`.
     Milestone M6h-1: ``hybrid`` ("lc", "cam", a dict or a :class:`pydftb.Hybrid`, as in
     :class:`pydftb.DFTB`; ``cutoff_reduction``, ``coulomb_cutoff`` and ``gsum_cutoff`` in
-    Angstrom): a range-separated hybrid functional for molecules and (M6h-3a) periodic systems
-    at the Gamma point, with
+    Angstrom): a range-separated hybrid functional for molecules and periodic systems at the
+    Gamma point (M6h-3a) and the k-points of a Gamma-centred grid (M6h-3b, ``kpts={"size":
+    (n1, n2, n3), "gamma": True}``), with
     SK files that have a ``RangeSep`` section; ``reuse_charges`` then carries the density matrix
     between geometry steps, as DFTB+ does.  There is no stress with one (DFTB+ has none either).
     """
@@ -300,7 +303,13 @@ class PyDFTB(Calculator):
                 spec["path"], npoints=spec.get("npoints"), density=spec.get("density"))
             k = np.asarray(path.kpts, float)
             return k, np.full(len(k), 1.0 / len(k))
-        if isinstance(spec, dict):
+        if isinstance(spec, dict) and ("size" in spec or "density" in spec):   # ASE's dict
+            grid = spec.get("size")
+            if grid is None:
+                grid = kptdensity2monkhorstpack(atoms, spec["density"], even=spec.get("even"))
+            k, w = monkhorst_pack(tuple(int(n) for n in grid),
+                                  gamma_centered=bool(spec.get("gamma", False)))
+        elif isinstance(spec, dict):
             k, w = np.atleast_2d(spec["kpts"]), np.asarray(spec.get("weights", np.ones(len(spec["kpts"]))))
         else:
             grid = kptdensity2monkhorstpack(atoms, spec, even=False) if np.isscalar(spec) else spec
@@ -379,7 +388,9 @@ class PyDFTB(Calculator):
         if self.reuse_charges and self.raw is not None and self._raw_labels == list(labels):
             q_init = self.raw.q_in        # DFTB+ keeps qInput between geometry steps
         elif self.read_charges is not None and self.raw is None:
-            q_init = calc.populations_from_file(labels, self.read_charges)    # M6f
+            q_init = calc.populations_from_file(          # M6f; the geometry for k-points (M6h-3b)
+                labels, self.read_charges, positions=a.positions / BOHR,
+                cell=a.cell.array / BOHR if periodic else None)
         xl = {}
         if self.xlbomd is not None:       # one calculation = one MD step (M6e)
             if self._xl is None or self._raw_labels != list(labels):
@@ -410,8 +421,11 @@ class PyDFTB(Calculator):
         if self.raw is None:
             raise RuntimeError("no calculation to write the charges of")
         calc, labels, _ = self._engine(self.atoms)
-        write_charges(path, calc.charge_data(labels, self.raw,
-                                             periodic=bool(self.atoms.pbc.any())), text)
+        a = self.atoms
+        periodic = bool(a.pbc.any())
+        write_charges(path, calc.charge_data(labels, self.raw, periodic=periodic,
+                                             positions=a.positions / BOHR,
+                                             cell=a.cell.array / BOHR if periodic else None), text)
 
     def evaluate(self, atoms, params=None, requires_grad=(), mode: str = "hf",
                  forces: bool = False, stress: bool = False, q_init=None):

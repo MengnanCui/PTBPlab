@@ -35,7 +35,19 @@ Coulomb kernel gamma_c (``coulomb="truncated"``: zero from the cutoff Rc on; ``"
 quintic on (Rc - 1 Bohr, Rc) matching gamma's value, first and second derivative), and P0 =
 diag(q0 / S_mumu(Gamma)).  Defaults as DFTB+: Rc half the smallest plane spacing, Rg = 2 Rc.
 The forces are the energy's derivative (NeighbourBased: with the reduced overlap, as DFTB+'s
-Gamma-point gradient).  k-points: milestone M6h-3b.
+Gamma-point gradient).
+
+k-points (milestone M6h-3b; DFTB+ with a SupercellFolding diag(N1, N2, N3) without shift,
+:class:`KPointHybridTerms`): pydftb's Bloch convention M(k) = sum_T M(0, T) exp(2 pi i k.T), the
+k-points a Gamma-centred grid of the folding (whole, or one of every k, -k as DFTB+'s set);
+H_x(k) = c [C(S DP S) + C(S DP) S(k) + S(k) C(DP S) + S(k) C(DP) S(k)] with the convolution
+C(X)(k) = 1/N sum_q X(q) o G(k - q), G(p)_AB = sum_g gamma_c(|R_B + g - R_A|) exp(2 pi i p.n_g):
+the exchange of the Born-von Karman supercell at its Gamma point, evaluated as the product of
+the supercell's real-space (BvK) matrices.  The lattice sums are those of DFTB+, over its
+parallelepiped about the atoms folded into the cell (which only matters for the untruncated
+kernel, ``coulomb="full"``), P0(k) = diag(q0 / S_mumu(k)), E_Fock with DeltaP_out (as DFTB+).
+The SCC mixes every k-point's complex DeltaP(k) ("matrix") or the real BvK array DeltaP(n)
+("neighbour", S then the reduced overlap), as DFTB+.
 
 TD-LC (milestone M6h-2, :mod:`pydftb.casida`): the Mulliken exchange operator
 K^x[M] = 1/4 :func:`four_terms` (S, G, M) of any square M (K^x[M^T] = K^x[M]^T) gives the
@@ -50,7 +62,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .coulomb import _GL_S, _GL_W, NEAR_TAU, _short_near
-from .hamiltonian import fold
+from .hamiltonian import fold, fold_all
+from .kpoints import supercell_folding
 
 TOL_SAME_DIST = 1.0e-5          # DFTB+ tolSameDist (Bohr): on-site below this distance
 MIN_HUB_DIFF = 0.3125e-5        # DFTB+ MinHubDiff, on tau = 3.2 U: "equal U" below this
@@ -72,9 +85,14 @@ class Hybrid:
     "threshold" (Thresholded); ``threshold`` (1e-6) of the latter; ``cutoff_reduction`` (Bohr,
     0) of the latter two: atom pairs beyond the largest SK cutoff minus it have no exchange.
     Periodic systems only (DFTB+ ``CoulombMatrix``, milestone M6h-3): ``coulomb`` "truncated"
-    (default) or "damped" (TruncatedAndDamped); ``coulomb_cutoff`` (Bohr, None: half the
-    smallest plane spacing) and ``gsum_cutoff`` (Bohr, None: twice the former), as DFTB+'s
-    defaults.  A molecule refuses them (DFTB+ stops on its unread CoulombMatrix)."""
+    (default), "damped" (TruncatedAndDamped) or, at k-points only (M6h-3b, as DFTB+), "full"
+    (the untruncated lattice sum over the parallelepiped of ``gsum_cutoff``: it grows with that,
+    so the SCC does not settle; for comparisons only); ``coulomb_cutoff`` (Bohr, None: DFTB+'s
+    default, half the smallest plane spacing at the Gamma point, :func:`dftbp_coulomb_cutoff` of
+    the folding at k-points) and ``gsum_cutoff`` (Bohr, None: twice the former).  A molecule
+    refuses them (DFTB+ stops on its unread CoulombMatrix).  The neighbour screening at
+    k-points builds the whole operator (DFTB+'s ``Threshold`` -> 0; DFTB+'s default 1e-6 screens
+    its increments, which shifts the energy by up to about 1e-6 Ha)."""
     kind: str = "lc"
     screening: str = "matrix"
     threshold: float = 1e-6
@@ -441,6 +459,62 @@ def default_coulomb_cutoff(cell) -> float:
     return 0.5 * float(plane_spacings(cell).min())
 
 
+def dftbp_coulomb_cutoff(cell, nk=(1, 1, 1)) -> float:
+    """DFTB+ 25.1's default CoulombCutoff (getCoulombTruncationCutoff) as coded, of a k-point run
+    with the supercell folding ``nk`` (milestone M6h-3b): the "BvK vectors" are the lattice
+    vectors with their Cartesian components scaled by nk (B2: not the vectors scaled, so with an
+    anisotropic folding not the half plane spacing of the supercell), the cutoff the distance from
+    the crossing of two of their parallelepiped's body diagonals to its nearest face.  DFTB+ finds
+    the crossing from the diagonals' x and y components and checks z; where their x-y
+    projections are parallel (e.g. a2 along z) it goes on with an unset point and stops on the
+    damping region (B3), at the Gamma point too: the same refusal here (a ``coulomb_cutoff``
+    avoids it).  For nk = 1 the value is :func:`default_coulomb_cutoff`'s, up to rounding."""
+    lat = np.asarray(cell, float).T * np.asarray(nk, float)[:, None]   # columns: BvK vectors
+    b1, b2, b3 = lat[:, 0], lat[:, 1], lat[:, 2]
+    s1, e1 = b2, b2 + (b1 - b2 + b3)            # the diagonals (start, end)
+    s2, e2 = np.zeros(3), b1 + b2 + b3
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tt = (((s2[0] - s1[0]) * (s2[1] - e2[1]) - (s2[1] - s1[1]) * (s2[0] - e2[0]))
+              / ((s2[1] - e2[1]) * (e1[0] - s1[0]) - (s2[0] - e2[0]) * (e1[1] - s1[1])))
+        ss = (((e1[1] - s1[1]) * (s2[0] - s1[0]) - (e1[0] - s1[0]) * (s2[1] - s1[1]))
+              / ((e1[1] - s1[1]) * (s2[0] - e2[0]) - (e1[0] - s1[0]) * (s2[1] - e2[1])))
+        z = (tt * (e1[2] - s1[2]) + ss * (s2[2] - e2[2])) - (s2[2] - s1[2])
+    if not z < 1e-10:
+        raise ValueError("The beginning of the damping region of the truncated Coulomb kernel "
+                         "must be at a positive radius (as DFTB+ 25.1, whose default Coulomb "
+                         "cutoff is undefined for this cell: it intersects the cell's body "
+                         "diagonals from their x-y projections, which are parallel here; give "
+                         "the hybrid's coulomb_cutoff)")
+    x1 = s1 + tt * (e1 - s1)
+    if not (abs(tt) <= 1.0 and abs(ss) <= 1.0) or np.linalg.norm(s2 + ss * (e2 - s2) - x1) > 1e-10:
+        raise ValueError("Error while calculating Coulomb truncation cutoff for given cell "
+                         "geometry. (as DFTB+; give the hybrid's coulomb_cutoff)")
+    normals = (np.cross(b1, b2), np.cross(b3, b1), np.cross(b2, b3))
+    return float(min(abs(x1 @ (v / np.linalg.norm(v))) for v in normals))
+
+
+def dftbp_fold_shifts(pos, cell) -> np.ndarray:
+    """The lattice translations DFTB+ takes off the atoms when it folds them into the cell
+    (boundarycond.F90 foldCoordsToCell; milestone M6h-3b): floor of the fractional coordinates,
+    one more where |a_i| (1 - the remainder) < eps (an atom within eps of the far face goes to
+    the near one); (n_atom, 3) integers.  DFTB+'s lattice sums and k-point charge files are of
+    the folded atoms."""
+    cell = np.asarray(cell, float)
+    frac = np.asarray(pos, float) @ np.linalg.inv(cell)
+    t = np.floor(frac)
+    vlen = np.linalg.norm(cell, axis=1)
+    t = t + (np.abs(vlen * (1.0 - (frac - t))) < np.finfo(float).eps)
+    return t.astype(int)
+
+
+def bvk_cells(nfold) -> np.ndarray:
+    """The cells of the Born-von Karman supercell diag(``nfold``) in DFTB+'s order (n1 fastest),
+    (N1 N2 N3, 3) integers (milestone M6h-3b)."""
+    n1, n2, n3 = (int(x) for x in nfold)
+    i = np.arange(n1 * n2 * n3)
+    return np.stack([i % n1, (i // n1) % n2, i // (n1 * n2)], axis=1)
+
+
 def lattice_translations(cell, rg) -> np.ndarray:
     """DFTB+ getCellTranslations: the lattice vectors n.cell with |n_i| <= floor(rg / h_i) + 1
     (a parallelepiped), Cartesian, (n_g, 3)."""
@@ -525,6 +599,8 @@ class HybridTerms:
             raise ValueError("Hybrid functionals don't yet support Gamma point calculations for "
                              "CoulombMatrix types other than 'Truncated' or 'Truncated+Damping' "
                              "(as DFTB+)")
+        if spec.coulomb_cutoff is None:
+            dftbp_coulomb_cutoff(cell)              # DFTB+ stops where it is undefined (B3)
         rc = (spec.coulomb_cutoff if spec.coulomb_cutoff is not None
               else default_coulomb_cutoff(cell))
         if rc - DIST_FUDGE <= 0.0:                  # DFTB+ checks it whatever the kernel
@@ -786,3 +862,410 @@ class HybridTerms:
             cds = cds + c * bilinear_ds(s, g, m1, m2)
             cdg = cdg + c * bilinear_dg(s, m1, m2)
         return cds[pairs.rows, pairs.cols], self._gamma_force(cdg)
+
+
+# ---- k-points (milestone M6h-3b) -------------------------------------------------------------
+class KPointLayout:
+    """The k-points of a periodic hybrid run beyond the Gamma point (milestone M6h-3b) and the
+    layout of its mixed DeltaP.
+
+    ``kpts``, ``kw``: the calculation's k-points and weights, the Gamma-centred grid of the
+    supercell folding ``nfold`` (N = N1 N2 N3 points), whole or one of every k, -k (weights 2/N,
+    1/N where k = -k), so that sum_k w_k Re f(k) = 1/N sum_q f(q) over the grid whenever f(-q) =
+    conj f(q).  The Born-von Karman (BvK) matrices X(n) = sum_k w_k Re[X(k) exp(-2 pi i k.n)] of
+    the N cells n (:func:`bvk_cells`) are the real-space matrices folded into the supercell,
+    X(n)_munu = sum over T = n mod N of X(mu in cell 0, nu in cell T).  ``screening``
+    "neighbour" mixes those (DFTB+ NeighbourBased, its deltaRhoInCplxHS), the others [Re | Im] of
+    every k-point's DeltaP(k) (MatrixBased, deltaRhoInCplx).  ``shifts``
+    (:func:`dftbp_fold_shifts`) convert to and from DFTB+'s charge-file records, which are of the
+    folded atoms."""
+
+    def __init__(self, kpts, kw, nfold, orb_atom, screening: str, shifts=None):
+        self.kpts = np.atleast_2d(np.asarray(kpts, float))
+        self.kw = np.asarray(kw, float) / np.sum(kw)
+        self.nfold = tuple(int(x) for x in nfold)
+        self.orb_atom = np.asarray(orb_atom)
+        self.n = len(self.orb_atom)
+        self.nk = len(self.kpts)
+        self.neighbour = screening == "neighbour"
+        self.cells = bvk_cells(self.nfold)
+        self.ncell = len(self.cells)
+        theta = 2.0 * np.pi * (self.kpts @ self.cells.T)                     # (nk, N)
+        self._cos, self._sin = np.cos(theta), np.sin(theta)
+        self._cos_w = (self.kw[:, None] * self._cos).T
+        self._sin_w = (self.kw[:, None] * self._sin).T
+        self.shifts = None if shifts is None else np.asarray(shifts, int)
+
+    def cell_index(self, m) -> np.ndarray:
+        """The BvK cell (index into :attr:`cells`) of integer lattice vectors ``m`` (..., 3)."""
+        m = np.mod(np.asarray(m, int), self.nfold)
+        n1, n2, _ = self.nfold
+        return (m[..., 2] * n2 + m[..., 1]) * n1 + m[..., 0]
+
+    def to_bvk(self, x) -> np.ndarray:
+        """The BvK matrices (N, n, n) of k-point matrices ``x`` (nk, n, n)."""
+        x = np.asarray(x).reshape(self.nk, -1)
+        out = self._cos_w @ x.real
+        if np.iscomplexobj(x):
+            out = out + self._sin_w @ x.imag
+        return out.reshape(self.ncell, self.n, self.n)
+
+    def from_bvk(self, b) -> np.ndarray:
+        """X(k) = sum_n X(n) exp(2 pi i k.n) at the k-points (nk, n, n)."""
+        b = np.asarray(b, float).reshape(self.ncell, -1)
+        return (self._cos @ b + 1j * (self._sin @ b)).reshape(self.nk, self.n, self.n)
+
+    # -- the mixed vector ---------------------------------------------------------------------
+    @property
+    def packed_size(self) -> int:
+        """Length of one spin channel's packed DeltaP."""
+        n2 = self.n * self.n
+        return self.ncell * n2 if self.neighbour else 2 * self.nk * n2
+
+    def pack(self, dps) -> np.ndarray:
+        """The vector the SCC mixes: per spin channel [Re | Im] of DeltaP(k) at every k-point
+        (DFTB+'s complex mixers take the real part of conj(x) y: the same mixing), or the BvK
+        array."""
+        if self.neighbour:
+            return np.concatenate([self.to_bvk(d).ravel() for d in dps])
+        return np.concatenate([np.concatenate([d.real.ravel(), d.imag.ravel()]) for d in dps])
+
+    def unpack(self, vec, nspin: int) -> list:
+        k = self.packed_size
+        vec = np.asarray(vec, float)
+        if len(vec) != k * nspin:
+            raise ValueError(f"a k-point hybrid calculation's mixed vector (q_init) has {k * nspin} "
+                             f"elements (the packed DeltaP of {nspin} spin channel(s)), not "
+                             f"{len(vec)}")
+        out = []
+        for s in range(nspin):
+            v = vec[s * k:(s + 1) * k]
+            if self.neighbour:
+                out.append(self.from_bvk(v))
+            else:
+                h = k // 2
+                out.append((v[:h] + 1j * v[h:]).reshape(self.nk, self.n, self.n))
+        return out
+
+    def error(self, x_out, x_in) -> float:
+        """The SCC error: the largest modulus of DeltaP_out(k) - DeltaP_in(k), or of the BvK
+        arrays' difference (DFTB+ getNextInputDensityCplx)."""
+        d = np.asarray(x_out) - np.asarray(x_in)
+        if self.neighbour:
+            return float(np.abs(d).max())
+        d = d.reshape(-1, 2, self.nk * self.n * self.n)
+        return float(np.hypot(d[:, 0], d[:, 1]).max())
+
+    # -- DFTB+'s charge-file records ----------------------------------------------------------
+    def _grid_index(self, k) -> np.ndarray:
+        n = np.array(self.nfold)
+        i = np.mod(np.rint(np.atleast_2d(np.asarray(k, float)) * n).astype(int), n)
+        return (i[:, 0] * n[1] + i[:, 1]) * n[2] + i[:, 2]
+
+    def _match(self, k_from, k_to) -> tuple:
+        """For every point of ``k_from``: the point of ``k_to`` equal to it mod 1, or else to its
+        inverse (then True)."""
+        to = {int(f): j for j, f in enumerate(self._grid_index(k_to))}
+        idx, inverse = [], []
+        for a, b in zip(self._grid_index(k_from), self._grid_index(-np.asarray(k_from))):
+            j = to.get(int(a))
+            if j is None:
+                j = to.get(int(b))
+                if j is None:
+                    raise ValueError("the k-points do not cover the folding's grid")
+            idx.append(j)
+            inverse.append(int(a) not in to)
+        return np.array(idx, int), np.array(inverse, bool)
+
+    def _atom_phases(self, k) -> np.ndarray:
+        """exp(2 pi i k.T) of every orbital's atom, (n_k, n)."""
+        if self.shifts is None:
+            raise ValueError("DFTB+'s k-point charge records need the atoms' positions (the "
+                             "fold shifts)")
+        return np.exp(2j * np.pi * (np.atleast_2d(k) @ self.shifts[self.orb_atom].T))
+
+    def _bvk_shifted(self, b, sign: int) -> np.ndarray:
+        """out[m][A, B] = b[m + sign (T_B - T_A) mod N][A, B] for every atom pair (A, B)."""
+        if self.shifts is None:
+            raise ValueError("DFTB+'s k-point charge records need the atoms' positions (the "
+                             "fold shifts)")
+        t = self.shifts
+        off = np.concatenate([[0], np.cumsum(np.bincount(self.orb_atom))])
+        out = np.empty_like(b)
+        for a in range(len(off) - 1):
+            ra = slice(off[a], off[a + 1])
+            for c in range(len(off) - 1):
+                rc = slice(off[c], off[c + 1])
+                perm = self.cell_index(self.cells + sign * (t[c] - t[a]))
+                out[:, ra, rc] = b[perm, ra, rc]
+        return out
+
+    def to_dftbp(self, dps) -> np.ndarray:
+        """DFTB+'s charge-file record of the DeltaP of every spin channel, as the file holds it
+        read in C order: MatrixBased (n_spin, nK, n, n) complex, DeltaP(k) at DFTB+'s k-points
+        (:func:`pydftb.kpoints.supercell_folding`), NeighbourBased the (n_spin, N, n, n) BvK
+        array, both of the folded atoms (D^dag DeltaP(k) D, D = diag(exp(2 pi i k.T_atom));
+        R[n]_AB = DeltaP(m)_AB with m = n - T_B + T_A)."""
+        if self.neighbour:
+            return np.stack([self._bvk_shifted(self.to_bvk(d), -1) for d in dps])
+        kd = supercell_folding(self.nfold)[0]
+        j, inverse = self._match(kd, self.kpts)
+        ph = self._atom_phases(kd).conj()
+        out = []
+        for d in dps:
+            m = np.array(d[j])
+            m[inverse] = m[inverse].conj()
+            out.append(ph[:, :, None] * m * ph.conj()[:, None, :])
+        return np.stack(out)
+
+    def from_dftbp(self, record, bvk: bool) -> list:
+        """The DeltaP(k) of every spin channel at the calculation's k-points from DFTB+'s record
+        (:meth:`to_dftbp`; ``bvk``: the NeighbourBased array; either layout serves either
+        screening here)."""
+        record = np.asarray(record)
+        if bvk:
+            return [self.from_bvk(self._bvk_shifted(np.asarray(r, float), 1)) for r in record]
+        kd = supercell_folding(self.nfold)[0]
+        if record.shape[1] != len(kd):
+            raise ValueError(f"the k-point record has {record.shape[1]} k-points, the folding "
+                             f"{self.nfold} {len(kd)}")
+        j, inverse = self._match(self.kpts, kd)
+        ph = self._atom_phases(kd)
+        out = []
+        for r in record:
+            p = ph[:, :, None] * r * ph.conj()[:, None, :]
+            m = p[j]
+            m[inverse] = m[inverse].conj()
+            out.append(m)
+        return out
+
+
+class KPointHybridTerms:
+    """The exchange of a periodic cell at the k-points of a supercell folding (``_Setup.hybrid``,
+    milestone M6h-3b; DFTB+ 25.1 addCamHamiltonianMatrix_kpts and
+    addCamHamiltonianNeighbour_kpts_ct), with the interface of :class:`HybridTerms`.
+
+    ``smat``: S(k) at the k-points (nk, n, n); ``kpts``, ``kw``, ``nfold``: the k-points as
+    :class:`KPointLayout`; the rest as :class:`HybridTerms`.  In the BvK supercell's real space
+    (:meth:`KPointLayout.to_bvk`) the convolution C(X)(k) = 1/N sum_q X(q) o G(k - q) is the
+    product X(n) o g(n), g(n)_AB = sum_g gamma_c(|R'_B + g - R'_A|) over the translations g of
+    DFTB+'s parallelepiped (:func:`lattice_translations`) whose cell n_g + T_A - T_B is n mod N,
+    R' = R - T.cell the atoms as DFTB+ folds them (:func:`dftbp_fold_shifts`): the same sums as
+    DFTB+'s, which for the untruncated kernel depend on that folding (B19).  Defaults as DFTB+:
+    Rc :func:`dftbp_coulomb_cutoff` of the folding, Rg = 2 Rc."""
+
+    pauli = False
+    _periodic = True
+
+    def __init__(self, spec: Hybrid, params, u_atom, pos, orb_atom, cell, pairs, smat, q0_orb,
+                 sk_cutoff, kpts, kw, nfold):
+        self.spec = spec
+        self.kind, self.omega, self.alpha, self.beta = params
+        cell = np.asarray(cell, float)
+        pos = np.asarray(pos, float)
+        nat = len(pos)
+        self.cell, self.u = cell, np.asarray(u_atom, float)
+        self.orb_atom = np.asarray(orb_atom)
+        self.offsets = np.concatenate([[0], np.cumsum(np.bincount(self.orb_atom,
+                                                                  minlength=nat))])
+        self.n = len(self.orb_atom)
+        cam_cutoff = sk_cutoff - spec.cutoff_reduction
+        if cam_cutoff < 0.0:
+            raise ValueError("Screening cutoff for hybrid xc-functional neighbours too short "
+                             "(as DFTB+)")
+        self._cam_cutoff = cam_cutoff
+        rc = (spec.coulomb_cutoff if spec.coulomb_cutoff is not None
+              else dftbp_coulomb_cutoff(cell, nfold))
+        if rc - DIST_FUDGE <= 0.0:                  # DFTB+ checks it whatever the kernel
+            raise ValueError("The beginning of the damping region of the truncated Coulomb "
+                             "kernel must be at a positive radius (as DFTB+; the Coulomb cutoff "
+                             f"is {rc:.4f} Bohr)")
+        self.rc = rc
+        self.rg = spec.gsum_cutoff if spec.gsum_cutoff is not None else 2.0 * rc
+        self.shifts = dftbp_fold_shifts(pos, cell)
+        self.layout = KPointLayout(kpts, kw, nfold, self.orb_atom, spec.screening, self.shifts)
+        self.pos_folded = pos - self.shifts @ cell
+        self.gvec = lattice_translations(cell, self.rg)
+        self.ncoef = np.rint(self.gvec @ np.linalg.inv(cell)).astype(int)
+        self._images = self._image_list()
+        lay = self.layout
+        g = np.zeros(lay.ncell * nat * nat)
+        for (a, b, gi, d, gam, _, _) in self._images:
+            flat = (lay.cell_index(self.ncoef[gi] + self.shifts[a] - self.shifts[b]) * nat
+                    + a) * nat + b
+            g += np.bincount(flat, weights=gam, minlength=len(g))
+        self.g_bvk = g.reshape(lay.ncell, nat, nat)
+        self.G = self.g_bvk[:, self.orb_atom][:, :, self.orb_atom]           # (N, n, n)
+        self.S = np.asarray(smat)
+        self._pairs = pairs
+        if spec.screening == "neighbour":       # S(k) of the pairs within the CAM cutoff
+            self._keep = (pairs.dist < cam_cutoff)[pairs.pair_of]
+            self.S_x = fold_all(pairs, pairs.s * self._keep, self.n, lay.kpts, np.ones(self.n))
+        else:
+            self._keep = None
+            self.S_x = self.S
+        self.q0_orb = np.asarray(q0_orb, float)
+        self.s_diag = np.array([np.diag(s).real for s in self.S])              # (nk, n)
+
+    def _gamma(self, ua, ub, d, derivative: bool = False):
+        if self.spec.coulomb == "full":
+            return (dgamma_cam if derivative else gamma_cam)(ua, ub, d, self.omega, self.alpha,
+                                                             self.beta)
+        return coulomb_gamma(ua, ub, d, self.omega, self.alpha, self.beta, self.rc,
+                             self.spec.coulomb, derivative=derivative)
+
+    def _image_list(self) -> list:
+        """The terms of the lattice sums per pair of Hubbard values: atoms a, b, translation
+        index, distance |R'_A - R'_B - g| and gamma, those within Rc only for a truncated kernel
+        (gamma and its derivative vanish beyond), in blocks of at most IMAGE_CHUNK candidates."""
+        values, inv = np.unique(self.u, return_inverse=True)
+        groups = [np.flatnonzero(inv == k) for k in range(len(values))]
+        full = self.spec.coulomb == "full"
+        out = []
+        for ia in groups:
+            for ib in groups:
+                step = max(1, IMAGE_CHUNK // (len(ia) * len(ib)))
+                parts = []
+                for g0 in range(0, len(self.gvec), step):
+                    v = (self.pos_folded[ia][:, None, None, :]
+                         - self.pos_folded[ib][None, :, None, :]
+                         - self.gvec[None, None, g0:g0 + step, :])
+                    d = np.sqrt((v * v).sum(-1))
+                    i, j, k = np.nonzero(np.ones(d.shape, bool) if full else d < self.rc)
+                    parts.append((ia[i], ib[j], g0 + k, d[i, j, k]))
+                a, b, gi, d = (np.concatenate([p[x] for p in parts]) for x in range(4))
+                ua, ub = self.u[ia[0]], self.u[ib[0]]
+                out.append((a, b, gi, d, self._gamma(ua, ub, d), ua, ub))
+        return out
+
+    # -- densities ------------------------------------------------------------------------
+    @property
+    def packed_size(self) -> int:
+        return self.layout.packed_size
+
+    def reference(self, nspin: int) -> np.ndarray:
+        """P0(k) = diag(q0 / S_mumu(k)) of one spin channel, half each with spin (DFTB+)."""
+        out = np.zeros((self.layout.nk, self.n, self.n), complex)
+        i = np.arange(self.n)
+        out[:, i, i] = (0.5 if nspin == 2 else 1.0) * self.q0_orb / self.s_diag
+        return out
+
+    def pack(self, dps) -> np.ndarray:
+        return self.layout.pack(dps)
+
+    def unpack(self, vec, nspin: int) -> list:
+        return self.layout.unpack(vec, nspin)
+
+    def error(self, x_out, x_in) -> float:
+        return self.layout.error(x_out, x_in)
+
+    def reset(self, restart: bool):
+        """No state between Fock builds (no threshold screening at k-points)."""
+
+    # -- Fock matrices and energy -----------------------------------------------------------
+    def _conv(self, x) -> np.ndarray:
+        """1/N sum_q X(q) o G(k - q) at the k-points: X(n) o g(n) in the BvK supercell."""
+        lay = self.layout
+        return lay.from_bvk(lay.to_bvk(x) * self.G)
+
+    def fock(self, dps) -> list:
+        """H_x[DeltaP](k) of every spin channel (zero for a zero DeltaP, as DFTB+'s first
+        iteration)."""
+        c = -0.125 if len(dps) == 1 else -0.25
+        s = self.S_x
+        out = []
+        for d in dps:
+            if not np.any(d):
+                out.append(np.zeros((self.layout.nk, self.n, self.n), complex))
+                continue
+            sd, ds = s @ d, d @ s
+            h = self._conv(sd @ s) + self._conv(sd) @ s + s @ self._conv(ds) + s @ self._conv(d) @ s
+            out.append(c * h)
+        return out
+
+    def fock_at(self, kpts, dps) -> list:
+        """H_x[DeltaP] at any k-points (band structures; DFTB+'s band run from the SCC's
+        DeltaP): C(X)(k) = sum_g X(n_g mod N) o gamma(g) exp(2 pi i k.n_g) over the lattice
+        sums' terms, the same as :meth:`fock` on the grid."""
+        kpts = np.atleast_2d(np.asarray(kpts, float))
+        lay, oa, nat = self.layout, self.orb_atom, len(self.u)
+        c = -0.125 if len(dps) == 1 else -0.25
+        s = self.S_x
+        parts = []
+        for d in dps:
+            sd, ds = s @ d, d @ s
+            parts.append([lay.to_bvk(x) for x in (sd @ s, sd, ds, d)])
+        s_band = self.overlap_at(kpts)
+        out = [np.empty((len(kpts), self.n, self.n), complex) for _ in dps]
+        for i, k in enumerate(kpts):
+            h = np.zeros(lay.ncell * nat * nat, complex)
+            for (a, b, gi, d, gam, _, _) in self._images:
+                nvec = self.ncoef[gi] + self.shifts[a] - self.shifts[b]
+                flat = (lay.cell_index(nvec) * nat + a) * nat + b
+                w = gam * np.exp(2j * np.pi * (nvec @ k))
+                h += (np.bincount(flat, weights=w.real, minlength=len(h))
+                      + 1j * np.bincount(flat, weights=w.imag, minlength=len(h)))
+            h = h.reshape(lay.ncell, nat, nat)[:, oa][:, :, oa]
+            sk = s_band[i]
+            for j, (b1, b2, b3, b4) in enumerate(parts):
+                c1, c2, c3, c4 = ((x * h).sum(0) for x in (b1, b2, b3, b4))
+                out[j][i] = c * (c1 + c2 @ sk + sk @ c3 + sk @ c4 @ sk)
+        return out
+
+    def overlap_at(self, kpts) -> np.ndarray:
+        """The overlap the exchange takes at any k-points (NeighbourBased: of the pairs within
+        the CAM cutoff)."""
+        p = self._pairs
+        values = p.s if self._keep is None else p.s * self._keep
+        return fold_all(p, values, self.n, np.atleast_2d(kpts), np.ones(self.n))
+
+    def energy(self, focks, dps) -> float:
+        """E_Fock = 1/2 sum_spin sum_k w_k Re sum H_x(k) o conj(DeltaP(k)); DFTB+ takes
+        DeltaP_out (B4: DeltaP_in at the Gamma point), as the SCC here."""
+        kw = self.layout.kw
+        return float(sum(0.5 * np.einsum("k,kij->", kw, h * d.conj()).real
+                         for h, d in zip(focks, dps)))
+
+    # -- forces ---------------------------------------------------------------------------
+    def pair_coefficient(self, dps, pairs) -> np.ndarray:
+        """dE_x/dS at every pair element (T, mu, nu): sum_k w_k Re[X(k)_numu exp(2 pi i k.T)],
+        the BvK matrix of X(k) = c [C(D) S D + C(D S) D + D S C(D) + D C(S D)] at cell -T,
+        summed over the spin channels (the Gamma-point formula in k; NeighbourBased with the
+        reduced overlap and the pairs within the CAM cutoff, as DFTB+'s gradient)."""
+        c = -0.125 if len(dps) == 1 else -0.25
+        s, lay = self.S_x, self.layout
+        x = np.zeros((lay.nk, self.n, self.n), complex)
+        for d in dps:
+            ds, sd = d @ s, s @ d
+            cd = self._conv(d)
+            x += c * (cd @ sd + self._conv(ds) @ d + ds @ cd + d @ self._conv(sd))
+        xb = lay.to_bvk(x)
+        coef = xb[lay.cell_index(-pairs.shift)[pairs.pair_of], pairs.cols, pairs.rows]
+        if self._keep is not None:
+            coef = coef * (pairs.dist < self._cam_cutoff)[pairs.pair_of]
+        return coef
+
+    def gamma_gradient(self, dps) -> np.ndarray:
+        """dE_x/dR_A through gamma: dE/dg(n) = c [D(n) o (S D S)(n) + (D S)(n) o (S D)(n)] (BvK
+        matrices) summed over each atom pair's orbitals, times gamma_c'(d) (R'_A - R'_B - g) / d
+        of every term of the lattice sums, which enters g(n) of (A, B) and of (B, A)."""
+        c = -0.125 if len(dps) == 1 else -0.25
+        s, lay = self.S_x, self.layout
+        w = np.zeros((lay.ncell, self.n, self.n))
+        for d in dps:
+            ds, sd = d @ s, s @ d
+            w += c * (lay.to_bvk(d) * lay.to_bvk(sd @ s) + lay.to_bvk(ds) * lay.to_bvk(sd))
+        starts = self.offsets[:-1]
+        w_at = np.add.reduceat(np.add.reduceat(w, starts, axis=1), starts, axis=2)
+        nat = len(self.u)
+        out = np.zeros((nat, 3))
+        for (a, b, gi, d, _, ua, ub) in self._images:
+            nvec = self.ncoef[gi] + self.shifts[a] - self.shifts[b]
+            wsym = (w_at[lay.cell_index(nvec), a, b] + w_at[lay.cell_index(-nvec), b, a])
+            dg = self._gamma(ua, ub, d, derivative=True)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                f = np.where((d > 0.0) & (a != b), wsym * dg / d, 0.0)
+            v = self.pos_folded[a] - self.pos_folded[b] - self.gvec[gi]
+            for x in range(3):
+                out[:, x] += np.bincount(a, weights=f * v[:, x], minlength=nat)
+        return out

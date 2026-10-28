@@ -17,7 +17,7 @@ from ase.build import bulk, molecule
 from ..blockpot import ONSITE_PBE
 from ..constants import BOHR, HARTREE, KCAL_MOL
 from ..external import fold_into_cell
-from ..kpoints import monkhorst_pack, reduce_time_reversal
+from ..kpoints import monkhorst_pack, reduce_time_reversal, supercell_folding
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "data")
 SKF_SETS = {
@@ -203,6 +203,27 @@ class Case:
     # hybrid (the lower-triangular DeltaP_in's dense Mulliken, DFTB._dftbp_gamma_q_in), which in
     # a low-symmetry cell are not DeltaP_in's Mulliken populations
     gamma_q_in_compat: bool = False
+    # milestone M6h-3b: k-points of the supercell folding diag(folding) without shift: pydftb
+    # takes DFTB+'s set (kpoints.supercell_folding), DFTB+ the SupercellFolding (and with the
+    # neighbour screening Threshold = dftbplus.KPOINT_NEIGHBOUR_THRESHOLD)
+    folding: tuple | None = None
+    # milestone M6h-3b: pydftb keeps the starting block populations of +U and onsite corrections
+    # as DFTB+ 25.1 at k-points (DFTB._dftbp_stale_blocks, B20)
+    stale_blocks_compat: bool = False
+    # milestone M6h-3b: both codes stop after this many SCC iterations unconverged (DFTB+
+    # ConvergentSCCOnly = No; the untruncated kernel, whose SCC does not settle)
+    fixed_scc: int | None = None
+
+    @property
+    def dftbp_forces(self) -> bool:
+        """DFTB+ computes forces: not for k-point hybrids with another Coulomb matrix than
+        Truncated or with spin, which DFTB+ 25.1 refuses (M6h-3b; pydftb's are tested against
+        differences of its energy)."""
+        if self.folding is None or self.hybrid is None:
+            return True
+        coulomb = (self.hybrid.get("coulomb", "truncated") if isinstance(self.hybrid, dict)
+                   else "truncated")
+        return coulomb == "truncated" and not self.spin
 
     @property
     def corrections(self) -> bool:
@@ -255,6 +276,8 @@ class Case:
                 or self.site_potentials is not None or self.solvation is not None)
 
     def kpoints(self):
+        if self.folding is not None:                       # M6h-3b
+            return supercell_folding(self.folding)
         if self.kgrid is None:
             return None
         k = monkhorst_pack(self.kgrid)
@@ -2190,5 +2213,115 @@ CASES += [
     Case("co2_crystal_lc_read_charges", _co2_crystal, **LC_GAMMA, read_charges={"text": False}),
     Case("o2_box_lc_spin_read_charges_text", _o2_box, **LC_GAMMA, read_charges={"text": True},
          spin={"unpaired_electrons": 2.0, "spin_constants": W_HCO}),
+]
+
+
+# M6h-3b: hybrid functionals of periodic systems at the k-points of a supercell folding (DFTB+
+# SupercellFolding without shift; pydftb DFTB+'s set, kpoints.supercell_folding).  DFTB+ gives no
+# forces for another Coulomb matrix than Truncated or with spin (Case.dftbp_forces): energies
+# only there, pydftb's forces against differences of its energy in test_hybrid_kpoints.py
+def _diamond2():
+    """Diamond's primitive cell, rattled: atom 0 at a negative fractional coordinate, which
+    DFTB+ folds into the cell (the gauge of its DeltaP(k), its lattice sums: B19)."""
+    at = bulk("C", "diamond", a=3.567)
+    at.rattle(0.03, seed=3)
+    return at
+
+
+def _centred(build, f):
+    """``build``'s structure moved by f times the cell's diagonal."""
+    def centred():
+        at = build()
+        at.translate(f * at.cell.sum(0))
+        return at
+    centred.__name__ = build.__name__ + "_centred"
+    return centred
+
+
+O2_SPIN = {"unpaired_electrons": 2.0, "spin_constants": W_HCO}
+TOL_HYB_BANDS = {**TOL_BANDS, **TOL_HYB}
+NEIGHBOUR = {"type": "lc", "screening": "neighbour"}
+STALE_NOTE = ("DFTB+ 25.1 never updates the block populations at k-points (B20: "
+              "getNextInputDensityCplx updates only qInput): compared with pydftb keeping the "
+              "starting blocks (DFTB._dftbp_stale_blocks); pydftb's own energy is {}")
+CASES += [
+    Case("diamond2_lc_k222", _diamond2, **LC_GAMMA, folding=(2, 2, 2),
+         note="the default cutoff of the folding (3.89 Bohr); 8 k-points, all their own inverses"),
+    Case("diamond2_lc_k333", _diamond2, **LC_GAMMA, folding=(3, 3, 3),
+         note="14 of the 27 k-points (k and -k merged)"),
+    Case("diamond2_lc_k123", _diamond2, **LC_GAMMA, folding=(1, 2, 3),
+         note="an anisotropic folding: DFTB+'s default cutoff scales the Cartesian components "
+              "of the lattice vectors (B2), as pydftb's"),
+    Case("diamond2_lc_k222_rc8", _diamond2, **{**LC_GAMMA, "hybrid": {"type": "lc", **RC8}},
+         folding=(2, 2, 2), note="Rc 8 Bohr beyond the BvK supercell's half spacing"),
+    Case("diamond2_lc_k222_damped", _diamond2,
+         **{**LC_GAMMA, "hybrid": {"type": "lc", "coulomb": "damped"}}, folding=(2, 2, 2),
+         note="TruncatedAndDamped; DFTB+ has no forces for it at k-points"),
+    Case("diamond2_lc_k222_full", _diamond2,
+         **{**LC_GAMMA, "hybrid": {"type": "lc", "coulomb": "full", "gsum_cutoff": 12.0}},
+         folding=(2, 2, 2), fixed_scc=5,
+         note="the untruncated kernel over a 12 Bohr parallelepiped about the folded atoms (B19; "
+              "about the unfolded ones the energy is 0.1-0.3 Ha off); the SCC does not settle "
+              "(the sum grows with the radius): 5 iterations, no forces from DFTB+"),
+    Case("diamond2_cam_k222", _diamond2, **CAM_GAMMA, folding=(2, 2, 2)),
+    Case("diamond2_global_k222", _diamond2, **{**CAM_GAMMA, "skf_set": "ptbp_hcocu_global"},
+         folding=(2, 2, 2), note="a global hybrid (CAM, beta = 0)"),
+    Case("diamond2_lc_k312_neighbour", _diamond2, **{**LC_GAMMA, "hybrid": NEIGHBOUR},
+         folding=(3, 1, 2),
+         note="NeighbourBased mixing the BvK array; DFTB+'s Threshold 1e-100 (pydftb does not "
+              "screen; DFTB+'s default 1e-6 moves the energy by up to 1.6e-6 Ha)"),
+    Case("diamond2_lc_k222_neighbour_red4", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**NEIGHBOUR, "cutoff_reduction": 4.0}}, folding=(2, 2, 2),
+         note="the pairs beyond the SK cutoff minus 4 Bohr out of the exchange's overlap"),
+    Case("co2_crystal_lc_k211", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         note="most atoms folded into the cell by DFTB+"),
+    Case("co2_crystal_lc_k211_neighbour", _co2_crystal, **{**LC_GAMMA, "hybrid": NEIGHBOUR},
+         folding=(2, 1, 1)),
+    Case("cu_fcc_lc_k333_1000K", _cu_fcc, **LC_GAMMA, folding=(3, 3, 3),
+         filling=("fermi", 1000.0), note="d shells, a metal"),
+    Case("o2_box_lc_spin_k222", _o2_box, **LC_GAMMA, folding=(2, 2, 2), spin=O2_SPIN,
+         note="no forces from DFTB+ with spin at k-points"),
+    Case("o2_box_lc_spin_k222_neighbour", _o2_box, **{**LC_GAMMA, "hybrid": NEIGHBOUR},
+         folding=(2, 2, 2), spin=O2_SPIN),
+    Case("co_triclinic_lc_k222", _co_triclinic, **LC_GAMMA, folding=(2, 2, 2),
+         note="the low-symmetry cell of the Gamma point's B6: at k-points DFTB+'s input "
+              "populations are DeltaP_in's Mulliken populations"),
+    # with the rest of the Hamiltonian
+    Case("co2_crystal_lc_k211_plusu_b20", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         plus_u=U_O, stale_blocks_compat=True, note=STALE_NOTE.format("2.2e-3 Ha lower")),
+    Case("co2_crystal_lc_k211_onsite_b20", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         onsite=ONS, stale_blocks_compat=True, note=STALE_NOTE.format("3.6e-2 Ha lower")),
+    Case("co2_crystal_lc_k211_dftb3_d3", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         dftb3=DFTB3_3OB, dispersion=D3BJ_3OB),
+    Case("co2_crystal_lc_k211_field_pc", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         efield=FIELD, point_charges=PC3),
+    Case("co2_crystal_lc_k211_mp", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1),
+         filling=("mp", 1000.0, 2)),
+    Case("co2_crystal_lc_k211_diis", _co2_crystal, **LC_GAMMA, folding=(2, 1, 1), mixer="diis",
+         note="DFTB+'s complex mixers on DeltaP(k) are the real ones on [Re | Im]"),
+    # restarts: DeltaP_in(k) or the BvK array after the folding record, of the folded atoms
+    Case("diamond2_lc_k312_read_charges", _diamond2, **LC_GAMMA, folding=(3, 1, 2),
+         read_charges={"text": False, "seed": 4},
+         note="run 1 folds atom 0 by another lattice vector than run 2: DFTB+ takes the file's "
+              "DeltaP(k) in run 2's gauge, as pydftb's populations_from_file at run 2's "
+              "positions"),
+    Case("diamond2_lc_k312_neighbour_read_charges_text", _diamond2,
+         **{**LC_GAMMA, "hybrid": NEIGHBOUR}, folding=(3, 1, 2),
+         read_charges={"text": True, "seed": 5}),
+    Case("o2_box_lc_spin_k211_read_charges_text", _o2_box, **LC_GAMMA, folding=(2, 1, 1),
+         spin=O2_SPIN, read_charges={"text": True, "seed": 1}),
+    # band runs from the SCC's DeltaP(k): H_x at any k
+    Case("diamond2_lc_k312_bands", _diamond2, **{**LC_GAMMA, "tol": TOL_HYB_BANDS},
+         folding=(3, 1, 2), klines=path(FCC, "GXL", [6, 6]),
+         note="DFTB+'s band run (ReadInitialCharges, one iteration) on G-X-L"),
+    Case("diamond2_lc_k312_neighbour_bands", _diamond2,
+         **{**LC_GAMMA, "hybrid": NEIGHBOUR, "tol": TOL_HYB_BANDS}, folding=(3, 1, 2),
+         klines=path(FCC, "GXL", [6, 6])),
+    # the bases of the dynamics (dynamics.py): no atom near a face of the cell, so none crosses
+    # one along the trajectory (DFTB+ carries DeltaP_in(k) of the atoms as folded at the step
+    # before: B21)
+    Case("diamond2_centred_lc_k222", _centred(_diamond2, 1 / 8), **LC_GAMMA, folding=(2, 2, 2)),
+    Case("co2_crystal_centred_lc_k211", _centred(_co2_crystal, 1 / 4), **LC_GAMMA,
+         folding=(2, 1, 1)),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

@@ -229,7 +229,7 @@ def test_refusals_of_the_setup():
     sk = _sk(LC_SET, labels)
     with pytest.raises(ValueError, match="shell-resolved"):
         DFTB(_sk(LC_SET, labels, shell_resolved=True), hybrid="lc")
-    with pytest.raises(ValueError, match="Gamma point only"):          # M6h-3b
+    with pytest.raises(ValueError, match="Monkhorst-Pack-like sampling"):    # M6h-3b
         DFTB(sk, hybrid="lc", kpts=(np.array([[0.0, 0.0, 0.25]]), np.ones(1))).calculate(
             labels, pos, np.eye(3) * 20.0, np.ones(3, bool))
     with pytest.raises(ValueError, match="too short"):

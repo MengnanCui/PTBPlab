@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-3b 周期杂化 k 点设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6h-3b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-3b · 设计</p>
+    <h1>长程校正（三 b）：周期体系的杂化泛函，k 点</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6h3b-hybrid-kpoints.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6h-3a 的周期杂化从 Γ 点推广到 k 点，对应 DFTB+ 25.1 用不平移的 <code>SupercellFolding</code> 的杂化计算。交换在对偶空间里算：每个 k 的 H<sub>x</sub>(k) 是 SCC 网格上所有 q 的 ΔP(q)、S(q) 与 γ 的格点和 G(k − q) 的卷积，等于 BvK 超胞 Γ 点的交换算符。MatrixBased 混合每个约化 k 的复数 ΔP(k)，NeighbourBased 混合 BvK 实空间的 ΔP(R)。截断、阻尼截断与 <code>Full</code> 三种库仑核，共线自旋，力，电荷文件与重启，任意 k 上的能带。MinimumImage 放在 M6h-3c。</p>
+    <ul>
+      <li><strong>原型与 DFTB+ 的对照</strong>（第二节，探针 P72–P82）：
+        <ul>
+          <li>能量：金刚石原胞（2×2×2、3×3×3、1×2×3、3×1×2）、CO<sub>2</sub> 晶体 2×1×1、Cu 3×3×3（1000 K）、O<sub>2</sub> 盒子 2×2×2（自旋）；LC、CAM、全局杂化；两种屏蔽；默认与显式截断、阻尼截断。差 ≤ 4.8e-11 Ha，SCC 轮数全部相同。</li>
+          <li>力：用 DFTB+ 的 SK 差分步长时差 ≤ 6.0e-12 Ha/Bohr；原型对自身能量的差分 ≤ 3.9e-9。DFTB+ 不给力的组合（阻尼截断、自旋），原型对差分到 ≤ 2.3e-10。</li>
+          <li>重启：读 DFTB+ 写的电荷文件，Matrix 与 Neighbour 都与 DFTB+ 第二次运行的轮数相同，前几轮的误差每一位相同。能带重启的本征值差 ≤ 2.5e-14 Ha。</li>
+          <li>组合：DFTB3 + D3、外场加点电荷、MP 展宽、Anderson、DIIS、Simple 混合器、自定义 Hubbard U 都一致。+U 与 onsite 只有照 DFTB+ 的做法冻住块布居才一致（B20）。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 25.1 的新问题</strong>（第六节）：
+        <ul>
+          <li>B20：k 点时混合后的块布居从不更新，DFTB+U 与 onsite 修正一直用起始的块布居。正确地每轮从 ΔP<sub>in</sub> 求块布居时，CO<sub>2</sub> 晶体 +U 的能量差 2.2e-3 Ha，onsite 差 3.6e-2 Ha。</li>
+          <li>B19：<code>Full</code> 的格点和是围绕折回晶胞的原子坐标的有限平行六面体，结果随原子怎样折回晶胞而变。</li>
+          <li>B12 证实：负的非对角折叠能通过检查，算出别的能量。B3：a<sub>2</sub> 沿 z 的晶胞，DFTB+ 算不出默认截断而停下（Γ 点也一样）。</li>
+          <li>NeighbourBased 的默认 Threshold 1e-6：能量偏到 1.6e-6 Ha，轮数变多；1e-8 时 SCC 卡在 5e-9 不收敛。</li>
+          <li>B21：几何步之间沿用的 ΔP<sub>in</sub>(k) 是上一步折回坐标的规范；原子沿折叠方向穿过晶胞面的那一步，DFTB+ 从错的规范起步，多 4–5 轮 SCC（结果不变）。</li>
+        </ul>
+      </li>
+      <li><strong>超出 DFTB+ 的部分</strong>（你的决定）：DFTB+ 在 k 点拒绝的三种组合，即非 Truncated 核的力、自旋配非 Truncated 核、自旋的力，pydftb 都给出精确的结果，用差分与自洽检查验证。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 4.8e-11</span><span class="lbl">原型与 DFTB+ 25.1 的能量之差（Ha）</span></li>
+      <li><span class="num">≤ 6.0e-12</span><span class="lbl">原型与 DFTB+ 的力之差（Ha/Bohr）</span></li>
+      <li><span class="num">2.5e-14</span><span class="lbl">能带重启的本征值之差（Ha）</span></li>
+      <li><span class="num">0.1 s</span><span class="lbl">原型的金刚石 3×3×3（DFTB+ 0.9 s）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为与原型</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#bugs">六、DFTB+ 的问题与 pydftb 的做法</a></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码 25.1（<code>dftb/hybridxc.F90</code>、<code>rshgamma.F90</code>、<code>dftb/densitymatrix.F90</code>、<code>dftb/periodic.F90</code>、<code>dftb/boundarycond.F90</code>、<code>dftbplus/main.F90: getNextInputDensityCplx</code>、<code>dftb/sccinit.F90</code>、<code>mixer/*.F90</code>）；调研记录在草稿目录 <code>m6h3/research_hybrid_periodic.md</code> 第四节起。</p>
+      <ul>
+        <li><strong>k 点集</strong>：只许 <code>SupercellFolding</code>，折叠矩阵是对角的 diag(N<sub>1</sub>, N<sub>2</sub>, N<sub>3</sub>)，平移为零；k = (i<sub>1</sub>/N<sub>1</sub>, i<sub>2</sub>/N<sub>2</sub>, i<sub>3</sub>/N<sub>3</sub>)，i<sub>1</sub> 最慢、i<sub>3</sub> 最快，k 与 −k 合并、保留先出现的一个，权重相加（<code>getSuperSampling</code>，按反演约化）。显式的 k 点只许在单轮的能带重启里用。</li>
+        <li><strong>γ 的格点和</strong>：G(k, k′)<sub>AB</sub> = Σ<sub>g</sub> γ<sub>c</sub>(|R<sub>B</sub> − R<sub>A</sub> − g|) e<sup>i2π(k−k′)·g</sup>，g 取与 Γ 点相同的平行六面体，原子坐标是折回晶胞的坐标（<code>foldCoordsToCell</code>：frac − ⌊frac⌋）。截断核在格点和覆盖 R<sub>c</sub> 以内时与坐标怎样折回无关；<code>Full</code>（不截断）的有限和就与之有关（B19）。</li>
+        <li><strong>交换</strong>（MatrixBased，<code>addCamHamiltonianMatrix_kpts</code>）：对每个约化 k，H<sub>x</sub>(k) = c Σ<sub>k′</sub> (w<sub>k′</sub>/2)[T(k, k′) + T(k, −k′)]，T 是 Γ 点四项公式的对偶形式，各项是 SΔPS、SΔP、ΔPS、ΔP 在 k′ 上与 G(k, k′) 的哈达玛积，再在 k 一侧乘 S(k)。它等于对完整网格求 (1/N)Σ<sub>q</sub>。
+          <ul>
+            <li>pydftb 的约定 M(k) = Σ<sub>T</sub> M(0, T) e<sup>i2πk·T</sup> 下写成 H<sub>x</sub>(k) = (c/N) Σ<sub>q</sub>[(SΔPS)(q)∘G(k−q) + ((SΔP)(q)∘G(k−q))S(k) + S(k)((ΔPS)(q)∘G(k−q)) + S(k)(ΔP(q)∘G(k−q))S(k)]，G(p)<sub>AB</sub> = Σ<sub>g</sub> γ<sub>c</sub>(|R<sub>B</sub> + g − R<sub>A</sub>|) e<sup>i2πp·n<sub>g</sub></sup>。</li>
+            <li>这正是 N<sub>1</sub>×N<sub>2</sub>×N<sub>3</sub> 超胞在 Γ 点的交换算符（固定的 ΔP 下与 M6h-3a 的超胞计算差 1.1e-16）。</li>
+            <li>ΔP<sub>in</sub> 全为零时（第一轮）H<sub>x</sub> = 0。</li>
+          </ul>
+        </li>
+        <li><strong>NeighbourBased</strong>（<code>addCamHamiltonianNeighbour_kpts_ct</code>）：实空间的四重循环，S 是 CAM 截断以内的对称近邻表，ΔP 取 BvK 数组。Threshold 很小时它与 MatrixBased 是同一个算符（S 换成缩减的 S）。默认的 Threshold 1e-6 下按增量筛选，结果依赖历史（P80）。</li>
+        <li><strong>参考密度</strong>：ΔP(k) = P(k) − diag(s q<sub>0μ</sub>/S<sub>μμ</sub>(k))，S<sub>μμ</sub>(k) 只取决于晶格。实空间的 P<sub>0</sub> 因此不是纯在位的，k 点计算只有在原子不与自身镜像重叠时才等于超胞的 Γ 点计算。</li>
+        <li><strong>能量</strong>：E<sub>Fock</sub> = Σ<sub>k</sub> w<sub>k</sub> ½ Re Σ H<sub>x</sub>[ΔP<sub>in</sub>](k)∘conj ΔP<sub>out</sub>(k)，用的是 ΔP<sub>out</sub>（Γ 点用 ΔP<sub>in</sub>，B4）。</li>
+        <li><strong>SCC</strong>（<code>getNextInputDensityCplx</code>）：
+          <ul>
+            <li>MatrixBased：混合所有约化 k 与自旋的完整复矩阵 ΔP(k)（复数混合器只取内积的实部，等于实数混合器作用在 [Re | Im] 上），误差为复数模的最大值。</li>
+            <li>NeighbourBased：混合实的 BvK 数组 ΔP(n) = Σ<sub>k</sub> w<sub>k</sub> Re[ΔP(k) e<sup>−i2πk·n</sup>]，误差为最大绝对值。</li>
+            <li>q<sub>in</sub> = Mulliken(ΔP<sub>in</sub>) + q<sub>0</sub>（k 点没有 Γ 点的 B6：<code>packHS</code> 把原子块补成厄米的）。</li>
+            <li>块布居（+U、onsite）混合后不更新（B20）。</li>
+            <li>第一轮、自旋第一轮不混合、最少轮数、重启时可在第一轮收敛：与 Γ 点相同。</li>
+            <li>几何步之间沿用 ΔP<sub>in</sub>(k)，是折回坐标的规范：原子穿过晶胞面时规范跳变（B21，P82）。</li>
+          </ul>
+        </li>
+        <li><strong>力</strong>：只有 Truncated、不加自旋。MatrixBased 是能量的导数（P74，调研里的 B17 疑问不成立）；NeighbourBased 混用 ΔP<sub>in</sub>(R) 与 ΔP<sub>out</sub>(k)（B5），差别是 SCC 误差的量级，紧容差下看不出。</li>
+        <li><strong>默认截断</strong>：R<sub>c</sub> 由 <code>getCoulombTruncationCutoff(latVecs, nK)</code> 照代码算：BvK 向量按笛卡尔分量乘折叠数（B2），两条体对角线的交点只用 x、y 投影求（B3）；R<sub>g</sub> = 2R<sub>c</sub>。</li>
+        <li><strong>电荷文件</strong>：折叠记录（对角 N，零平移）之后只有一条记录。MatrixBased 是复数 ΔP<sub>in</sub>(k)（nOrb, nOrb, nK·nSpin），k 最快、自旋在外；NeighbourBased 是 BvK 数组（nOrb, nOrb, N<sub>1</sub>, N<sub>2</sub>, N<sub>3</sub>, nSpin）。两者都是折回坐标的 Bloch 规范。重启要相同的折叠；能带重启（<code>KLines</code>、<code>MaxSCCIterations = 1</code>）从文件的 ΔP(k′) 在任意 k 上建 H<sub>x</sub>。</li>
+        <li><strong>拒绝</strong>（P78，原话见第二节）：带平移或非对角的折叠、显式 k 点、Thresholded、非 Truncated 核的力、自旋配非 Truncated 核、自旋的力、折叠不同的重启、非共线、激发态。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为与原型</h2>
+      <p>探针 P72–P82（草稿目录 <code>m6h3b/</code>，记录在 <code>notes_k.md</code>）。原型 <code>kproto.py</code> 在 M6h-3a 的工作树上换掉 k 点的 SCC 与交换。参数集 <code>ptbp_hcocu_lc</code>、<code>_cam</code>、<code>_global</code>，SCC 容差 1e-10，<code>EwaldTolerance</code> 1e-12；DFTB+ 的输入写 <code>SupercellFolding</code>，NeighbourBased 写 <code>Threshold = 1e-100</code>（同 DFTB+ 自己的测试）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P72 能量与 SCC</td><td>金刚石原胞（2 个原子，扰动）2×2×2、3×3×3、1×2×3（B2 的默认截断）、R<sub>c</sub> = 8 的截断、阻尼截断、CAM、全局杂化、NeighbourBased；CO<sub>2</sub> 晶体 2×1×1 两种屏蔽；Cu 3×3×3（1000 K）两种屏蔽；O<sub>2</sub> 盒子 2×2×2（自旋）两种屏蔽</td><td>能量差 ≤ 4.8e-11 Ha，SCC 轮数全部相同（最长 46 轮），电荷 ≤ 1.7e-10 e。每轮误差一致到 DFTB+ 打印的精度（1e-8，相对），收敛末段是舍入。</td></tr>
+          <tr><td>P72f <code>Full</code></td><td>金刚石，R<sub>g</sub> = 6 与 12 Bohr</td><td>两边都不收敛（不截断的格点和随 R<sub>g</sub> 增大，DFTB+ 480 轮后误差仍约 1）。固定 4–6 轮比较：用折回坐标的格点和时能量差 ≤ 4.2e-11、每轮误差 3e-8；用原坐标的格点和差 0.1–0.3 Ha（B19）。</td></tr>
+          <tr><td>P74 力</td><td>金刚石 2×2×2 与 3×1×2、CO<sub>2</sub> 2×1×1，两种屏蔽，SCC 容差 1e-11</td><td>与 DFTB+ 差 ≤ 6.0e-12 Ha/Bohr（DFTB+ 的 SK 步长）；对原型能量的差分 ≤ 3.9e-9（解析 SK 导数）。DFTB+ 的 k 点力是能量的导数（B17 不成立）。</td></tr>
+          <tr><td>P74b 超出 DFTB+ 的力</td><td>阻尼截断、自旋（两种屏蔽）、全局杂化</td><td>对原型能量的差分 ≤ 2.3e-10。</td></tr>
+          <tr><td>P75 默认截断</td><td>FCC、三斜晶胞，各向同性与不同的折叠；a<sub>2</sub> 沿 z 的晶胞</td><td>照代码算的 R<sub>c</sub> 与 DFTB+ 打印的值相同，例如 FCC 1×2×3 为 2.88885 Bohr（本意 1.94586，B2）。a<sub>2</sub> 沿 z 时 DFTB+ 停下（“The beginning of the damping region of the truncated Coulomb kernel must be at a positive radius.”），Γ 点也一样（B3）。</td></tr>
+          <tr><td>P77 电荷文件与重启</td><td>MatrixBased 与 NeighbourBased，文本与二进制，自旋</td><td>格式见第一节；二进制长度为 16 n²·nK·nSpin 与 8 n²·N·nSpin（两者不会相等，可由长度认出布局）。DFTB+ 的 ΔP(k) 是折回坐标的规范：按 C 序读出的数组 = D<sup>†</sup> ΔP<sub>pydftb</sub> D，D = diag(e<sup>i2πk·T<sub>atom</sub></sup>)，T 是 DFTB+ 折回时减去的晶格矢量；BvK 数组的胞号相应移 T<sub>B</sub> − T<sub>A</sub>。换算后从 DFTB+ 的文件重启，Matrix 与 Neighbour 都与 DFTB+ 第二次运行 15/15 轮，前三轮误差每一位相同。</td></tr>
+          <tr><td>P77c 能带重启</td><td>金刚石 3×1×2 的 SCC，KLines 上 11 个 k</td><td>任意 k 上的 H<sub>x</sub>(k)（G(k − q) 的差任意）：本征值与 DFTB+ 差 1.6e-14（Matrix）与 2.5e-14 Ha（Neighbour）。</td></tr>
+          <tr><td>P78 拒绝</td><td>带平移与非对角的折叠、显式 k 点、MinimumImage、Thresholded、阻尼与 Full 的力、自旋配阻尼、自旋的力、折叠不同的重启</td><td>原话：“Hybrid functionals using integration with k-points requires a Monkhorst-Pack-like sampling with a zero shift.”、“… i.e., a uniform extension of the lattice.”、“Error while parsing k-point sampling for a hybrid xc-functional run. Currently only the supercell folding technique (or any format specifying the Gamma-point only) is supported.”、“Hybrid functionality for periodic systems currently not implemented for the threshold algorithm.”、“Hybrid functionals don't yet support gradient calculations for periodic systems beyond the Gamma point for CoulombMatrix settings other than 'Truncated'.”、“Hybrid functionality does not yet support spin-polarized calculations of periodic systems beyond the Gamma-point for CoulombMatrix settings other than 'Truncated'.”、“Hybrid functionality currently does not yet support spin-polarized gradient evaluation for periodic systems beyond the Gamma-point.”、“When restarting, only identical k-point samplings to the previous run are supported …”。负的非对角折叠能运行，能量 −3.15436 Ha，对角 2×2×2 是 −3.13078（B12）。MinimumImage 加 MatrixBased 能运行（B10）。</td></tr>
+          <tr><td>P79 组合</td><td>CO<sub>2</sub> 2×1×1：+U、onsite、DFTB3 + D3、外场加点电荷、MP、Anderson、DIIS、Simple(0.3)、自定义 Hubbard U</td><td>能量差 ≤ 5.8e-11，力 ≤ 8.2e-12，轮数相同（Anderson 233/233、Simple 104/104）。+U 与 onsite：块布居冻在起始值时 7.5e-11 与 6.9e-11、轮数相同；每轮从 ΔP<sub>in</sub> 求块布居（正确的做法）时差 2.2e-3 与 3.6e-2 Ha（B20）。</td></tr>
+          <tr><td>P80 Neighbour 的 Threshold</td><td>DFTB+ 的默认 1e-6 与 1e-8，对照不筛选的构建</td><td>金刚石：1e-6 能量差 3.0e-7（E<sub>Fock</sub> 1.7e-6），24 轮（不筛选 16 轮）；1e-8 差 4.4e-10。CO<sub>2</sub>：1e-6 差 −1.6e-6，34 轮（27 轮）；1e-8 时 DFTB+ 的误差卡在 5e-9，500 轮不收敛。</td></tr>
+          <tr><td>P81 计时</td><td>一个线程</td><td>金刚石 3×3×3：DFTB+ 0.9 s，原型 0.1 s；CO<sub>2</sub> 2×1×1：0.4 与 0.2 s；金刚石 2×2×2 NeighbourBased（Threshold 1e-100）：DFTB+ 63 s，原型 0.1 s。</td></tr>
+          <tr><td>P82 几何步之间（B21）</td><td>未居中的 CO<sub>2</sub> 晶体 MD，600 K，20 步；折叠 2×2×2 与 2×1×1；pydftb 的实现</td><td>2×2×2：第 2、4、6、15 步有原子穿过晶胞面（沿 z、z、z、y），DFTB+ 用 30、30、31、36 轮，pydftb 26、26、26、31 轮，其余每步相同；位置差 2.2e-8 Å。2×1×1：穿过的方向都不折叠（相位为 1），没有差别。只影响轮数，不影响结果。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>from pydftb.bands import eigenstates
+from pydftb.kpoints import supercell_folding
+calc = DFTB(sk_lc, hybrid="lc", kpts=supercell_folding((2, 2, 2)))   # DFTB+ 的约化与顺序
+r = calc.calculate(labels, pos, cell, forces=True)
+r.e_fock, r.q_in                     # q_in = [布居 | 打包的 ΔP(k) 或 BvK ΔP(R)]
+eigenstates(calc, labels, pos, cell, populations=r.q_in, kpts=path)  # 任意 k（H<sub>x</sub> 取自 SCC 网格的 ΔP）
+atoms.calc = PyDFTB(skdir, hybrid="lc", kpts={"size": (2, 2, 2), "gamma": True})</code></pre>
+      <ul>
+        <li><strong>k 点集</strong>：
+          <ul>
+            <li>周期杂化的 k 点必须是不平移的超胞折叠网格（完整的，或按 DFTB+ 约化的）；pydftb 由 k 点认出 N<sub>1</sub>×N<sub>2</sub>×N<sub>3</sub>，其余用 DFTB+ 的原话拒绝。</li>
+            <li>新函数 <code>kpoints.supercell_folding(n)</code> 给出 DFTB+ 的约化集与顺序（电荷文件按这个顺序）。</li>
+            <li>ASE：<code>kpts={"size": (n1, n2, n3), "gamma": True}</code>（ASE 的写法）；杂化配带平移的网格时报错并提示这个写法。</li>
+          </ul>
+        </li>
+        <li><strong><code>Hybrid</code> 的选项</strong>：
+          <ul>
+            <li><code>coulomb</code> 多一个 <code>"full"</code>，只在 k 点用；</li>
+            <li><code>"minimum_image"</code> 到 M6h-3c 之前拒绝；</li>
+            <li>默认 R<sub>c</sub> 照 DFTB+ 的代码（B2）；B3 的晶胞报 DFTB+ 停下时的原话并说明原因，Γ 点也一样。</li>
+          </ul>
+        </li>
+        <li><strong>NeighbourBased 的 Threshold</strong>：pydftb 不筛选（等于 DFTB+ 的 Threshold → 0）。DFTB+ 默认的 1e-6 与之差到 1e-6 Ha（P80），文档写明，对照时设 1e-100。</li>
+        <li><strong>超出 DFTB+ 的组合</strong>（你的决定）：阻尼截断与 Full 的力、自旋配阻尼截断与 Full、自旋的力，都给出能量的精确导数；文档写明 DFTB+ 拒绝、没有 DFTB+ 参考。</li>
+        <li><strong>块布居</strong>：+U、onsite 每轮从 ΔP<sub>in</sub> 求块布居（同 Γ 点）。验证用的类属性 <code>_dftbp_stale_blocks</code> 照 DFTB+ 冻住它（B20）。</li>
+        <li><strong>电荷文件</strong>：
+          <ul>
+            <li><code>charge_data</code> 与 <code>populations_from_file</code> 读写两种 k 点记录，按 DFTB+ 折回坐标的规范换算（由本次的坐标求 T）。</li>
+            <li>布局由记录长度认出；pydftb 能把 MatrixBased 的文件读给 NeighbourBased 的计算，反之亦然（DFTB+ 不能，文档写明）。</li>
+            <li>折叠不同时报 DFTB+ 的原话。</li>
+          </ul>
+        </li>
+        <li><strong>其余同 Γ 点</strong>：应力（报错）、Thresholded、非共线、TD-LC、torch 拒绝。几何步之间沿用打包的 ΔP，用于结构优化与 MD（只有 Truncated 能对照 DFTB+）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <ul>
+          <li><code>hybrid.py</code>（分子与 Γ 点的路径逐位不变）：
+            <ul>
+              <li><code>dftbp_coulomb_cutoff(cell, nk)</code>：照 <code>getCoulombTruncationCutoff</code> 移植（B2），B3 的退化情形报错。Γ 点仍用 <code>default_coulomb_cutoff</code>（非退化晶胞的值逐位不变），只加退化检查。</li>
+              <li><code>dftbp_fold_shifts(pos, cell)</code>：DFTB+ 折回时减去的晶格矢量。</li>
+              <li><code>KPointHybridTerms</code>：与 <code>HybridTerms</code> 相同的接口（<code>reference</code>、<code>pack</code>、<code>unpack</code>、<code>error</code>、<code>reset</code>、<code>fock</code>、<code>energy</code>、<code>pair_coefficient</code>、<code>gamma_gradient</code>），另加 <code>fock_at</code>（能带）与 DFTB+ 文件布局的换算。
+                <ul>
+                  <li><code>KPointLayout</code>：本次计算的 k 点集（完整网格或任一约化集）与 BvK 超胞的 N 个胞（DFTB+ 的顺序，n<sub>1</sub> 最快）之间的变换 X(n) = Σ<sub>k</sub> w<sub>k</sub> Re[X(k) e<sup>−i2πk·n</sup>] 与 X(k) = Σ<sub>n</sub> X(n) e<sup>i2πk·n</sup>，都是 (N × N<sub>k</sub>) 的实矩阵积；打包、解包、误差；DFTB+ 记录的规范换算（D<sup>†</sup>ΔP(k)D 与胞号移 T<sub>B</sub> − T<sub>A</sub>）与 k 点集的对应（±k 取共轭）。</li>
+                  <li>卷积 (1/N)Σ<sub>q</sub> X(q)∘G(k − q) 写成 BvK 实空间的乘积：C(X)(k) = Σ<sub>n</sub> [X(n)∘g(n)] e<sup>i2πk·n</sup>，g(n)<sub>AB</sub> 是格点和中胞号 n<sub>g</sub> + T<sub>A</sub> − T<sub>B</sub> ≡ n 的各项。格点和用 DFTB+ 折回的坐标与 Γ 点相同的平行六面体（等于每个原子对的平行六面体移 T<sub>A</sub> − T<sub>B</sub>，B19）；截断核只留 R<sub>c</sub> 以内的项。</li>
+                  <li>H<sub>x</sub>(k) = c[C(SΔPS) + C(SΔP)S(k) + S(k)C(ΔPS) + S(k)C(ΔP)S(k)]：每个 k 三次矩阵积，四个卷积各两次实矩阵积。<code>fock_at</code> 在任意 k 上用带相位 e<sup>i2πk·n<sub>g</sub></sup> 的格点和。</li>
+                  <li>力：S 的系数 X(k) = c[C(ΔP) S ΔP + C(ΔPS) ΔP + ΔP S C(ΔP) + ΔP C(SΔP)]，其 BvK 矩阵在胞 −T 的元素就是成对元素的系数；γ 的系数是 BvK 实空间的 W(n) = c[ΔP(n)∘(SΔPS)(n) + (ΔPS)(n)∘(SΔP)(n)]，乘以格点和各项的 γ′（每项同时出现在 (A, B, n) 与 (B, A, −n)）。NeighbourBased 用缩减的 S 与截断掩码，同 Γ 点。</li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+          <li><code>kpoints.py</code>：<code>supercell_folding(n)</code>；<code>folding_of(kpts, weights)</code> 认出 N 并检查（完整网格等权重，或每对 ±k 中任一个、权重 2/N 与自反的 1/N）。</li>
+          <li><code>calculator.py</code>：
+            <ul>
+              <li><code>_setup</code> 与 <code>_check_periodic_hybrid</code>：放开 k 点，建 <code>KPointHybridTerms</code>；MinimumImage 拒绝到 M6h-3c，Γ 点的 <code>Full</code> 照 DFTB+ 拒绝。</li>
+              <li><code>_scc_hybrid_kpoints</code>：每个自旋的复数 ΔP(k)，Fock 按自旋拼接，E<sub>Fock</sub> 在对角化之后用 ΔP<sub>out</sub>，混合后的 q<sub>in</sub> 与块布居来自 ΔP<sub>in</sub>(k) + P<sub>0</sub>(k)（<code>_dftbp_stale_blocks</code> 照 DFTB+ 冻住块布居）。Γ 点与分子的 <code>_scc_hybrid</code> 不变。</li>
+              <li><code>charge_data</code>、<code>populations_from_file</code> 多 <code>positions</code>、<code>cell</code> 两个参数（k 点的规范要用）；<code>calculate</code> 读文件时自己传入。</li>
+            </ul>
+          </li>
+          <li><code>dftbplus_io.py</code>：<code>ChargeData</code> 多两个字段（复数的 ΔP(k) 与实的 BvK 数组，都保持 DFTB+ 文件里的样子）；文本里复数是 “(a,b)” 记号，二进制是一条记录。</li>
+          <li><code>bands.py</code>：k 点杂化在任意 k 上的本征态（<code>fock_at</code>，缩减 S 用于 NeighbourBased）。</li>
+          <li><code>ase_calc.py</code>：<code>kpts</code> 的 <code>{"size" 或 "density", "gamma"}</code>；带平移的网格由 DFTB 的检查报错，提示这个写法。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>验证工具</strong>：
+            <ul>
+              <li><code>Case.folding</code>：pydftb 用 <code>supercell_folding</code> 的 k 点，DFTB+ 写 <code>SupercellFolding</code>；</li>
+              <li><code>hybrid_block(spec, kpoints=True)</code> 为 NeighbourBased 写 <code>Threshold = 1e-100</code>；</li>
+              <li><code>Case.stale_blocks_compat</code>（B20 的对照）；<code>Case.dftbp_forces</code>：DFTB+ 不给力的算例不比力（<code>PrintForces = No</code>），另用差分测试；</li>
+              <li><code>Case.fixed_scc</code>：<code>Full</code> 的算例固定 5 轮（<code>ConvergentSCCOnly = No</code>）。</li>
+            </ul>
+          </li>
+          <li><strong>参考算例</strong>（29 个与 2 条动力学）：
+            <ul>
+              <li>金刚石原胞：LC 2×2×2、3×3×3、1×2×3（B2）、显式截断、阻尼截断（只比能量）、Full（固定轮数）、CAM、全局杂化、NeighbourBased（含 CutoffReduction）；</li>
+              <li>CO<sub>2</sub> 2×1×1 两种屏蔽；Cu 3×3×3（1000 K）；O<sub>2</sub> 盒子 2×2×2 自旋（只比能量）；三斜 CO 2×2×2（低对称，k 点没有 B6）；</li>
+              <li>组合：+U 与 onsite（B20 对照）、DFTB3 + D3、外场加点电荷、MP、DIIS；</li>
+              <li>重启：Matrix 二进制（第一次运行的原子 0 折回的格矢不同）、Neighbour 文本、自旋文本；能带重启：Matrix 与 Neighbour；</li>
+              <li>动力学：金刚石 2×2×2 的结构优化、CO<sub>2</sub> 2×1×1 的 MD，两者的晶胞都居中（没有原子穿过晶胞面，B21），其基础算例也是参考。</li>
+            </ul>
+          </li>
+          <li><strong>自洽测试</strong>（<code>test_hybrid_kpoints.py</code>）：
+            <ul>
+              <li>对偶空间的算符等于超胞 Γ 点的算符（固定 ΔP）；原子不与自身镜像重叠的晶胞里，k 点的整个计算等于超胞的 Γ 点计算；</li>
+              <li>Matrix 与 Neighbour（不缩减）相同；约化网格与完整网格的结果相同；闭壳层的自旋计算等于非自旋；</li>
+              <li>力对能量的差分（两种屏蔽、三种核、自旋）；</li>
+              <li>B2、B3 的数值；k 点集的认出与拒绝；电荷文件往返、布局互换与规范换算、重启的轮数；</li>
+              <li>能带：SCC 网格上的点复现 SCC 的能级；ASE 的 Γ 心网格；所有拒绝的原文。</li>
+            </ul>
+          </li>
+          <li><strong>门槛</strong>：golden 两个环境（基于 M6h-3a 的文档提交 <code>b3009b6</code>）、refgen（NumPy、torch）、dynamics、pytest 三个环境、PTBP 测试、G1。门槛运行时不并行跑重的探针（PTBP 的进程测试对负载敏感）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="bugs">
+      <h2>六、DFTB+ 的问题与 pydftb 的做法</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 25.1</th><th>证据</th><th>pydftb</th></tr></thead>
+        <tbody>
+          <tr><td>B20：k 点混合后不更新块布居（<code>main.F90</code> 的 <code>getNextInputDensityCplx</code> 只更新 q<sub>in</sub>；Γ 点的 <code>getNextInputDensityReal</code> 用 <code>denseBlockMulliken</code> 更新 <code>qBlockIn</code>），DFTB+U 与 onsite 的势一直用起始的块布居（自旋时是第一轮的输出）</td><td>P79：照此冻住块布居时与 DFTB+ 一致到 7.5e-11；正确的做法差 2.2e-3（+U）与 3.6e-2 Ha（onsite）</td><td>每轮从 ΔP<sub>in</sub> 求块布居；验证用的 <code>_dftbp_stale_blocks</code> 复现 DFTB+</td></tr>
+          <tr><td>B19：<code>Full</code> 的格点和是折回坐标的有限平行六面体（<code>rCoords</code> 是近邻表的折回坐标），结果随原子怎样折回晶胞而变</td><td>P72f：用原坐标差 0.1–0.3 Ha，用折回坐标差 4e-11</td><td>与 DFTB+ 相同（每个原子对的像移 T<sub>A</sub> − T<sub>B</sub>）；文档写明 <code>Full</code> 只供测试、不收敛</td></tr>
+          <tr><td>B2：默认 R<sub>c</sub> 的 BvK 向量按笛卡尔分量缩放</td><td>P75：FCC 1×2×3 为 2.88885（本意 1.94586）</td><td>与 DFTB+ 相同（照代码），文档写明</td></tr>
+          <tr><td>B3：a<sub>2</sub> 沿 z 等晶胞的对角线交点求不出，DFTB+ 停下</td><td>P75，Γ 点与 k 点</td><td>报 DFTB+ 的原话并说明，可给 <code>coulomb_cutoff</code></td></tr>
+          <tr><td>B12：负的非对角折叠能通过检查</td><td>P78：能量 −3.15436（对角 −3.13078）</td><td>只认对角折叠的网格</td></tr>
+          <tr><td>B4：k 点的 E<sub>Fock</sub> 用 ΔP<sub>out</sub></td><td>调研；P72 的 E<sub>Fock</sub> 一致到 6e-11</td><td>与 DFTB+ 相同</td></tr>
+          <tr><td>B5：NeighbourBased 的 k 点力混用 ΔP<sub>in</sub>(R)</td><td>P74：紧容差下 9.7e-13</td><td>精确的导数（ΔP<sub>out</sub>）</td></tr>
+          <tr><td>NeighbourBased 的默认 Threshold 1e-6</td><td>P80：能量偏到 1.6e-6 Ha，轮数多；1e-8 时不收敛</td><td>不筛选；文档写明；移植筛选放在 M6h-3c</td></tr>
+          <tr><td>B21：几何步之间沿用的 ΔP<sub>in</sub>(k) 是上一步折回坐标的规范，原子穿过晶胞面后规范跳变</td><td>P82：穿过的那一步多 4–5 轮，其余相同</td><td>ΔP(k) 是未折回坐标的规范，连续；动力学的参考把晶胞居中</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li><strong>M6h-3c</strong>：MinimumImage（NeighbourBased 的 Wigner–Seitz 网格，表面向量不加权 B9；MatrixBased 加 MIC 的另一种近似 B10），以及 NeighbourBased 的 Threshold 增量筛选（P80 的差别到 1e-6 Ha）。</li>
+        <li><strong>不做</strong>：应力（DFTB+ 没有）；Thresholded、非共线、周期的 TD-LC（DFTB+ 拒绝）；带平移或非对角的折叠（DFTB+ 拒绝）。</li>
+        <li><strong>规模</strong>：
+          <ul>
+            <li>混合向量长 2·N<sub>k</sub>·n²·N<sub>spin</sub>（MatrixBased）或 N·n²·N<sub>spin</sub>（NeighbourBased），Broyden 的历史与之成正比，与 DFTB+ 相同。</li>
+            <li>交换每轮 O(N<sub>k</sub>·N·n²) 的实矩阵积（BvK 变换）加 O(N<sub>k</sub>·n³) 的矩阵积；轨道级的 g(n) 占 N·n² 个实数。</li>
+          </ul>
+        </li>
+        <li><strong>风险</strong>：
+          <ul>
+            <li>DFTB+ 不给力的组合只有差分与自洽检查，没有外部参考；</li>
+            <li>Full 不收敛，只能固定轮数对照；</li>
+            <li>B20 的对照依赖兼容开关，pydftb 自己的 +U/onsite k 点结果只与差分和 Γ 点的超胞比较。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

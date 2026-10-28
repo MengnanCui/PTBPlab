@@ -136,12 +136,18 @@ COULOMB_MATRIX = {"truncated": "Truncated", "damped": "TruncatedAndDamped", "ful
                   "minimum_image": "MinimumImage"}
 
 
-def hybrid_block(spec) -> str:
+# M6h-3b: DFTB+'s NeighbourBased Threshold of the references at k-points: pydftb builds the
+# whole operator (Threshold -> 0); DFTB+'s default 1e-6 screens the increments of its build
+KPOINT_NEIGHBOUR_THRESHOLD = 1e-100
+
+
+def hybrid_block(spec, kpoints: bool = False) -> str:
     """Hamiltonian lines ``Hybrid`` (M6h-1) of pydftb's ``hybrid`` option: "lc", "cam" or
     {"type", "screening" ("matrix", "neighbour", "threshold"), "threshold", "cutoff_reduction"
     (Bohr)}; DFTB+'s default screening (MatrixBased) is written out.  M6h-3a: a
     ``CoulombMatrix`` block when "coulomb", "coulomb_cutoff" or "gsum_cutoff" (Bohr) differ from
-    the defaults (Truncated, DFTB+'s cutoffs)."""
+    the defaults (Truncated, DFTB+'s cutoffs).  ``kpoints`` (M6h-3b): NeighbourBased with
+    ``Threshold`` = KPOINT_NEIGHBOUR_THRESHOLD."""
     if not spec:
         return ""
     from ..hybrid import Hybrid
@@ -153,9 +159,10 @@ def hybrid_block(spec) -> str:
                                       ("GSummationCutoff", h.gsum_cutoff)) if v is not None)
         coulomb = f"    CoulombMatrix = {COULOMB_MATRIX[h.coulomb]} {{\n{kids}    }}\n"
     red = f"      CutoffReduction [Bohr] = {_f(h.cutoff_reduction)}\n"
+    thr = f"      Threshold = {_f(KPOINT_NEIGHBOUR_THRESHOLD)}\n" if kpoints else ""
     screening = {
         "matrix": "MatrixBased {}\n",
-        "neighbour": "NeighbourBased {\n" + red + "    }\n",
+        "neighbour": "NeighbourBased {\n" + thr + red + "    }\n",
         "threshold": ("Thresholded {\n"
                       f"      Threshold = {_f(1e-6 if h.threshold is None else h.threshold)}\n"
                       + red + "    }\n"),
@@ -936,7 +943,8 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
     ``extra_options``: lines of the Options block (M6f); ``fermi``: see :func:`filling_block`;
     ``selected_shells``: {label: [(file label, shell letters), ...]} (M6f-5): SelectedShells
     and every pair's files listed (the first label's group outer, as DFTB+ reads them);
-    ``kpts="gamma_folding"`` (M6h-3a): the Gamma point as an identity SupercellFolding."""
+    ``kpts="gamma_folding"`` (M6h-3a): the Gamma point as an identity SupercellFolding;
+    ``kpts={"folding": (n1, n2, n3)}`` (M6h-3b): the SupercellFolding diag(n) without shift."""
     sel = selected_shells or {}
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' if e not in sel else
                      f"    {e} = SelectedShells {{ {' '.join(chr(34) + s + chr(34) for _, s in sel[e])} }}"
@@ -949,6 +957,10 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
         # restart (ReadInitialCharges) with the Gamma point given as a k-point
         kblock = ("  KPointsAndWeights = SupercellFolding {\n    1 0 0\n    0 1 0\n    0 0 1\n"
                   "    0.0 0.0 0.0\n  }\n")
+    elif periodic and isinstance(kpts, dict) and "folding" in kpts:          # M6h-3b
+        n1, n2, n3 = (int(x) for x in kpts["folding"])
+        kblock = (f"  KPointsAndWeights = SupercellFolding {{\n    {n1} 0 0\n    0 {n2} 0\n"
+                  f"    0 0 {n3}\n    0.0 0.0 0.0\n  }}\n")
     elif periodic:
         if kpts is None:
             kpts = (np.zeros((1, 3)), np.ones(1))

@@ -15,7 +15,13 @@ Charge restart files ``charges.bin`` / ``charges.dat`` (DFTB+ ``dftb/sccinit.F90
   and atom (and the imaginary blocks with dual spin-orbit coupling);
 * with a hybrid functional (milestone M6h-1, molecules), the density-matrix difference
   DeltaP_in = P - P0 of every spin channel (up, down), the whole N x N matrix column by column,
-  one value per record; DFTB+'s matrices hold the lower triangle (the upper one zero).
+  one value per record; DFTB+'s matrices hold the lower triangle (the upper one zero).  A
+  periodic run writes its supercell folding (coefficients and shifts, 12 reals) before it: the
+  identity at the Gamma point (M6h-3a), diag(N1, N2, N3) for k-points (M6h-3b), whose DeltaP_in
+  is one record: MatrixBased the complex DeltaP(k) of every spin channel at DFTB+'s k-points of
+  the folding (:func:`pydftb.kpoints.supercell_folding`), NeighbourBased the real array of the
+  N1 N2 N3 cells of the Born-von Karman supercell, both of the atoms as DFTB+ folds them into
+  the cell (:class:`pydftb.hybrid.KPointLayout` converts).
 
 ``charges.bin`` is a Fortran stream file (no record markers, 4-byte integers and logicals);
 ``charges.dat`` is the same in Fortran list-directed text, written here exactly as gfortran
@@ -35,12 +41,14 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from .constants import BOHR, HARTREE
+from .kpoints import supercell_folding
 
 RESTART_FORMAT = 8
 CHECKSUM_TOL = 1e-7          # DFTB+ elecTolMax: the checksums must match their arrays
@@ -65,6 +73,12 @@ class ChargeData:
     rho: np.ndarray | None = None         # (n_spin, N, N) DeltaP_in of a hybrid run (M6h-1)
     folding: np.ndarray | None = None     # (3, 4) k-point folding and shifts of a periodic
                                           # hybrid run, before rho (M6h-3a: the Gamma point)
+    # M6h-3b, a hybrid run at the k-points of the folding diag(N1, N2, N3), the record as read in
+    # C order: MatrixBased (n_spin, nK, N, N) complex DeltaP_in(k) at DFTB+'s k-points (pydftb's
+    # Bloch convention), NeighbourBased (n_spin, N1 N2 N3, N, N) the BvK array (cells n1 fastest,
+    # [n, mu, nu] = DeltaP_in(mu in cell 0, nu in cell n)), both of the folded atoms
+    rho_kpoints: np.ndarray | None = None
+    rho_bvk: np.ndarray | None = None
 
     @property
     def n_spin(self) -> int:
@@ -117,6 +131,19 @@ class _Stream:
     def reals(self, n):
         return np.array(self.take(f"<{n}d"), float)
 
+    def complexes(self, n):
+        return self.reals(2 * n).view(complex)
+
+    def remaining(self) -> int:
+        return len(self.data) - self.pos
+
+
+_COMPLEX = re.compile(r"\(\s*([^,()\s]+)\s*[,;]\s*([^,()\s]+)\s*\)")
+
+
+def _fortran_float(x: str) -> float:
+    return float(x.replace("D", "E").replace("d", "e"))
+
 
 class _Records:
     """Fortran list-directed reads: every read statement (:meth:`start`) begins on a new line
@@ -153,7 +180,21 @@ class _Records:
         return out
 
     def reals(self, n):
-        return np.array([float(x.replace("D", "E").replace("d", "e")) for x in self.items(n)])
+        return np.array([_fortran_float(x) for x in self.items(n)])
+
+    def complexes(self, n):
+        """n complex values "(re,im)" (M6h-3b), over as many lines as they take."""
+        out = []
+        while len(out) < n:
+            if self.i >= len(self.lines):
+                raise ValueError("the charge file ends too early (wrong orbital counts?)")
+            out += [complex(_fortran_float(a), _fortran_float(b))
+                    for a, b in _COMPLEX.findall(self.lines[self.i])]
+            self.i += 1
+        return np.array(out[:n], complex)
+
+    def next_is_complex(self) -> bool:
+        return self.i < len(self.lines) and "(" in self.lines[self.i]
 
 
 def read_charges(path, norb_atom, text: bool | None = None) -> ChargeData:
@@ -212,22 +253,62 @@ def read_charges(path, norb_atom, text: bool | None = None) -> ChargeData:
         blocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
     if iblock:
         iblocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
-    dmat = folding = None
+    dmat = folding = rho_k = rho_bvk = None
     if rho:                                      # hybrid functionals (M6h-1)
         if kpoint_info:                          # periodic (M6h-3a): coeffsAndShifts, in order
             rd.start()
             folding = np.array(rd.reals(12), float).reshape(4, 3).T
-            if not (np.array_equal(folding[:, :3], np.eye(3)) and not folding[:, 3].any()):
-                raise ValueError("the charge file has k-point density matrices (a periodic "
-                                 "hybrid calculation beyond the Gamma point, milestone M6h-3b), "
-                                 "which pydftb does not read")
         if n_atom_file != len(norb_atom):
             raise ValueError("the charge file's density matrix needs all atoms of the system")
-        n = int(edges[-1])                       # deltaRhoIn(kk, jj, ii), one value per record
+        n = int(edges[-1])
+        nfold = folding_diagonal(folding)
         rd.start()
-        dmat = rd.reals(n_spin * n * n).reshape(n_spin, n, n).transpose(0, 2, 1).copy()
+        if nfold is None or nfold == (1, 1, 1):  # deltaRhoIn(kk, jj, ii), one value per record
+            dmat = rd.reals(n_spin * n * n).reshape(n_spin, n, n).transpose(0, 2, 1).copy()
+        else:                                    # k-points (M6h-3b): one record
+            ncell = int(np.prod(nfold))
+            nk = len(supercell_folding(nfold)[0])
+            if text:
+                is_complex = rd.next_is_complex()
+            else:
+                left = rd.remaining()
+                if left not in (16 * n * n * nk * n_spin, 8 * n * n * ncell * n_spin):
+                    raise ValueError(f"the charge file's k-point density record has {left} "
+                                     "bytes, neither DFTB+'s MatrixBased nor its NeighbourBased "
+                                     f"one for {n} orbitals and the folding {nfold}")
+                is_complex = left == 16 * n * n * nk * n_spin
+            if is_complex:
+                rho_k = rd.complexes(n_spin * nk * n * n).reshape(n_spin, nk, n, n)
+            else:
+                rho_bvk = rd.reals(n_spin * ncell * n * n).reshape(n_spin, ncell, n, n)
     return ChargeData(q, norb_atom, blocks, iblocks, checksum, version, multipolar, rho,
-                      kpoint_info, n_dip, n_quad, rho=dmat, folding=folding)
+                      kpoint_info, n_dip, n_quad, rho=dmat, folding=folding, rho_kpoints=rho_k,
+                      rho_bvk=rho_bvk)
+
+
+def folding_diagonal(folding):
+    """(N1, N2, N3) of a charge file's supercell folding record (coefficients and shifts,
+    (3, 4)), None without one; DFTB+'s refusals of other foldings in its words (pydftb also
+    refuses the non-diagonal ones its check passes, B12)."""
+    if folding is None:
+        return None
+    coeffs, shifts = np.asarray(folding, float)[:, :3], np.asarray(folding, float)[:, 3]
+    if abs(np.linalg.det(coeffs)) - 1.0 < -1e-6:
+        raise ValueError("Determinant of the supercell matrix must be greater than 1. (the "
+                         "charge file's folding, as DFTB+)")
+    if np.any(np.abs(np.mod(coeffs + 0.5, 1.0) - 0.5) > 1e-6):
+        raise ValueError("The components of the supercell matrix must be integers. (the charge "
+                         "file's folding, as DFTB+)")
+    if np.any(np.abs(coeffs - np.diag(np.diag(coeffs))) > 1e-6) or np.any(np.diag(coeffs) < 0.5):
+        raise ValueError("Hybrid functionals using integration with k-points requires a "
+                         "Monkhorst-Pack-like sampling, i.e., a uniform extension of the lattice. "
+                         "(the charge file's folding, as DFTB+; pydftb takes diagonal foldings "
+                         "only)")
+    if np.any(np.abs(shifts) > 1e-6):
+        raise ValueError("Hybrid functionals using integration with k-points requires a "
+                         "Monkhorst-Pack-like sampling with a zero shift. (the charge file's "
+                         "folding, as DFTB+)")
+    return tuple(int(np.rint(x)) for x in np.diag(coeffs))
 
 
 def _read_blocks(rd, norb_atom, n_atom_file, n_spin) -> list:
@@ -251,15 +332,26 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
         text = str(path).endswith(".dat")
     if data.n_dipole or data.n_quadrupole or (data.kpoint_info and data.folding is None):
         raise ValueError("pydftb writes only populations, blocks and a density matrix (of a "
-                         "molecule or the Gamma point)")
-    if data.density_matrix and data.rho is None:
+                         "molecule, the Gamma point or a supercell folding)")
+    dens = [x for x in (data.rho, data.rho_kpoints, data.rho_bvk) if x is not None]
+    if len(dens) > 1:
+        raise ValueError("one density matrix record only (rho, rho_kpoints or rho_bvk)")
+    if data.density_matrix and not dens:
         raise ValueError("density_matrix is set but there is no density matrix (rho)")
-    if data.folding is not None and data.rho is None:
+    if data.folding is not None and not dens:
         raise ValueError("the k-point folding record goes with a density matrix (DFTB+ writes "
                          "it before one)")
+    kpoint_record = data.rho_kpoints is not None or data.rho_bvk is not None
+    nfold = folding_diagonal(data.folding)
+    if kpoint_record and (nfold is None or nfold == (1, 1, 1)):
+        raise ValueError("a k-point density record needs its supercell folding (DFTB+ writes "
+                         "it before)")
+    if data.rho is not None and nfold not in (None, (1, 1, 1)):
+        raise ValueError("a real density matrix goes with a molecule or the Gamma point's "
+                         "folding (k-points: rho_kpoints or rho_bvk)")
     norb = np.asarray(data.norb_atom, int)
     edges = np.concatenate([[0], np.cumsum(norb)])
-    head_flags = [data.blocks is not None, data.iblocks is not None, data.rho is not None,
+    head_flags = [data.blocks is not None, data.iblocks is not None, bool(dens),
                   data.folding is not None, True]
     checksum = data.sums()
     rows = []                                   # (kind, values) records in order
@@ -284,6 +376,21 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
             raise ValueError(f"the density matrix has shape {rho.shape}, not "
                              f"{(data.n_spin, int(edges[-1]), int(edges[-1]))}")
         rows.extend(("r", [x]) for x in rho.transpose(0, 2, 1).ravel())
+    n = int(edges[-1])
+    if data.rho_kpoints is not None:            # M6h-3b: one record, as held (C order)
+        r = np.asarray(data.rho_kpoints, complex)
+        nk = len(supercell_folding(nfold)[0])
+        if r.shape != (data.n_spin, nk, n, n):
+            raise ValueError(f"the k-point density record has shape {r.shape}, not "
+                             f"{(data.n_spin, nk, n, n)}")
+        rows.append(("c", r.ravel()))
+    if data.rho_bvk is not None:
+        r = np.asarray(data.rho_bvk, float)
+        ncell = int(np.prod(nfold))
+        if r.shape != (data.n_spin, ncell, n, n):
+            raise ValueError(f"the BvK density record has shape {r.shape}, not "
+                             f"{(data.n_spin, ncell, n, n)}")
+        rows.append(("r", r.ravel()))
     tmp = f"{path}.tmp"
     if text:
         with open(tmp, "w") as f:
@@ -299,6 +406,8 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
 def _binary_record(kind, vals) -> bytes:
     if kind in ("i", "m"):
         return struct.pack(f"<{len(vals)}i", *vals)
+    if kind == "c":
+        return np.asarray(vals, "<c16").tobytes()
     if kind == "h":
         flags, ints, sums = vals
         return (struct.pack("<5i", *[1 if f else 0 for f in flags])
@@ -315,6 +424,8 @@ def _text_record(kind, vals) -> str:
         flags, ints, sums = vals
         return ("".join(ld_logical(f) for f in flags) + "".join(ld_integer(v) for v in ints)
                 + "".join(ld_real(x) for x in sums))
+    if kind == "c":
+        return "".join(ld_complex(z) for z in vals)
     return "".join(ld_real(x) for x in vals)
 
 
@@ -342,6 +453,25 @@ def ld_real(x: float) -> str:
         return " " + f"{x:.{16 - e}f}".rjust(20) + " " * 5
     sign = "-" if e < 0 else "+"
     return " " + f"{mant}E{sign}{abs(e):03d}".rjust(25)
+
+
+def ld_complex(z: complex) -> str:
+    """COMPLEX(8) as gfortran's list-directed output writes it (M6h-3b): "(re,im)" right-justified
+    in 53 columns after the blank, each part as :func:`ld_real` without its blanks except that the
+    exponential form has 17 digits after the point (18 significant)."""
+    return " " + f"({_complex_part(z.real)},{_complex_part(z.imag)})".rjust(53)
+
+
+def _complex_part(x: float) -> str:
+    x = float(x)
+    if x == 0.0 or not math.isfinite(x):
+        return ld_real(x).strip()
+    e = int(f"{x:.16E}".split("E")[1])
+    if -1 <= e <= 16:
+        return ld_real(x).strip()
+    mant, exp = f"{x:.17E}".split("E")
+    e = int(exp)
+    return f"{mant}E{'-' if e < 0 else '+'}{abs(e):03d}"
 
 
 # ---- analysis outputs (milestone M6f-4a) ------------------------------------------------------

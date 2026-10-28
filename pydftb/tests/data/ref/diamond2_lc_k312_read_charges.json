@@ -1,0 +1,206 @@
+{
+ "schema": 1,
+ "case": "diamond2_lc_k312_read_charges",
+ "note": "run 1 folds atom 0 by another lattice vector than run 2: DFTB+ takes the file's DeltaP(k) in run 2's gauge, as pydftb's populations_from_file at run 2's positions",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 1e-10,
+  "ewald_tolerance": 1e-12,
+  "mixer": null,
+  "initial_charges": null,
+  "read_charges": {
+   "text": false,
+   "seed": 4
+  },
+  "charge": 0.0,
+  "fd_delta": 0.0001220703125,
+  "hybrid": "lc"
+ },
+ "libraries": {},
+ "input": {
+  "run1_positions_angstrom": [
+   [
+    0.034105119624558866,
+    0.007853776745586367,
+    0.052806643783896164
+   ],
+   [
+    0.855619651394033,
+    0.8341864350870287,
+    0.8809511326967725
+   ]
+  ],
+  "labels": [
+   "C",
+   "C"
+  ],
+  "positions_angstrom": [
+   [
+    0.053658854202909556,
+    0.013095295515359682,
+    0.0028949240421602585
+   ],
+   [
+    0.8358452188990653,
+    0.8834283539245681,
+    0.8811072306219304
+   ]
+  ],
+  "cell_angstrom": [
+   [
+    0.0,
+    1.7835,
+    1.7835
+   ],
+   [
+    1.7835,
+    0.0,
+    1.7835
+   ],
+   [
+    1.7835,
+    1.7835,
+    0.0
+   ]
+  ],
+  "kpoints": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.5
+   ],
+   [
+    0.3333333333333333,
+    0.0,
+    0.0
+   ],
+   [
+    0.3333333333333333,
+    0.0,
+    0.5
+   ]
+  ],
+  "kweights": [
+   0.16666666666666666,
+   0.16666666666666666,
+   0.3333333333333333,
+   0.3333333333333333
+  ],
+  "max_l": {
+   "C": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "charges_file": "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",
+  "charges_text": false
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  ReadInitialCharges = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_hks067j3/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  KPointsAndWeights = SupercellFolding {\n    3 0 0\n    0 1 0\n    0 0 2\n    0.0 0.0 0.0\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.0582081623,
+  "free_energy": -3.0582081623,
+  "e_zero": -3.0582081623,
+  "e_rep": 0.0637124983,
+  "e_scc": -0.0,
+  "e_band": -2.9158531296,
+  "e_fock": -0.2060675311,
+  "fermi": -0.166160546400248,
+  "forces": [
+   [
+    -0.123752829940128,
+    -0.0456995155439525,
+    -0.0168885461663536
+   ],
+   [
+    0.123752829940124,
+    0.0456995155439655,
+    0.0168885461663819
+   ]
+  ],
+  "charges_net": [
+   -7.88258347483861e-15,
+   7.7715611723761e-16
+  ],
+  "n_scc": 18,
+  "scc_errors": [
+   1.0123462,
+   0.8092859,
+   0.10931822,
+   0.07061511,
+   0.014725517,
+   0.0066320477,
+   0.00096047206,
+   0.00031872991,
+   5.5556215e-05,
+   6.9149722e-06,
+   5.9561799e-06,
+   8.6585574e-07,
+   6.74381e-08,
+   5.0174478e-08,
+   7.9841313e-09,
+   3.5936547e-10,
+   3.4254678e-10,
+   3.2549517e-11
+  ],
+  "run1": {
+   "energy": -3.0279184308,
+   "n_scc": 17
+  }
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 1e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08
+ }
+}

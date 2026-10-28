@@ -155,7 +155,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         opts = dict(scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
-                    max_scc=500, solver=solver, repulsive=case.repulsive, fd_delta=fd_delta,
+                    max_scc=case.fixed_scc or 500, solver=solver, repulsive=case.repulsive,
+                    fd_delta=fd_delta,
                     dispersion=inp.get("dispersion"), k_threads=k_threads,
                     backend=backend, device=device, dtype=dtype,
                     **(case.dftb3 or {}), **({"spin": True, **case.spin} if case.spin else {}),
@@ -170,6 +171,10 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
         calc = DFTB(sk, **{**opts, **options})
         if case.gamma_q_in_compat:                        # M6h-3a: DFTB+ 25.1's Gamma q_in
             calc._dftbp_gamma_q_in = True
+        if case.stale_blocks_compat:                      # M6h-3b: DFTB+ 25.1's k blocks (B20)
+            calc._dftbp_stale_blocks = True
+        if case.fixed_scc:                                # M6h-3b: stopped unconverged
+            calc.warn_unconverged = False
         if q_init is None and case.read_charges is not None and "charges_file" in inp:
             q_init = charge_file_data(inp, calc._charge_layout(labels)[0].norb_atom)
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
@@ -418,7 +423,9 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
         skdir = _plain_skf_dir(case, tmp)
         periodic = inp["cell_angstrom"] is not None
         kpts = None
-        if periodic and inp["kpoints"] is not None:
+        if periodic and case.folding is not None:       # M6h-3b: the supercell folding
+            kpts = {"folding": tuple(case.folding)}
+        elif periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         elif periodic and case.hybrid is not None:      # M6h-3a: restarts need the folding
             kpts = "gamma_folding"
@@ -435,7 +442,7 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
                  + dftbplus.custom_hubbards_block(case.hubbard, set(inp["labels"]))
                  + dftbplus.custom_occupations_block(case.occupations)
                  + dftbplus.truncate_block(case.truncate_sk)
-                 + dftbplus.hybrid_block(case.hybrid)
+                 + dftbplus.hybrid_block(case.hybrid, kpoints=case.folding is not None)
                  + dftbplus.corrections_block(case.h5, case.halogen, case.dipole_correction,
                                               inp["labels"]))
         if case.casida and case.casida.get("spin_constants") and not case.spin:
@@ -445,12 +452,16 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
             extra += f"  EwaldTolerance = {dftbplus._f(case.ewald_tolerance)}\n"
         args = (inp["labels"], np.array(inp["positions_angstrom"]),
                 np.array(inp["cell_angstrom"]) if periodic else None)
-        # DFTB+ has no excited-state stress: no forces for a periodic Casida case
-        forces = not (case.casida and periodic)
+        # DFTB+ has no excited-state stress: no forces for a periodic Casida case; none where
+        # it refuses them (k-point hybrids, M6h-3b)
+        forces = not (case.casida and periodic) and case.dftbp_forces
         kw = dict(skdir=skdir, max_l=inp["max_l"], kpts=kpts, scc=case.scc, filling=case.filling,
                   shell_resolved=case.shell_resolved, repulsive=case.repulsive, extra_ham=extra,
                   scc_tol=case.scc_tol, threads=threads, charge=case.charge,
                   binary=dftbplus_binary(case),
+                  **({"forces": False} if not forces and not case.casida else {}),
+                  **({"max_scc": case.fixed_scc, "convergent_only": False}
+                     if case.fixed_scc else {}),
                   **({"analysis": case.analysis} if case.analysis else {}),
                   **({"extra_top": dftbplus.casida_block(case.casida, forces), "forces": forces,
                       "autotest": True} if case.casida else {}),
@@ -987,8 +998,11 @@ def _compare_scc_start(case: Case, inp: dict, ref: dict, res, **run) -> dict:
                                         hybrid=None)
         r1, calc = run_pydftb(case1, inp1, engine=True, **run)
         data = charge_file_data(inp, calc._charge_layout(inp["labels"])[0].norb_atom)
-        dev["charges_file"] = float(np.abs(calc.populations_from_file(inp["labels"], data)
-                                           - r1.q_in).max())
+        cell = (None if inp["cell_angstrom"] is None
+                else np.array(inp["cell_angstrom"]) / BOHR)      # M6h-3b: run 1's DeltaP(k)
+        q_file = calc.populations_from_file(
+            inp["labels"], data, positions=np.array(inp1["positions_angstrom"]) / BOHR, cell=cell)
+        dev["charges_file"] = float(np.abs(q_file - r1.q_in).max())
     return dev
 
 

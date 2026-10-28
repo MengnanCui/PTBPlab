@@ -2,7 +2,8 @@
 
 Byte-for-byte round trips of the files DFTB+ 25.1 wrote for the frozen references
 *_read_charges* (binary and text, every layout; with a hybrid functional also the density
-matrix, M6h-1, and for the Gamma point the k-point folding before it, M6h-3a), pydftb's own files
+matrix, M6h-1, and for the Gamma point the k-point folding before it, M6h-3a, for k-points the
+folding and the complex DeltaP(k) or the BvK array, M6h-3b), pydftb's own files
 read back, DFTB+'s checks on reading, and the older formats
 4-7.  Restarting from DFTB+'s files against DFTB+ itself is
 in test_reference.py.
@@ -42,9 +43,12 @@ def test_dftbplus_files_round_trip_byte_for_byte(name, tmp_path):
     src = tmp_path / ("in.dat" if text else "in.bin")
     src.write_bytes(blob)
     data = io.read_charges(src, norb)
-    gamma = inp["cell_angstrom"] is not None and data.rho is not None    # M6h-3a: the folding
-    assert data.version == 8 and data.multipolar and data.kpoint_info == gamma
-    assert (data.folding is not None) == gamma
+    kpoint_record = data.rho_kpoints is not None or data.rho_bvk is not None       # M6h-3b
+    folded = inp["cell_angstrom"] is not None and (data.rho is not None or kpoint_record)
+    assert data.version == 8 and data.multipolar and data.kpoint_info == folded
+    assert (data.folding is not None) == folded           # M6h-3a/b: the folding before DeltaP
+    if kpoint_record:                                      # diag(N), the case's folding
+        assert io.folding_diagonal(data.folding) == refgen.CASES_BY_NAME[doc["case"]].folding
     assert np.array_equal(data.checksum, data.sums())          # DFTB+'s own summation order
     out = tmp_path / ("out.dat" if text else "out.bin")
     io.write_charges(out, data)

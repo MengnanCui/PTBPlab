@@ -56,6 +56,7 @@ from .hamiltonian import Basis, PairBlocks, build_pairs, fold, fold_all, onsite_
 from . import dftbplus_io
 from .dftbplus_io import ChargeData
 from .mixer import make_mixer, mixer_spec
+from .kpoints import folding_of
 from .occupations import Smearing, fill_at, fill_independent_k
 from .neighbors import neighbor_list
 from .parallel import as_kthreads
@@ -463,14 +464,20 @@ class DFTB:
                           and masses (and equal per-label options); NumPy only, not with Casida,
                           XL-BOMD or the analysis outputs.
     hybrid : "lc" | "cam" | dict | Hybrid  a range-separated hybrid functional (DFTB+
-                          ``Hybrid``, milestone M6h-1; molecules, and periodic systems at the
-                          Gamma point, M6h-3a): LC-DFTB or CAM, omega, alpha
+                          ``Hybrid``, milestone M6h-1; molecules, periodic systems at the Gamma
+                          point, M6h-3a, and at the k-points of a supercell folding, M6h-3b):
+                          LC-DFTB or CAM, omega, alpha
                           and beta from the SK files' ``RangeSep`` section; a dict sets
                           ``type``, ``screening`` ("matrix", "neighbour", "threshold"),
                           ``threshold`` and ``cutoff_reduction`` (Bohr), and for a periodic
                           system DFTB+'s ``CoulombMatrix``: ``coulomb`` ("truncated",
-                          "damped"), ``coulomb_cutoff`` and ``gsum_cutoff`` (Bohr), see
-                          :class:`pydftb.hybrid.Hybrid`; no stress then (as DFTB+).
+                          "damped", "full" at k-points), ``coulomb_cutoff`` and ``gsum_cutoff``
+                          (Bohr), see :class:`pydftb.hybrid.Hybrid`; no stress then (as DFTB+).
+                          k-points: the Gamma-centred grid of a folding diag(n1, n2, n3)
+                          (:func:`pydftb.kpoints.supercell_folding` is DFTB+'s set; DFTB+
+                          refuses others), the neighbour screening without DFTB+'s Threshold
+                          screening (DFTB+'s Threshold -> 0); the forces of the damped and full
+                          kernels and of spin polarisation too, which DFTB+ refuses.
                           ``DFTBResult.e_fock`` is the exchange
                           (in ``energy``); ``q_in``/``q_out`` are then [populations | packed
                           DeltaP], what the SCC carries between geometries.  SK files with a
@@ -498,6 +505,10 @@ class DFTB:
     # test use only: the finite-frequency response of complex eigenvectors with DFTB+'s
     # eta term (it cancels between k and -k; DFTB+ keeps it for reduced k-point sets) (M6g-1)
     _response_eta_compat = False
+    # test use only: a k-point hybrid's block potentials (+U, onsite corrections) from the
+    # starting block populations, as DFTB+ 25.1, whose getNextInputDensityCplx never updates
+    # them (with spin those of the first output; B20, M6h-3b)
+    _dftbp_stale_blocks = False
 
     def __init__(self, sk: SKSet, scc: bool = True, kpts=None, temperature: float = 0.0,
                  scc_tol: float = 1e-8, max_scc: int = 200, mixing: float | None = None,
@@ -1087,7 +1098,8 @@ class DFTB:
             if self.backend.is_torch:
                 raise ValueError("DFTB+ charge files are read with the NumPy backend only "
                                  "(milestone M6f)")
-            q_init = self.populations_from_file(species, q_init)
+            q_init = self.populations_from_file(species, q_init, positions=positions,
+                                                 cell=cell if periodic else None)
         if scc_control is None:
             state = self._scc(setup, q_init, need_derivs, timings)
         else:
@@ -1158,21 +1170,34 @@ class DFTB:
                                               self._block_shell_occupation(basis))
         return basis, np.asarray(site_of_orb), rep, block
 
-    def charge_data(self, species, result: DFTBResult, periodic: bool = False) -> ChargeData:
+    def charge_data(self, species, result: DFTBResult, periodic: bool = False, positions=None,
+                    cell=None) -> ChargeData:
         """``result``'s input populations of the last SCC iteration (``q_in``, what DFTB+
         writes) as a DFTB+ charge file (:func:`pydftb.dftbplus_io.write_charges`): every class
         total on its first orbital, collinear spin as (q, m), blocks per atom; with a hybrid
         functional also DeltaP_in of every spin channel (up, down), its lower triangle as DFTB+
         keeps it (M6h-1), and for a ``periodic`` one DFTB+'s k-point folding record before it
-        (the Gamma point, M6h-3a)."""
+        (the Gamma point, M6h-3a).  At the k-points of a supercell folding (M6h-3b) DFTB+'s
+        record of DeltaP_in (:meth:`pydftb.hybrid.KPointLayout.to_dftbp`), which is of the atoms
+        folded into the cell: ``positions`` and ``cell`` (Bohr) of ``result`` are needed then."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         vec = np.asarray(result.q_in, float)
-        rho = None
+        rho = rho_k = rho_bvk = layout = None
         if self.hybrid is not None and self.pauli:         # M6h-1b
             raise ValueError("DFTB+ writes no charge file for a non-collinear hybrid calculation "
                              "(main.F90 leaves it out): there is no format for its 2N x 2N "
                              "density matrix")
-        if self.hybrid is not None:                        # [populations | packed DeltaP]
+        if self.hybrid is not None and periodic:           # k-points (M6h-3b)
+            layout = self._kpoint_layout(basis, positions, cell)
+        if layout is not None:
+            if layout.shifts is None:
+                raise ValueError("the charge file of a k-point hybrid calculation needs the "
+                                 "positions and the cell (DFTB+'s DeltaP(k) is of the atoms "
+                                 "folded into the cell)")
+            vec, dps = self._split_kpoint_vector(basis, vec, layout)
+            record = layout.to_dftbp(dps)
+            rho_k, rho_bvk = (None, record) if layout.neighbour else (record, None)
+        elif self.hybrid is not None:                      # [populations | packed DeltaP]
             vec, rho = self._split_hybrid_vector(basis, vec)
         n_chan = {"q": 1, "ud": 2, "pauli": 4}[rep]
         blocks = iblocks = None
@@ -1195,9 +1220,40 @@ class DFTB:
         folding = None
         if rho is not None and periodic:                   # M6h-3a: the Gamma point
             folding = np.hstack([np.eye(3), np.zeros((3, 1))])
+        if layout is not None:                             # M6h-3b: diag(N1, N2, N3)
+            folding = np.hstack([np.diag(np.array(layout.nfold, float)), np.zeros((3, 1))])
         return ChargeData(q_orb, np.asarray(basis.norb_atom, int), blocks, iblocks,
-                          density_matrix=rho is not None, kpoint_info=folding is not None,
-                          rho=rho, folding=folding)
+                          density_matrix=rho is not None or layout is not None,
+                          kpoint_info=folding is not None, rho=rho, folding=folding,
+                          rho_kpoints=rho_k, rho_bvk=rho_bvk)
+
+    def _kpoint_layout(self, basis: Basis, positions=None, cell=None):
+        """The :class:`pydftb.hybrid.KPointLayout` of a periodic hybrid calculation at the
+        k-points of a supercell folding (M6h-3b), None at the Gamma point; with ``positions`` and
+        ``cell`` (Bohr) DFTB+'s fold shifts for its charge-file records."""
+        if self.kpts is None:
+            return None
+        kpts, kw = self.kpts
+        kpts = np.atleast_2d(np.asarray(kpts, float))
+        kw = np.asarray(kw, float) / np.sum(kw)
+        if len(kpts) == 1 and not np.any(kpts[0]):
+            return None
+        nfold = self._check_periodic_hybrid(False, kpts, kw)
+        shifts = None
+        if positions is not None and cell is not None:
+            shifts = _hybrid.dftbp_fold_shifts(positions, cell)
+        return _hybrid.KPointLayout(kpts, kw, nfold, basis.orb_atom, self.hybrid.screening,
+                                    shifts)
+
+    def _split_kpoint_vector(self, basis: Basis, vec, layout) -> tuple:
+        """A k-point hybrid run's mixing vector -> (populations, DeltaP(k) per spin channel)
+        (M6h-3b)."""
+        nspin = 2 if self.spin else 1
+        k = layout.packed_size * nspin
+        if len(vec) <= k:
+            raise ValueError("the result is not one of this hybrid calculation (q_in has no "
+                             "density matrix)")
+        return vec[:len(vec) - k], layout.unpack(vec[len(vec) - k:], nspin)
 
     def _split_hybrid_vector(self, basis: Basis, vec) -> tuple:
         """A hybrid run's mixing vector -> (populations, DeltaP per spin channel as DFTB+ keeps
@@ -1236,7 +1292,8 @@ class DFTB:
         return out
 
     def populations_from_file(self, species, data, skip_charge_test: bool = False,
-                              text: bool | None = None) -> np.ndarray:
+                              text: bool | None = None, positions=None,
+                              cell=None) -> np.ndarray:
         """The mixing vector (``q_init``) of a DFTB+ charge file (a :class:`ChargeData` or a
         path), as DFTB+ ``ReadInitialCharges`` takes it: populations summed over every class;
         DFTB+'s checks of the spin channels, checksums (1e-7), electron count and collinear
@@ -1246,18 +1303,45 @@ class DFTB:
         DFTB+) when the file has no density matrix; a non-hybrid calculation ignores one.  The
         Gamma-point folding record of a periodic run (M6h-3a) is read and checked; pydftb takes
         such a file for a molecule and a molecule's for the Gamma point (DeltaP_in is the same
-        dense matrix; DFTB+ 25.1 stops on the latter and reads the former one value off)."""
+        dense matrix; DFTB+ 25.1 stops on the latter and reads the former one value off).
+        k-points (M6h-3b; ``positions`` and ``cell`` in Bohr, of the calculation that takes the
+        file): the folding must be this calculation's (as DFTB+), the record (DeltaP(k) or the
+        BvK array, of the atoms as DFTB+ folds them at these positions) is converted to this
+        calculation's k-points and screening (either record serves either screening; DFTB+
+        reads only its own)."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         if not isinstance(data, ChargeData):
             data = dftbplus_io.read_charges(data, basis.norb_atom, text)
         q = self._file_populations(basis, site_of_orb, rep, block, data, skip_charge_test)
-        if self.hybrid is None or data.rho is None:
+        kpoint_record = data.rho_kpoints is not None or data.rho_bvk is not None
+        if self.hybrid is None or (data.rho is None and not kpoint_record):
             return q
         if self.pauli:                                     # M6h-1b
             raise ValueError("the charge file has a density matrix, which a non-collinear hybrid "
                              "calculation cannot take (DFTB+ writes none for one and reads only "
                              "files without)")
         nspin = 2 if self.spin else 1
+        layout = None if cell is None else self._kpoint_layout(basis, positions, cell)
+        file_fold = dftbplus_io.folding_diagonal(data.folding)
+        if layout is not None or kpoint_record:            # M6h-3b
+            mine = (1, 1, 1) if layout is None else layout.nfold
+            if file_fold != mine:
+                raise ValueError("Error while processing k-point sampling for hybrid run. When "
+                                 "restarting, only identical k-point samplings to the previous "
+                                 f"run are supported. (as DFTB+: the charge file's supercell "
+                                 f"folding is {file_fold}, this calculation's {mine}"
+                                 + ("; a periodic calculation passes its positions and cell"
+                                    if cell is None else "") + ")")
+            if layout.shifts is None:
+                raise ValueError("a k-point hybrid calculation takes a charge file with its "
+                                 "positions and cell (DFTB+'s DeltaP(k) is of the atoms folded "
+                                 "into the cell)")
+            record = data.rho_bvk if data.rho_bvk is not None else data.rho_kpoints
+            if record.shape[0] != nspin:
+                raise ValueError(f"the charge file's density record has {record.shape[0]} spin "
+                                 f"channel(s), this calculation {nspin}")
+            dps = layout.from_dftbp(record, bvk=data.rho_bvk is not None)
+            return np.concatenate([q, layout.pack(dps)])
         if data.rho.shape != (nspin, basis.norb, basis.norb):
             raise ValueError(f"the charge file's density matrix has shape {data.rho.shape}, this "
                              f"calculation needs {(nspin, basis.norb, basis.norb)}")
@@ -1642,14 +1726,18 @@ class DFTB:
                                                        pbc if periodic else None)
         hybrid = None
         if self.hybrid is not None:                                   # M6h-1
+            nfold = None
             if periodic:
-                self._check_periodic_hybrid(gamma_only)               # M6h-3a
+                nfold = self._check_periodic_hybrid(gamma_only, kpts, kw)    # M6h-3a, M6h-3b
             elif (self.hybrid.coulomb != "truncated" or self.hybrid.coulomb_cutoff is not None
                   or self.hybrid.gsum_cutoff is not None):
                 raise ValueError("coulomb, coulomb_cutoff and gsum_cutoff are DFTB+'s "
                                  "CoulombMatrix of periodic systems (DFTB+ stops on one for a "
                                  "molecule)")
-            if matrices:
+            if matrices and nfold is not None:                        # k-points (M6h-3b)
+                hybrid = self._kpoint_hybrid_terms(species, pos, basis, smat, cell, pb, kpts, kw,
+                                                   nfold)
+            elif matrices:
                 hybrid = self._hybrid_terms(species, pos, basis, np.asarray(smat[0]).real,
                                             cell if periodic else None, pb if periodic else None)
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
@@ -1669,12 +1757,24 @@ class DFTB:
                                    basis.orb_atom, smat, q0_orb, self.sk.cutoff,
                                    pauli=self.pauli, cell=cell, pairs=pairs)
 
-    def _check_periodic_hybrid(self, gamma_only: bool):
-        """A hybrid functional in a periodic cell (M6h-3a): the Gamma point only so far; DFTB+'s
+    def _kpoint_hybrid_terms(self, species, pos, basis: Basis, smat, cell, pairs, kpts, kw,
+                             nfold) -> "_hybrid.KPointHybridTerms":
+        """The exchange terms of a periodic geometry at the k-points of the supercell folding
+        ``nfold`` (M6h-3b), ``smat`` S(k) at them; as :meth:`_hybrid_terms` otherwise."""
+        ls = np.asarray(basis.shell_l)
+        q0_orb = (self._reference_shell_populations(basis) / (2 * ls + 1))[basis.orb_shell]
+        return _hybrid.KPointHybridTerms(self.hybrid, self._range_sep,
+                                         [self.sk.hubbard[lab][0] for lab in species], pos,
+                                         basis.orb_atom, cell, pairs, np.asarray(smat), q0_orb,
+                                         self.sk.cutoff, kpts, kw, nfold)
+
+    def _check_periodic_hybrid(self, gamma_only: bool, kpts=None, kw=None):
+        """A hybrid functional in a periodic cell: the Gamma point (M6h-3a, None) or the
+        supercell folding (n1, n2, n3) whose Gamma-centred grid the k-points are (M6h-3b); DFTB+'s
         refusals in its words."""
-        if not gamma_only:
-            raise ValueError("hybrid functionals of periodic systems are implemented at the Gamma "
-                             "point only (k-points: milestone M6h-3b)")
+        if self.hybrid.coulomb == "minimum_image" and not gamma_only:
+            raise ValueError("the MinimumImage Coulomb matrix of k-point hybrids is milestone "
+                             "M6h-3c (use coulomb='truncated', 'damped' or 'full')")
         if self.hybrid.screening == "threshold":
             raise ValueError("Hybrid functionality for periodic systems currently not implemented "
                              "for the threshold algorithm (as DFTB+)")
@@ -1684,6 +1784,17 @@ class DFTB:
         if self.casida is not None:
             raise ValueError("hybrid functional excited states for periodic geometries are "
                              "currently unavailable (as DFTB+)")
+        if gamma_only:
+            return None
+        nfold = folding_of(kpts, kw)
+        if nfold is None:
+            raise ValueError("Hybrid functionals using integration with k-points requires a "
+                             "Monkhorst-Pack-like sampling with a zero shift (as DFTB+): the "
+                             "k-points must be the Gamma-centred grid of a supercell folding "
+                             "diag(n1, n2, n3), whole or with one of every k, -k "
+                             "(pydftb.kpoints.supercell_folding(n) is DFTB+'s set; ASE: "
+                             "kpts={'size': (n1, n2, n3), 'gamma': True})")
+        return nfold
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -2214,8 +2325,10 @@ class DFTB:
         elements, the first output always taken unmixed (unless the SCC starts from given
         populations); the input populations [q, m_x, m_y, m_z] per shell (or the blocks) are
         those of DeltaP_in + P0 (DFTB+ keeps the blocks of the first output: see the M6h-1b
-        report)."""
+        report).  k-points: :meth:`_scc_hybrid_kpoints` (M6h-3b)."""
         hy = st.hybrid
+        if isinstance(hy, _hybrid.KPointHybridTerms):
+            return self._scc_hybrid_kpoints(st, q_init, forces, timings)
         pauli = st.pauli is not None
         threads = self.k_threads if self.k_threads.n > 1 else None
         solver = (self.solver if not isinstance(self.solver, str)
@@ -2306,6 +2419,102 @@ class DFTB:
             warnings.warn(f"SCC not converged after {nit} iterations (max |dDeltaP| = "
                           f"{diff:.2e} > {self.scc_tol:.1e}); returning the last iteration's "
                           "results", RuntimeWarning, stacklevel=3)
+        state = _HybridState(dp_in, dp_out, x_in, x_out, e_fock)
+        return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
+                         converged, diff, vs_orb, errors, hybrid=state)
+
+    def _scc_hybrid_kpoints(self, st: _Setup, q_init, forces, timings) -> _SCCState:
+        """The SCC of a periodic hybrid at k-points (M6h-3b; DFTB+ main.F90
+        getNextInputDensityCplx): as :meth:`_scc_hybrid`, the mixer working on the complex
+        DeltaP(k) of every k-point and spin channel ([Re | Im]) or, with the neighbour screening,
+        on their real BvK arrays (:class:`pydftb.hybrid.KPointLayout`), the error the largest
+        modulus of the difference; H_x(k) per channel; E_Fock = 1/2 Re sum H_x[DeltaP_in] o
+        conj(DeltaP_out) after the diagonalisation (DFTB+'s, B4); the input populations and blocks
+        after mixing those of DeltaP_in(k) + P0(k) (``_dftbp_stale_blocks``: the blocks kept, as
+        DFTB+ 25.1, B20).  The other rules (DeltaP_in = 0 at the start, the spin guess, the
+        minimum iterations, no mixing after the last one) as DFTB+'s and the Gamma point's."""
+        hy = st.hybrid
+        threads = self.k_threads if self.k_threads.n > 1 else None
+        solver = (self.solver if not isinstance(self.solver, str)
+                  else SOLVERS[self.solver](threads=threads))
+        t1 = time.perf_counter()
+        s = st.smat_precise
+        solver.prepare(s if st.spin is None else np.concatenate([s, s]))
+        t_diag = time.perf_counter() - t1
+        nspin = 1 if st.spin is None else 2
+        nk = len(st.kw)
+        mixer = make_mixer(self.mixer, self.mixing)
+        p0 = [hy.reference(nspin)] * nspin
+        q_start = self._initial_populations(st)
+        npop = len(q_start)
+        nx = hy.packed_size * nspin
+        if q_init is None:
+            q_in, x_in = q_start, np.zeros(nx)
+        else:
+            q_init = np.asarray(q_init, float)
+            if len(q_init) not in (npop, npop + nx):
+                raise ValueError(f"q_init of a hybrid calculation: {npop} populations, or those "
+                                 f"and the {nx} elements of the packed DeltaP; not "
+                                 f"{len(q_init)} values")
+            q_in = q_init[:npop].copy()
+            x_in = q_init[npop:].copy() if len(q_init) > npop else np.zeros(nx)
+        dp_in = hy.unpack(x_in, nspin)
+        first_out = st.spin is not None and q_init is None
+        min_iter = 1
+        if q_init is None and (st.spin is not None or (st.block is not None and st.block.has_u)):
+            min_iter = 2                          # DFTB+ getMinSccIters
+        q_blk = q_in                              # the blocks DFTB+ 25.1 keeps (B20)
+        h0 = self._with_net(st, st.h0)
+        errors, converged, diff = [], False, 0.0
+        for nit in range(1, self.max_scc + 1):
+            v_orb, vs_orb = self._potentials(st, q_in)
+            fock = hy.fock(dp_in)
+            if st.block is not None:
+                pots = self._block_potentials(st, q_blk if self._dftbp_stale_blocks else q_in,
+                                              onsite=nit > 1 or q_init is not None)
+                h = self._block_hamiltonian(st, h0, st.smat, v_orb, vs_orb, pots, None)
+            else:
+                v = np.asarray(v_orb)
+                h = h0 + 0.5 * st.smat * (v[:, None] + v[None, :])
+                if vs_orb is not None:
+                    vs = np.asarray(vs_orb)
+                    hs = 0.5 * st.smat * (vs[:, None] + vs[None, :])
+                    h = np.concatenate([h + hs, h - hs])          # up, down
+            h = h + np.concatenate(fock)
+            t1 = time.perf_counter()
+            rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=False)
+            t_diag += time.perf_counter() - t1
+            q_orb, q_out = self._populations(st, rho)
+            dp_out = [np.asarray(rho[i * nk:(i + 1) * nk]) - p0[i] for i in range(nspin)]
+            e_fock = hy.energy(fock, dp_out)
+            x_out = hy.pack(dp_out)
+            diff = hy.error(x_out, x_in)
+            errors.append(float(diff))
+            if self.verbose:
+                print(f"SCC {nit:3d}  max dDeltaP = {diff:.3e}")
+            if diff < self.scc_tol and nit >= min_iter:
+                converged = True
+                break
+            if nit == self.max_scc:
+                break                      # DFTB+: no mixing after the last iteration
+            if nit == 1 and first_out:
+                x_in, q_in = x_out, q_out  # DFTB+: the spin guess is not mixed in
+                q_blk = q_out
+                dp_in = hy.unpack(x_in, nspin)
+            else:
+                x_in = mixer.mix(x_in, x_out)
+                dp_in = hy.unpack(x_in, nspin)
+                q_in = self._populations(st, np.concatenate([d + p for d, p in zip(dp_in, p0)]))[1]
+        if forces:
+            t1 = time.perf_counter()
+            rho, wdm, evals, mu, ts, occ = self._solve(solver, st, h, need_w=True)
+            t_diag += time.perf_counter() - t1
+        timings["diag"] = t_diag
+        timings["scc_iter"] = nit
+        if not converged and self.warn_unconverged:
+            warnings.warn(f"SCC not converged after {nit} iterations (max |dDeltaP| = "
+                          f"{diff:.2e} > {self.scc_tol:.1e}); returning the last iteration's "
+                          "results", RuntimeWarning, stacklevel=4)
         state = _HybridState(dp_in, dp_out, x_in, x_out, e_fock)
         return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
                          converged, diff, vs_orb, errors, hybrid=state)

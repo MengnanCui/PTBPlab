@@ -303,7 +303,7 @@ def test_eigenstates_reproduce_the_scc_levels(name):
     st = eigenstates(calc, labels, pos, cell, PBC, res.q_in)
     ev = np.asarray(res.eigenvalues).reshape(st.eigenvalues.shape)
     assert np.abs(st.eigenvalues - ev).max() < 1e-12
-    with pytest.raises(ValueError, match="Gamma point only"):
+    with pytest.raises(ValueError, match="SCC on a supercell folding"):          # M6h-3b
         eigenstates(calc, labels, pos, cell, PBC, res.q_in, kpts=np.array([[0.0, 0.0, 0.5]]))
 
 
@@ -338,10 +338,9 @@ def test_charge_file_errors(tmp_path):
     res, calc, labels, *_ = _case("o2_box_lc_spin")
     data = calc.charge_data(labels, res, periodic=True)
     path = tmp_path / "charges.bin"
-    write_charges(path, dataclasses.replace(data, folding=np.hstack([2 * np.eye(3),
-                                                                     np.zeros((3, 1))])))
-    with pytest.raises(ValueError, match="M6h-3b"):
-        read_charges(path, data.norb_atom)
+    with pytest.raises(ValueError, match="real density matrix goes with"):         # M6h-3b
+        write_charges(path, dataclasses.replace(data, folding=np.hstack([2 * np.eye(3),
+                                                                         np.zeros((3, 1))])))
     with pytest.raises(ValueError, match="goes with a density matrix"):
         write_charges(path, dataclasses.replace(data, rho=None, density_matrix=False))
     with pytest.raises(ValueError, match="writes only"):
@@ -365,7 +364,7 @@ def test_ase_calculator(tmp_path):
 
 # ---- refusals -----------------------------------------------------------------------------
 @pytest.mark.parametrize("spec, opts, match", [
-    ("lc", {"kpts": (np.array([[0.0, 0.0, 0.25]]), np.ones(1))}, "Gamma point only"),
+    ("lc", {"kpts": (np.array([[0.0, 0.0, 0.25]]), np.ones(1))}, "zero shift"),     # M6h-3b
     ({"type": "lc", "screening": "threshold"}, {}, "threshold algorithm"),
     ("lc", {"spin": "noncolinear", "spin_constants": {"O": -0.028}}, "with molecular"),
     ("lc", {"casida": {"n_excitations": 3}}, "excited states for periodic"),

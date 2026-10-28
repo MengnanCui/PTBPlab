@@ -20,6 +20,8 @@ from pydftb.validation.cases import CASES_BY_NAME
 from .conftest import SKF_HCOCU
 
 REFS = sorted(glob.glob(os.path.join(dynamics.REF_DIR, "*.json")))
+# the most SCC iterations one step and the whole run may differ by (default 1 and 2)
+N_SCC_SLACK = {"co2_crystal_lc_k211_md": (2, 3)}     # M6h-3b: two steps, see the case's note
 
 
 def _dftbplus_onsite_rule(monkeypatch):
@@ -56,7 +58,8 @@ def test_against_dftbplus_driver(path, monkeypatch):
             assert (n_py <= n_ref).all() and n_py.sum() < n_ref.sum()
             _dftbplus_onsite_rule(monkeypatch)
             n_py = np.array(dynamics.compare(doc)["result"]["n_scc"])
-        assert np.abs(n_py - n_ref).max() <= 1 and abs(n_py.sum() - n_ref.sum()) <= 2
+        step, run = N_SCC_SLACK.get(doc["case"], (1, 2))
+        assert np.abs(n_py - n_ref).max() <= step and abs(n_py.sum() - n_ref.sum()) <= run
 
 
 def test_reference_set_is_complete():

@@ -496,7 +496,7 @@ H5 and the halogen correction recognise elements, DFTB+ species names (type labe
 ### Range-separated hybrid functionals (LC, CAM)
 
 DFTB+'s `Hybrid = LC {}` and `CAM {}` for molecules (milestone M6h-1; NumPy engine only) and
-periodic systems at the Gamma point (M6h-3a, below).  The
+periodic systems at the Gamma point (M6h-3a) and at k-points (M6h-3b, below).  The
 SK files hold the functional: their `RangeSep` section (`LC omega` or `CAM omega alpha beta`,
 as in DFTB+'s ob2 files) gives omega, alpha and beta; the option picks DFTB+'s type and
 screening:
@@ -520,8 +520,8 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: k-points (M6h-3b), the response
-analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
+coordinate derivatives, XL-BOMD; not yet in pydftb: the MinimumImage Coulomb matrix (M6h-3c),
+the response analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
 
 TD-LC (milestone M6h-2): `casida=` with LC files gives DFTB+'s TD-LC-DFTB.  The long-range
@@ -575,6 +575,37 @@ DFTB+ (an identity SupercellFolding works); a molecule reading a Gamma-point cha
 DeltaP_in one value off.  DFTB+'s default EwaldTolerance (1e-9) moves its energies by about
 1e-7: the references use 1e-12.  Details:
 [`docs/reports/M6h3a-hybrid-gamma.html`](docs/reports/M6h3a-hybrid-gamma.html).
+
+k-points (milestone M6h-3b; DFTB+ with a `SupercellFolding` without shift): the k-points must be
+the Gamma-centred grid of a folding diag(n1, n2, n3), whole or with one of every k, -k:
+
+```python
+from pydftb.bands import eigenstates
+from pydftb.kpoints import supercell_folding
+calc = DFTB(sk, hybrid="lc", kpts=supercell_folding((2, 2, 2)))   # DFTB+'s set and order
+r = calc.calculate(labels, pos, cell, forces=True)
+states = eigenstates(calc, labels, pos, cell, populations=r.q_in, kpts=path)   # any k
+atoms.calc = PyDFTB(skdir, hybrid="lc", kpts={"size": (2, 2, 2), "gamma": True})
+```
+
+H_x(k) is the convolution of DeltaP(q), S(q) and the lattice sums of gamma over the grid, i.e.
+the Born-von Karman supercell's Gamma-point exchange, evaluated as the product of its
+real-space matrices; P0(k) = q0 / S_mumu(k); the SCC mixes DeltaP(k) of every k-point (the
+neighbour screening: the real array of the supercell's cells) and `q_in` holds it.  The
+Coulomb matrices "truncated", "damped" and "full" (the untruncated sum over DFTB+'s
+parallelepiped, which does not converge: for comparisons), DFTB+'s default cutoff of the
+folding (its Cartesian scaling of the lattice vectors, with DFTB+'s refusal where it is
+undefined), collinear spin, the combinations of the Gamma point, charge files (DFTB+'s complex
+DeltaP(k) or neighbour array of the atoms folded into the cell, either layout read into either
+screening), band states at any k and the dynamics.  Beyond DFTB+ 25.1, which refuses them: the
+forces of the damped and full kernels and with spin (against differences of the energy).
+Differences from DFTB+ 25.1: its block populations (+U, onsite) never follow DeltaP at
+k-points (2.2e-3 and 3.6e-2 Ha in the CO2 crystal; pydftb takes those of DeltaP_in, a
+validation switch keeps DFTB+'s); its NeighbourBased `Threshold` (default 1e-6) screens the
+increments of its build (up to 1.6e-6 Ha): pydftb builds the whole operator (the references
+use 1e-100); a geometry step where an atom crosses a face of the cell starts DFTB+ from
+DeltaP(k) in the wrong gauge (4-5 more SCC iterations).  Not yet: MinimumImage (M6h-3c).
+Details: [`docs/reports/M6h3b-hybrid-kpoints.html`](docs/reports/M6h3b-hybrid-kpoints.html).
 
 ### Analysis outputs
 

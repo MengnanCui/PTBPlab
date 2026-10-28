@@ -186,6 +186,17 @@ DYN_CASES = [
     DynCase("diamond8_lc_opt", "diamond8_lc", "opt", tol=TOL_OPT,
             note="the rattled diamond cell relaxes back (fixed lattice: no stress with a "
                  "hybrid)"),
+    # M6h-3b: k-points of a supercell folding, DeltaP_in(k) (DFTB+'s complex matrices) carried
+    # from step to step; no atom crosses a face of the cell (B21)
+    DynCase("co2_crystal_lc_k211_md", "co2_crystal_centred_lc_k211", "md", temperature=300.0,
+            steps=20, tol={**TOL_MD, "energy": 1e-7},
+            note="LC at the k-points of the folding 2 x 1 x 1, DeltaP(k) reused: the SCC "
+                 "iterations of every step agree but two (one and two more in pydftb, whose "
+                 "error at DFTB+'s last iteration is 1.11 and 1.03 times the tolerance 1e-10: "
+                 "rounding).  Where an atom crosses a face along a folded axis DFTB+ takes 4-5 "
+                 "more (B21: it carries DeltaP_in(k) of the atoms as folded the step before)"),
+    DynCase("diamond2_lc_k222_opt", "diamond2_centred_lc_k222", "opt", tol=TOL_OPT,
+            note="the rattled primitive cell relaxes back on the 2 x 2 x 2 folding"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -340,7 +351,9 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
     base = CASES_BY_NAME[case.base]
     periodic = inp["cell_angstrom"] is not None
     kpts = None if inp["kpoints"] is None else (np.array(inp["kpoints"]), np.array(inp["kweights"]))
-    if periodic and kpts is None and base.hybrid is not None:      # M6h-3a, as refgen
+    if periodic and base.folding is not None:                      # M6h-3b, as refgen
+        kpts = {"folding": tuple(base.folding)}
+    elif periodic and kpts is None and base.hybrid is not None:    # M6h-3a, as refgen
         kpts = "gamma_folding"
     if case.kind == "opt":
         driver = dftbplus.opt_driver(case.optimiser, case.lattice, case.grad_elem,
@@ -360,7 +373,7 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
                  + dftbplus.initial_charges_block(base.initial_charges)
                  + dftbplus.corrections_block(base.h5, base.halogen, base.dipole_correction,
                                               inp["labels"])
-                 + dftbplus.hybrid_block(base.hybrid))
+                 + dftbplus.hybrid_block(base.hybrid, kpoints=base.folding is not None))
         ewald = case.ewald_tolerance or base.ewald_tolerance
         if ewald is not None:
             extra += f"  EwaldTolerance = {dftbplus._f(ewald)}\n"

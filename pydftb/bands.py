@@ -156,7 +156,8 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
     shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`; with a
     hybrid functional followed by the packed DeltaP_in, whose exchange H_x[DeltaP_in] is added: a
-    fresh build, also for the threshold screening; periodic: at the Gamma point only, M6h-3a);
+    fresh build, also for the threshold screening; periodic at the Gamma point, M6h-3a; from the
+    k-points of a supercell folding at any k, M6h-3b, as DFTB+'s band run);
     None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
@@ -177,10 +178,19 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     n_expected = 4 * nsh if pauli else len(st.q0) if st.spin is None else 2 * nsh
     if st.block is not None:
         n_expected = st.block.size
-    hyb_dp = None
+    hyb_dp = hyb_k = None
     if getattr(engine, "hybrid", None) is not None and q.shape != (n_expected,):   # M6h-1
-        q, rho = engine._split_hybrid_vector(st.basis, q)
-        hyb_dp = [r + np.tril(r, -1).conj().T for r in rho]     # (two-component: complex)
+        layout = None
+        if st.cell is not None and np.any(st.pbc):
+            layout = engine._kpoint_layout(st.basis)
+        if layout is not None:          # the SCC's k-points (M6h-3b): H_x at any k from them
+            q, hyb_dp = engine._split_kpoint_vector(st.basis, q, layout)
+            smat = fold_all(st.pairs, st.pairs.s, st.basis.norb, st.kpts, np.ones(st.basis.norb))
+            hyb_k = engine._kpoint_hybrid_terms(st.species, st.pos, st.basis, smat, st.cell,
+                                                st.pairs, st.kpts, st.kw, layout.nfold)
+        else:
+            q, rho = engine._split_hybrid_vector(st.basis, q)
+            hyb_dp = [r + np.tril(r, -1).conj().T for r in rho]     # (two-component: complex)
     if q.shape != (n_expected,):
         raise ValueError(f"populations need {n_expected} entries (the SCC's mixed vector, "
                          f"DFTBResult.q_in), got shape {q.shape}")
@@ -194,9 +204,10 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     ones = np.ones(norb)
     gamma = len(k) == 1 and not np.any(k[0])
     periodic = st.cell is not None and np.any(st.pbc)
-    if hyb_dp is not None and periodic and not gamma:                 # M6h-3a
-        raise ValueError("the states of a periodic hybrid calculation are implemented at the "
-                         "Gamma point only (k-points: milestone M6h-3b)")
+    if hyb_dp is not None and hyb_k is None and periodic and not gamma:      # M6h-3a
+        raise ValueError("the states at k-points of a periodic hybrid calculation need its SCC "
+                         "on a supercell folding (M6h-3b), whose DeltaP(k) gives H_x at any k; "
+                         "this one is at the Gamma point")
     hyb_cell = (st.cell, pb) if periodic else (None, None)
     solver = engine.solver if not isinstance(engine.solver, str) else SOLVERS[engine.solver]()
     if not hasattr(solver, "eig"):
@@ -243,7 +254,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
                 h = np.concatenate([h + hs, h - hs])                 # up, down
                 s = np.concatenate([s, s])
-        if hyb_dp is not None:              # + H_x[DeltaP_in] (M6h-1; the Gamma point, M6h-3a)
+        if hyb_k is not None:               # + H_x[DeltaP_in](k) (M6h-3b)
+            h = h + np.concatenate(hyb_k.fock_at(kc, hyb_dp))
+        elif hyb_dp is not None:            # + H_x[DeltaP_in] (M6h-1; the Gamma point, M6h-3a)
             terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real,
                                          *hyb_cell)
             terms.reset(True)                         # the threshold build takes all of DeltaP
