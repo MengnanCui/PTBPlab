@@ -156,8 +156,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
     shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`; with a
     hybrid functional followed by the packed DeltaP_in, whose exchange H_x[DeltaP_in] is added: a
-    fresh build, also for the threshold screening; periodic at the Gamma point, M6h-3a; from the
-    k-points of a supercell folding at any k, M6h-3b, as DFTB+'s band run);
+    fresh build, also for the threshold screening and the neighbour screening's Threshold (one
+    screened build, not the SCC's accumulated exchange, M6h-3c); periodic at the Gamma point,
+    M6h-3a; from the k-points of a supercell folding at any k, M6h-3b, as DFTB+'s band run);
     None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its

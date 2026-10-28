@@ -438,7 +438,6 @@ def test_dftbplus_input_blocks():
 @pytest.mark.parametrize("hybrid, kpts, match", [
     ("lc", monkhorst_pack((2, 2, 2)), "zero shift"),
     ("lc", (np.array([[0.0, 0.0, 0.25]]), np.ones(1)), "zero shift"),
-    ({"type": "lc", "coulomb": "minimum_image"}, supercell_folding((2, 1, 1)), "M6h-3c"),
     ({"type": "lc", "screening": "threshold"}, supercell_folding((2, 1, 1)),
      "threshold algorithm"),
     ({"type": "lc", "coulomb_cutoff": 0.9}, supercell_folding((2, 1, 1)), "positive radius"),

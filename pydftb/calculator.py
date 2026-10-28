@@ -1080,6 +1080,11 @@ class DFTB:
         if stress and self.hybrid is not None:                          # M6h-3a
             raise ValueError("no stress with a hybrid functional (DFTB+ silently skips it and "
                              "refuses lattice optimisation and barostats)")
+        if (forces and periodic and self.hybrid is not None and self.kpts is not None   # M6h-3c
+                and self.hybrid.coulomb == "minimum_image"
+                and self.hybrid.screening == "neighbour"
+                and np.any(np.asarray(self.kpts[0], float))):
+            raise ValueError(_hybrid._MIC_NEIGHBOUR_FORCES)
         if self.independent_k_filling and not periodic:
             raise ValueError("independent_k_filling needs a periodic system (DFTB+ reads it for "
                              "periodic systems only)")
@@ -1734,6 +1739,9 @@ class DFTB:
                 raise ValueError("coulomb, coulomb_cutoff and gsum_cutoff are DFTB+'s "
                                  "CoulombMatrix of periodic systems (DFTB+ stops on one for a "
                                  "molecule)")
+            elif self.hybrid.neighbour_threshold is not None:                     # M6h-3c
+                raise ValueError("neighbour_threshold is DFTB+'s NeighbourBased Threshold of "
+                                 "periodic systems (DFTB+ stops on one for a molecule)")
             if matrices and nfold is not None:                        # k-points (M6h-3b)
                 hybrid = self._kpoint_hybrid_terms(species, pos, basis, smat, cell, pb, kpts, kw,
                                                    nfold)
@@ -1763,18 +1771,17 @@ class DFTB:
         ``nfold`` (M6h-3b), ``smat`` S(k) at them; as :meth:`_hybrid_terms` otherwise."""
         ls = np.asarray(basis.shell_l)
         q0_orb = (self._reference_shell_populations(basis) / (2 * ls + 1))[basis.orb_shell]
-        return _hybrid.KPointHybridTerms(self.hybrid, self._range_sep,
-                                         [self.sk.hubbard[lab][0] for lab in species], pos,
-                                         basis.orb_atom, cell, pairs, np.asarray(smat), q0_orb,
-                                         self.sk.cutoff, kpts, kw, nfold)
+        cls = _hybrid.KPointHybridTerms
+        if self.hybrid.coulomb == "minimum_image" and self.hybrid.screening == "neighbour":
+            cls = _hybrid.NeighbourMinimumImageTerms                  # M6h-3c
+        return cls(self.hybrid, self._range_sep, [self.sk.hubbard[lab][0] for lab in species],
+                   pos, basis.orb_atom, cell, pairs, np.asarray(smat), q0_orb, self.sk.cutoff,
+                   kpts, kw, nfold)
 
     def _check_periodic_hybrid(self, gamma_only: bool, kpts=None, kw=None):
         """A hybrid functional in a periodic cell: the Gamma point (M6h-3a, None) or the
         supercell folding (n1, n2, n3) whose Gamma-centred grid the k-points are (M6h-3b); DFTB+'s
         refusals in its words."""
-        if self.hybrid.coulomb == "minimum_image" and not gamma_only:
-            raise ValueError("the MinimumImage Coulomb matrix of k-point hybrids is milestone "
-                             "M6h-3c (use coulomb='truncated', 'damped' or 'full')")
         if self.hybrid.screening == "threshold":
             raise ValueError("Hybrid functionality for periodic systems currently not implemented "
                              "for the threshold algorithm (as DFTB+)")

@@ -226,6 +226,22 @@ class Case:
         return coulomb == "truncated" and not self.spin
 
     @property
+    def pydftb_forces(self) -> bool:
+        """pydftb computes forces: not for the NeighbourBased MinimumImage at k-points, whose
+        exchange matrix is not the derivative of its energy (M6h-3c, B22)."""
+        h = self.hybrid if isinstance(self.hybrid, dict) else {}
+        return not (self.folding is not None and h.get("coulomb") == "minimum_image"
+                    and h.get("screening") == "neighbour")
+
+    @property
+    def screened_history(self) -> bool:
+        """DFTB+'s Threshold of the neighbour screening at k-points (M6h-3c): the SCC's exchange
+        accumulates screened increments, so a build from q_in alone (pydftb's eigenstates,
+        DFTB+'s band run) is not the SCC's own."""
+        h = self.hybrid if isinstance(self.hybrid, dict) else {}
+        return self.folding is not None and h.get("neighbour_threshold") is not None
+
+    @property
     def corrections(self) -> bool:
         """M6f-3 settings: H5, the halogen correction, the dipole correction."""
         return (self.h5 is not None or self.halogen is not None
@@ -2323,5 +2339,92 @@ CASES += [
     Case("diamond2_centred_lc_k222", _centred(_diamond2, 1 / 8), **LC_GAMMA, folding=(2, 2, 2)),
     Case("co2_crystal_centred_lc_k211", _centred(_co2_crystal, 1 / 4), **LC_GAMMA,
          folding=(2, 1, 1)),
+]
+
+# ---- milestone M6h-3c: MinimumImage and the NeighbourBased Threshold at k-points -----------
+# MinimumImage: the untruncated kernel over the Wigner-Seitz cell of the supercell (DFTB+ has no
+# forces for it, pydftb's MatrixBased ones are tested against differences of its energy); the
+# Threshold: DFTB+'s screened increments of DeltaP_in (dftbplus writes the spec's threshold)
+MIC = {"type": "lc", "coulomb": "minimum_image"}
+MIC_NEIGHBOUR = {**MIC, "screening": "neighbour"}
+CAM_MIC = {"type": "cam", "coulomb": "minimum_image"}
+T6 = {**NEIGHBOUR, "neighbour_threshold": 1e-6}
+# the cases stopped before the frozen exchange's tail (below) end at SCC errors of 2-4e-7, where
+# DFTB+'s k-point neighbour gradient, which takes one DeltaP from DeltaP_out(k) and the other
+# from the last DeltaP_in(R) (B5), moves the forces by up to 1.7e-8 Ha/Bohr (pydftb: the
+# derivative, DeltaP_out twice; with DFTB+'s pair of densities 4e-13 for diamond)
+TOL_HYB_T6 = {**TOL_HYB, "forces": 5e-8}
+CASES += [
+    Case("diamond2_lc_k312_mic", _diamond2, **{**LC_GAMMA, "hybrid": MIC}, folding=(3, 1, 2),
+         note="MatrixBased: G(k - q) over the 11 Wigner-Seitz vectors of the 3 x 1 x 2 supercell "
+              "(6 classes: the ties on its surface each count once, B9)"),
+    Case("diamond2_lc_k222_mic_ws1", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**MIC, "wigner_seitz_reduction": 1}}, folding=(2, 2, 2),
+         note="WignerSeitzReduction 1: the Wigner-Seitz cell of the 1 x 1 x 1 cell, g = 0 only"),
+    Case("diamond2_cam_k222_mic", _diamond2, **{**CAM_GAMMA, "hybrid": CAM_MIC},
+         folding=(2, 2, 2)),
+    Case("diamond2_global_k222_mic", _diamond2,
+         **{**CAM_GAMMA, "skf_set": "ptbp_hcocu_global", "hybrid": CAM_MIC}, folding=(2, 2, 2),
+         note="a global hybrid (CAM, beta = 0)"),
+    Case("co2_crystal_lc_k211_mic", _co2_crystal, **{**LC_GAMMA, "hybrid": MIC},
+         folding=(2, 1, 1)),
+    Case("co_triclinic_lc_k222_mic", _co_triclinic, **{**LC_GAMMA, "hybrid": MIC},
+         folding=(2, 2, 2)),
+    Case("diamond2_lc_k222_mic_neighbour_ws1", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**MIC_NEIGHBOUR, "wigner_seitz_reduction": 1}},
+         folding=(2, 2, 2),
+         note="NeighbourBased: the paths M -> A -> B -> N with A-B in the Wigner-Seitz cell, gamma "
+              "at the paths' distances (no forces: not the derivative of its energy, B22)"),
+    Case("diamond2_lc_k222_mic_neighbour", _diamond2,
+         **{**LC_GAMMA, "hybrid": MIC_NEIGHBOUR, "scc_tol": 3e-6}, folding=(2, 2, 2),
+         note="the 19 Wigner-Seitz vectors; DFTB+ about 22 s per iteration.  Stopped at 3e-6, "
+              "where the two codes' errors still agree to their printed digits: the slow SCC (59 "
+              "iterations to 1e-10) parts at ~1e-6 (rounding amplified by Broyden), the "
+              "converged energies agree to 5.7e-12 Ha.  Matrix and Neighbour MinimumImage differ "
+              "by 1.1e-3 Ha here (B10)"),
+    Case("diamond2_lc_k312_mic_bands", _diamond2, **{**LC_GAMMA, "hybrid": MIC,
+                                                     "tol": TOL_HYB_BANDS},
+         folding=(3, 1, 2), klines=path(FCC, "GXL", [6, 6])),
+    Case("diamond2_lc_k222_mic_neighbour_ws1_bands", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**MIC_NEIGHBOUR, "wigner_seitz_reduction": 1},
+            "tol": TOL_HYB_BANDS}, folding=(2, 2, 2), klines=path(FCC, "GXL", [6, 6]),
+         note="the explicit cells' blocks with their own phases at the band's k-points"),
+    # DFTB+'s Threshold of the neighbour screening (default 1e-6 at k-points).  Once every
+    # increment of DeltaP_in falls below it (errors of about 1e-6) the exchange stops changing,
+    # and Broyden's next step can be nearly zero (|dDeltaP| 1e-12 to 2e-8); its update then
+    # divides differences of nearly equal residuals, and the two codes' errors part from there
+    # (by 1e-4 to 1 relative, both reaching the same energy to 3e-11 Ha).  scc_tol stops the
+    # cases just before that step
+    Case("diamond2_lc_k312_neighbour_t6", _diamond2,
+         **{**LC_GAMMA, "hybrid": T6, "scc_tol": 5e-7, "tol": TOL_HYB_T6}, folding=(3, 1, 2),
+         note="DFTB+'s default Threshold (at 1e-10: 4.8e-6 Ha from the unscreened build, 28 SCC "
+              "iterations instead of 17); the 14th iteration's build keeps no increment"),
+    Case("diamond2_lc_k312_neighbour_t4", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**NEIGHBOUR, "neighbour_threshold": 1e-4}}, folding=(3, 1, 2),
+         note="1.7e-5 Ha from the unscreened build"),
+    Case("diamond2_lc_k312_neighbour_t6_damped", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**T6, "coulomb": "damped"}}, folding=(3, 1, 2)),
+    Case("co2_crystal_lc_k211_neighbour_t6", _co2_crystal,
+         **{**LC_GAMMA, "hybrid": T6, "scc_tol": 4e-7, "tol": TOL_HYB_T6}, folding=(2, 1, 1),
+         note="21 iterations, the last one with no increment kept (the nearly zero step is the "
+              "25th)"),
+    Case("diamond2_lc_k222_mic_neighbour_t6", _diamond2,
+         **{**LC_GAMMA, "hybrid": {**MIC_NEIGHBOUR, "neighbour_threshold": 1e-6}},
+         folding=(2, 2, 2), fixed_scc=20,
+         note="the screened MinimumImage stalls at errors of 1-2e-5 (DFTB+'s default): 20 "
+              "iterations, 7.4e-5 Ha from the unscreened build"),
+    Case("diamond2_lc_k312_neighbour_t6_bands", _diamond2,
+         **{**LC_GAMMA, "hybrid": T6, "scc_tol": 5e-7, "tol": {**TOL_HYB_BANDS, **TOL_HYB_T6}},
+         folding=(3, 1, 2), klines=path(FCC, "GXL", [6, 6]),
+         note="DFTB+'s band run: one screened build of the file's DeltaP, not the SCC's "
+              "accumulated exchange (the SCC's own levels are compared on its grid)"),
+    Case("diamond2_lc_k312_neighbour_t6_read_charges", _diamond2,
+         **{**LC_GAMMA, "hybrid": T6, "scc_tol": 5e-7, "tol": TOL_HYB_T6}, folding=(3, 1, 2),
+         read_charges={"text": False, "seed": 4},
+         note="the first build of a restart is a whole one of the file's DeltaP, as of every "
+              "geometry step (updateCoords)"),
+    Case("diamond2_centred_lc_k222_neighbour_t6", _centred(_diamond2, 1 / 8),
+         **{**LC_GAMMA, "hybrid": T6, "scc_tol": 3e-7, "tol": TOL_HYB_T6}, folding=(2, 2, 2),
+         note="the nearly zero step is the 14th"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

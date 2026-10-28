@@ -496,10 +496,10 @@ H5 and the halogen correction recognise elements, DFTB+ species names (type labe
 ### Range-separated hybrid functionals (LC, CAM)
 
 DFTB+'s `Hybrid = LC {}` and `CAM {}` for molecules (milestone M6h-1; NumPy engine only) and
-periodic systems at the Gamma point (M6h-3a) and at k-points (M6h-3b, below).  The
-SK files hold the functional: their `RangeSep` section (`LC omega` or `CAM omega alpha beta`,
-as in DFTB+'s ob2 files) gives omega, alpha and beta; the option picks DFTB+'s type and
-screening:
+periodic systems at the Gamma point (M6h-3a) and at k-points (M6h-3b and M6h-3c, below).
+The SK files hold the functional: their `RangeSep` section (`LC omega` or `CAM omega alpha
+beta`, as in DFTB+'s ob2 files) gives omega, alpha and beta; the option picks DFTB+'s type
+and screening:
 
 ```python
 calc = DFTB(sk, hybrid="lc")                    # LC files; "cam" takes CAM, global or LC files
@@ -520,8 +520,8 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: the MinimumImage Coulomb matrix (M6h-3c),
-the response analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
+coordinate derivatives, XL-BOMD; not yet in pydftb: the response analyses (M6h-4), torch
+and `pydftb.autodiff`.  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
 
 TD-LC (milestone M6h-2): `casida=` with LC files gives DFTB+'s TD-LC-DFTB.  The long-range
@@ -602,10 +602,44 @@ forces of the damped and full kernels and with spin (against differences of the 
 Differences from DFTB+ 25.1: its block populations (+U, onsite) never follow DeltaP at
 k-points (2.2e-3 and 3.6e-2 Ha in the CO2 crystal; pydftb takes those of DeltaP_in, a
 validation switch keeps DFTB+'s); its NeighbourBased `Threshold` (default 1e-6) screens the
-increments of its build (up to 1.6e-6 Ha): pydftb builds the whole operator (the references
-use 1e-100); a geometry step where an atom crosses a face of the cell starts DFTB+ from
-DeltaP(k) in the wrong gauge (4-5 more SCC iterations).  Not yet: MinimumImage (M6h-3c).
-Details: [`docs/reports/M6h3b-hybrid-kpoints.html`](docs/reports/M6h3b-hybrid-kpoints.html).
+increments of its build (up to 1.6e-6 Ha): pydftb builds the whole operator unless given
+`neighbour_threshold` (below; the references use 1e-100); a geometry step where an atom
+crosses a face of the cell starts DFTB+ from DeltaP(k) in the wrong gauge (4-5 more SCC
+iterations).  Details:
+[`docs/reports/M6h3b-hybrid-kpoints.html`](docs/reports/M6h3b-hybrid-kpoints.html).
+
+MinimumImage and the neighbour screening's Threshold (milestone M6h-3c; DFTB+ has both at
+k-points only):
+
+```python
+k = supercell_folding((2, 2, 2))
+DFTB(sk, kpts=k, hybrid={"type": "lc", "coulomb": "minimum_image"})         # matrix screening
+DFTB(sk, kpts=k, hybrid={"type": "lc", "coulomb": "minimum_image", "screening": "neighbour",
+                         "wigner_seitz_reduction": 1})                      # no forces
+DFTB(sk, kpts=k, hybrid={"type": "lc", "screening": "neighbour", "neighbour_threshold": 1e-6})
+```
+
+"minimum_image" is DFTB+'s MinimumImage: the untruncated kernel summed over the Wigner-Seitz
+cell of the supercell folding (reduced by `wigner_seitz_reduction` cells; the ties on its
+surface each counted once, as DFTB+), without cutoffs.  The matrix screening is the k-point
+exchange with those translations; the neighbour screening restricts only the A-B density of
+every path M -> A -> B -> N to the Wigner-Seitz cell and takes gamma at the path's own
+distances (evaluated as convolutions of explicit-cell kernels by FFT).  They are different
+approximations (1.1e-3 Ha apart for a diamond 2x2x2 folding), as in DFTB+.  The Wigner-Seitz
+vectors belong to the atoms as DFTB+ folds them into the cell, so the energy jumps when an
+atom crosses a face of the cell (1.8 Ha in a diamond 2x1x1 folding, DFTB+ the same): not for
+geometry optimisation or MD.  The matrix screening's forces are the exact derivative, and
+spin works (DFTB+ refuses both); the neighbour screening's operator is not self-adjoint, so its
+exchange matrix is not the derivative of the energy and pydftb refuses its forces (DFTB+ has
+none either).  DFTB+ stops on its default Coulomb cutoff where that is undefined (a2 along z)
+even for MinimumImage, which does not use it; pydftb goes on.  `neighbour_threshold` is
+DFTB+'s `Threshold`: the exchange accumulates screened builds of the increments of DeltaP_in
+(DFTB+'s kept quadruples; an unchanged DeltaP gives zero, as DFTB+), so the result depends on
+the SCC's history (4.8e-6 Ha from the whole operator at 1e-6 for diamond; with MinimumImage
+the SCC stalls at errors of 1e-5); every geometry starts with a whole build, a band run makes
+one screened build of DeltaP, and the forces are the unscreened formula at the screened
+density, as DFTB+'s.  None (the default) builds the whole operator.  Details:
+[`docs/reports/M6h3c-hybrid-mic-threshold.html`](docs/reports/M6h3c-hybrid-mic-threshold.html).
 
 ### Analysis outputs
 

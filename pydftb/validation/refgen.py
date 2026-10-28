@@ -179,7 +179,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             q_init = charge_file_data(inp, calc._charge_layout(labels)[0].norb_atom)
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
         res = calc.calculate(labels, np.array(inp["positions_angstrom"]) / BOHR, cell,
-                             np.ones(3, bool) if periodic else None, q_init=q_init)
+                             np.ones(3, bool) if periodic else None, q_init=q_init,
+                             forces=case.pydftb_forces)
         return (res, calc) if engine else res
     finally:
         if tmp:
@@ -574,8 +575,11 @@ def _compare_states(case: Case, inp: dict, ref: dict, res, engine) -> dict:
            np.ones(3, bool) if periodic else None)
     fermi = res.fermi_spin if res.fermi_spin is not None else res.fermi
     st = eigenstates(engine, *geo, res.q_in, projections=bool(case.regions), scc_fermi=fermi)
-    dev = {"eigenvalues": float(np.abs(st.eigenvalues - np.array(ref["eigenvalues"])).max()),
-           "occupations": float(np.abs(st.occupations - np.array(ref["filling"])).max())}
+    ev, occ = st.eigenvalues, st.occupations
+    if case.screened_history:            # M6h-3c: DFTB+'s run 1 shows the SCC's own levels
+        ev, occ = (np.reshape(x, np.shape(ev)) for x in (res.eigenvalues, res.occupations))
+    dev = {"eigenvalues": float(np.abs(ev - np.array(ref["eigenvalues"])).max()),
+           "occupations": float(np.abs(occ - np.array(ref["filling"])).max())}
     if case.regions:
         shells = [list(range(inp["max_l"][inp["labels"][r["atoms"][0]]] + 1)) for r in case.regions]
         dev["regions"] = max(

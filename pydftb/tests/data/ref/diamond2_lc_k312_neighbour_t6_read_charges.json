@@ -1,0 +1,206 @@
+{
+ "schema": 1,
+ "case": "diamond2_lc_k312_neighbour_t6_read_charges",
+ "note": "the first build of a restart is a whole one of the file's DeltaP, as of every geometry step (updateCoords)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14,
+  "differentiation": "FiniteDiff (default)"
+ },
+ "skf_set": "ptbp_hcocu_lc",
+ "skf_sha256": {
+  "C-C.skf": "bdce9b8f8484237a77dfec9739f12e4230a2621e240781eb3fc4caa11518ba62",
+  "C-Cu.skf": "ca2097e8c281e2c911474e9109727d19a33ec72a23f267374f44aa0eb56adc51",
+  "C-H.skf": "ff1f6fe641768bb259adc508f04e5f60f698a9876b4fec90152db24f551ad24e",
+  "C-O.skf": "7fc441d083ae808321384eee47c410fe779b6c4042bdfa040f1aa6c97a349261",
+  "Cu-C.skf": "51816a49b9e8094200ebfad0bbc3017c3eff28210042951022b8e1e7ae63f3f8",
+  "Cu-Cu.skf": "42062ec155a31d2c10e948be0624890f8c34c3fb51291b5556a82e60a5a00de7",
+  "Cu-H.skf": "6170214013fd44e795cf7e941530be17846d4997af7dea94c523a81af83d42db",
+  "Cu-O.skf": "6509210c8cbcf631bf33df49f347c2fbdde3a85ac69829efddb82581052e8493",
+  "H-C.skf": "c24c84231cb80ed922e22d5dd4571640aa7ae20b9294b2c05019baf122f1c946",
+  "H-Cu.skf": "8d1659e7154f1380edf2442e1b846f9530c01b668de9032d48d9f877eab7be4f",
+  "H-H.skf": "466b1da0599aadd1622c3d16588ac09f568b6c9ab4e538dcbfef2538a098605b",
+  "H-O.skf": "f68b93fa05bd427329ae0126d76f5973b732f17a7ead72ca7fbee84ed8addafe",
+  "O-C.skf": "96402572482cce60c17209013feae10100829fb3a34b42efdec1ac83173ebd37",
+  "O-Cu.skf": "2748c5f9e1617292165b584656cad4a6a63d564472b0e9d1819fdba6f9c51d19",
+  "O-H.skf": "cbfe7271cc0e99b89a03eaf24c6ad9f4b8b70e2eb653cd31fd334739cc1cfda2",
+  "O-O.skf": "6e1e7d22e464f863a6497c24b5d4407a56f192ca21d4cba389d4f4123711e3d0"
+ },
+ "settings": {
+  "scc": true,
+  "filling": [
+   "fermi",
+   0.0
+  ],
+  "shell_resolved": false,
+  "repulsive": "skf",
+  "typed": null,
+  "dftb3": null,
+  "spin": null,
+  "scc_tol": 5e-07,
+  "ewald_tolerance": 1e-12,
+  "mixer": null,
+  "initial_charges": null,
+  "read_charges": {
+   "text": false,
+   "seed": 4
+  },
+  "charge": 0.0,
+  "fd_delta": 0.0001220703125,
+  "hybrid": {
+   "type": "lc",
+   "screening": "neighbour",
+   "neighbour_threshold": 1e-06
+  }
+ },
+ "libraries": {},
+ "input": {
+  "run1_positions_angstrom": [
+   [
+    0.034105119624558866,
+    0.007853776745586367,
+    0.052806643783896164
+   ],
+   [
+    0.855619651394033,
+    0.8341864350870287,
+    0.8809511326967725
+   ]
+  ],
+  "labels": [
+   "C",
+   "C"
+  ],
+  "positions_angstrom": [
+   [
+    0.053658854202909556,
+    0.013095295515359682,
+    0.0028949240421602585
+   ],
+   [
+    0.8358452188990653,
+    0.8834283539245681,
+    0.8811072306219304
+   ]
+  ],
+  "cell_angstrom": [
+   [
+    0.0,
+    1.7835,
+    1.7835
+   ],
+   [
+    1.7835,
+    0.0,
+    1.7835
+   ],
+   [
+    1.7835,
+    1.7835,
+    0.0
+   ]
+  ],
+  "kpoints": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.5
+   ],
+   [
+    0.3333333333333333,
+    0.0,
+    0.0
+   ],
+   [
+    0.3333333333333333,
+    0.0,
+    0.5
+   ]
+  ],
+  "kweights": [
+   0.16666666666666666,
+   0.16666666666666666,
+   0.3333333333333333,
+   0.3333333333333333
+  ],
+  "max_l": {
+   "C": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "charges_file": "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",
+  "charges_text": false
+ },
+ "hsd": "Geometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 5e-07\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  ReadInitialCharges = Yes\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_ref_db76ezza/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  KPointsAndWeights = SupercellFolding {\n    3 0 0\n    0 1 0\n    0 0 2\n    0.0 0.0 0.0\n  }\n  Hybrid = LC {\n    Screening = NeighbourBased {\n      Threshold = 1e-06\n      CutoffReduction [Bohr] = 0.0\n    }\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "energy": -3.0582084989,
+  "free_energy": -3.0582084989,
+  "e_zero": -3.0582084989,
+  "e_rep": 0.0637124983,
+  "e_scc": -0.0,
+  "e_band": -2.9158532889,
+  "e_fock": -0.2060677083,
+  "fermi": -0.166160847248103,
+  "forces": [
+   [
+    -0.123747895242706,
+    -0.0457005547062145,
+    -0.016891131346654
+   ],
+   [
+    0.123747895242695,
+    0.0457005547062365,
+    0.0168911313466821
+   ]
+  ],
+  "charges_net": [
+   -4.9960036108132e-15,
+   -3.33066907387547e-15
+  ],
+  "n_scc": 14,
+  "scc_errors": [
+   0.49253713,
+   0.40383891,
+   0.045576617,
+   0.031573137,
+   0.0067023206,
+   0.003137898,
+   0.00034166616,
+   0.00012883769,
+   2.7820024e-05,
+   8.1604438e-06,
+   3.5646954e-06,
+   2.5573816e-06,
+   5.7106607e-07,
+   3.1731731e-07
+  ],
+  "run1": {
+   "energy": -3.0279167305,
+   "n_scc": 13
+  }
+ },
+ "tolerances": {
+  "energy": 1e-08,
+  "forces": 5e-08,
+  "charges": 1e-08,
+  "spins": 1e-08,
+  "n_scc": 0,
+  "scc_errors": 0.0001,
+  "orbital": 1e-08,
+  "eigenvalues": 1e-08,
+  "moments": 1e-08,
+  "pc_forces": 1e-08,
+  "dipole": 1e-08,
+  "e_fr": 1e-08,
+  "n_electrons": 1e-08,
+  "fermi_level": 1e-08,
+  "charges_file": 1e-08
+ }
+}

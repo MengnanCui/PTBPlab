@@ -90,9 +90,17 @@ class Hybrid:
     so the SCC does not settle; for comparisons only); ``coulomb_cutoff`` (Bohr, None: DFTB+'s
     default, half the smallest plane spacing at the Gamma point, :func:`dftbp_coulomb_cutoff` of
     the folding at k-points) and ``gsum_cutoff`` (Bohr, None: twice the former).  A molecule
-    refuses them (DFTB+ stops on its unread CoulombMatrix).  The neighbour screening at
-    k-points builds the whole operator (DFTB+'s ``Threshold`` -> 0; DFTB+'s default 1e-6 screens
-    its increments, which shifts the energy by up to about 1e-6 Ha)."""
+    refuses them (DFTB+ stops on its unread CoulombMatrix).  At k-points (M6h-3c, as DFTB+)
+    also ``coulomb`` "minimum_image" (DFTB+ MinimumImage: the untruncated kernel over the Wigner-
+    Seitz cell of the supercell folding reduced by ``wigner_seitz_reduction`` cells,
+    :func:`wigner_seitz_vectors`, lattice vectors of the atoms as DFTB+ folds them into the cell,
+    so the energy jumps when an atom crosses a face of the cell (B23; up to Hartrees in small
+    supercells); MatrixBased and NeighbourBased are different approximations, and the latter has
+    no forces; no cutoffs, and not DFTB+'s stop on the default cutoff it computes but does not
+    use, B3).  The neighbour screening at k-points builds the whole operator
+    unless ``neighbour_threshold`` is given (DFTB+'s ``Threshold``, default 1e-6 there: the
+    increments of DeltaP_in screened, which shifts the energy by up to about 1e-5 Ha and makes
+    it depend on the SCC's history; M6h-3c)."""
     kind: str = "lc"
     screening: str = "matrix"
     threshold: float = 1e-6
@@ -100,6 +108,8 @@ class Hybrid:
     coulomb: str = "truncated"
     coulomb_cutoff: float | None = None
     gsum_cutoff: float | None = None
+    wigner_seitz_reduction: int = 0
+    neighbour_threshold: float | None = None
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -121,6 +131,25 @@ class Hybrid:
             v = getattr(self, name)
             if v is not None and not v > 0.0:
                 raise ValueError(f"hybrid {name} must be positive (Bohr)")
+        r = self.wigner_seitz_reduction                   # M6h-3c
+        if isinstance(r, bool) or not isinstance(r, (int, np.integer)) or r < 0:
+            raise ValueError("hybrid wigner_seitz_reduction must be a non-negative integer (DFTB+ "
+                             "WignerSeitzReduction)")
+        if r and self.coulomb != "minimum_image":
+            raise ValueError("wigner_seitz_reduction goes with coulomb='minimum_image' (DFTB+ "
+                             "reads WignerSeitzReduction in the MinimumImage block only)")
+        if self.coulomb == "minimum_image" and (self.coulomb_cutoff is not None
+                                                or self.gsum_cutoff is not None):
+            raise ValueError("coulomb_cutoff and gsum_cutoff do not go with "
+                             "coulomb='minimum_image' (DFTB+ reads neither in the MinimumImage "
+                             "block: the Wigner-Seitz cell of the folding and the untruncated "
+                             "kernel)")
+        if self.neighbour_threshold is not None:
+            if self.screening != "neighbour":
+                raise ValueError("neighbour_threshold is the Threshold of the neighbour screening "
+                                 "(DFTB+ NeighbourBased)")
+            if not self.neighbour_threshold >= 0.0:
+                raise ValueError("the hybrid neighbour_threshold must not be negative")
 
     @classmethod
     def make(cls, spec) -> "Hybrid | None":
@@ -135,11 +164,13 @@ class Hybrid:
             if "type" in d:
                 d["kind"] = d.pop("type")
             unknown = set(d) - {"kind", "screening", "threshold", "cutoff_reduction", "coulomb",
-                                "coulomb_cutoff", "gsum_cutoff"}
+                                "coulomb_cutoff", "gsum_cutoff", "wigner_seitz_reduction",
+                                "neighbour_threshold"}
             if unknown:
                 raise ValueError(f"hybrid: unknown keys {sorted(unknown)} (use 'type', "
                                  "'screening', 'threshold', 'cutoff_reduction', 'coulomb', "
-                                 "'coulomb_cutoff', 'gsum_cutoff')")
+                                 "'coulomb_cutoff', 'gsum_cutoff', 'wigner_seitz_reduction', "
+                                 "'neighbour_threshold')")
             for key in ("kind", "screening", "coulomb"):
                 if key in d:
                     d[key] = str(d[key]).lower()
@@ -521,6 +552,30 @@ def lattice_translations(cell, rg) -> np.ndarray:
     nmax = np.floor(rg / plane_spacings(cell)).astype(int) + 1
     n = np.array(np.meshgrid(*[np.arange(-m, m + 1) for m in nmax], indexing="ij"))
     return n.reshape(3, -1).T @ np.asarray(cell, float)
+
+
+def wigner_seitz_vectors(nfold, cell, reduction: int = 0, search: int = 2,
+                         tol: float = 1e-8) -> np.ndarray:
+    """DFTB+ generateWignerSeitzGrid (math/wignerseitz.F90) for MinimumImage (milestone
+    M6h-3c): the integer lattice vectors n (n_ws, 3) of the Wigner-Seitz cell of the supercell
+    N' = max(N - reduction, 1): n in [-2N', 2N']^3 whose metric length |n.A| is the smallest of
+    n - i N' (i in [-2, 2]^3) within ``tol`` (Bohr^2), the ties on the cell's surface all kept,
+    each with weight 1 (B9), by length (a stable sort; DFTB+'s heap sort orders ties otherwise)."""
+    nk = np.maximum(np.asarray(nfold, int) - int(reduction), 1)
+    lat = np.asarray(cell, float)
+    metric = lat @ lat.T
+    n_all = np.array(np.meshgrid(*[np.arange(-search * n, search * n + 1) for n in nk],
+                                 indexing="ij")).reshape(3, -1).T
+    shift = np.array(np.meshgrid(*[np.arange(-search, search + 1)] * 3,
+                                 indexing="ij")).reshape(3, -1).T * nk
+    centre = int(np.flatnonzero((shift == 0).all(1))[0])
+    keep = []
+    for i0 in range(0, len(n_all), 4096):
+        diff = n_all[i0:i0 + 4096, None, :] - shift[None, :, :]
+        dist = np.einsum("nai,ij,naj->na", diff, metric, diff)
+        keep.append(np.abs(dist[:, centre] - dist.min(1)) <= tol)
+    ws = n_all[np.concatenate(keep)]
+    return ws[np.argsort(np.linalg.norm(ws @ lat, axis=1), kind="mergesort")]
 
 
 def dftbp_dense_mulliken(dp, s, orb_atom) -> np.ndarray:
@@ -1074,19 +1129,29 @@ class KPointHybridTerms:
             raise ValueError("Screening cutoff for hybrid xc-functional neighbours too short "
                              "(as DFTB+)")
         self._cam_cutoff = cam_cutoff
-        rc = (spec.coulomb_cutoff if spec.coulomb_cutoff is not None
-              else dftbp_coulomb_cutoff(cell, nfold))
-        if rc - DIST_FUDGE <= 0.0:                  # DFTB+ checks it whatever the kernel
-            raise ValueError("The beginning of the damping region of the truncated Coulomb "
-                             "kernel must be at a positive radius (as DFTB+; the Coulomb cutoff "
-                             f"is {rc:.4f} Bohr)")
-        self.rc = rc
-        self.rg = spec.gsum_cutoff if spec.gsum_cutoff is not None else 2.0 * rc
+        if spec.coulomb == "minimum_image":      # M6h-3c: no cutoffs (DFTB+ still computes the
+            self.rc = self.rg = None             # default it does not use, and stops on B3)
+        else:
+            rc = (spec.coulomb_cutoff if spec.coulomb_cutoff is not None
+                  else dftbp_coulomb_cutoff(cell, nfold))
+            if rc - DIST_FUDGE <= 0.0:              # DFTB+ checks it whatever the kernel
+                raise ValueError("The beginning of the damping region of the truncated Coulomb "
+                                 "kernel must be at a positive radius (as DFTB+; the Coulomb "
+                                 f"cutoff is {rc:.4f} Bohr)")
+            self.rc = rc
+            self.rg = spec.gsum_cutoff if spec.gsum_cutoff is not None else 2.0 * rc
         self.shifts = dftbp_fold_shifts(pos, cell)
         self.layout = KPointLayout(kpts, kw, nfold, self.orb_atom, spec.screening, self.shifts)
         self.pos_folded = pos - self.shifts @ cell
-        self.gvec = lattice_translations(cell, self.rg)
-        self.ncoef = np.rint(self.gvec @ np.linalg.inv(cell)).astype(int)
+        if spec.coulomb == "minimum_image":       # M6h-3c: the supercell's Wigner-Seitz cell
+            self.ws = wigner_seitz_vectors(nfold, cell, spec.wigner_seitz_reduction)
+            self.ncoef = self.ws
+            self.gvec = self.ws @ cell
+        else:
+            self.gvec = lattice_translations(cell, self.rg)
+            self.ncoef = np.rint(self.gvec @ np.linalg.inv(cell)).astype(int)
+        self.threshold = spec.neighbour_threshold if spec.screening == "neighbour" else None
+        self._prev = self._hprev = None
         self._images = self._image_list()
         lay = self.layout
         g = np.zeros(lay.ncell * nat * nat)
@@ -1108,7 +1173,7 @@ class KPointHybridTerms:
         self.s_diag = np.array([np.diag(s).real for s in self.S])              # (nk, n)
 
     def _gamma(self, ua, ub, d, derivative: bool = False):
-        if self.spec.coulomb == "full":
+        if self.spec.coulomb in ("full", "minimum_image"):
             return (dgamma_cam if derivative else gamma_cam)(ua, ub, d, self.omega, self.alpha,
                                                              self.beta)
         return coulomb_gamma(ua, ub, d, self.omega, self.alpha, self.beta, self.rc,
@@ -1117,10 +1182,11 @@ class KPointHybridTerms:
     def _image_list(self) -> list:
         """The terms of the lattice sums per pair of Hubbard values: atoms a, b, translation
         index, distance |R'_A - R'_B - g| and gamma, those within Rc only for a truncated kernel
-        (gamma and its derivative vanish beyond), in blocks of at most IMAGE_CHUNK candidates."""
+        (gamma and its derivative vanish beyond), in blocks of at most IMAGE_CHUNK candidates;
+        MinimumImage: the Wigner-Seitz vectors, MatrixBased (getCamGammaFourier over them)."""
         values, inv = np.unique(self.u, return_inverse=True)
         groups = [np.flatnonzero(inv == k) for k in range(len(values))]
-        full = self.spec.coulomb == "full"
+        full = self.spec.coulomb in ("full", "minimum_image")
         out = []
         for ia in groups:
             for ib in groups:
@@ -1159,8 +1225,10 @@ class KPointHybridTerms:
     def error(self, x_out, x_in) -> float:
         return self.layout.error(x_out, x_in)
 
-    def reset(self, restart: bool):
-        """No state between Fock builds (no threshold screening at k-points)."""
+    def reset(self, restart: bool = True):
+        """Forget the screened builds' history (``neighbour_threshold``, M6h-3c): the next
+        :meth:`fock` builds all of DeltaP, as DFTB+ at a new geometry."""
+        self._prev = self._hprev = None
 
     # -- Fock matrices and energy -----------------------------------------------------------
     def _conv(self, x) -> np.ndarray:
@@ -1170,7 +1238,10 @@ class KPointHybridTerms:
 
     def fock(self, dps) -> list:
         """H_x[DeltaP](k) of every spin channel (zero for a zero DeltaP, as DFTB+'s first
-        iteration)."""
+        iteration); with ``neighbour_threshold`` DFTB+'s screened increments
+        (:meth:`_screened_fock`, M6h-3c)."""
+        if self.threshold is not None:
+            return self._screened_fock(dps)
         c = -0.125 if len(dps) == 1 else -0.25
         s = self.S_x
         out = []
@@ -1183,20 +1254,99 @@ class KPointHybridTerms:
             out.append(c * h)
         return out
 
+    # -- DFTB+'s Threshold of the neighbour screening (M6h-3c) ------------------------------------
+    def screening_groups(self, pmax: float) -> list:
+        """DFTB+'s kept quadruples (getFourLoopCompositeIndex): pair entries p = (M, A@h) and
+        q = (N, B@l) of the pairs within the CAM cutoff and the on-site, kept when pmax est_p
+        est_q >= Threshold (est = max |S block|, calculateOverlapEstimates; 1 on-site), as groups
+        of p that keep the same q: [(p pairs, p on-site, q pairs, q on-site)], boolean masks of
+        the pairs and flags."""
+        if getattr(self, "_est", None) is None:
+            p = self._pairs
+            est = np.zeros(len(p.dist))
+            np.maximum.at(est, p.pair_of, np.abs(p.s))
+            self._est = est
+        est, keep = self._est, self._pairs.dist < self._cam_cutoff
+        tau = self.threshold / pmax
+        levels = np.unique(np.concatenate([est[keep], [1.0]]))[::-1]
+        with np.errstate(divide="ignore"):
+            theta = tau / np.where(keep & (est > 0.0), est, np.inf)
+        k_pair = np.searchsorted(-levels, -theta, side="right")      # q levels kept by each p
+        k_on = int(np.searchsorted(-levels, -tau, side="right"))
+        out = []
+        for kq in sorted(set(k_pair[keep].tolist()) | {k_on}):
+            if kq:
+                lev = levels[kq - 1]
+                out.append((keep & (k_pair == kq), kq == k_on, keep & (est >= lev), 1.0 >= lev))
+        return out
+
+    def _overlap_of(self, pair_mask, onsite: bool, kpts=None) -> np.ndarray:
+        """S(k) of the pairs in ``pair_mask`` (and the on-site identity) at ``kpts`` (default:
+        the SCC's)."""
+        p = self._pairs
+        k = self.layout.kpts if kpts is None else np.atleast_2d(kpts)
+        return fold_all(p, p.s * pair_mask[p.pair_of], self.n, k,
+                        np.ones(self.n) if onsite else np.zeros(self.n))
+
+    def _group_operators(self, groups) -> list:
+        return [(self._overlap_of(pp, po), self._overlap_of(qp, qo)) for pp, po, qp, qo in groups]
+
+    def _increment(self, x, sets) -> np.ndarray:
+        """The four terms of the BvK array ``x`` over the kept quadruples, at the SCC's k-points:
+        sum over the (S_P, S_Q) of C(S_P D S_Q) + C(S_P D) S_Q + S_P C(D S_Q) + S_P C(D) S_Q."""
+        d = self.layout.from_bvk(x)
+        h = np.zeros((self.layout.nk, self.n, self.n), complex)
+        for sp, sq in sets:
+            spd, dsq = sp @ d, d @ sq
+            h = h + (self._conv(spd @ sq) + self._conv(spd) @ sq + sp @ self._conv(dsq)
+                     + sp @ self._conv(d) @ sq)
+        return h
+
+    def _screened_fock(self, dps) -> list:
+        """DFTB+'s NeighbourBased exchange with a Threshold (addCamHamiltonianNeighbour_kpts_ct
+        and _mic): H = H_prev + H[dDeltaP] over the quadruples :meth:`screening_groups` keeps
+        for pmax = max |dDeltaP| (BvK arrays, all spin channels), dDeltaP = DeltaP - DeltaP_prev
+        (all of DeltaP after :meth:`reset`); an unchanged DeltaP returns zero, as DFTB+ (B7)."""
+        c = -0.125 if len(dps) == 1 else -0.25
+        lay, n = self.layout, self.n
+        bv = [lay.to_bvk(d) for d in dps]
+        inc = bv if self._prev is None else [b - q for b, q in zip(bv, self._prev)]
+        if self._hprev is None:
+            self._hprev = [np.zeros((lay.nk, n, n), complex) for _ in dps]
+        self._prev = bv
+        pmax = max(float(np.abs(x).max()) for x in inc)
+        if pmax < 1e-16:
+            return [np.zeros((lay.nk, n, n), complex) for _ in dps]
+        sets = self._group_operators(self.screening_groups(pmax))
+        for i, x in enumerate(inc):
+            self._hprev[i] = self._hprev[i] + c * self._increment(x, sets)
+        return [np.array(h) for h in self._hprev]
+
     def fock_at(self, kpts, dps) -> list:
         """H_x[DeltaP] at any k-points (band structures; DFTB+'s band run from the SCC's
         DeltaP): C(X)(k) = sum_g X(n_g mod N) o gamma(g) exp(2 pi i k.n_g) over the lattice
-        sums' terms, the same as :meth:`fock` on the grid."""
+        sums' terms, the same as :meth:`fock` on the grid; with ``neighbour_threshold`` one
+        screened build of all of DeltaP (DFTB+'s band run, not the SCC's accumulated one)."""
         kpts = np.atleast_2d(np.asarray(kpts, float))
         lay, oa, nat = self.layout, self.orb_atom, len(self.u)
         c = -0.125 if len(dps) == 1 else -0.25
-        s = self.S_x
+        s_band = self.overlap_at(kpts)
+        if self.threshold is None:
+            sets = [(self.S_x, self.S_x, s_band, s_band)]
+        else:
+            pmax = max(float(np.abs(lay.to_bvk(d)).max()) for d in dps)
+            groups = self.screening_groups(pmax) if pmax >= 1e-16 else []
+            sets = [(self._overlap_of(pp, po), self._overlap_of(qp, qo),
+                     self._overlap_of(pp, po, kpts), self._overlap_of(qp, qo, kpts))
+                    for pp, po, qp, qo in groups]
         parts = []
         for d in dps:
-            sd, ds = s @ d, d @ s
-            parts.append([lay.to_bvk(x) for x in (sd @ s, sd, ds, d)])
-        s_band = self.overlap_at(kpts)
-        out = [np.empty((len(kpts), self.n, self.n), complex) for _ in dps]
+            per = []
+            for sp, sq, _, _ in sets:
+                spd, dsq = sp @ d, d @ sq
+                per.append([lay.to_bvk(x) for x in (spd @ sq, spd, dsq, d)])
+            parts.append(per)
+        out = [np.zeros((len(kpts), self.n, self.n), complex) for _ in dps]
         for i, k in enumerate(kpts):
             h = np.zeros(lay.ncell * nat * nat, complex)
             for (a, b, gi, d, gam, _, _) in self._images:
@@ -1206,10 +1356,14 @@ class KPointHybridTerms:
                 h += (np.bincount(flat, weights=w.real, minlength=len(h))
                       + 1j * np.bincount(flat, weights=w.imag, minlength=len(h)))
             h = h.reshape(lay.ncell, nat, nat)[:, oa][:, :, oa]
-            sk = s_band[i]
-            for j, (b1, b2, b3, b4) in enumerate(parts):
-                c1, c2, c3, c4 = ((x * h).sum(0) for x in (b1, b2, b3, b4))
-                out[j][i] = c * (c1 + c2 @ sk + sk @ c3 + sk @ c4 @ sk)
+            for j, per in enumerate(parts):
+                tot = None
+                for (b1, b2, b3, b4), (_, _, spb, sqb) in zip(per, sets):
+                    c1, c2, c3, c4 = ((x * h).sum(0) for x in (b1, b2, b3, b4))
+                    t = c1 + c2 @ sqb[i] + spb[i] @ c3 + spb[i] @ c4 @ sqb[i]
+                    tot = t if tot is None else tot + t
+                if tot is not None:
+                    out[j][i] = c * tot
         return out
 
     def overlap_at(self, kpts) -> np.ndarray:
@@ -1269,3 +1423,140 @@ class KPointHybridTerms:
             for x in range(3):
                 out[:, x] += np.bincount(a, weights=f * v[:, x], minlength=nat)
         return out
+
+
+class NeighbourMinimumImageTerms(KPointHybridTerms):
+    """NeighbourBased exchange with the MinimumImage Coulomb matrix at k-points (DFTB+
+    addCamHamiltonianNeighbour_kpts_mic; milestone M6h-3c).  Every path M@0 -> A@h -> B@h+g ->
+    N@g+h-l of the neighbour lists (the pairs within the CAM cutoff and the on-site), g a
+    Wigner-Seitz vector (:func:`wigner_seitz_vectors`), adds S_MA DeltaP_AB S_BN times
+    gamma_MN + gamma_MB + gamma_AN + gamma_AB, the untruncated kernel at the path's own distances;
+    only the A-B offset of the density is restricted to the Wigner-Seitz cell.  The sums regroup
+    into convolutions of explicit-cell kernels in the frame of the folded atoms: with S the
+    overlap kernel, P the density at the WS vectors and g gamma at every cell,
+    (S*P*S) o g + ((S*P) o g)*S + S*((P*S) o g) + S*(P o g)*S, evaluated by FFT on a grid wide
+    enough not to alias and folded into the supercell.  The operator is not self-adjoint (B22):
+    its exchange matrix is not the derivative of its energy, so there are no forces (DFTB+ has
+    none either); DFTB+'s Threshold as in :class:`KPointHybridTerms`."""
+
+    def _image_list(self) -> list:
+        return []                                  # gamma at the explicit cells instead
+
+    def _kernels(self):
+        """The grid (L, the explicit cells m, their BvK cells), gamma(m) and the overlap
+        kernel's transform, once."""
+        if getattr(self, "_g_l", None) is not None:
+            return
+        p, t, nat, n = self._pairs, self.shifts, len(self.u), self.n
+        keep = p.dist < self._cam_cutoff
+        self._hcell = p.shift + t[p.j] - t[p.i]               # pair cells of the folded atoms
+        hmax = np.abs(self._hcell[keep]).max(0) if keep.any() else np.zeros(3, int)
+        ext = 2 * hmax + np.abs(self.ws).max(0)
+        self._grid = tuple(int(x) for x in 2 * ext + 1)
+        m = np.array(np.meshgrid(*[np.arange(x) for x in self._grid],
+                                 indexing="ij")).reshape(3, -1).T
+        m = np.where(m > ext, m - 2 * ext - 1, m)
+        self._m, self._cell_of_m = m, self.layout.cell_index(m)
+        r = self.pos_folded
+        v = r[None, None, :, :] + (m @ self.cell)[:, None, None, :] - r[None, :, None, :]
+        dist = np.sqrt((v * v).sum(-1))                        # (m, X, Y): |R'_Y + m - R'_X|
+        g = np.zeros_like(dist)
+        for a in range(nat):
+            for b in range(nat):
+                g[:, a, b] = self._gamma(self.u[a], self.u[b], dist[:, a, b])
+        oa = self.orb_atom
+        self._g_l = g[:, oa][:, :, oa].reshape(self._grid + (n, n))
+        self._s_full = self._s_kernel(keep, True)
+
+    def _s_kernel(self, pair_mask, onsite: bool) -> np.ndarray:
+        """FFT of the overlap kernel of the pairs in ``pair_mask`` (and the on-site identity)."""
+        p, n = self._pairs, self.n
+        sl = np.zeros(self._grid + (n, n))
+        el = pair_mask[p.pair_of]
+        hc = np.mod(self._hcell[p.pair_of[el]], self._grid)
+        np.add.at(sl, (hc[:, 0], hc[:, 1], hc[:, 2], p.rows[el], p.cols[el]), p.s[el])
+        if onsite:
+            sl[0, 0, 0][np.diag_indices(n)] += 1.0
+        return np.fft.fftn(sl, axes=(0, 1, 2))
+
+    def _explicit(self, x, sets) -> np.ndarray:
+        """The four terms (no prefactor) at the explicit cells, (cells, n, n), of the BvK array
+        ``x`` over the (S_P, S_Q) kernel pairs."""
+        lay, n = self.layout, self.n
+        pf = lay._bvk_shifted(x, -1)                          # the folded atoms' frame
+        pl = np.zeros(self._grid + (n, n))
+        wc = np.mod(self.ws, self._grid)
+        pl[wc[:, 0], wc[:, 1], wc[:, 2]] = pf[lay.cell_index(self.ws)]
+        fft, ifft, g = np.fft.fftn, np.fft.ifftn, self._g_l
+        p_hat, pg_hat = fft(pl, axes=(0, 1, 2)), fft(pl * g, axes=(0, 1, 2))
+        y = np.zeros(self._grid + (n, n))
+        for sp, sq in sets:
+            spp = ifft(sp @ p_hat, axes=(0, 1, 2)).real
+            pps = ifft(p_hat @ sq, axes=(0, 1, 2)).real
+            y += ifft(fft(spp, axes=(0, 1, 2)) @ sq, axes=(0, 1, 2)).real * g
+            y += ifft(fft(spp * g, axes=(0, 1, 2)) @ sq, axes=(0, 1, 2)).real
+            y += ifft(sp @ fft(pps * g, axes=(0, 1, 2)), axes=(0, 1, 2)).real
+            y += ifft(sp @ pg_hat @ sq, axes=(0, 1, 2)).real
+        return y.reshape(-1, n, n)
+
+    def _on_grid(self, y) -> np.ndarray:
+        """Explicit-cell blocks (folded frame) -> H(k) at the SCC's k-points."""
+        lay = self.layout
+        yf = np.zeros((lay.ncell, self.n, self.n))
+        np.add.at(yf, self._cell_of_m, y)
+        return lay.from_bvk(lay._bvk_shifted(yf, 1))
+
+    def _group_operators(self, groups) -> list:
+        return [(self._s_kernel(pp, po), self._s_kernel(qp, qo)) for pp, po, qp, qo in groups]
+
+    def _increment(self, x, sets) -> np.ndarray:
+        return self._on_grid(self._explicit(x, sets))
+
+    def fock(self, dps) -> list:
+        self._kernels()
+        if self.threshold is not None:
+            return self._screened_fock(dps)
+        c = -0.125 if len(dps) == 1 else -0.25
+        lay = self.layout
+        out = []
+        for d in dps:
+            if not np.any(d):
+                out.append(np.zeros((lay.nk, self.n, self.n), complex))
+                continue
+            out.append(c * self._increment(lay.to_bvk(d), [(self._s_full, self._s_full)]))
+        return out
+
+    def fock_at(self, kpts, dps) -> list:
+        """H_x at any k-points: the explicit cells' blocks with their own phases (DFTB+'s band
+        run builds them at its k-points); with a Threshold one screened build of DeltaP."""
+        self._kernels()
+        kpts = np.atleast_2d(np.asarray(kpts, float))
+        lay = self.layout
+        c = -0.125 if len(dps) == 1 else -0.25
+        if self.threshold is None:
+            sets = [(self._s_full, self._s_full)]
+        else:
+            pmax = max(float(np.abs(lay.to_bvk(d)).max()) for d in dps)
+            sets = (self._group_operators(self.screening_groups(pmax)) if pmax >= 1e-16 else [])
+        phase = np.exp(2j * np.pi * (kpts @ self._m.T))                    # (nk, cells)
+        dk = np.exp(2j * np.pi * (kpts @ self.shifts[self.orb_atom].T))     # gauge: D(k)
+        out = []
+        for d in dps:
+            y = self._explicit(lay.to_bvk(d), sets).reshape(len(self._m), -1)
+            hk = (phase @ y).reshape(len(kpts), self.n, self.n)
+            out.append(c * dk[:, :, None] * hk * dk.conj()[:, None, :])
+        return out
+
+    def pair_coefficient(self, dps, pairs):
+        raise ValueError(_MIC_NEIGHBOUR_FORCES)
+
+    def gamma_gradient(self, dps):
+        raise ValueError(_MIC_NEIGHBOUR_FORCES)
+
+
+_MIC_NEIGHBOUR_FORCES = (
+    "Hybrid functionals don't yet support gradient calculations for periodic systems beyond the "
+    "Gamma point for CoulombMatrix setting 'MinimumImage'. (as DFTB+ for the NeighbourBased "
+    "screening; pydftb has none either: that operator is not self-adjoint, so its exchange matrix "
+    "is not the derivative of the energy (B22) and forces would need a response calculation; the "
+    "MatrixBased MinimumImage has forces)")

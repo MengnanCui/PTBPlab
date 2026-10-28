@@ -147,7 +147,8 @@ def hybrid_block(spec, kpoints: bool = False) -> str:
     (Bohr)}; DFTB+'s default screening (MatrixBased) is written out.  M6h-3a: a
     ``CoulombMatrix`` block when "coulomb", "coulomb_cutoff" or "gsum_cutoff" (Bohr) differ from
     the defaults (Truncated, DFTB+'s cutoffs).  ``kpoints`` (M6h-3b): NeighbourBased with
-    ``Threshold`` = KPOINT_NEIGHBOUR_THRESHOLD."""
+    ``Threshold`` = KPOINT_NEIGHBOUR_THRESHOLD, or the spec's ``neighbour_threshold`` (M6h-3c);
+    MinimumImage with its ``WignerSeitzReduction`` when not zero."""
     if not spec:
         return ""
     from ..hybrid import Hybrid
@@ -157,9 +158,13 @@ def hybrid_block(spec, kpoints: bool = False) -> str:
         kids = "".join(f"      {key} [Bohr] = {_f(v)}\n"
                        for key, v in (("CoulombCutoff", h.coulomb_cutoff),
                                       ("GSummationCutoff", h.gsum_cutoff)) if v is not None)
+        if h.wigner_seitz_reduction:                                  # M6h-3c
+            kids += f"      WignerSeitzReduction = {int(h.wigner_seitz_reduction)}\n"
         coulomb = f"    CoulombMatrix = {COULOMB_MATRIX[h.coulomb]} {{\n{kids}    }}\n"
     red = f"      CutoffReduction [Bohr] = {_f(h.cutoff_reduction)}\n"
-    thr = f"      Threshold = {_f(KPOINT_NEIGHBOUR_THRESHOLD)}\n" if kpoints else ""
+    threshold = (KPOINT_NEIGHBOUR_THRESHOLD if h.neighbour_threshold is None
+                 else h.neighbour_threshold)                          # M6h-3c
+    thr = f"      Threshold = {_f(threshold)}\n" if kpoints else ""
     screening = {
         "matrix": "MatrixBased {}\n",
         "neighbour": "NeighbourBased {\n" + thr + red + "    }\n",

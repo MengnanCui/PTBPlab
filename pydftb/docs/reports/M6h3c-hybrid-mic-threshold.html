@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-3c MinimumImage 与筛选报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6h-3c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-3c · 完成报告</p>
+    <h1>长程校正（三 c）：k 点的 MinimumImage 与 NeighbourBased 的 Threshold</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6h3c-hybrid-mic-threshold.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6h-3b 的 k 点杂化补上 DFTB+ 25.1 余下的两项。一是库仑矩阵 <code>MinimumImage</code>：不截断的 γ，格点和只取 BvK 超胞的 Wigner–Seitz 胞，<code>WignerSeitzReduction</code> 可以缩小超胞。二是 NeighbourBased 的 <code>Threshold</code>：交换按 ΔP<sub>in</sub> 的增量累加，按阈值筛掉近邻对组合（DFTB+ 在 k 点默认 1e-6）。两种屏蔽下的 MinimumImage 在 DFTB+ 里是两种不同的近似，pydftb 都照它实现：MatrixBased 就是 M6h-3b 的交换，平移换成 WS 向量、核换成完整的 γ；NeighbourBased 重写成显式格胞的核的卷积，用 FFT 求。筛选移植了 DFTB+ 保留近邻对组合的规则与增量累加，结果与 DFTB+ 一样依赖 SCC 的历史；默认仍不筛选。只有 NumPy 引擎；分子、Γ 点与 M6h-3b 的 k 点计算逐位不变。</p>
+    <ul>
+      <li><strong>与 DFTB+ 对照</strong>：18 个参考算例全部通过。
+        <ul>
+          <li>能量差 ≤ 5.5e-11 Ha，电荷 ≤ 1.8e-10 e，18 个算例的 SCC 轮数全部相同，每轮误差 ≤ 1.3e-5（相对）；能带重启的本征值 ≤ 1.7e-13 Ha；DFTB+ 给力的 Threshold 算例在 SCC 容差 1e-10 时力差 1.5e-12 Ha/Bohr，停在 2–4e-7 的算例差到 1.7e-8（B5，见第三节）。</li>
+          <li>覆盖：MatrixBased MinimumImage（金刚石原胞 3×1×2、2×2×2 缩小 1，CAM、全局杂化，CO<sub>2</sub> 晶体 2×1×1，三斜 CO 2×2×2，能带重启）；NeighbourBased MinimumImage（金刚石 2×2×2 与缩小 1，能带重启）；Threshold 1e-6 与 1e-4（截断与阻尼截断，CO<sub>2</sub> 晶体，居中的金刚石 2×2×2，筛选的 MinimumImage 固定 20 轮，能带重启，从 DFTB+ 的电荷文件重启）。</li>
+        </ul>
+      </li>
+      <li><strong>超出 DFTB+ 的部分</strong>：MatrixBased MinimumImage 的力与自旋（DFTB+ 拒绝），力与能量的差分相差 ≤ 2.1e-9 Ha/Bohr（差分本身的噪声）；DFTB+ 在默认截断无定义的晶胞上连 MinimumImage 也停下（B3，那个截断用不到），pydftb 照算。</li>
+      <li><strong>DFTB+ 25.1 的问题</strong>（第五节）：
+        <ul>
+          <li>B23（新）：WS 向量是折回晶胞后原子坐标系里的格矢，不按原子对取最近像，所以能量随原子怎样折回晶胞而跳变：金刚石 2×1×1 的一个原子越过晶胞面，MatrixBased 跳 1.82 Ha，NeighbourBased（缩小 1）跳 0.073 Ha，两个程序的跳变一致到 5e-11。MinimumImage 因此不适合结构优化与 MD。</li>
+          <li>B22（新）：NeighbourBased MinimumImage 的交换算符不自伴（相对 23 %），交换矩阵不是能量的导数，力要解响应方程；DFTB+ 也不给，pydftb 拒绝并说明原因。</li>
+          <li>B9、B10 证实：WS 边界上的并列向量都以权重 1 计入；两种 MinimumImage 在金刚石 2×2×2 差 1.1e-3 Ha。默认 Threshold 1e-6 时 MinimumImage 的 SCC 停在 1e-5 的误差上不收敛。</li>
+          <li>筛选的 SCC 尾巴（不是错误）：增量全部被筛掉以后交换冻结，Broyden 随后有一步几乎为零，下一次更新放大舍入，两个程序的每轮误差从那里分开，能量不受影响；参考的容差停在那一步之前。这时 B5（DFTB+ 的 k 点梯度混用 ΔP<sub>in</sub>）让力差到 1.7e-8 Ha/Bohr。</li>
+        </ul>
+      </li>
+      <li><strong>不支持</strong>：NeighbourBased MinimumImage 的力（B22）；其余同 M6h-3b（Thresholded 屏蔽、非共线自旋、TD-LC、应力、带平移的网格）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">18</span><span class="lbl">新的 DFTB+ 参考算例，全部通过</span></li>
+      <li><span class="num">≤ 5.5e-11</span><span class="lbl">与 DFTB+ 25.1 的能量之差（Ha）</span></li>
+      <li><span class="num">≤ 2.1e-9</span><span class="lbl">MatrixBased MinimumImage 的力与能量差分之差（Ha/Bohr，DFTB+ 不给）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#parity">三、与 DFTB+ 的对照</a></li>
+      <li><a href="#selfcheck">四、自洽检查</a></li>
+      <li><a href="#findings">五、DFTB+ 的问题</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>hybrid.py</code></td><td>
+              <ul>
+                <li><code>Hybrid</code>：新字段 <code>wigner_seitz_reduction</code>（非负整数，只配 <code>coulomb="minimum_image"</code>）与 <code>neighbour_threshold</code>（None 不筛选，只配 NeighbourBased）；MinimumImage 不收 <code>coulomb_cutoff</code>、<code>gsum_cutoff</code>（DFTB+ 在 MinimumImage 块里不读它们）；<code>make</code> 接受两个新键。</li>
+                <li><code>wigner_seitz_vectors(nfold, cell, reduction)</code>：<code>generateWignerSeitzGrid</code> 的移植。N′ = max(N − r, 1)；n ∈ [−2N′, 2N′]³ 中度量长度在 n − i∘N′（i ∈ [−2, 2]³）里最小（容差 1e-8 Bohr²）的都保留，包括边界上的并列向量（B9）；按长度稳定排序。</li>
+                <li><code>KPointHybridTerms</code>：
+                  <ul>
+                    <li>MinimumImage：平移取 WS 向量，核取不截断的 γ；不求默认截断（DFTB+ 求了不用，B3 时停下）。</li>
+                    <li>Threshold：<code>fock</code> 走 <code>_screened_fock</code>。ΔΔP = ΔP<sub>in</sub> − ΔP<sub>prev</sub> 的超胞数组，p<sub>max</sub> = max|ΔΔP|（所有自旋）；<code>screening_groups(p<sub>max</sub>)</code> 给出 DFTB+ 保留的近邻对组合，按 est 分组（同组的 p 保留同一个 q 集合），每组用掩码后的 S<sub>P</sub>、S<sub>Q</sub> 求四项；H = H<sub>prev</sub> + c·H<sub>4</sub>[ΔΔP]；p<sub>max</sub> &lt; 1e-16 时返回 0（B7）；<code>reset</code> 清空历史（每个新几何）。</li>
+                    <li><code>fock_at</code> 改为对 (S<sub>P</sub>, S<sub>Q</sub>) 的组求和；不筛选时只有一组，算术与 M6h-3b 相同（逐位）；筛选时是从 ΔP 一次的筛选构建（同 DFTB+ 的能带运行）。</li>
+                  </ul></li>
+                <li><code>NeighbourMinimumImageTerms(KPointHybridTerms)</code>：在折回原子的坐标系里，把 S（CAM 截断以内，加在位单位阵）、WS 胞上的 ΔP 与各显式格胞的 γ 放到 L 网格上（L<sub>d</sub> = 2(2h<sub>max</sub> + g<sub>max</sub>) + 1，卷积不混叠），四项 (S⋆P⋆S)∘γ、((S⋆P)∘γ)⋆S、S⋆((P⋆S)∘γ)、S⋆(P∘γ)⋆S 用 FFT 求，再折回超胞、换回 pydftb 的规范；<code>fock_at</code> 用显式格胞的相位与折回原子的规范 D(k)；筛选同上；力拒绝（B22）。</li>
+              </ul></td></tr>
+            <tr><td><code>calculator.py</code></td><td>去掉 M6h-3b 对 k 点 MinimumImage 的拒绝；<code>_kpoint_hybrid_terms</code> 按屏蔽选类；k 点的 NeighbourBased MinimumImage 要力时报 DFTB+ 的原话并说明原因；分子配 <code>neighbour_threshold</code> 时报错（DFTB+ 在分子上停下）。</td></tr>
+            <tr><td><code>bands.py</code></td><td>只改文档字符串：<code>eigenstates</code> 每次新建 terms，任意 k 上的 H<sub>x</sub> 由 <code>fock_at</code> 给出；有阈值时是一次筛选构建，不是 SCC 累加出来的交换。</td></tr>
+            <tr><td><code>validation/</code></td><td>
+              <ul>
+                <li><code>dftbplus.py</code>：<code>hybrid_block</code> 写 <code>WignerSeitzReduction</code>（非零时）与 <code>neighbour_threshold</code>（没有时仍是 1e-100）。</li>
+                <li><code>cases.py</code>：18 个算例；属性 <code>Case.pydftb_forces</code>（k 点的 NeighbourBased MinimumImage 为假）与 <code>Case.screened_history</code>（k 点的 <code>neighbour_threshold</code>）。</li>
+                <li><code>refgen.py</code>：pydftb 的运行按 <code>pydftb_forces</code> 要力；<code>screened_history</code> 的算例在 SCC 网格上比较 SCC 自己的能级（第三节 §）。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_hybrid_mic.py</code>：27 项（第四节）。</li>
+                <li><code>tests/test_hybrid_kpoints.py</code>：去掉 k 点 MinimumImage 拒绝的一项参数。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb.kpoints import supercell_folding
+k = supercell_folding((2, 2, 2))
+DFTB(sk_lc, kpts=k, hybrid={"type": "lc", "coulomb": "minimum_image"})        # MatrixBased，有力
+DFTB(sk_lc, kpts=k, hybrid={"type": "lc", "coulomb": "minimum_image",
+                            "screening": "neighbour", "wigner_seitz_reduction": 1})   # 没有力
+DFTB(sk_lc, kpts=k, hybrid={"type": "lc", "screening": "neighbour",
+                            "neighbour_threshold": 1e-6})                     # DFTB+ 默认的筛选</code></pre>
+      <ul>
+        <li><strong>MinimumImage</strong>：只在 k 点（Γ 点按 DFTB+ 的原话拒绝）。<code>wigner_seitz_reduction</code> = r 时取超胞 max(N − r, 1) 的 WS 胞。能量依赖原子怎样折回晶胞（B23）：原子越过晶胞面时能量跳变，结构优化与 MD 中不可用；照 DFTB+ 实现只为对照。MatrixBased 与 NeighbourBased 是不同的近似（B10）。</li>
+        <li><strong>力与自旋</strong>：MatrixBased MinimumImage 给精确的导数，共线自旋也支持（DFTB+ 都拒绝）。NeighbourBased MinimumImage 要力时报错：它的交换矩阵不是能量的导数（B22），能量与 SCC、能带、电荷文件照常可用。</li>
+        <li><strong><code>neighbour_threshold</code></strong>：None（默认）建完整的算子，与 M6h-3b 相同；给一个数即 DFTB+ 的增量筛选，结果依赖 SCC 的历史（每个新几何从完整构建开始）。偏差的量级：金刚石 3×1×2 时 1e-6 偏 4.8e-6 Ha、1e-4 偏 1.7e-5 Ha，轮数多；MinimumImage 配 1e-6 时 SCC 停在 1e-5 的误差上。Γ 点接受但不起作用（同 DFTB+，B16）；分子报错。力是未筛选的公式在筛选后的密度上（同 DFTB+），不是筛选后能量的导数。</li>
+        <li><strong>电荷文件与能带</strong>：与 M6h-3b 相同（记录与库仑核无关）。能带在任意 k 上建 H<sub>x</sub>；有筛选时是从文件的 ΔP 一次的筛选构建，与 DFTB+ 的能带运行相同，不是 SCC 累加出来的交换。</li>
+      </ul>
+    </section>
+
+    <section id="parity">
+      <h2>三、与 DFTB+ 的对照</h2>
+      <p>参数与容差同 M6h-3b：<code>ptbp_hcocu_lc</code>、<code>_cam</code>、<code>_global</code>，DFTB+ 的 <code>EwaldTolerance</code> 1e-12，k 点写成不平移的 <code>SupercellFolding</code>；没有 <code>neighbour_threshold</code> 的 NeighbourBased 写 <code>Threshold = 1e-100</code>，有的写它的值。SCC 容差 1e-10，几个算例另设（见表）。</p>
+      <h3>18 个算例</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>|ΔE|（Ha）</th><th>|ΔF|（Ha/Bohr）</th><th>|Δq|（e）</th><th>SCC 轮数</th><th>每轮误差（相对）</th></tr></thead>
+        <tbody>
+          <tr><td><code>diamond2_lc_k312_mic</code></td><td>MatrixBased MinimumImage：3×1×2 超胞的 11 个 WS 向量（6 个类，边界上的并列向量各算一次，B9）</td><td>3.0e-11</td><td>—</td><td>2.8e-12</td><td>37/37</td><td>1.3e-5</td></tr>
+          <tr><td><code>diamond2_lc_k222_mic_ws1</code></td><td><code>WignerSeitzReduction</code> 1：只剩 g = 0</td><td>3.7e-11</td><td>—</td><td>6.9e-15</td><td>18/18</td><td>2.5e-8</td></tr>
+          <tr><td><code>diamond2_cam_k222_mic</code></td><td>CAM</td><td>4.6e-11</td><td>—</td><td>6.9e-14</td><td>27/27</td><td>5.6e-8</td></tr>
+          <tr><td><code>diamond2_global_k222_mic</code></td><td>全局杂化（CAM，β = 0）</td><td>3.2e-11</td><td>—</td><td>5.0e-15</td><td>16/16</td><td>1.9e-8</td></tr>
+          <tr><td><code>co2_crystal_lc_k211_mic</code></td><td>干冰晶胞 2×1×1（12 个原子）</td><td>1.5e-11</td><td>—</td><td>1.8e-10</td><td>28/28</td><td>4.6e-8</td></tr>
+          <tr><td><code>co_triclinic_lc_k222_mic</code></td><td>三斜晶胞里的 CO</td><td>1.0e-11</td><td>—</td><td>7.7e-12</td><td>40/40</td><td>1.3e-6</td></tr>
+          <tr><td><code>diamond2_lc_k222_mic_neighbour_ws1</code></td><td>NeighbourBased MinimumImage，缩小 1</td><td>3.1e-12</td><td>—</td><td>6.1e-15</td><td>15/15</td><td>4.3e-8</td></tr>
+          <tr><td><code>diamond2_lc_k222_mic_neighbour</code></td><td>NeighbourBased MinimumImage，19 个 WS 向量，SCC 容差 3e-6 *</td><td>1.4e-11</td><td>—</td><td>9.5e-11</td><td>29/29</td><td>5.5e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_mic_bands</code></td><td>MatrixBased 的能带重启（G–X–L 上 13 个 k，本征值 1.7e-13）</td><td>3.0e-11</td><td>—</td><td>2.8e-12</td><td>37/37</td><td>1.3e-5</td></tr>
+          <tr><td><code>diamond2_lc_k222_mic_neighbour_ws1_bands</code></td><td>NeighbourBased 的能带重启（显式格胞的相位，本征值 3.7e-14）</td><td>3.1e-12</td><td>—</td><td>6.1e-15</td><td>15/15</td><td>4.3e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_neighbour_t6</code></td><td>Threshold 1e-6（DFTB+ 的默认），SCC 容差 5e-7 †</td><td>3.9e-11</td><td>1.7e-8 ‡</td><td>6.9e-15</td><td>14/14</td><td>1.8e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_neighbour_t4</code></td><td>Threshold 1e-4（与不筛选的构建差 1.7e-5 Ha）</td><td>2.1e-11</td><td>1.5e-12</td><td>6.0e-15</td><td>18/18</td><td>2.9e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_neighbour_t6_damped</code></td><td>阻尼截断，1e-6</td><td>4.4e-11</td><td>—</td><td>1.4e-14</td><td>22/22</td><td>3.2e-8</td></tr>
+          <tr><td><code>co2_crystal_lc_k211_neighbour_t6</code></td><td>干冰晶胞，1e-6，SCC 容差 4e-7 †</td><td>5.5e-11</td><td>1.0e-8 ‡</td><td>1.7e-10</td><td>21/21</td><td>5.1e-8</td></tr>
+          <tr><td><code>diamond2_lc_k222_mic_neighbour_t6</code></td><td>筛选的 NeighbourBased MinimumImage（1e-6），固定 20 轮：SCC 停在 1–2e-5 的误差上（与不筛选的差 7.4e-5 Ha）</td><td>1.7e-11</td><td>—</td><td>1.1e-12</td><td>20/20</td><td>4.2e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_neighbour_t6_bands</code></td><td>DFTB+ 的能带重启：从文件的 ΔP 一次的筛选构建（本征值 1.6e-14）§</td><td>3.9e-11</td><td>1.7e-8 ‡</td><td>6.9e-15</td><td>14/14</td><td>1.8e-8</td></tr>
+          <tr><td><code>diamond2_lc_k312_neighbour_t6_read_charges</code></td><td>从 DFTB+ 的 charges.bin 重启：第一次构建是文件 ΔP 的完整构建，同每个新几何（<code>updateCoords</code>）</td><td>4.5e-11</td><td>6.7e-9 ‡</td><td>7.7e-15</td><td>14/14</td><td>1.5e-8</td></tr>
+          <tr><td><code>diamond2_centred_lc_k222_neighbour_t6</code></td><td>居中的金刚石原胞 2×2×2，1e-6，SCC 容差 3e-7 †</td><td>4.8e-11</td><td>1.3e-9 ‡</td><td>5.4e-15</td><td>13/13</td><td>3.9e-8</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>“—”：DFTB+ 不给力（MinimumImage、阻尼截断）。MatrixBased MinimumImage 的力在第四节对差分检查。每轮误差只比较大于 1e-7 的轮次。</li>
+        <li>* NeighbourBased MinimumImage 的 SCC 慢（到 1e-10 要 55–59 轮），误差到 1e-6 附近后 Broyden 把舍入放大，两个程序的每轮误差分开；收敛后能量仍差 5.7e-12（探针 P84）。参考停在 3e-6。</li>
+        <li>† Threshold 的 SCC：增量全部低于阈值以后（误差约 1e-6），交换不再变化，Broyden 随后有一步几乎为零（|ΔΔP| 1e-12 到 2e-8，各算例的第 14、17、25 步）；下一次更新除以两个几乎相等的残差之差，1e-15 量级的舍入被放大，两个程序的每轮误差从那里分开（相对 1e-4 到 1，收敛到 1e-10 时能量仍差 ≤ 3e-11）。参考的 SCC 容差停在那一步之前，最后一轮已经不保留任何增量。</li>
+        <li>‡ B5：DFTB+ 的 k 点 NeighbourBased 梯度（<code>addCamGradientsNeighbour_kpts_ct</code>）一个 ΔP 取 ΔP<sub>out</sub>(k)、另一个取最后的 ΔP<sub>in</sub>(R)，在 2–4e-7 的 SCC 误差上让力差到 1.7e-8 Ha/Bohr，这些算例的容差放到 5e-8。把 pydftb 的二次型换成这对密度的对称双线性形式 [Q(out + in) − Q(out − in)]/4 后，三个金刚石算例与 DFTB+ 差 ≤ 4.0e-13，干冰 9.6e-9（余下的是 DFTB+ 各项取法的不对称部分）。pydftb 给出精确的导数。</li>
+        <li>§ SCC 网格上比较 SCC 自己的能级（与 DFTB+ 差 1.7e-14）：有阈值时 SCC 的交换是累加出来的，从 q<sub>in</sub> 一次构建（<code>eigenstates</code>，同 DFTB+ 的能带运行）与它差 1.4e-5 Ha，refgen 对这类算例不再在网格上重建。</li>
+      </ul>
+    </section>
+
+    <section id="selfcheck">
+      <h2>四、自洽检查</h2>
+      <p><code>tests/test_hybrid_mic.py</code> 的 27 项（不需要 DFTB+）：</p>
+      <ul>
+        <li><strong>WS 向量</strong>：FCC 2×2×2、3×1×2、3×3×3 各 19、11、43 个，覆盖超胞的每个类、关于 0 对称、按长度排序；缩小到 N′ = 1 时只剩 0；立方晶胞保留全部 27 个并列向量。</li>
+        <li><strong>筛选的组</strong>：<code>screening_groups</code> 覆盖的近邻对组合恰好是 est<sub>p</sub>·est<sub>q</sub> ≥ τ 的那些，每个组合只出现一次（5 个 τ，逐个对照暴力枚举）。</li>
+        <li><strong>算符</strong>：
+          <ul>
+            <li>在 SCC 的网格上 <code>fock_at</code> 等于 <code>fock</code>（1e-12）：MatrixBased、NeighbourBased（缩小 0 与 1）、两种筛选；</li>
+            <li>自伴性：截断的两种屏蔽与 MatrixBased MinimumImage 的 ⟨H[P], Q⟩ = ⟨H[Q], P⟩ 到 1e-12 相对，NeighbourBased MinimumImage 不是（B22）。</li>
+          </ul></li>
+        <li><strong>力对能量的差分</strong>（MatrixBased MinimumImage，h = 5e-5 Bohr，SCC 容差 1e-12）：金刚石 3×1×2、2×2×2 缩小 1、O<sub>2</sub> 盒子的自旋（原子离开晶胞面，B23），三个环境里最大 2.1e-9；这是差分本身的噪声（能量的 SCC 误差除以 h，h 减半时并不按 h² 变小，四点公式也不更好），测试的界是 5e-9。</li>
+        <li><strong>一致性</strong>：闭壳层的自旋计算等于不加自旋（两种 MinimumImage）；Threshold 1e-100 等于不筛选（截断与 NeighbourBased MinimumImage，1e-12）。</li>
+        <li><strong>筛选的历史</strong>：阈值趋于 0 时增量累加等于完整算子；ΔP 不变时返回 0（B7）；<code>reset</code> 后重复同一密度给出同一结果；阈值很大时什么都不留；中等阈值时先后两个密度的结果与单独一个不同（依赖历史）。新几何从完整构建开始（DFTB+ 的 <code>updateCoords</code>）：接着上一步 <code>q_in</code> 的计算等于从它开始的新计算器，并且与从头算的结果不同。</li>
+        <li><strong>输入与拒绝</strong>：两个新字段的检查与 DFTB+ 输入块（<code>WignerSeitzReduction</code>、<code>Threshold</code>）；MinimumImage 不收截断；a<sub>2</sub> 沿 z 的晶胞（DFTB+ 停下，B3）用 MinimumImage 能算，等于转动后 DFTB+ 能算的同一体系（1e-9）；NeighbourBased MinimumImage 的力、Γ 点的 MinimumImage、分子的 <code>neighbour_threshold</code> 报错。</li>
+      </ul>
+    </section>
+
+    <section id="findings">
+      <h2>五、DFTB+ 的问题</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 25.1</th><th>证据</th><th>pydftb 的做法</th></tr></thead>
+        <tbody>
+          <tr><td>B23（新）：MinimumImage 的 WS 向量是折回晶胞后原子坐标系里的格矢（<code>generateWignerSeitzGrid</code> 只看格子，不看原子对），能量随原子怎样折回晶胞而变；原子越过晶胞面时跳变</td><td>P89：金刚石 2×1×1，原子 0 在 a<sub>1</sub> 面两侧 ∓1e-6 Bohr：MatrixBased 跳 −1.818692 Ha（两个程序差 5.3e-11），NeighbourBased（缩小 1）+0.07272 Ha（1.8e-11），Truncated 只差斜率（−4.0e-7）。O<sub>2</sub> 盒子 2×1×1（自旋）跳 0.0356 Ha</td><td>照 DFTB+（与折回的约定一起），文档写明；差分测试让原子离开晶胞面</td></tr>
+          <tr><td>B22（新）：NeighbourBased MinimumImage 只把每条路径 M → A → B → N 中 A–B 的密度限在 WS 胞里，与它配对的 M–N 偏移不限，交换算符不自伴</td><td>P84d：随机厄米 P、Q 的 ⟨H[P], Q⟩ 与 ⟨H[Q], P⟩ 差 23 %（其余算符 ≤ 6.5e-16）；SCC 慢（金刚石 2×2×2 到 1e-10 要 55–59 轮），尾巴对舍入敏感</td><td>照 DFTB+ 算能量；力拒绝并说明原因（精确的力要解响应方程）</td></tr>
+          <tr><td>B9（证实）：WS 边界上的并列向量都以权重 1 计入</td><td>P83：FCC 2×2×2 19 个向量、8 个类</td><td>照 DFTB+（这是它的 MinimumImage 的定义）</td></tr>
+          <tr><td>B10（证实）：MatrixBased 与 NeighbourBased 的 MinimumImage 是不同的近似</td><td>P84c：金刚石 2×2×2 差 1.1e-3 Ha，缩小 1 时 8.8e-5；第四项 S(ΔP∘γ)S 相同到 3e-15，前三项不同</td><td>两种都照 DFTB+，文档写明</td></tr>
+          <tr><td>B3 的延伸：MinimumImage 不用截断，DFTB+ 仍求默认截断，在 a<sub>2</sub> 沿 z 的晶胞上停下</td><td>P88</td><td>不求截断，照算（等于转动后 DFTB+ 能算的同一体系）</td></tr>
+          <tr><td>Threshold（不是错误）：按增量筛选，结果依赖历史；默认 1e-6 时 MinimumImage 的 SCC 不收敛，截断核的 SCC 在容差附近爬行</td><td>P86、P86b；交换冻结后 Broyden 几乎为零的一步放大舍入，两个程序的 SCC 尾巴从那里分开（第三节 †），参考的容差停在那一步之前</td><td>默认不筛选；给阈值时照 DFTB+</td></tr>
+          <tr><td>B7：ΔP<sub>in</sub> 不变时返回 H = 0 而不是 H<sub>prev</sub></td><td>源码；SCC 中没有触发</td><td>照 DFTB+（只在筛选的增量构建里）</td></tr>
+          <tr><td>B16：Γ 点的 NeighbourBased 不用 Threshold</td><td>源码</td><td>同 DFTB+</td></tr>
+          <tr><td>B11：非零 γ 表只留 γ ≥ 机器精度的项，负的 γ 被丢掉</td><td>源码；测试参数（α = 0.19，β = 0.46）碰不到</td><td>不复现，保留所有 γ</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6h-3b 的文档提交 <code>68d342c</code> 逐字节比较</td><td>conda 1385 个计算、642543 个字段，最小环境 1319 个计算、627721 个字段，都逐位相同（<code>--allow-new wigner_seitz_reduction neighbour_threshold threshold</code>：<code>Hybrid</code> 的两个新字段与 k 点交换对象的 <code>threshold</code> 属性）；18 个新算例的 54 个计算不在比较之列</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>467 个算例全部通过；torch 74 个通过，393 个按设计跳过（只有 NumPy 的物理，含 18 个新算例）；34 条动力学参考全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1552 个通过 / 393 个跳过（比 M6h-3b 多 45 个：18 个参考算例与 <code>test_hybrid_mic.py</code> 的 27 项）。最小环境与 torch 环境各有一个失败：<code>test_matrix_mic_forces_are_the_energy_derivative[matrix]</code> 的力与差分差 2.08e-9，超过当时的界 2e-9（conda 里 1.1e-9）；这是差分本身的噪声（第四节），界改为 5e-9 后这个文件在三个环境里各 27 项全部通过。其余：最小环境 1302 个通过 / 521 个跳过，torch 1506 / 438</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>MinimumImage 不收截断，也不在 B3 上停下</strong>：设计只记了 DFTB+ 的做法（不读 <code>CoulombCutoff</code>、<code>GSummationCutoff</code>，默认截断照样求、B3 时停下）。实现时 pydftb 拒绝这两个参数（DFTB+ 遇到不读的键也停下），并且不求默认截断：MinimumImage 用不到它，停下只是 DFTB+ 的问题。新加一项测试对照转动后 DFTB+ 能算的同一体系。</li>
+        <li><strong><code>bands.py</code> 只改文档字符串</strong>：设计写“能带用新建的 terms”。原来的代码已经每次新建；筛选时的一次构建在 <code>fock_at</code> 里。</li>
+        <li><strong><code>refgen.py</code> 改了两处</strong>（设计写 refgen 不变）：pydftb 拒绝 NeighbourBased MinimumImage 的力，参考运行按 <code>Case.pydftb_forces</code> 不要力；有阈值时 SCC 的交换不能从 q<sub>in</sub> 重建（设计没有想到），能带算例在网格上比较 SCC 自己的能级（第三节 §）。</li>
+        <li><strong>两种 MinimumImage 的第四项相同</strong>只在探针 P84c 里查过，没有写成测试（类不单独给出各项）。</li>
+        <li><strong>算例数</strong>：设计约 16 个，实际 18 个（多了 Threshold 的电荷文件重启与居中的 2×2×2；设计里 MatrixBased MinimumImage 的电荷文件重启没有做，记录与库仑核无关，M6h-3b 已对照）。</li>
+        <li><strong>Threshold 算例的 SCC 容差</strong>：设计写“容差按 P86 选，避开爬行的尾巴”。实际查清了尾巴的原因（第三节 †：冻结后 Broyden 几乎为零的一步放大舍入），四个算例的容差停在那一步之前（3e-7 到 5e-7）；这时 B5 让力差到 1.7e-8（‡），这些算例的力容差放到 5e-8。</li>
+        <li><strong>撤掉的动力学参考</strong>：实现时加过一条 Threshold 1e-6 的结构优化，想对照每个几何清空历史（<code>updateCoords</code>）。DFTB+ 的 SCC 在第 3、4 个几何上爬了 246 与 350 轮，两边的优化路径不同（6 步与 5 步）；筛选后的能量依赖路径，最终能量差 4.5e-9 Ha（几何差 6.1e-8 Å）。撤掉这条参考，改由电荷文件重启的算例（第一次构建是完整的，与新几何相同）与一项自洽检查覆盖。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6h-4</strong>：杂化泛函下的响应（先用探针确定 DFTB+ 25.1 支持的组合），然后 M6h 全部完成。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18、B19、B20、B21、B22、B23：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6h3c-hybrid-mic-threshold.html">← M6h-3c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>
