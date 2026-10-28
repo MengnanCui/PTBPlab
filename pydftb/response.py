@@ -1044,6 +1044,9 @@ def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> CoordDerivativesRe
     if st.cell is not None and bool(np.any(st.pbc)):
         raise ValueError("coordinate derivatives (M6g-2) are for molecules only (as DFTB+: "
                          "Born charges of a periodic system need the Berry phase)")
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4d)
+        from . import response_hybrid
+        return response_hybrid.coordinate_derivatives(calc, st, sc, spec, opts)
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.coordinate_derivatives(calc, st, sc, spec, opts)

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-4d 杂化泛函的坐标导数设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6h-4d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-4d · 设计</p>
+    <h1>长程校正（四 d）：杂化泛函下的坐标导数</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="M6h4c-hybrid-response-frequency.html">M6h-4c 设计</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">DFTB+ 拒绝杂化泛函下的坐标导数（“Coordinate derivative perturbations do not yet work with hybrid functionals”）。M6h-4d 给出分子的 <code>CoordDerivatives</code>：布居对原子位置的导数、Born 电荷、本征值导数，金属另有费米能级的导数。算法是 M6g-2 的坐标响应搬到 M6h-4 的轨道对空间。交换出现两次：一次是它在固定密度下对坐标的显式导数（S′ 与 γ′），一次是响应核。两分量（非共线，分子）也做，旧计算路径逐位不变。</p>
+    <ul>
+      <li><strong>原型</strong>（M6h-4b 时写好，P98a 用现在的代码重跑）：
+        <ul>
+          <li>Born 电荷与解析杂化力对外场的差分（Maxwell 关系，原子不动）：H<sub>2</sub>O LC 3.4e-12，CH<sub>3</sub>OH LC 3.5e-11，H<sub>2</sub>CO CAM 3.9e-11（|Z*| 0.4–0.7）。</li>
+          <li>去掉交换后等于 M6g-2：1.7e-16；CH<sub>3</sub> 自旋对 SCC 电荷的几何差分 1.9e-10。</li>
+        </ul></li>
+      <li><strong>屏蔽</strong>（P98b）：NeighbourBased 与 Thresholded 的交换用截断以内的 S，它的导数是 S′ 乘以原子对的近邻掩码。CutoffReduction 10 的苯：带掩码与几何差分一致到 2.5e-10，不带掩码差 1.0e-2。</li>
+      <li><strong>SK 表的折点</strong>（P98c）：H<sub>2</sub>O 的一个 H 沿 y 移动时，S 本身的差分与解析的 S′ 差 3e-5，h 从 1e-4 缩到 1e-5 也只到 1.4e-5，所以那里的几何差分不可靠。干净的检验是 Born 电荷对 dF/dE。</li>
+      <li><strong>范围</strong>：分子；实数路径（闭壳层、共线自旋、金属、+U、onsite、DFTB3、外场与点电荷，三种屏蔽，LC、CAM、全局杂化）与两分量（MatrixBased，同基态）。周期体系拒绝，同 M6g-2。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 3.9e-11</span><span class="lbl">Born 电荷对 dF/dE（原型）</span></li>
+      <li><span class="num">1.7e-16</span><span class="lbl">去掉交换后与 M6g-2 之差</span></li>
+      <li><span class="num">2.5e-10</span><span class="lbl">带掩码的屏蔽交换导数对差分</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围与 DFTB+</a></li>
+      <li><a href="#probe">二、探针与原型</a></li>
+      <li><a href="#method">三、pydftb 的算法</a></li>
+      <li><a href="#api">四、pydftb 的接口</a></li>
+      <li><a href="#impl">五、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">六、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">七、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围与 DFTB+</h2>
+      <ul>
+        <li><strong>DFTB+ 25.1</strong>（与开发版相同，<code>initprogram.F90</code>）：<code>CoordDerivatives</code> 配 <code>Hybrid</code> 时停下。它的坐标导数另外还拒绝自旋、+U、onsite、SOC 与非团簇的边界条件；pydftb 的 M6g-2、M6g-3a、M6g-3b 已经越过这些限制。</li>
+        <li><strong>M6h-4d 做</strong>：分子的坐标导数，结果类与 M6g-2 相同（<code>CoordDerivativesResult</code>）：dN<sub>B</sub>/dx<sub>K,c</sub>（含自旋的磁化，两分量的四个分量）、Born 电荷、本征值导数、金属的 dE<sub>F</sub>/dx；可以只移动部分原子（<code>{"atoms": [...]}</code>）。</li>
+        <li><strong>不做</strong>：周期体系（同 M6g-2：周期体系的 Born 电荷要 Berry 相；DFTB+ 也只给团簇）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、探针与原型</h2>
+      <p>原型在草稿目录 <code>m6h4b/proto_x.py</code>（M6h-4b 时写好）与 <code>m6h4d/</code>。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P98a</td><td>原型用现在的代码重跑：Born 电荷对解析杂化力的外场差分（h = 1e-4，四点公式）；SCC 电荷的几何差分；去掉交换对 M6g-2</td><td>Born：H<sub>2</sub>O 3.4e-12，CH<sub>3</sub>OH 3.5e-11，H<sub>2</sub>CO CAM 3.9e-11；几何差分：CH<sub>3</sub> 自旋 1.9e-10，H<sub>2</sub>O 2.9e-6（P98c 的折点）；去掉交换 ≤ 2.2e-16。</td></tr>
+          <tr><td>P98b</td><td>屏蔽交换 four_terms(S<sub>x</sub>, G, ΔP) 在固定 ΔP 下的导数对几何差分：原子对近邻掩码、原型的 “S<sub>cam</sub> ≠ 0” 掩码、不加掩码</td><td>苯 NeighbourBased（CutoffReduction 10）：2.5e-10、2.5e-10、1.0e-2；苯 Thresholded（CutoffReduction 4）：都是 2.5e-10。“S<sub>cam</sub> ≠ 0” 在这些几何里碰巧对，但对称性为零的 S 元素导数不一定为零，所以用原子对的掩码。</td></tr>
+          <tr><td>P98c</td><td>H<sub>2</sub>O：S 本身的几何差分对解析的 S′</td><td>H 原子沿 y：h = 1e-3、1e-4、1e-5 时差 3.2e-5、3.0e-5、1.4e-5（不随 h 收敛）；其余方向 h = 1e-5 时 ≤ 4e-12。SK 表的插值在这个距离上有折点，P98a 的 2.9e-6 与 P98b 中 H<sub>2</sub>O 的 9.6e-5 都来自它。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="method">
+      <h2>三、pydftb 的算法</h2>
+      <p>对坐标 x = x<sub>K,c</sub>，S′、H<sub>0</sub>′ 来自原子 K 的原子对（同 M6g-2）。基态密度 ρ<sub>s</sub> = C<sub>s</sub> f C<sub>s</sub><sup>T</sup>（每个自旋通道），ΔP<sub>s</sub> = ρ<sub>s</sub> − P<sub>0</sub>。</p>
+      <h3>固定密度下的显式导数</h3>
+      <ul>
+        <li>H<sub>e</sub> = H<sub>0</sub>′ + ½ S′∘(v<sub>μ</sub> + v<sub>ν</sub>) + ½ S∘(v′<sub>μ</sub> + v′<sub>ν</sub>) + ½(S′V<sub>b</sub> + V<sub>b</sub>S′) + c·L(S<sub>x</sub>′, G′; ΔP)。
+          <ul>
+            <li>v 是基态的 SCC 势（自旋时每个通道 v ± v<sub>s</sub>），v′ 是固定电荷时势的导数（γ′、三阶、外场、点电荷，M6g-2 的 Jacobian）；V<sub>b</sub> 是基态的块势（+U、onsite）。</li>
+            <li>L 是四项算子 four_terms(S, G, ΔP) 对 (S, G) 的线性变化；c = −1/8（闭壳层）或 −1/4（每个自旋通道）。</li>
+            <li>S<sub>x</sub>′ = S′（MatrixBased），或 S′ 乘以原子对近邻掩码（NeighbourBased、Thresholded 的极限，同 M6h-4 的响应）；G′ 是 γ′(R<sub>AB</sub>) 在 K 所在原子对上的投影。</li>
+          </ul></li>
+        <li>正交归一的约束：N = C<sup>T</sup>S′C，P<sub>N</sub> = −Σ<sub>s</sub> w C(f̄∘N)C<sup>T</sup>，f̄<sub>ij</sub> = ½(f<sub>i</sub> + f<sub>j</sub>)。</li>
+        <li>固定 P 时 Mulliken 与块布居随 S 变：q<sub>S′</sub> = diag(ρS′)，Q<sub>S′</sub> = ½(ρS′ + S′ρ)；它们的库仑、自旋常数与块势记作 K<sub>c</sub>[ρS′]（没有交换：交换只看 ΔP）。</li>
+      </ul>
+      <h3>响应</h3>
+      <ul>
+        <li>(I − T<sup>T</sup>KT) z = T<sup>T</sup>(H<sub>e</sub> + K[P<sub>N</sub>] + K<sub>c</sub>[ρS′] − SC(ε̄∘N)C<sup>T</sup>S)，投影同 M6h-4（金属的费米能级移动；两分量另投影掉整体自旋转动）。</li>
+        <li>最后一项是 M6g-2 的 −W∘(ε̄∘N)：C<sup>T</sup>SC = 1，所以它在对空间里正好是 −D∘(ε̄∘N)，并且一起被投影。</li>
+        <li>P<sub>1</sub> = P<sub>N</sub> + Tz；dN = diag(P<sub>1</sub>S) + diag(ρS′)。</li>
+        <li>本征值导数：H<sub>1</sub> = H<sub>e</sub> + K[P<sub>1</sub>] + K<sub>c</sub>[ρS′]，dε<sub>i</sub> = [C<sup>T</sup>H<sub>1</sub>C − ε̄∘N]<sub>ii</sub>；简并组取子块的本征值（同 M6g-2）。</li>
+        <li>金属：dE<sub>F</sub>/dx = Σ<sub>窗口</sub> w δ dε / Σ w δ（每个费米组）。</li>
+        <li>Born 电荷：∂μ<sub>j</sub>/∂x<sub>K,i</sub> = δ<sub>ij</sub>(q<sub>0</sub> − N)<sub>K</sub> − Σ<sub>A</sub> R<sub>A,j</sub> dN<sub>A</sub>/dx<sub>K,i</sub>（物理符号，同 M6g-2）。</li>
+      </ul>
+      <h3>两分量</h3>
+      <ul>
+        <li>旋量的 H<sub>e</sub>：H<sub>0</sub>′ ⊗ 1 + Σ<sub>b</sub> ½ S′∘(v<sup>b</sup><sub>μ</sub> + v<sup>b</sup><sub>ν</sub>) ⊗ σ<sup>b</sup> + ½ S∘(v′<sub>μ</sub> + v′<sub>ν</sub>) ⊗ 1 + 块势的四个分量 + 交换的线性变化（对 ΔP 的四个 N×N 块各用一次 L，系数 −1/4）；N = C<sup>†</sup>(S′ ⊗ 1)C。</li>
+        <li>其余照实数路径，内积取实部；右端投影掉整体自旋转动（与位置无关的扰动不激发它们，投影只去掉噪声）。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>四、pydftb 的接口</h2>
+      <pre><code>r = DFTB(sk_lc, hybrid="lc", analysis={"coord_derivatives": True}).calculate(labels, pos)
+cd = r.analysis.coord_derivatives
+cd.atom[K, i, 0, B]      # dN_B / dx_K,i；cd.born[K, i, j] = dμ_j / dx_K,i</code></pre>
+      <ul>
+        <li>输出同 M6g-2：detailed.out 的坐标导数块（<code>coord_derivative_tables</code>）与 dBand_dx.out。</li>
+        <li>拒绝：周期体系（同 M6g-2）。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>五、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>response_hybrid.py</code></td><td>
+            <ul>
+              <li>实数路径与两分量的 <code>kernel</code> 各拆成两段：<code>_scc_populations(ps, ds=None)</code>（壳层与块布居；给出 ds 时是固定密度 ps 在 S′ 下的布居）与 <code>_scc_h(pops, nr)</code>（SCC 势的 H<sub>1</sub>），交换另加。运算与顺序不变，静态结果逐位相同。</li>
+              <li><code>coordinate_derivatives</code>：两条路径共用一个函数，路径相关的只有旋量的组装（<code>_spinor</code>、S′ ⊗ 1）、布居的布局与投影（<code>_orbital_populations</code>、<code>_project</code>）。按原子分批：每批 RHS_ELEMENTS / (6 n<sub>块</sub> n<sup>2</sup>) 个原子（同时存在的数组约为静态求解的两倍）。</li>
+            </ul></td></tr>
+          <tr><td><code>hybrid.py</code></td><td>模块函数 <code>four_terms_lin</code>（四项算子在固定 D 下沿 (S′, G′) 的变化）；<code>HybridTerms.gamma_derivative(atoms)</code>（轨道层面的 γ′）与 <code>exchange_derivative(dps, ds, dg)</code>（S′ 乘原子对近邻掩码、系数、两分量的四个块）。</td></tr>
+          <tr><td><code>response.py</code></td><td><code>coordinate_derivatives</code> 有杂化时转到 <code>response_hybrid</code>（周期体系的检查在前）。</td></tr>
+          <tr><td><code>calculator.py</code></td><td>去掉 “Coordinate derivative perturbations” 的拒绝。</td></tr>
+        </tbody>
+      </table></div>
+      <p>没有 DFTB+ 参考算例（DFTB+ 拒绝），不加 refgen 的算例。</p>
+    </section>
+
+    <section id="validation">
+      <h2>六、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li><strong>Born 电荷对 dF/dE</strong>（解析杂化力的外场差分，力已与 DFTB+ 对上）：H<sub>2</sub>O、H<sub>2</sub>CO CAM、C<sub>2</sub>H<sub>4</sub> 全局杂化、CH<sub>3</sub> 自旋、CuCO 300 K、+U、onsite、DFTB3、外场加点电荷、NeighbourBased、Thresholded（阈值 1e-14）、两分量（含 300 K、外场加点电荷）。界 1e-9。</li>
+        <li><strong>去掉交换</strong>等于 M6g-2、M6g-3a、M6g-3b 的坐标导数（同一基态），界 1e-12。</li>
+        <li><strong>几何差分</strong>（避开 SK 表的折点）：SCC 电荷、本征值、金属的费米能级；NeighbourBased 带 CutoffReduction 时只用它（那里的力不是能量的导数，Born 对 dF/dE 不成立）。</li>
+        <li><strong>两分量</strong>：磁矩沿 z 时等于共线的杂化坐标导数。</li>
+        <li><strong>屏蔽交换的显式导数</strong>：苯 CutoffReduction 10，对位移后的算子做差分。</li>
+        <li><strong>部分原子与分批</strong>：部分原子的结果等于全部计算的对应行；每批一个原子不改变结果。</li>
+        <li><strong>门槛</strong>：golden 两个环境逐位相同、refgen（NumPy、torch）、dynamics、pytest 三个环境、PTBP 测试与 G1。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>七、风险与之后</h2>
+      <ul>
+        <li><strong>内存</strong>：每列一个 n×n 的 S′、H<sub>e</sub> 与 P<sub>N</sub>，按 RHS_ELEMENTS 分批。</li>
+        <li><strong>Thresholded</strong>：用筛选的极限（同 M6h-4 的响应），不碰基态的筛选历史。</li>
+        <li><strong>CutoffReduction</strong>：力（DFTB+ 与 pydftb）用不截断的 S′，不是能量的导数；坐标导数是截断模型自身的导数。两者在截断边界附近的原子对上不一致，属预期。</li>
+        <li><strong>之后</strong>：M6h 全部完成，转到路线图的 M7、M8。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M6h4c-hybrid-response-frequency.html">← M6h-4c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

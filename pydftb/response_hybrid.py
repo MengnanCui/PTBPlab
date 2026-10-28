@@ -179,11 +179,36 @@ class HybridResponse:
 
     def kernel(self, ps) -> list:
         """H1 of the potentials that P1 induces, per spin channel (n_rhs, n, n)."""
-        gs, nr = self.gs, ps[0].shape[0]
-        hs = [np.zeros((nr, self.n, self.n)) for _ in range(self.ns)]
+        nr = ps[0].shape[0]
         if not self.scc:
-            return hs
-        qsh = [gs.shells(q.T) for q in self.populations(ps)]          # (n_shell, n_rhs)
+            return [np.zeros((nr, self.n, self.n)) for _ in range(self.ns)]
+        hs = self._scc_h(self._scc_populations(ps), nr)
+        for s, hx in enumerate(self.hybrid.response_fock(ps)):
+            hs[s] += hx
+        return hs
+
+    def _scc_populations(self, ps, ds=None) -> tuple:
+        """The shell populations (n_shell, n_rhs) of every spin channel and the block
+        populations (n_rhs, n_pair) of the first-order densities ``ps``; with the overlap's
+        change ``ds`` (n_rhs, n, n), those of the fixed densities ``ps`` (n, n) (M6h-4d)."""
+        gs, ch = self.gs, self.channels
+        pops = (self.populations(ps) if ds is None
+                else [np.einsum("ij,rji->ri", p, ds) for p in ps])
+        qsh = [gs.shells(q.T) for q in pops]                           # (n_shell, n_rhs)
+        qb = None
+        if ch is not None:
+            qb = []
+            for p in ps:
+                ps_ = p @ self.s if ds is None else p @ ds
+                qb.append(0.5 * (ps_ + np.transpose(ps_, (0, 2, 1)))[:, ch.mu, ch.nu])
+        return qsh, qb
+
+    def _scc_h(self, pops, nr: int) -> list:
+        """H1 of the SCC potentials (gamma and the third order, the spin constants, the block
+        kernel) of shell and block populations (:meth:`_scc_populations`), per spin channel."""
+        qsh, qb = pops
+        gs = self.gs
+        hs = [np.zeros((nr, self.n, self.n)) for _ in range(self.ns)]
         v = self.e @ (self.kq @ (self.e.T @ sum(qsh)))
         vm = self.w @ (qsh[0] - qsh[1]) if self.ns == 2 and self.w is not None else None
         for s in range(self.ns):
@@ -191,10 +216,6 @@ class HybridResponse:
             hs[s] += self._h_shell(vs[gs.orb_shell].T)
         ch = self.channels
         if ch is not None:                               # block potentials (+U, onsite)
-            qb = []
-            for p in ps:
-                ps_ = p @ self.s
-                qb.append(0.5 * (ps_ + np.transpose(ps_, (0, 2, 1)))[:, ch.mu, ch.nu])
             comp = qb if self.ns == 1 else [qb[0] + qb[1], qb[0] - qb[1]]
             vb = ch.kernel @ np.concatenate(comp, axis=1).T              # (n_comp nb, n_rhs)
             vb = [vb[i * ch.size:(i + 1) * ch.size] for i in range(ch.n_comp)]
@@ -205,8 +226,6 @@ class HybridResponse:
                 vmat[:, ch.nu, ch.mu] = vc.T
                 sv = self.s @ vmat
                 hs[s] += 0.5 * (sv + np.transpose(sv, (0, 2, 1)))
-        for s, hx in enumerate(self.hybrid.response_fock(ps)):
-            hs[s] += hx
         return hs
 
     # ---- solving -------------------------------------------------------------------------
@@ -716,28 +735,49 @@ class PauliHybridResponse(HybridResponse):
         return self._spinor(0.5 * self.s * (v4[:, :, :, None] + v4[:, :, None, :]))
 
     def kernel(self, ps) -> list:
-        gs, nr = self.gs, ps[0].shape[0]
+        nr = ps[0].shape[0]
         if not self.scc:
             return [np.zeros((nr, 2 * self.n, 2 * self.n), complex) for _ in ps]
-        qsh = np.stack([gs.shells(q.T) for q in self._components(ps)])    # (4, n_shell, r)
+        h = self._scc_h(self._scc_populations(ps), nr)[0]
+        return [h + hx for hx in self.hybrid.response_fock(ps)]
+
+    def _scc_populations(self, ps, ds=None) -> tuple:
+        """The four Pauli components' shell populations (4, n_shell, n_rhs) and block
+        populations (4, n_rhs, n_pair) of ``ps``; with the overlap's change ``ds`` (n_rhs, N, N)
+        those of the fixed spinor densities ``ps`` (2N, 2N) (M6h-4d)."""
+        from .spinorbit import components
+        gs, ch = self.gs, self.channels
+        if ds is None:
+            comp = self._components(ps)
+        else:
+            comp = sum(np.einsum("bij,rji->bri", components(p), ds).real for p in ps)
+        qsh = np.stack([gs.shells(q.T) for q in comp])                      # (4, n_shell, r)
+        q = None
+        if ch is not None:
+            q = 0.0
+            for p in ps:
+                cs = components(p) @ self.s if ds is None else components(p)[:, None] @ ds
+                q = q + (0.5 * (cs + np.conj(np.swapaxes(cs, -1, -2))))[:, :, ch.mu, ch.nu].real
+        return qsh, q
+
+    def _scc_h(self, pops, nr: int) -> list:
+        """The spinor H1 of the SCC potentials of the components' shell and block populations
+        (:meth:`_scc_populations`), as a one-element list."""
+        qsh, q = pops
+        gs = self.gs
         v = np.empty_like(qsh)
         v[0] = self.e @ (self.kq @ (self.e.T @ qsh[0]))
         v[1:] = np.einsum("ij,bjr->bir", self.w, qsh[1:])
         h = self._h_components(np.transpose(v[:, gs.orb_shell, :], (0, 2, 1)))
         ch = self.channels
         if ch is not None:                               # block potentials, four components
-            from .spinorbit import components
-            q = 0.0
-            for p in ps:
-                cs = components(p) @ self.s
-                q = q + (0.5 * (cs + np.conj(np.swapaxes(cs, -1, -2))))[:, :, ch.mu, ch.nu].real
             vb = (ch.kernel @ np.concatenate(list(q), axis=1).T).reshape(4, ch.size, nr)
             e = np.zeros((4, nr, self.n, self.n))
             e[:, :, ch.mu, ch.nu] = np.transpose(vb, (0, 2, 1))
             e[:, :, ch.nu, ch.mu] = np.transpose(vb, (0, 2, 1))
             se = self.s @ e
             h = h + self._spinor(0.5 * (se + np.swapaxes(se, -1, -2)))
-        return [h + hx for hx in self.hybrid.response_fock(ps)]
+        return [h]
 
     def _rotations(self) -> list:
         """Orthonormal z of the global spin rotations -i/2 [sigma_b x 1, P0] (zero modes without
@@ -889,3 +929,201 @@ def external_charge_derivatives(calc, st, sc, spec,
     orb = orb.reshape(len(charges), 3, hr.nqm, gs.norb)
     return R.ExternalChargeDerivativesResult(charges, R._sum_atoms(orb, gs.orb_atom, gs.natom),
                                              orb, gs.orb_atom.copy())
+
+
+# ---- coordinate derivatives (milestone M6h-4d) --------------------------------------------
+def coordinate_derivatives(calc, st, sc, spec, opts: dict) -> R.CoordDerivativesResult:
+    """DFTB+'s ``CoordDerivatives`` with a hybrid functional (molecules; DFTB+ refuses it):
+    :func:`pydftb.response.coordinate_derivatives` in the space of level pairs, on the real
+    path and with two-component spin.  For x = x_K,c at fixed density matrix the Hamiltonian
+    changes by H_e = H0' + 1/2 S' o (v_mu + v_nu) + 1/2 S o (v'_mu + v'_nu)
+    + 1/2 (S' V_b + V_b S') + H_x' (v' the potential's change at fixed charges, V_b the block
+    potentials -- two-component: their four components and i/2 (S' Y + Y S') of the imaginary
+    parts -- and H_x' the exchange of the ground state's DeltaP along S' and gamma',
+    :meth:`pydftb.hybrid.HybridTerms.exchange_derivative`); the orthonormality gives
+    P_N = -C (f_bar o N) C^+ (N = C^+ S' C) and the Mulliken and block populations of rho S'
+    their potentials K_c[rho S'] (no exchange).  Then
+    (I - T^+ K T) z = T^+ (H_e + K[P_N] + K_c[rho S'] - S C (e_bar o N) C^+ S), projected (the
+    Fermi level's move, the global spin rotations), P1 = P_N + T z, dN = diag(P1 S) +
+    diag(rho S'); the level derivatives the diagonal of C^+ H1 C - e_bar o N with
+    H1 = H_e + K[P1] + K_c[rho S'] (degenerate runs: the eigenvalues of its block)."""
+    from .spinorbit import components
+    natom = len(st.species)
+    sel = R.coordinate_atoms(spec, natom)
+    atoms = np.arange(natom) if sel is None else sel
+    hr = _response(calc, st, sc, opts)
+    gs, hyb, n = hr.gs, st.hybrid, hr.n
+    pauli = isinstance(hr, PauliHybridResponse)
+    nch = 1 if pauli else hr.ns                          # matrix channels
+    pb = R._pair_derivatives(calc, st)
+    ai = pb.i[pb.pair_of]
+    offsets = np.asarray(st.basis.offsets)
+    # the ground state: potentials, block potentials, densities
+    v_orb, vs_orb = calc._potentials(st, sc.q_in)
+    v_orb = np.asarray(v_orb, float)
+    if pauli:
+        vc = np.zeros((4, n))
+        vc[0] = v_orb
+        if vs_orb is not None:
+            vc[1:] = np.asarray(vs_orb, float)
+    else:
+        vc = ([v_orb] if hr.ns == 1 else
+              [v_orb + np.asarray(vs_orb, float), v_orb - np.asarray(vs_orb, float)])
+    vb = y = None
+    if st.block is not None:
+        vblk, viblk = calc._block_potentials(st, sc.q_in)
+        if pauli:
+            vb = np.zeros((4, n, n))
+            for kk, sl in enumerate(st.block.slices):
+                vb[:, sl, sl] = vblk[kk]
+            if viblk is not None:
+                y = np.zeros((4, n, n))
+                for kk, sl in enumerate(st.block.slices):
+                    y[:, sl, sl] = viblk[kk]
+        else:
+            comp = [np.zeros((n, n)) for _ in range(hr.ns)]
+            for kk, sl in enumerate(st.block.slices):
+                for s in range(hr.ns):
+                    comp[s][sl, sl] = vblk[kk][s]
+            vb = comp if hr.ns == 1 else [comp[0] + comp[1], comp[0] - comp[1]]
+    dq_in, _ = calc._charge_and_magnetisation(st, sc.q_in)
+    jac = R.external_jacobian(st)
+    if calc.scc:
+        jac = jac + R.coulomb_jacobian(st, np.asarray(dq_in, float))
+        if st.third is not None:
+            jac = jac + R.third_order_jacobian(st, np.asarray(dq_in, float))
+    ch = [hr.ch[b] if pauli else hr.c[b].T for b in range(len(gs.blocks))]
+    fs, rho = [], [None] * nch
+    for b, blk in enumerate(gs.blocks):
+        f = R._theta(gs.beta * (blk.evals - blk.fermi))
+        fs.append(f)
+        chan = 0 if pauli else blk.spin
+        r_b = gs.max_fill * blk.weight * ((hr.c[b] * f) @ ch[b])
+        rho[chan] = r_b if rho[chan] is None else rho[chan] + r_b
+    ref = hyb.reference(1 if pauli else hr.ns)
+    dps = [r - ref for r in rho]
+    s_mat = hr.s if not pauli else np.kron(np.eye(2), hr.s)
+    nb = len(gs.blocks)
+    nlev = max(len(blk.evals) for blk in gs.blocks)
+    na = len(atoms)
+    orb = np.zeros((na, 3, hr.nqm, n))
+    dei = np.zeros((na, 3, nb, nlev))
+    efnum = np.zeros((3 * na, hr.ns))
+    per_atom = max(1, RHS_ELEMENTS // (6 * nb * hr.nmat * hr.nmat))   # ~2x solve's arrays
+    for a0 in range(0, na, per_atom):
+        chunk = atoms[a0:a0 + per_atom]
+        ncol = 3 * len(chunk)
+        dh0 = np.zeros((ncol, n, n))
+        dsm = np.zeros((ncol, n, n))
+        dv = np.zeros((gs.nshell, ncol))
+        for k, atom in enumerate(chunk):
+            lo, hi = offsets[atom], offsets[atom] + int(np.count_nonzero(gs.orb_atom == atom))
+            rows = np.flatnonzero(ai == atom)              # elements of the pairs (K, B)
+            r_loc, cols = pb.rows[rows] - lo, pb.cols[rows]
+            for c in range(3):
+                col = 3 * k + c
+                d_h = np.zeros((hi - lo, n))
+                d_s = np.zeros((hi - lo, n))
+                np.add.at(d_h, (r_loc, cols), -pb.dh[rows, c])   # d/dR_K = -d/d(R_B - R_K)
+                np.add.at(d_s, (r_loc, cols), -pb.ds[rows, c])
+                dh0[col, lo:hi, :] += d_h
+                dh0[col, :, lo:hi] += d_h.T
+                dsm[col, lo:hi, :] += d_s
+                dsm[col, :, lo:hi] += d_s.T
+                dv[:, col] = hr.e @ jac[:, atom, c]
+        hx = hyb.exchange_derivative(dps, dsm, hyb.gamma_derivative(chunk))
+        hpot = hr._h_shell(dv[gs.orb_shell].T)           # 1/2 S o (v'_mu + v'_nu)
+        if pauli:
+            comp = (0.5 * dsm[None] * (vc[:, None, :, None] + vc[:, None, None, :])).astype(complex)
+            comp[0] += dh0 + hpot
+            if vb is not None:
+                comp += 0.5 * (dsm[None] @ vb[:, None] + vb[:, None] @ dsm[None])
+            if y is not None:
+                comp += 0.5j * (dsm[None] @ y[:, None] + y[:, None] @ dsm[None])
+            he = [hr._spinor(comp) + hx[0]]
+            ds2 = np.zeros((ncol, 2 * n, 2 * n))
+            ds2[:, :n, :n] = dsm
+            ds2[:, n:, n:] = dsm
+        else:
+            he = []
+            for s in range(hr.ns):
+                h = dh0 + 0.5 * dsm * (vc[s][:, None] + vc[s][None, :]) + hpot
+                if vb is not None:
+                    h = h + 0.5 * (dsm @ vb[s] + vb[s] @ dsm)
+                he.append(h + hx[s])
+            ds2 = dsm
+        del dh0, hx, hpot
+        # the orthonormality's P_N, N = C^+ S' C, and the populations of rho S'
+        dtype = complex if pauli else float
+        pn = [np.zeros((ncol, hr.nmat, hr.nmat), dtype) for _ in range(nch)]
+        nms, ebars = [], []
+        for b, blk in enumerate(gs.blocks):
+            chan = 0 if pauli else blk.spin
+            nm = ch[b] @ ds2 @ hr.c[b]
+            fbar = 0.5 * (fs[b][:, None] + fs[b][None, :])
+            pn[chan] -= gs.max_fill * blk.weight * (hr.c[b] @ (fbar * nm) @ ch[b])
+            nms.append(nm)
+            ebars.append(0.5 * (blk.evals[:, None] + blk.evals[None, :]))
+        kc = hr._scc_h(hr._scc_populations(rho, ds=dsm), ncol) if hr.scc else \
+            [np.zeros_like(h) for h in he]
+        if pauli:
+            q_s = np.transpose(np.einsum("bij,rji->bri", components(rho[0]), dsm).real, (1, 0, 2))
+        else:
+            q = [np.einsum("ij,rji->ri", r, dsm) for r in rho]
+            q_s = np.stack(q if hr.ns == 1 else [q[0] + q[1], q[0] - q[1]], axis=1)
+        kpn = hr.kernel(pn)
+        htot = [he[c] + kpn[c] + kc[c] for c in range(nch)]
+        for b, blk in enumerate(gs.blocks):
+            sc_ = s_mat @ hr.c[b]
+            sch = sc_.conj().T if pauli else sc_.T
+            htot[0 if pauli else blk.spin] = (htot[0 if pauli else blk.spin]
+                                              - sc_ @ (ebars[b] * nms[b]) @ sch)
+        rhs = hr._project(hr.t_adjoint(htot))
+        del htot, kpn, dsm, ds2
+        z = hr._minres(rhs) if hr.scc else rhs
+        del rhs
+        p1 = [p + t for p, t in zip(pn, hr.t_apply(z))]
+        cols = slice(3 * a0, 3 * a0 + ncol)
+        orb[a0:a0 + len(chunk)] = (hr._orbital_populations(p1) + q_s).reshape(
+            len(chunk), 3, hr.nqm, n)
+        k1 = hr.kernel(p1)
+        h1 = [he[c] + k1[c] + kc[c] for c in range(nch)]
+        for b, blk in enumerate(gs.blocks):
+            m = hr._block_matrix(h1, b, blk) - ebars[b] * nms[b]
+            diag = np.einsum("rii->ri", m).real.copy()
+            de = diag.copy()
+            for gid in np.unique(blk.group):
+                idx = np.flatnonzero(blk.group == gid)
+                if idx.size > 1:                         # degenerate run: its block's eigenvalues
+                    de[:, idx] = np.linalg.eigvalsh(m[:, idx][:, :, idx])
+            dei[a0:a0 + len(chunk), :, b, :len(blk.evals)] = de.reshape(len(chunk), 3, -1)
+            win = blk.window
+            if win.size:
+                dlt = blk.weight * R._delta(blk.evals[win], blk.fermi, gs.beta)
+                efnum[cols, blk.spin] += diag[:, win] @ dlt
+    if hr.indefinite:
+        warnings.warn("the hybrid response equation is indefinite: the ground state is a "
+                      "saddle point of the SCC (unstable), not a minimum; the response is "
+                      "that of this stationary state (as DFTB+'s)", RuntimeWarning, stacklevel=3)
+    dfermi = None
+    if gs.metallic:
+        dfermi = np.zeros((3 * na, hr.ns))
+        if gs.fermi_shift:
+            if gs.shared_fermi:
+                dfermi[:] = efnum.sum(1, keepdims=True) / gs.dos.sum()
+            else:
+                for s in range(hr.ns):
+                    if gs.dos[s] > 0.0:
+                        dfermi[:, s] = efnum[:, s] / gs.dos[s]
+        dfermi = dfermi.reshape(na, 3, hr.ns)
+    atom_d = R._sum_atoms(orb, gs.orb_atom, natom)       # (n_K, 3, n_qm, n_atom)
+    # Born charges: d mu_j / d x_K,i = delta_ij (q0 - N)_K - sum_A R_A,j dN_A / dx_K,i
+    dq_out, _ = calc._charge_and_magnetisation(st, sc.q_out)
+    dn_atom = np.zeros(natom)
+    np.add.at(dn_atom, np.asarray(st.site_atom), np.asarray(dq_out, float))
+    pos = np.asarray(st.pos, float)
+    born = -np.einsum("Aj,kiA->kij", pos, atom_d[:, :, 0, :])
+    born[:, np.arange(3), np.arange(3)] -= dn_atom[atoms][:, None]
+    return R.CoordDerivativesResult(atoms, born, atom_d, orb, dei, dfermi,
+                                    gs.max_fill * gs.dos if gs.metallic else None, gs.metallic,
+                                    gs.orb_atom.copy())

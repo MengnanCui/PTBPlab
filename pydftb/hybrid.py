@@ -382,6 +382,18 @@ def four_terms(s, g, d):
     return (sd @ s) * g + (sd * g) @ s + s @ (d * g) @ s + s @ (ds * g)
 
 
+def four_terms_lin(s, g, ds, dg, d):
+    """The change of :func:`four_terms` (S, G, D) along (dS, dG) at fixed D (milestone M6h-4d:
+    the exchange's explicit coordinate derivative); ``ds``, ``dg`` (..., n, n), D (n, n)."""
+    sd, d_s = s @ d, d @ s
+    dsd, dds = ds @ d, d @ ds
+    t1 = (dsd @ s + sd @ ds) * g + (sd @ s) * dg
+    t2 = (dsd * g) @ s + (sd * dg) @ s + (sd * g) @ ds
+    t3 = ds @ (d * g) @ s + s @ (d * dg) @ s + s @ (d * g) @ ds
+    t4 = ds @ (d_s * g) + s @ (dds * g) + s @ (d_s * dg)
+    return t1 + t2 + t3 + t4
+
+
 def bilinear_ds(s, g, m1, m2):
     """The S coefficients C of B = <M1, K^x[M2]> (M6h-2; S and G symmetric): the derivative
     along a symmetric change of S_munu = S_numu is C_munu + C_numu (C_mumu on the diagonal), as
@@ -793,6 +805,43 @@ class HybridTerms:
 
     def _four_terms(self, s, d):
         return four_terms(s, self.G, d)
+
+    def gamma_derivative(self, atoms) -> np.ndarray:
+        """d G / d x_K,c of the displaced ``atoms`` (molecules; 3 len(atoms), n, n): the
+        orbital-level gamma'(R_AB) (R_A - R_B)_c / R_AB (delta_AK - delta_BK) (M6h-4d)."""
+        if self._periodic:
+            raise ValueError("coordinate derivatives of a periodic hybrid are not supported")
+        dist = np.where(self.dist > 0.0, self.dist, 1.0)
+        units = [self.dg_atom * self.vec[:, :, c] / dist for c in range(3)]
+        out = np.zeros((3 * len(atoms), len(dist), len(dist)))
+        for k, atom in enumerate(atoms):
+            for c in range(3):
+                m = out[3 * k + c]
+                m[atom, :] += units[c][atom, :]
+                m[:, atom] -= units[c][:, atom]
+                np.fill_diagonal(m, 0.0)
+        return out[:, self.orb_atom][:, :, self.orb_atom]
+
+    def exchange_derivative(self, dps, ds, dg) -> list:
+        """The explicit derivative of H_x at fixed DeltaP (molecules, M6h-4d) along the
+        overlap's change ``ds`` and the orbital-level gamma's ``dg`` (n_rhs, n, n) for every
+        spin channel's DeltaP: the overlap of the pairs within the CAM cutoff for the
+        NeighbourBased screening and the Thresholded one's limit (as :meth:`response_fock`);
+        two-component: the four N x N blocks of the spinor DeltaP."""
+        if self.pauli:
+            n, d = self.n, dps[0]
+            h = np.empty(ds.shape[:-2] + (2 * n, 2 * n), complex)
+            for r in (0, 1):
+                for c in (0, 1):
+                    h[..., r * n:(r + 1) * n, c * n:(c + 1) * n] = -0.25 * four_terms_lin(
+                        self.S, self.G, ds, dg, d[r * n:(r + 1) * n, c * n:(c + 1) * n])
+            return [h]
+        s = self.S
+        if self.spec.screening != "matrix":
+            s = self.S_cam
+            ds = ds * self.neighbours[np.ix_(self.orb_atom, self.orb_atom)]
+        c = -0.125 if len(dps) == 1 else -0.25
+        return [c * four_terms_lin(s, self.G, ds, dg, d) for d in dps]
 
     def _fock_threshold(self, dp):
         """DFTB+ addCamHamiltonianThreshold_cluster: H_prev += the change from DeltaDeltaP =

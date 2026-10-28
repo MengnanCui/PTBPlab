@@ -520,8 +520,8 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: torch and `pydftb.autodiff` (the
-response analyses: M6h-4, below).  Details:
+XL-BOMD; not yet in pydftb: torch and `pydftb.autodiff` (the response analyses and the
+coordinate derivatives: M6h-4 to M6h-4d, below).  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
 
 TD-LC (milestone M6h-2): `casida=` with LC files gives DFTB+'s TD-LC-DFTB.  The long-range
@@ -665,7 +665,7 @@ respond (DFTB+ never updates the block populations of a hybrid's response, 3-13 
 the point charges' potential is not added to the perturbation (DFTB+ 25.1 adds it to every
 response, with or without a hybrid; fixed in the development version); the class attributes
 `DFTB._response_blocks_compat` and `DFTB._response_pc_compat` (testing) do as DFTB+.
-Refused: coordinate derivatives (as DFTB+; milestone M6h-4d); finite frequencies: below.
+Finite frequencies and coordinate derivatives (DFTB+ refuses both with a hybrid): below.
 Details: [`docs/reports/M6h4-hybrid-response.html`](docs/reports/M6h4-hybrid-response.html).
 
 The same analyses work at k-points (collinear spin) and with two-component spin (molecules),
@@ -714,6 +714,23 @@ at 1e-5 Ha below one), M6g's and M6g-3b's finite-frequency responses without the
 (<= 8.5e-13, metals, +U, the Gamma point, k-points), the supercell's Gamma point at k-points
 (1.1e-12) and the collinear limit.  Details:
 [`docs/reports/M6h4c-hybrid-response-frequency.html`](docs/reports/M6h4c-hybrid-response-frequency.html).
+
+Coordinate derivatives with a hybrid functional (milestone M6h-4d; molecules, the real path and
+two-component spin; DFTB+ refuses them): `analysis={"coord_derivatives": True}` (or
+`{"atoms": [...]}`) gives M6g-2's result -- dN/dx, Born charges, level derivatives and a metal's
+Fermi-level derivatives.  M6g-2's coordinate response is solved in the pair space; the exchange
+enters twice: its explicit derivative at fixed DeltaP (the overlap's and gamma's, with the
+NeighbourBased and Thresholded overlap masked to the atom pairs within the CAM cutoff) and the
+response kernel.  The Thresholded screening takes its limit, as the responses; with
+CutoffReduction the derivatives are the screened model's, while the forces (DFTB+'s and
+pydftb's) take the unscreened S'.  Checks: the Born charges are the field derivatives of the
+analytic hybrid forces (Maxwell's relation, <= 1.3e-10 for every configuration: spin, a metal,
++U, onsite, DFTB3, field and point charges, the three screenings, two-component spin), without
+the exchange M6g-2's, M6g-3a's and M6g-3b's derivatives (<= 1.6e-14), geometry finite differences
+where the SK tables are smooth (<= 6.5e-10; their spline knots spoil differences at H2O's and
+CH3OH's distances) and the two-component collinear limit.  A cluster of 20 waters takes 6 s
+(1 thread).  Details:
+[`docs/reports/M6h4d-hybrid-coord-derivatives.html`](docs/reports/M6h4d-hybrid-coord-derivatives.html).
 
 ### Analysis outputs
 

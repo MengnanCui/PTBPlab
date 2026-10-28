@@ -206,7 +206,6 @@ def test_sk_files_and_the_option():
     ({"hybrid": {"type": "lc", "screening": "threshold"}, "spin": True,
       "spin_constants": W_HCO}, "thresholded"),
     ({"analysis": {"atom_energies": True}}, "Atomic resolved energies"),
-    ({"analysis": {"coord_derivatives": True}}, "Coordinate derivative"),
     ({"spin": "noncolinear", "spin_constants": W_HCO,
       "hybrid": {"type": "lc", "screening": "neighbour"}}, "matrix alogorithm"),
     ({"casida": {"n_excitations": 3, "energy_window": 0.1}}, "window options"),

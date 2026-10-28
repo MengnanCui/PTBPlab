@@ -765,8 +765,6 @@ class DFTB:
         elif a is not None and a.atom_energies:
             dftbp = ("Atomic resolved energies cannot be calculated with hybrid functionals at "
                      "the moment")
-        elif a is not None and a.coord_derivatives is not False:
-            dftbp = "Coordinate derivative perturbations do not yet work with hybrid functionals"
         elif self.casida is not None:                           # TD-LC (M6h-2)
             cas = self.casida
             if rs[0] == "cam":
