@@ -1,4 +1,4 @@
-"""Static responses with a hybrid functional (milestones M6h-4, M6h-4b): DFTB+'s
+"""Responses with a hybrid functional (milestones M6h-4, M6h-4b, M6h-4c): DFTB+'s
 ``Polarisability``, ``ResponseKernel`` and the development version's
 ``ExternalChargeDerivatives`` on the real path (molecules and the Gamma point, collinear spin;
 :class:`HybridResponse`), at k-points (:class:`KPointHybridResponse`) and with two-component
@@ -45,8 +45,26 @@ MinimumImage NeighbourBased operator is not self-adjoint, B22, and refused).  Tw
 populations of the four Pauli components, H1 = sum_b [1/2 S o (V^b_mu + V^b_nu)] x sigma^b, and
 the global spin rotations (zero modes without spin-orbit coupling) projected out.
 
-NumPy engine only; static only (DFTB+ refuses finite frequencies with a hybrid: milestone
-M6h-4c); coordinate derivatives are milestone M6h-4d.
+Finite frequencies (M6h-4c; DFTB+ refuses them with a hybrid): for an e^{-iwt} perturbation P1
+has a symmetric (Hermitian) part P^s and an antisymmetric (anti-Hermitian) one P^a; populations
+see only P^s, the exchange both.  With Omega_ij = w / (e_i - e_j) on the pairs of different
+degenerate runs (the others have F = 0 at w != 0; no Fermi-level move, as DFTB+) and
+G = 1 / sqrt(1 + Omega^2), z^a = G y:
+
+    [[I + D K_s D, -Omega G], [-G Omega, G (I + D K_x D) G]] [z^s; y] = [D o M_ext; 0],
+
+K_s the static response potentials of P^s, K_x the exchange of P^a (two-component: its upper-
+right spin block the negative adjoint of the lower-left one).  Symmetric, indefinite above an
+excitation; w = 0 is the static equation.  MINRES, and when it stalls near or among
+excitations a dense solve of small systems on the physical space, else a warning.  The
+two-component rotations are not projected at w != 0 (no zero modes there) but near-null at
+small w (eigenvalues ~ w^2): the right-hand side has no part along them, rounding has, so
+MINRES may stall on a residual plateau just above its tolerance (accepted) and the dense solve
+amplifies the rounding by 1 / w^2 (so it comes only after MINRES fails).
+The eta -> 0 limit of DFTB+'s weights (the populations of M6g's and M6g-3b's finite-frequency
+responses without the exchange).
+
+NumPy engine only; coordinate derivatives are milestone M6h-4d.
 """
 from __future__ import annotations
 
@@ -61,6 +79,9 @@ SOLVE_MAX = 1000          # iterations
 NEGATIVE_CURVATURE = -1e-8   # Rayleigh quotient of a Lanczos vector: an indefinite equation
 ROTATION_REL = 1e-8       # spin-rotation zero modes below this of the largest: no rotation
 RHS_ELEMENTS = 2_000_000  # right-hand sides per batch: n_rhs n_block n_orb^2 at most this
+DENSE_LIMIT = 3000        # finite frequency: a dense solve when MINRES stalls, unknowns
+OMEGA_PLATEAU = 1e-11     # finite frequency without the dense solve: a relative residual of
+PLATEAU_STEPS = 100       # at most this not halved in this many iterations is accepted
 
 
 def _real(x) -> np.ndarray:
@@ -200,12 +221,21 @@ class HybridResponse:
         k = self.t_adjoint(self.kernel(self.t_apply(z)))
         return [a - b for a, b in zip(z, k)]
 
-    def _minres(self, b) -> list:
+    def _minres(self, b, op=None, maxit: int = SOLVE_MAX, strict: bool = True,
+                curvature: bool = True, plateau: float | None = None) -> list:
         """MINRES on every right-hand side of ``b`` (z of every block): Paige and Saunders'
         Lanczos process with the QR factorisation of its tridiagonal by Givens rotations
         (SciPy's minres without a preconditioner), each column with its own scalars, until the
         residual estimate is SOLVE_TOL of |b|.  A negative Rayleigh quotient of a Lanczos
-        vector marks the equation as indefinite."""
+        vector marks the equation as indefinite (``curvature``).  ``op``: the operator
+        (:meth:`_operator`); after ``maxit`` iterations an error, or with ``strict`` False the
+        last iterate (``self._converged`` False, ``self._residual`` the worst relative
+        residual).  ``plateau``: a worst relative residual of at most this that has not halved
+        in PLATEAU_STEPS iterations ends the iteration as converged (its attainable accuracy;
+        ``self._residual`` that residual)."""
+        op = self._operator if op is None else op
+        self._converged, self._residual = True, 0.0
+        hist = []
         nr = b[0].shape[0]
         beta1 = np.sqrt(self._inner(b, b))
         x = [np.zeros_like(v) for v in b]
@@ -216,20 +246,30 @@ class HybridResponse:
         oldb, beta, dbar, epsln = np.zeros(nr), beta1.copy(), np.zeros(nr), np.zeros(nr)
         phibar, cs, sn = beta1.copy(), -np.ones(nr), np.zeros(nr)
         stop = SOLVE_TOL * beta1
-        for it in range(1, SOLVE_MAX + 2):
+        for it in range(1, maxit + 2):
             active = phibar > stop
             if not active.any():
                 break
-            if it > SOLVE_MAX:
+            if plateau is not None:                      # finite frequency (M6h-4c)
                 worst = float(np.max(phibar[active] / beta1[active]))
-                raise RuntimeError(f"the hybrid response did not converge in {SOLVE_MAX} "
-                                   f"iterations (relative residual {worst:.1e})")
+                if (len(hist) >= PLATEAU_STEPS and worst <= plateau
+                        and worst > 0.5 * hist[-PLATEAU_STEPS]):
+                    self._residual = worst
+                    break
+                hist.append(worst)
+            if it > maxit:
+                worst = float(np.max(phibar[active] / beta1[active]))
+                if strict:
+                    raise RuntimeError(f"the hybrid response did not converge in {maxit} "
+                                       f"iterations (relative residual {worst:.1e})")
+                self._converged, self._residual = False, worst
+                break
             v = [_scale(1.0, beta, y) for y in r2]              # the Lanczos vector
-            y = self._operator(v)
+            y = op(v)
             if it >= 2:
                 y = [a - _scale(beta, oldb, c) for a, c in zip(y, r1)]
             alfa = self._inner(v, y)
-            if np.any(alfa[active] < NEGATIVE_CURVATURE):
+            if curvature and np.any(alfa[active] < NEGATIVE_CURVATURE):
                 self.indefinite = True
             y = [a - _scale(alfa, beta, c) for a, c in zip(y, r2)]
             r1, r2 = r2, y
@@ -320,6 +360,178 @@ class HybridResponse:
         """C^+ H1 C of block k."""
         return self.c[k].T @ hs[blk.spin] @ self.c[k]
 
+    # ---- finite frequencies (milestone M6h-4c) -------------------------------------------
+    _complex = False                                     # the blocks' matrices are real
+
+    def _t_d(self, z, d) -> list:
+        """:meth:`t_apply` with the weights ``d`` of every block."""
+        out = [np.zeros((z[0].shape[0], self.n, self.n)) for _ in range(self.ns)]
+        for b, blk in enumerate(self.gs.blocks):
+            out[blk.spin] -= self.c[b] @ (d[b] * z[b]) @ self.c[b].T
+        return out
+
+    def _tt_d(self, hs, d) -> list:
+        """:meth:`t_adjoint` with the weights ``d``, without the Fermi level's move."""
+        return [d[b] * (self.c[b].T @ hs[blk.spin] @ self.c[b])
+                for b, blk in enumerate(self.gs.blocks)]
+
+    def _exchange_a(self, ps) -> list:
+        """H_x of the antisymmetric part of P1 (every spin channel)."""
+        return self.hybrid.response_fock(ps)
+
+    def _zero_modes(self) -> bool:
+        """Whether the static equation has zero modes (the two-component spin rotations)."""
+        return False
+
+    def _omega_weights(self, omega: float) -> tuple:
+        """Per block D without the pairs of one degenerate run (the intraband ones included:
+        F = 0 there at omega != 0), Omega = omega / (e_i - e_j) and G = 1 / sqrt(1 + Omega^2)."""
+        dfin, om, g = [], [], []
+        for b, blk in enumerate(self.gs.blocks):
+            e = blk.evals
+            d = self.d[b].copy()
+            d[blk.group[:, None] == blk.group[None, :]] = 0.0
+            with np.errstate(divide="ignore", invalid="ignore"):
+                o = np.where(d > 0.0, omega / (e[:, None] - e[None, :]), 0.0)
+            dfin.append(d)
+            om.append(o)
+            g.append(1.0 / np.sqrt(1.0 + o * o))
+        return dfin, om, g
+
+    def _operator_omega(self, x, weights) -> list:
+        """[[I + D K_s D, -Omega G], [-G Omega, G (I + D K_x D) G]] on [z^s of every block...,
+        y of every block...] (z^a = G y): K_s every response potential of P^s, K_x the exchange
+        of P^a."""
+        dfin, om, g = weights
+        nb = len(dfin)
+        zs, za = x[:nb], [g[b] * x[nb + b] for b in range(nb)]
+        ks = self._tt_d(self.kernel(self._t_d(zs, dfin)), dfin)
+        kx = self._tt_d(self._exchange_a(self._t_d(za, dfin)), dfin)
+        return ([zs[b] - ks[b] - om[b] * za[b] for b in range(nb)]
+                + [g[b] * (za[b] - kx[b] - om[b] * zs[b]) for b in range(nb)])
+
+    def _pair_unknowns(self, dfin) -> int:
+        """Real unknowns of the finite-frequency system: the pairs i < j with D > 0, two parts,
+        real and imaginary for complex blocks."""
+        pairs = sum(int(np.count_nonzero(np.triu(d > 0.0, 1))) for d in dfin)
+        return 2 * pairs * (2 if self._complex else 1)
+
+    def _solve_stacked(self, rhs, weights, omega: float) -> list:
+        """MINRES on the finite-frequency system (indefinite above an excitation, so without the
+        saddle-point flag).  Small systems (at most DENSE_LIMIT unknowns) without zero modes:
+        not converged after as many iterations as unknowns, the dense solve
+        (:meth:`_dense_solve`).  With the two-component rotations (near-null at small w:
+        rounding along them can stall MINRES just above its tolerance, and the dense solve
+        amplifies it by 1 / w^2) and in large systems: MINRES to SOLVE_MAX, a stagnating
+        residual of at most OMEGA_PLATEAU accepted; then the dense solve (small systems) or a
+        warning and the last iterate."""
+        dim = self._pair_unknowns(weights[0])
+        small, zero = dim <= DENSE_LIMIT, self._zero_modes()
+        op = lambda x: self._operator_omega(x, weights)          # noqa: E731
+        x = self._minres(rhs, op, min(dim, SOLVE_MAX) if small and not zero else SOLVE_MAX,
+                         strict=False, curvature=False,
+                         plateau=OMEGA_PLATEAU if zero or not small else None)
+        if self._converged:
+            return x
+        if small:
+            return self._dense_solve(rhs, op, weights[0])
+        extra = (" or, with two-component spin, to the omega -> 0 pole of the global spin "
+                 "rotations" if zero else "")
+        warnings.warn(f"the hybrid response at omega = {omega:g} Ha did not converge in "
+                      f"{SOLVE_MAX} MINRES iterations (relative residual {self._residual:.1e}): "
+                      f"the frequency is close to or among excitations of the response "
+                      f"equation{extra}; this is the last iterate (the dense solve of its {dim} "
+                      f"unknowns: pydftb.response_hybrid.DENSE_LIMIT >= {dim})", RuntimeWarning,
+                      stacklevel=4)
+        return x
+
+    def _dense_solve(self, rhs, op, dfin) -> list:
+        """The finite-frequency system as a dense matrix on its physical space -- z^s symmetric
+        (Hermitian), y antisymmetric (anti-Hermitian) on the pairs i < j with D > 0, in the
+        orthonormal basis (e_ij +- e_ji) / sqrt 2 and, for complex blocks, i (e_ij -+ e_ji) /
+        sqrt 2 -- the operator applied to the basis in batches, solved by LU: accurate to the
+        condition number times the rounding near an excitation, where MINRES stalls."""
+        idx = [np.argwhere(np.triu(d > 0.0, 1)) for d in dfin]
+        dim = self._pair_unknowns(dfin)
+        a = np.empty((dim, dim))
+        step = max(1, RHS_ELEMENTS // (2 * len(idx) * self.nmat * self.nmat))
+        for lo in range(0, dim, step):
+            hi = min(dim, lo + step)
+            e = np.zeros((dim, hi - lo))
+            e[np.arange(lo, hi), np.arange(hi - lo)] = 1.0
+            a[:, lo:hi] = self._coordinates(op(self._from_coordinates(e, idx)), idx)
+        return self._from_coordinates(np.linalg.solve(a, self._coordinates(rhs, idx)), idx)
+
+    def _coordinates(self, x, idx) -> np.ndarray:
+        """(n_unknowns, n_rhs) coordinates of [z^s..., y...] in :meth:`_dense_solve`'s basis."""
+        nb, out = len(idx), []
+        for part, sign in ((0, 1.0), (1, -1.0)):
+            for b, ij in enumerate(idx):
+                m, i, j = x[part * nb + b], ij[:, 0], ij[:, 1]
+                out.append(((m[:, i, j] + sign * m[:, j, i]) * _SQRT_HALF).real)
+                if self._complex:                            # i (e_ij - sign e_ji) / sqrt 2
+                    out.append(((-1j * m[:, i, j] + sign * 1j * m[:, j, i]) * _SQRT_HALF).real)
+        return np.concatenate(out, axis=1).T
+
+    def _from_coordinates(self, c, idx) -> list:
+        """[z^s..., y...] of coordinates (n_unknowns, n_rhs) in :meth:`_dense_solve`'s basis."""
+        nb, nr = len(idx), c.shape[1]
+        dtype = complex if self._complex else float
+        out = [np.zeros((nr, self.nmat, self.nmat), dtype) for _ in range(2 * nb)]
+        o = 0
+        for part, sign in ((0, 1.0), (1, -1.0)):
+            for b, ij in enumerate(idx):
+                m, i, j, k = out[part * nb + b], ij[:, 0], ij[:, 1], len(ij)
+                cr = c[o:o + k].T * _SQRT_HALF
+                o += k
+                m[:, i, j] += cr
+                m[:, j, i] += sign * cr
+                if self._complex:
+                    ci = c[o:o + k].T * _SQRT_HALF
+                    o += k
+                    m[:, i, j] += 1j * ci
+                    m[:, j, i] -= sign * 1j * ci
+        return out
+
+    def solve_omega(self, v_shell, omega: float) -> tuple:
+        """:meth:`solve` at a frequency omega != 0 (M6h-4c): the populations, on-site
+        populations and level derivatives of the symmetric part P^s (the antisymmetric one has
+        none); no Fermi-level move (the Fermi level's derivatives are zero)."""
+        gs = self.gs
+        weights = self._omega_weights(omega)
+        dfin, om = weights[0], weights[1]
+        nrhs = v_shell.shape[1]
+        step = max(1, RHS_ELEMENTS // (2 * len(gs.blocks) * self.nmat * self.nmat))
+        nlev = max(len(blk.evals) for blk in gs.blocks)
+        orb = np.zeros((nrhs, self.nqm, self.n))
+        net = np.zeros((nrhs, self.n))
+        dei = np.zeros((nrhs, len(gs.blocks), nlev))
+        for lo in range(0, nrhs, step):
+            cols = slice(lo, min(lo + step, nrhs))
+            h_ext = self._external(v_shell[gs.orb_shell, cols].T)
+            b = self._tt_d(h_ext, dfin)
+            if self.scc:
+                zs = self._solve_stacked(b + [np.zeros_like(v) for v in b], weights,
+                                         omega)[:len(b)]
+            else:                                        # the bare response (RPA)
+                zs = [v / (1.0 - o * o) for v, o in zip(b, om)]
+            ps = self._t_d(zs, dfin)
+            hs = [x + y for x, y in zip(h_ext, self.kernel(ps))]
+            orb[cols] = self._orbital_populations(ps)
+            net[cols] = self._net(ps)
+            for k, blk in enumerate(gs.blocks):
+                m = self._block_matrix(hs, k, blk)
+                de = np.einsum("rii->ri", m).real.copy()
+                for gid in np.unique(blk.group):
+                    idx = np.flatnonzero(blk.group == gid)
+                    if idx.size > 1:                     # degenerate run: its block's eigenvalues
+                        de[:, idx] = np.linalg.eigvalsh(m[:, idx][:, :, idx])
+                dei[cols, k, :len(blk.evals)] = de
+        return orb, net, dei, np.zeros((nrhs, self.ns)) if gs.metallic else None
+
+
+_SQRT_HALF = 1.0 / np.sqrt(2.0)
+
 
 def _cdot(a, b) -> np.ndarray:
     """Per right-hand side, sum over the blocks of Re Tr(a^+ b) (Hermitian blocks)."""
@@ -402,12 +614,21 @@ class KPointHybridResponse(HybridResponse):
                 vmat[:, ch.nu, ch.mu] = vc.T
                 sv = self.sk[b] @ vmat
                 hs[b] += 0.5 * (sv + np.conj(np.transpose(sv, (0, 2, 1))))
-        dps = [np.stack([ps[s * self.nk + k] / gs.blocks[s * self.nk + k].weight
-                         for k in range(self.nk)], axis=1) for s in range(self.ns)]
-        for s, hx in enumerate(self.hybrid.response_fock(dps)):
-            for k in range(self.nk):
-                hs[s * self.nk + k] += hx[:, k]
+        for b, hx in enumerate(self._exchange(ps)):
+            hs[b] += hx
         return hs
+
+    def _exchange(self, ps) -> list:
+        """H_x of every block's P1: dP(k) = P1(k) / w_k of every spin channel through the ground
+        state's k-point operator."""
+        gs, nk = self.gs, self.nk
+        dps = [np.stack([ps[s * nk + k] / gs.blocks[s * nk + k].weight for k in range(nk)],
+                        axis=1) for s in range(self.ns)]
+        out = [None] * len(ps)
+        for s, hx in enumerate(self.hybrid.response_fock(dps)):
+            for k in range(nk):
+                out[s * nk + k] = hx[:, k]
+        return out
 
     def _external(self, v_orb) -> list:
         return [self._h_block(v_orb, b) for b in range(len(self.gs.blocks))]
@@ -417,6 +638,18 @@ class KPointHybridResponse(HybridResponse):
 
     def _block_matrix(self, hs, k: int, blk) -> np.ndarray:
         return self.ch[k] @ hs[k] @ self.c[k]
+
+    # finite frequencies (M6h-4c): P^a(-k) = conj P^a(k) too, so the convolution holds
+    _complex = True
+
+    def _t_d(self, z, d) -> list:
+        return [-(self.c[b] @ (d[b] * z[b]) @ self.ch[b]) for b in range(len(z))]
+
+    def _tt_d(self, hs, d) -> list:
+        return [d[b] * (self.ch[b] @ hs[b] @ self.c[b]) for b in range(len(hs))]
+
+    def _exchange_a(self, ps) -> list:
+        return self._exchange(ps)
 
 
 class PauliHybridResponse(HybridResponse):
@@ -559,6 +792,21 @@ class PauliHybridResponse(HybridResponse):
     def _block_matrix(self, hs, k: int, blk) -> np.ndarray:
         return self.ch[k] @ hs[k] @ self.c[k]
 
+    # finite frequencies (M6h-4c): no projection (the rotations are no zero modes at w != 0)
+    _complex = True
+
+    def _t_d(self, z, d) -> list:
+        return [-(self.c[b] @ (d[b] * z[b]) @ self.ch[b]) for b in range(len(z))]
+
+    def _tt_d(self, hs, d) -> list:
+        return [d[b] * (self.ch[b] @ hs[b] @ self.c[b]) for b in range(len(hs))]
+
+    def _exchange_a(self, ps) -> list:
+        return self.hybrid.response_fock(ps, antihermitian=True)
+
+    def _zero_modes(self) -> bool:
+        return bool(self.rotations)
+
 
 def _response(calc, st, sc, opts: dict, rpa: bool = False) -> HybridResponse:
     """The response class of the ground state: two-component, k-points or the real path."""
@@ -571,51 +819,59 @@ def _response(calc, st, sc, opts: dict, rpa: bool = False) -> HybridResponse:
 
 
 # ---- the analyses ----------------------------------------------------------------------------
-def _static(spec, what: str) -> np.ndarray:
-    omegas = R.frequencies(spec, what)
-    if np.any(omegas != 0.0):                            # _check_hybrid stops this before
-        raise ValueError("Finite frequency hybrid xc-functional calculation not currently "
-                         "supported (as in DFTB+)")
-    return omegas
+def _solve_all(hr, v, omegas) -> list:
+    """(orb, net, dei, dfermi) at every frequency: the static solve at 0, M6h-4c's otherwise."""
+    return [hr.solve(v) if float(w) == 0.0 else hr.solve_omega(v, float(w)) for w in omegas]
+
+
+def _stack(xs):
+    return None if xs[0] is None else np.stack(xs)
 
 
 def polarisability(calc, st, sc, spec, opts: dict) -> R.PolarisabilityResult:
-    """DFTB+'s ``Polarisability`` with a hybrid functional: the static response to E_x, E_y,
-    E_z (as :func:`pydftb.response.polarisability`)."""
-    omegas = _static(spec, "polarisability")
+    """DFTB+'s ``Polarisability`` with a hybrid functional: the response to E_x, E_y, E_z at
+    every frequency (as :func:`pydftb.response.polarisability`; M6h-4c at omega != 0)."""
+    omegas = R.frequencies(spec, "polarisability")
     hr = _response(calc, st, sc, opts)
     gs = hr.gs
     pos = np.asarray(st.pos, float)
     v = pos[gs.shell_atom]                               # (n_shell, 3)
     if getattr(calc, "_response_pc_compat", False):      # DFTB+ 25.1 (B27)
         v = v + R.point_charge_shift(st, gs)[:, None]
-    orb, _, dei, dfermi = hr.solve(v)
-    atom = R._sum_atoms(orb, gs.orb_atom, gs.natom)      # (3, n_qm, n_atom)
     periodic = st.cell is not None and bool(np.any(st.pbc))
-    tensor = None if periodic else -np.einsum("Aj,iA->ji", pos, atom[:, 0, :])[None]
-    return R.PolarisabilityResult(omegas, tensor, atom[None], orb[None], [dei],
-                                  None if dfermi is None else dfermi[None],
-                                  gs.max_fill * gs.dos if gs.metallic else None, gs.metallic)
+    orbs, atoms, deis, dfermis, tensors = [], [], [], [], []
+    for orb, _, dei, dfermi in _solve_all(hr, v, omegas):
+        atom = R._sum_atoms(orb, gs.orb_atom, gs.natom)  # (3, n_qm, n_atom)
+        orbs.append(orb)
+        atoms.append(atom)
+        deis.append(dei)
+        dfermis.append(dfermi)
+        tensors.append(None if periodic else -np.einsum("Aj,iA->ji", pos, atom[:, 0, :]))
+    return R.PolarisabilityResult(omegas, _stack(tensors), np.stack(atoms), np.stack(orbs), deis,
+                                  _stack(dfermis), gs.max_fill * gs.dos if gs.metallic else None,
+                                  gs.metallic)
 
 
 def response_kernel(calc, st, sc, spec, opts: dict) -> R.ResponseKernelResult:
-    """DFTB+'s ``ResponseKernel`` with a hybrid functional: the static response to a unit
-    potential on each atom (``rpa``: the bare response, as DFTB+'s zero iterations)."""
+    """DFTB+'s ``ResponseKernel`` with a hybrid functional: the response to a unit potential on
+    each atom at every frequency (``rpa``: the bare response, as DFTB+'s zero iterations;
+    M6h-4c at omega != 0)."""
     spec_d = {} if spec is True else dict(spec)
     rpa = bool(spec_d.get("rpa", False)) or not calc.scc
-    omegas = _static(spec, "response_kernel")
+    omegas = R.frequencies(spec, "response_kernel")
     hr = _response(calc, st, sc, opts, rpa=rpa)
     gs = hr.gs
     v = np.eye(gs.natom)[gs.shell_atom]                  # (n_shell, n_atom)
     if getattr(calc, "_response_pc_compat", False) and not rpa:      # DFTB+ 25.1 (B27)
         v = v + R.point_charge_shift(st, gs)[:, None]
-    orb, net, dei, dfermi = hr.solve(v)
+    out = _solve_all(hr, v, omegas)
     frontier = [(blk.spin, blk.k, blk.n_filled - 1, blk.first_empty) for blk in gs.blocks]
-    return R.ResponseKernelResult(omegas, rpa, R._sum_atoms(orb, gs.orb_atom, gs.natom)[None],
-                                  orb[None], R._sum_atoms(net, gs.orb_atom, gs.natom)[None],
-                                  [dei], None if dfermi is None else dfermi[None],
-                                  gs.max_fill * gs.dos if gs.metallic else None, gs.metallic,
-                                  frontier, gs.orb_atom.copy())
+    return R.ResponseKernelResult(
+        omegas, rpa, np.stack([R._sum_atoms(o[0], gs.orb_atom, gs.natom) for o in out]),
+        np.stack([o[0] for o in out]), np.stack([R._sum_atoms(o[1], gs.orb_atom, gs.natom)
+                                                 for o in out]),
+        [o[2] for o in out], _stack([o[3] for o in out]),
+        gs.max_fill * gs.dos if gs.metallic else None, gs.metallic, frontier, gs.orb_atom.copy())
 
 
 def external_charge_derivatives(calc, st, sc, spec,

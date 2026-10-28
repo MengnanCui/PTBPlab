@@ -319,9 +319,11 @@ def test_point_charge_switch_adds_their_potential(name, monkeypatch):
 
 # ---- refusals --------------------------------------------------------------------------------
 def test_refusals():
-    """DFTB+'s refusals of a hybrid's responses (k-points and two-component spin: M6h-4b,
-    tests/test_hybrid_response_complex.py)."""
-    with pytest.raises(ValueError, match="Finite frequency hybrid"):
-        _run("h2o_lc", analysis={"polarisability": {"static": False, "frequencies": [0.1]}})
+    """DFTB+'s refusal of a hybrid's coordinate derivatives (M6h-4d) and pydftb's of a
+    broadening eta at finite frequencies (M6h-4c, tests/test_hybrid_response_frequency.py; k-points
+    and two-component spin: M6h-4b, tests/test_hybrid_response_complex.py)."""
+    with pytest.raises(ValueError, match="eta other than"):
+        _run("h2o_lc", analysis={"polarisability": {"static": False, "frequencies": [0.1]},
+                                 "perturbation": {"eta": 1e-3}})
     with pytest.raises(ValueError, match="Coordinate derivative perturbations"):
         _run("h2o_lc", analysis={"coord_derivatives": True})

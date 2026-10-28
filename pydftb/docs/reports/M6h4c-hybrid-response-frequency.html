@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-4c 杂化响应的有限频率报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6h-4c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-4c · 完成报告</p>
+    <h1>长程校正（四 c）：杂化响应的有限频率</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6h4c-hybrid-response-frequency.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">杂化泛函下的极化率与响应核现在也能在有限频率下计算，三条路径都可以：分子与 Γ 点、k 点（共线自旋）、两分量（非共线自旋，分子）。DFTB+ 25.1 拒绝这种组合，所以没有 DFTB+ 参考，验证靠 TD-LC Casida 对全部激发的求和、去掉交换后的 M6g 与 M6g-3b、超胞与共线的极限。有限频率时一阶密度多出反对称部分，只有交换看得见它；占据–空轨道对空间的未知量加倍，方程仍对称，第一激发以上不定。求解仍用批量 MINRES，激发附近小体系改用稠密解。只有 NumPy 引擎；静态结果逐位不变（含 M6h-4 的 37 个算例）。</p>
+    <ul>
+      <li><strong>实数路径（分子与 Γ 点）</strong>：
+        <ul>
+          <li>与 TD-LC Casida 对全部激发的求和一致：H<sub>2</sub>O 在 0.1、0.25、0.5 Ha（第一激发 0.2264）≤ 9.0e-15，CH<sub>3</sub> 自旋在 0.05、0.2（第一激发 0.0995）≤ 1.5e-14（相对）。</li>
+          <li>C<sub>6</sub>H<sub>6</sub> 离 0.150397 Ha 的激发 1e-5 Ha：稠密解 9.3e-12（|α| 2210）。</li>
+          <li>去掉交换后等于 M6g 的有限频率响应：CuCO 300 K 的金属 8.5e-13，H<sub>2</sub>CO +U 1.1e-13，干冰 Γ 点 2.0e-13；RPA 1.2e-14。</li>
+        </ul>
+      </li>
+      <li><strong>k 点与两分量</strong>：
+        <ul>
+          <li>k 点的核等于超胞 Γ 点的核：CO 盒子 1.1e-12，三重态 O<sub>2</sub> 1.7e-13；30000 K 的金刚石去掉交换后等于 M6g，8.1e-13。</li>
+          <li>两分量去掉交换后等于 M6g-3b，1.5e-14；磁矩沿 z 时等于共线的结果：α 1.4e-10，q 5.7e-11，m<sub>z</sub> 6.9e-11。</li>
+          <li>反厄米矩阵的 Pauli 交换要算完整的四个块。基态的捷径（右上块取左下块的伴随）对它给出符号相反的右上块。</li>
+        </ul>
+      </li>
+      <li><strong>求解器</strong>：
+        <ul>
+          <li>第一激发以下，MINRES 的轮数是静态的 1.3–2 倍，每轮两次批量的交换构建。</li>
+          <li>激发附近与稠密的激发谱里 MINRES 停滞。不超过 3000 个未知量时转稠密解，更大时警告并给出达到的残差。</li>
+          <li>两分量的整体转动在小 ω 是近零模：接受略高于容差的平台残差，MINRES 失败时才用稠密解。</li>
+        </ul>
+      </li>
+      <li><strong>η</strong>：pydftb 解 η → 0 的极限，去掉交换后与 DFTB+ 默认 η = 1e-8 的 M6g 一致。显式给出别的 η 时拒绝。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 1.5e-14</span><span class="lbl">与 TD-LC 对全部激发的求和（相对）</span></li>
+      <li><span class="num">9.3e-12</span><span class="lbl">离激发 1e-5 Ha 的稠密解（相对）</span></li>
+      <li><span class="num">1.1e-12</span><span class="lbl">k 点的核与超胞 Γ 点之差</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#real">三、实数路径的验证</a></li>
+      <li><a href="#complex">四、k 点与两分量的验证</a></li>
+      <li><a href="#solver">五、求解器与耗时</a></li>
+      <li><a href="#dftbplus">六、DFTB+ 的情况</a></li>
+      <li><a href="#tests">七、测试与门槛</a></li>
+      <li><a href="#deviations">八、与设计的偏差</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response_hybrid.py</code></td><td>
+              <ul>
+                <li><code>HybridResponse</code> 的有限频率部分（三条路径共用）：
+                  <ul>
+                    <li><code>_omega_weights</code>：每个块的 D（去掉同一简并组的对，带内的也去掉）、Ω、G；</li>
+                    <li><code>_operator_omega</code>：堆叠未知量 [z<sup>s</sup>…, y…] 上的算符，K<sub>s</sub> 用静态的 <code>kernel</code>，K<sub>x</sub> 用 <code>_exchange_a</code>；</li>
+                    <li><code>_t_d</code>、<code>_tt_d</code>：带权重 D 的 T 与 T<sup>†</sup>，不移动费米能级；</li>
+                    <li><code>_solve_stacked</code>：求解策略（第五节）；<code>_pair_unknowns</code> 数实未知量；</li>
+                    <li><code>_dense_solve</code>、<code>_coordinates</code>、<code>_from_coordinates</code>：物理子空间的基（(e<sub>ij</sub> ± e<sub>ji</sub>)/√2，复数块加 i 倍），按批量右端建矩阵，LU；</li>
+                    <li><code>solve_omega</code>：布居、在位布居与本征值导数（简并组取子块的本征值）都来自 P<sup>s</sup>；费米能级的导数为零。</li>
+                  </ul></li>
+                <li><code>_minres</code> 加可选的 <code>op</code>、<code>maxit</code>、<code>strict</code>、<code>curvature</code>、<code>plateau</code>。静态的调用不变，算术逐位相同。</li>
+                <li><code>KPointHybridResponse</code>：复数的 <code>_t_d</code>、<code>_tt_d</code>；交换移到 <code>_exchange</code>，P<sup>a</sup> 也用它（P<sup>a</sup>(−k) = conj P<sup>a</sup>(k)）。</li>
+                <li><code>PauliHybridResponse</code>：复数的 <code>_t_d</code>、<code>_tt_d</code>；<code>_exchange_a</code> 用反厄米的 Pauli 交换；<code>_zero_modes</code> 报告有没有整体转动。有限频率不投影。</li>
+                <li><code>polarisability</code>、<code>response_kernel</code>：逐个频率求解（<code>_solve_all</code>，ω = 0 走静态的 <code>solve</code>），结果按频率叠起来，与 M6g 同形。</li>
+              </ul></td></tr>
+            <tr><td><code>hybrid.py</code></td><td><code>response_fock(dps, antihermitian=False)</code>：<code>HybridTerms</code> 的 Pauli 分支在 <code>antihermitian</code> 时把右上块取反；k 点的类接受这个参数（卷积对任意矩阵成立）；<code>NeighbourMinimumImageTerms</code> 仍报错。</td></tr>
+            <tr><td><code>calculator.py</code></td><td>去掉 “Finite frequency hybrid” 的拒绝；有限频率配显式的非默认 η 时拒绝（“eta other than DFTB+'s default 1e-8 is not supported”）。</td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_hybrid_response_frequency.py</code>：17 项（第三、四、五节）。</li>
+                <li><code>test_hybrid.py</code> 与 <code>test_hybrid_response.py</code>：有限频率的拒绝改成 η 的拒绝，坐标导数的拒绝不变。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+        <p>没有 DFTB+ 参考算例（DFTB+ 拒绝），所以不加 refgen 的算例。用到的基态都是已与 DFTB+ 对上的参考算例。DFTB+ 格式的输出（detailed.out 的块、dE_band.out、dV_band.out）不用改：结果类与 M6g 相同，三条路径的多频率结果都试写过。</p>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>r = DFTB(sk_lc, hybrid="lc", analysis={"polarisability": {"frequencies": [0.1, 0.2]}}).calculate(labels, pos)
+r.analysis.polarisability.tensor          # (3, 3, 3)：ω = 0（静态）、0.1、0.2
+r = DFTB(sk_lc, hybrid="lc", kpts=supercell_folding((2, 2, 2)),
+         analysis={"response_kernel": {"static": False, "frequency_range": (0.05, 0.3, 0.05)}}).calculate(labels, pos, cell, pbc)</code></pre>
+      <ul>
+        <li><strong>范围</strong>：M6h-4 与 M6h-4b 的全部组合（屏蔽、LC/CAM/全局、自旋、金属、DFTB3、+U、onsite、外场、点电荷、k 点、两分量），频率的给法同 M6g。点电荷导数只有静态的（DFTB+ 也是）。</li>
+        <li><strong>物理</strong>：
+          <ul>
+            <li>对 e<sup>−iωt</sup> 的扰动，一阶密度 P<sub>1</sub> = P<sup>s</sup> + P<sup>a</sup>，含时密度 P<sup>s</sup> cos ωt − iP<sup>a</sup> sin ωt。</li>
+            <li>布居只来自 P<sup>s</sup>（反对称矩阵的 Mulliken 布居为零），交换两部分都看。</li>
+            <li>没有带内项，不移动费米能级（同 DFTB+ 与 M6g）。</li>
+          </ul></li>
+        <li><strong>η</strong>：DFTB+ 的有限频率权重带 +iη（默认 1e-8），pydftb 的杂化有限频率是 η → 0 的极限。离裸跃迁能 1e-8 以外，两者差 O(η<sup>2</sup>)。要展宽（吸收谱）的话，pydftb 不做，显式的非默认 <code>perturbation={"eta": …}</code> 拒绝。</li>
+        <li><strong>警告</strong>：
+          <ul>
+            <li>“did not converge in 1000 MINRES iterations”：频率在激发附近或在稠密的激发谱里，体系又大于 <code>pydftb.response_hybrid.DENSE_LIMIT</code>（3000 个未知量）。</li>
+            <li>警告给出达到的残差与稠密解需要的上限。调大 <code>DENSE_LIMIT</code> 就用稠密解：内存是未知量个数的平方乘以 8 字节，再加 LU 的一份拷贝。</li>
+          </ul></li>
+        <li><strong>耗时</strong>见第五节。</li>
+      </ul>
+    </section>
+
+    <section id="real">
+      <h2>三、实数路径的验证</h2>
+      <p>基态 scc_tol 1e-12。表中“测试的界”是 <code>test_hybrid_response_frequency.py</code> 断言的上限。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>检查</th><th>体系</th><th>实测</th><th>测试的界</th></tr></thead>
+        <tbody>
+          <tr><td>TD-LC Casida 对全部激发的求和 α(ω) = 2Σ<sub>n</sub> ω<sub>n</sub> μ<sub>n</sub>μ<sub>n</sub>/(ω<sub>n</sub><sup>2</sup> − ω<sup>2</sup>)（精确解，相对）</td><td>H<sub>2</sub>O LC：ω = 0.1、0.25、0.5（后两个在第一激发 0.2264 以上）</td><td>6.0e-16、9.0e-15、5.9e-15</td><td>1e-10</td></tr>
+          <tr><td></td><td>CH<sub>3</sub> LC 自旋（每个元素一个 W）：ω = 0.05、0.2（第一激发 0.0995）</td><td>9.3e-15、1.5e-14</td><td>1e-10</td></tr>
+          <tr><td>激发附近（稠密解）</td><td>C<sub>6</sub>H<sub>6</sub> LC，0.150397 Ha 的激发下方 1e-5 Ha（|α| 2210）</td><td>9.3e-12</td><td>1e-8</td></tr>
+          <tr><td>去掉交换 = M6g（DFTB+ 的权重，η 1e-8）：布居导数与本征值导数，ω = 0.05、0.15</td><td>CuCO 300 K（金属，|dq| 11.3）</td><td>8.5e-13；2.5e-13</td><td>1e-11</td></tr>
+          <tr><td></td><td>H<sub>2</sub>CO +U</td><td>1.1e-13；2.3e-14</td><td>1e-11</td></tr>
+          <tr><td></td><td>干冰 Γ 点（核的算例）</td><td>2.0e-13；5.4e-14</td><td>1e-11</td></tr>
+          <tr><td>RPA = 裸 χ<sub>0</sub>(ω)</td><td>H<sub>2</sub>O，ω = 0.3（|χ<sub>0</sub>| 6.1）</td><td>1.2e-14</td><td>1e-12</td></tr>
+          <tr><td>ω → 0</td><td>H<sub>2</sub>O：静态的项与单独的静态计算</td><td>逐位相同</td><td>逐位</td></tr>
+          <tr><td></td><td>H<sub>2</sub>O：α(1e-4) − α(0) 与 α(1e-2) − α(0)</td><td>6.79e-7 与 6.80e-3，比 9.993e-5（= (1e-4/1e-2)<sup>2</sup>）</td><td>≤ 1e-6，比 ≤ 2e-4</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>Casida 的求和</strong>：TD-LC 的 A ± B 与 CPKS 用同一个交换核（M6h-4 的坑 156）。闭壳层只有单重态，μ 带 √2；自旋极化时取全部态。CH<sub>3</sub> 要用每个元素一个数的自旋常数：Casida 的自旋耦合用每个原子最高占据壳层的 W，CPKS 用壳层分辨的 W，配 M6h-1 的壳层矩阵时两者差 1e-7（与杂化无关，坑 166）。</li>
+        <li><strong>第一激发以上</strong>：方程不定（H<sub>2</sub>O 在 0.3 Ha 有 2 个负本征值），MINRES 照样收敛，与求和一致到 1e-14。有限频率不报鞍点的警告：这里的不定是物理的，不是基态的问题。</li>
+      </ul>
+    </section>
+
+    <section id="complex">
+      <h2>四、k 点与两分量的验证</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>检查</th><th>体系</th><th>实测</th><th>测试的界</th></tr></thead>
+        <tbody>
+          <tr><td>k 点的核 = 超胞 Γ 点的核对镜像求和，ω = 0.2</td><td>CO 盒子 2×1×1 LC（|核| 3.89）</td><td>1.1e-12</td><td>1e-11</td></tr>
+          <tr><td></td><td>同一盒子里的三重态 O<sub>2</sub>（自旋）</td><td>1.7e-13</td><td>1e-11</td></tr>
+          <tr><td>去掉交换 = M6g</td><td>金刚石 2×2×2，30000 K</td><td>8.1e-13</td><td>1e-11</td></tr>
+          <tr><td>去掉交换 = M6g-3b，ω = 0.05、0.2</td><td>H<sub>3</sub> 120°</td><td>1.5e-14</td><td>1e-12</td></tr>
+          <tr><td>磁矩沿 z = 共线的杂化响应，ω = 0.2</td><td>HCO（共线的结果已与 DFTB+ 对上）</td><td>α 1.4e-10，q 5.7e-11，m<sub>z</sub> 6.9e-11，m<sub>x</sub>、m<sub>y</sub> 为 0</td><td>1e-8</td></tr>
+          <tr><td>反厄米矩阵的 Pauli 交换</td><td>H<sub>3</sub> 120°，随机的反厄米 P</td><td>与四块逐个算的算符差 2.1e-16，输出反厄米到 1.0e-16；基态的捷径差 2.0（相对）</td><td>1e-14</td></tr>
+          <tr><td>近零模（第五节）</td><td>H<sub>3</sub> 120°：dq(2e-5) − dq(0) 与 dq(1e-5) − dq(0) 之比</td><td>3.983（ω<sup>2</sup> 律），不警告</td><td>3.95–4.05</td></tr>
+          <tr><td>两分量的稠密解（强制）</td><td>HCO 磁矩沿 z，ω = 0.5，对共线的结果（相对）</td><td>4.7e-13</td><td>1e-10</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>约化的 k 点集</strong>：DFTB+ 的约化 k 点集只存一半的 k，−k 的量由共轭得到。超胞里的 P<sup>a</sup> 是实的反对称矩阵，所以 P<sup>a</sup>(−k) = conj P<sup>a</sup>(k)，基态的 BvK 卷积对 P<sup>a</sup> 也成立，超胞检查证实了这一点。</li>
+        <li><strong>两分量的 P<sup>a</sup></strong>：原型直接用基态的 Pauli 交换时，布居差 25–50 %，但随机探针的对称性检验看不出来（坑 165）。实现里 <code>response_fock(..., antihermitian=True)</code> 把右上块取反。</li>
+      </ul>
+    </section>
+
+    <section id="solver">
+      <h2>五、求解器与耗时</h2>
+      <ul>
+        <li><strong>策略</strong>：
+          <ul>
+            <li>小体系（≤ 3000 个实未知量）、没有零模：MINRES 在未知量个数的轮数内不收敛，就建物理子空间上的稠密矩阵，LU 求解，误差为条件数乘以舍入。</li>
+            <li>有两分量的整体转动或体系大：MINRES 最多 1000 轮；相对残差 ≤ 1e-11、100 轮内没有减半时接受（<code>OMEGA_PLATEAU</code>、<code>PLATEAU_STEPS</code>）。仍不收敛时，小体系用稠密解，大体系警告，结果用最后一步。</li>
+          </ul></li>
+        <li><strong>两分量的近零模</strong>：
+          <ul>
+            <li>没有 SOC 时整体转动在有限频率下不再是零模，但本征值 ∝ ω<sup>2</sup>。H<sub>3</sub> 120° 在 ω = 1e-5 有 3 个 2.1e-9，下一个是 2.3e-3。</li>
+            <li>右端与它们正交到舍入（≤ 4e-15），舍入把它们带进 Lanczos 过程，MINRES 有时停在略高于容差的平台上。H<sub>3</sub> 的 scc_tol 1e-12 基态停在 2–3e-13；1e-6 到 1e-14 的其余基态 6–8 轮收敛。</li>
+            <li>稠密 LU 则把舍入放大 1/ω<sup>2</sup> 倍（1e-5 时差 2.6e-4），所以只有 MINRES 失败时才用它。这时频率不小，稠密解准确（HCO 在 0.5 Ha：MINRES 1000 轮后转稠密解，不再警告）。</li>
+          </ul></li>
+        <li><strong>平台判据</strong>：右端在零空间上有 1e-12 不相容部分的合成算符里，MINRES 的残差递推先停在 1e-12，再慢慢漂到 2.5e-13，而真实残差是 1.5e-12，迭代解在其余分量上的误差从 1.3e-15 涨到 5e-12。平台判据在漂移之前停下（单元测试，坑 169）。</li>
+      </ul>
+      <p>耗时（一个线程，只算分析；“轮”是最多的 MINRES 轮数）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>体系</th><th>静态</th><th>ω = 0.1 Ha</th><th>ω = 0.4 Ha（激发谱里）</th></tr></thead>
+        <tbody>
+          <tr><td>(H<sub>2</sub>O)<sub>10</sub>，60 个能级</td><td>0.02 s，18 轮</td><td>0.04 s，24 轮</td><td>2.4 s，1000 轮后稠密解（1600 个未知量）</td></tr>
+          <tr><td>(H<sub>2</sub>O)<sub>20</sub>，120 个能级</td><td>0.06 s，18 轮</td><td>0.16 s，25 轮</td><td>6.2 s，警告：残差 2.2e-2（6400 个未知量）</td></tr>
+          <tr><td>(H<sub>2</sub>O)<sub>40</sub>，240 个能级</td><td>0.40 s，19 轮</td><td>1.1 s，26 轮</td><td>42 s，警告：残差 4.5e-2（25600 个未知量）</td></tr>
+          <tr><td>干冰 2×2×2（12 个原子，48 个轨道）</td><td>0.32 s，24 轮</td><td>1.1 s，43 轮</td><td>26 s，警告：残差 2.5e-3</td></tr>
+          <tr><td>干冰 3×3×3</td><td>0.57 s，23 轮</td><td>3.0 s，43 轮</td><td>66 s，警告：残差 2.1e-3</td></tr>
+          <tr><td>HCO(H<sub>2</sub>O)<sub>5</sub>，两分量，78 个旋量能级</td><td>0.09 s，27 轮</td><td>0.35 s，58 轮</td><td>6.0 s，警告：残差 2.6e-2</td></tr>
+          <tr><td>HCO(H<sub>2</sub>O)<sub>10</sub>，138 个旋量能级</td><td>0.40 s，30 轮</td><td>4.2 s，180 轮（平台）</td><td>24 s，警告：残差 1.1e-1</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>第一激发以下</strong>：每轮两次批量的交换构建（P<sup>s</sup> 与 P<sup>a</sup>），复数路径还多一倍的未知量，所以一个频率的耗时是静态的 2–5 倍；两分量走到平台时更多（HCO(H<sub>2</sub>O)<sub>10</sub> 约 10 倍）。</li>
+        <li><strong>稠密的激发谱里</strong>：0.4 Ha 已在水与干冰的大量激发之间。η → 0 的响应在那里是一串极点之和，条件数很大，MINRES 1000 轮只到 2e-3–1e-1 的残差，最后一步的 α<sub>yy</sub> 差 13 %（(H<sub>2</sub>O)<sub>20</sub>：710.7 对 629.5）。把 <code>DENSE_LIMIT</code> 调到 7000 时，(H<sub>2</sub>O)<sub>20</sub> 的稠密解共 30 s。这个区域的物理量本来需要展宽（吸收谱），不在本块的范围内。</li>
+      </ul>
+    </section>
+
+    <section id="dftbplus">
+      <h2>六、DFTB+ 的情况</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+</th><th>pydftb 的做法</th></tr></thead>
+        <tbody>
+          <tr><td><code>Polarisability</code>、<code>ResponseKernel</code> 的 <code>Frequencies</code> 配 <code>Hybrid</code>：“Finite frequency hybrid xc-functional calculation not currently supported”（<code>initprogram.F90</code>，25.1 与开发版相同）</td><td>给出响应，用 Casida 的求和、M6g 与 M6g-3b 的极限、超胞与共线的极限验证</td></tr>
+          <tr><td>不加杂化时的有限频率权重 θ(f<sub>i</sub> − f<sub>a</sub>)[1/(Δ + ω + iη) + 1/(Δ − ω + iη)] 取实部，只给 P<sup>s</sup>（坑 156、164）</td><td>去掉交换后与它一致到 ≤ 8.5e-13；有交换时一起解 P<sup>s</sup> 与 P<sup>a</sup></td></tr>
+          <tr><td>η 默认 1e-8</td><td>η → 0 的极限；显式的其他 η 拒绝</td></tr>
+        </tbody>
+      </table></div>
+      <p>本块没有新的 DFTB+ 问题。</p>
+    </section>
+
+    <section id="tests">
+      <h2>七、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6h-4b 的文档提交 <code>c69279f</code> 逐字节比较</td><td>conda 1550 个计算、694594 个字段，最小环境 1484 个计算、679745 个字段，都逐位相同（含 M6h-4 的 37 个算例；不需要 <code>--allow-new</code>）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>504 个算例全部通过；torch 74 个通过，430 个按设计跳过（只有 NumPy 的物理）；34 条动力学参考全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1667 个通过 / 430 个跳过（比 M6h-4b 多 17 个：<code>test_hybrid_response_frequency.py</code> 的 17 项）；最小环境 1418 / 558，torch 1622 / 475</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>八、与设计的偏差</h2>
+      <ul>
+        <li><strong>求解策略</strong>：设计让两分量（有整体转动）不用稠密解、只警告。实现后的计时改变了这一点：
+          <ul>
+            <li>HCO(H<sub>2</sub>O)<sub>10</sub> 在 0.1 Ha 第 100 轮已到 1.9e-12，之后停在平台上，跑满 1000 轮（22 s）并发出多余的警告；</li>
+            <li>小的 HCO 在 0.5 Ha 停在 1.4e-4，只能警告，而稠密解在这个频率是准确的。</li>
+          </ul>
+          现在有转动或体系大时接受平台残差（≤ 1e-11、100 轮不减半），之后小体系仍用稠密解（第五节）。前者降到 180 轮、4.2 s，不警告；后者 1000 轮后转稠密解。设计文档已改。</li>
+        <li><strong>平台的原因</strong>：起初以为是基态的自洽残差沿转动方向的分量。探针表明右端与转动正交到舍入，平台只在 scc_tol 1e-12 的那个基态出现，于是改成舍入的说法（坑 168）。代码的注释也改了，门槛是在改好之后重新跑的：第一次运行开始 2.5 分钟就停掉了。</li>
+        <li><strong>警告的原文</strong>：加了“或在激发之间”的说法，并给出稠密解需要的 <code>DENSE_LIMIT</code>。</li>
+        <li><strong>测试</strong>：设计的验证清单全部做了，另加平台判据的单元测试（合成算符）与两分量求解器的测试，共 17 项。“强制一个不可达的容差来触发平台”的做法不可靠：残差递推在有的环境里继续下降，所以平台判据改用合成算符测试，三个环境的结果相同。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li><strong>M6h-4d 坐标导数</strong>（分子）：交换在固定密度下对坐标的导数进入一阶哈密顿量，用 Born 电荷对解析力的外场差分验证。M6h-4b 时的原型已一致到 3.4e-12–3.9e-11。</li>
+        <li>不在计划内：有限 η 的展宽（吸收谱）。需要的话可以单列：复对称方程，用 COCG 或 QMR 一类的求解器。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6h4c-hybrid-response-frequency.html">← M6h-4c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

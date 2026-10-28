@@ -767,11 +767,14 @@ class HybridTerms:
         c = -0.125 if len(dps) == 1 else -0.25
         return [c * self._four_terms(s, d) for d in dps]
 
-    def response_fock(self, dps) -> list:
+    def response_fock(self, dps, antihermitian: bool = False) -> list:
         """H_x of first-order densities (M6h-4), every channel's with leading batch axes: the
         exact operator, for the threshold screening its limit (the pairs within the CAM cutoff,
         as its increments) without touching the screening's state; two-component (M6h-4b): of
-        the spinor matrices (..., 2N, 2N), as :meth:`fock`."""
+        the spinor matrices (..., 2N, 2N), as :meth:`fock`, whose upper-right block is the
+        adjoint of the lower-left one -- its negative for ``antihermitian`` matrices (the
+        antisymmetric part of a finite-frequency response, M6h-4c).  The other operators hold
+        for any matrix."""
         if self.pauli:
             n, out = self.n, []
             for d in dps:
@@ -780,6 +783,8 @@ class HybridTerms:
                     h[..., r * n:(r + 1) * n, c * n:(c + 1) * n] = -0.25 * self._four_terms(
                         self.S, d[..., r * n:(r + 1) * n, c * n:(c + 1) * n])
                 h[..., :n, n:] = np.conj(np.swapaxes(h[..., n:, :n], -1, -2))
+                if antihermitian:
+                    h[..., :n, n:] *= -1.0
                 out.append(h)
             return out
         s = self.S if self.spec.screening == "matrix" else self.S_cam
@@ -1273,11 +1278,13 @@ class KPointHybridTerms:
             out.append(c * h)
         return out
 
-    def response_fock(self, dps) -> list:
+    def response_fock(self, dps, antihermitian: bool = False) -> list:
         """H_x(k) of first-order densities (M6h-4b): every spin channel's (n_rhs, nk, n, n) at the
         k-points, the right-hand sides in one BvK convolution; with ``neighbour_threshold`` the
         screening's limit (the S of the pairs within the CAM cutoff, no screened increments),
-        the history of the ground state's builds untouched."""
+        the history of the ground state's builds untouched.  For any matrices whose -k ones are
+        their conjugates (the anti-Hermitian part of a finite-frequency response too, M6h-4c:
+        ``antihermitian`` changes nothing)."""
         c = -0.125 if len(dps) == 1 else -0.25
         s = self.S_x
         out = []
@@ -1569,7 +1576,7 @@ class NeighbourMinimumImageTerms(KPointHybridTerms):
             out.append(c * self._increment(lay.to_bvk(d), [(self._s_full, self._s_full)]))
         return out
 
-    def response_fock(self, dps) -> list:
+    def response_fock(self, dps, antihermitian: bool = False) -> list:
         raise ValueError(_MIC_NEIGHBOUR_RESPONSE)
 
     def fock_at(self, kpts, dps) -> list:

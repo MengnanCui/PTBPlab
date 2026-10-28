@@ -767,8 +767,6 @@ class DFTB:
                      "the moment")
         elif a is not None and a.coord_derivatives is not False:
             dftbp = "Coordinate derivative perturbations do not yet work with hybrid functionals"
-        elif a is not None and _finite_frequencies(a):
-            dftbp = "Finite frequency hybrid xc-functional calculation not currently supported"
         elif self.casida is not None:                           # TD-LC (M6h-2)
             cas = self.casida
             if rs[0] == "cam":
@@ -794,6 +792,11 @@ class DFTB:
             why = "type switching is not supported"
         elif self.force_evaluation != "traditional":
             why = "only force_evaluation='traditional' is supported"
+        elif (a is not None and _finite_frequencies(a) and a.perturbation
+              and float(a.perturbation.get("eta", _response_eta())) != _response_eta()):
+            why = ("the finite-frequency response is the eta -> 0 limit (M6h-4c; DFTB+ refuses "
+                   "finite frequencies with a hybrid): an eta other than DFTB+'s default 1e-8 "
+                   "is not supported")
         if why:
             raise ValueError(f"hybrid functionals: {why}")
         return rs
@@ -2962,6 +2965,11 @@ def _response_analyses(a) -> bool:
     the external charge derivatives; M6g)."""
     return a is not None and (a.polarisability is not False or a.response_kernel is not False
                               or a.external_charge_derivatives is not False)
+
+
+def _response_eta() -> float:
+    from . import response as _response
+    return _response.ETA
 
 
 def _finite_frequencies(a) -> bool:

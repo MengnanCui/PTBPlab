@@ -665,9 +665,8 @@ respond (DFTB+ never updates the block populations of a hybrid's response, 3-13 
 the point charges' potential is not added to the perturbation (DFTB+ 25.1 adds it to every
 response, with or without a hybrid; fixed in the development version); the class attributes
 `DFTB._response_blocks_compat` and `DFTB._response_pc_compat` (testing) do as DFTB+.
-Refused: finite frequencies and coordinate derivatives (as DFTB+; milestones M6h-4c and
-M6h-4d).  Details:
-[`docs/reports/M6h4-hybrid-response.html`](docs/reports/M6h4-hybrid-response.html).
+Refused: coordinate derivatives (as DFTB+; milestone M6h-4d); finite frequencies: below.
+Details: [`docs/reports/M6h4-hybrid-response.html`](docs/reports/M6h4-hybrid-response.html).
 
 The same analyses work at k-points (collinear spin) and with two-component spin (molecules),
 where DFTB+ 25.1 crashes (milestone M6h-4b): z becomes a Hermitian matrix per (spin, k) or
@@ -684,6 +683,37 @@ relative), and without the exchange the responses are M6g's and M6g-3b's.  On co
 point (the warning above); the MinimumImage NeighbourBased exchange is not self-adjoint (B22),
 so its k-point responses are refused.  Details:
 [`docs/reports/M6h4b-hybrid-response-complex.html`](docs/reports/M6h4b-hybrid-response-complex.html).
+
+Finite frequencies (milestone M6h-4c; DFTB+ refuses them with a hybrid) on all three paths,
+given as in M6g (`frequencies`, `frequency_range`, `static`):
+
+```python
+r = DFTB(sk_lc, hybrid="lc", analysis={"polarisability": {"frequencies": [0.1, 0.2]}}).calculate(
+    labels, pos)
+r.analysis.polarisability.tensor        # (3, 3, 3): w = 0 (static), 0.1, 0.2
+```
+
+For an e^{-iwt} perturbation the first-order density has a symmetric (Hermitian) and an
+antisymmetric (anti-Hermitian) part; the populations see only the first, the exchange both, so
+the pair space doubles.  With Omega = w / (e_i - e_j) and G = 1 / sqrt(1 + Omega^2) the
+equation [[I + D K_s D, -Omega G], [-G Omega, G (I + D K_x D) G]] [z^s; y] = [D o M_ext; 0]
+stays symmetric (indefinite above the first excitation, so without the saddle-point warning),
+and w = 0 is the static one, bit for bit.  pydftb solves the eta -> 0 limit of DFTB+'s weights
+(an explicit other `perturbation={"eta": ...}` is refused).  MINRES as above, two batched
+exchange builds per iteration and below the first excitation 1.3-2 times the static iterations
+(two-component spin up to 6 times, on the plateau below); near or among excitations it stalls,
+and a system of at most
+`pydftb.response_hybrid.DENSE_LIMIT` (3000) unknowns is then solved densely on its physical
+space, exact to the condition number times the rounding; a larger one gets a warning with the
+residual reached (a cluster of 20 waters at 0.4 Ha: 2.2e-2, its alpha_yy 13 % off; with
+`DENSE_LIMIT` raised to its 6400 unknowns the dense solve takes 30 s).  Two-component spin: the
+global rotations are near-null at small w (eigenvalues ~ w^2), so a residual plateau just above
+the tolerance is accepted and the dense solve comes only after MINRES fails.  Checks: TD-LC
+Casida's sum over all states (<= 1.5e-14 relative, also above the first excitation; 9.3e-12
+at 1e-5 Ha below one), M6g's and M6g-3b's finite-frequency responses without the exchange
+(<= 8.5e-13, metals, +U, the Gamma point, k-points), the supercell's Gamma point at k-points
+(1.1e-12) and the collinear limit.  Details:
+[`docs/reports/M6h4c-hybrid-response-frequency.html`](docs/reports/M6h4c-hybrid-response-frequency.html).
 
 ### Analysis outputs
 
