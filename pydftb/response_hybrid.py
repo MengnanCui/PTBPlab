@@ -1,7 +1,9 @@
-"""Static responses with a hybrid functional (milestone M6h-4): DFTB+'s ``Polarisability``,
-``ResponseKernel`` and the development version's ``ExternalChargeDerivatives`` on the real path
-(molecules and the Gamma point, collinear spin); the entry points of :mod:`pydftb.response`
-branch here when the calculation has a hybrid functional.
+"""Static responses with a hybrid functional (milestones M6h-4, M6h-4b): DFTB+'s
+``Polarisability``, ``ResponseKernel`` and the development version's
+``ExternalChargeDerivatives`` on the real path (molecules and the Gamma point, collinear spin;
+:class:`HybridResponse`), at k-points (:class:`KPointHybridResponse`) and with two-component
+spin (molecules; :class:`PauliHybridResponse`), where DFTB+ 25.1 crashes (B24, B25); the entry
+points of :mod:`pydftb.response` branch here when the calculation has a hybrid functional.
 
 DFTB+ (``derivs/linearresponse.F90`` dRhoReal) adds the exchange of the first-order density
 matrix, H_x[P1], to the first-order Hamiltonian and iterates the response SCC on the dense P1
@@ -36,8 +38,15 @@ potentials do not respond (B26); ``DFTB._response_blocks_compat`` (testing) leav
 ``DFTB._response_pc_compat`` (testing, also without a hybrid: :mod:`pydftb.response`) adds the
 point charges' potential to the perturbation, as DFTB+ 25.1 does in every response (B27).
 
-NumPy engine only; static only (DFTB+ refuses finite frequencies with a hybrid).  Two-component
-calculations, k-points and coordinate derivatives are milestone M6h-4b.
+The complex paths (M6h-4b) keep the equation: z is Hermitian per block and the products take
+their real part.  At k-points every (spin, k) block's P1 carries w_k and the exchange is the
+ground state's k-point operator on dP(k) = P1(k) / w_k (its Thresholded screening's limit; the
+MinimumImage NeighbourBased operator is not self-adjoint, B22, and refused).  Two-component: the
+populations of the four Pauli components, H1 = sum_b [1/2 S o (V^b_mu + V^b_nu)] x sigma^b, and
+the global spin rotations (zero modes without spin-orbit coupling) projected out.
+
+NumPy engine only; static only (DFTB+ refuses finite frequencies with a hybrid: milestone
+M6h-4c); coordinate derivatives are milestone M6h-4d.
 """
 from __future__ import annotations
 
@@ -50,6 +59,7 @@ from . import response as R
 SOLVE_TOL = 1e-13         # relative residual of every right-hand side
 SOLVE_MAX = 1000          # iterations
 NEGATIVE_CURVATURE = -1e-8   # Rayleigh quotient of a Lanczos vector: an indefinite equation
+ROTATION_REL = 1e-8       # spin-rotation zero modes below this of the largest: no rotation
 RHS_ELEMENTS = 2_000_000  # right-hand sides per batch: n_rhs n_block n_orb^2 at most this
 
 
@@ -57,8 +67,8 @@ def _real(x) -> np.ndarray:
     """A real matrix of the real path (the Gamma point's are real already)."""
     x = np.asarray(x)
     if np.iscomplexobj(x):
-        raise ValueError("hybrid functionals: the response with complex eigenvectors "
-                         "(k-points) is milestone M6h-4b")
+        raise ValueError("hybrid functionals: complex eigenvectors on the real response path "
+                         "(k-points and two-component spin have their own classes)")
     return np.asarray(x, float)
 
 
@@ -91,9 +101,15 @@ class HybridResponse:
             self.c.append(_real(blk.c))
             w = R.static_weights(gs, blk)                    # <= 0: F_ia <= 0, -delta
             self.d.append(np.sqrt(np.clip(-gs.max_fill * blk.weight * w, 0.0, None)))
-        # the Fermi groups (one channel, or both with a shared Fermi level): the window levels
-        # whose electron count is kept and the unit vector u ~ sqrt(w delta) of the projection
-        self.groups = []
+        self.groups = self._fermi_groups()
+        self.nqm, self.nmat = self.ns, self.n        # population components, matrix size
+        self.iterations = 0                              # most MINRES steps of a solve
+        self.indefinite = False
+
+    def _fermi_groups(self) -> list:
+        """The Fermi groups (one channel, or both with a shared Fermi level): the window levels
+        whose electron count is kept and the unit vector u ~ sqrt(w delta) of the projection."""
+        gs, groups = self.gs, []
         if gs.fermi_shift:
             chans = ([list(range(len(gs.blocks)))] if gs.shared_fermi else
                      [[b for b, blk in enumerate(gs.blocks) if blk.spin == s]
@@ -102,9 +118,8 @@ class HybridResponse:
                 parts = [(b, gs.blocks[b].window) for b in members if gs.blocks[b].window.size]
                 if parts:
                     u = np.concatenate([np.diag(self.d[b])[win] for b, win in parts])
-                    self.groups.append((parts, u / np.linalg.norm(u)))
-        self.iterations = 0                              # most MINRES steps of a solve
-        self.indefinite = False
+                    groups.append((parts, u / np.linalg.norm(u)))
+        return groups
 
     # ---- T and T^T -----------------------------------------------------------------------
     def t_apply(self, z) -> list:
@@ -118,7 +133,12 @@ class HybridResponse:
         """z of every block from H of every spin channel: D o (C^T H C), projected."""
         z = [self.d[b] * (self.c[b].T @ hs[blk.spin] @ self.c[b])
              for b, blk in enumerate(self.gs.blocks)]
-        for parts, u in self.groups:                     # the Fermi level's move
+        return self._fermi_project(z)
+
+    def _fermi_project(self, z) -> list:
+        """The window diagonal of every Fermi group orthogonal to its u (the Fermi level's
+        move), in place."""
+        for parts, u in self.groups:
             y = np.concatenate([z[b][:, win, win] for b, win in parts], axis=1)
             y = y - (y @ u)[:, None] * u[None, :]
             o = 0
@@ -169,6 +189,12 @@ class HybridResponse:
         return hs
 
     # ---- solving -------------------------------------------------------------------------
+    _inner = staticmethod(_dot)                          # the real Frobenius products
+
+    def _project(self, z) -> list:
+        """Directions the solution leaves out (none here; the two-component spin rotations)."""
+        return z
+
     def _operator(self, z) -> list:
         """(I + T^T K T) z (t_apply carries the minus sign of P1 = -T z)."""
         k = self.t_adjoint(self.kernel(self.t_apply(z)))
@@ -181,7 +207,7 @@ class HybridResponse:
         residual estimate is SOLVE_TOL of |b|.  A negative Rayleigh quotient of a Lanczos
         vector marks the equation as indefinite."""
         nr = b[0].shape[0]
-        beta1 = np.sqrt(_dot(b, b))
+        beta1 = np.sqrt(self._inner(b, b))
         x = [np.zeros_like(v) for v in b]
         w = [np.zeros_like(v) for v in b]
         w2 = [np.zeros_like(v) for v in b]
@@ -202,12 +228,12 @@ class HybridResponse:
             y = self._operator(v)
             if it >= 2:
                 y = [a - _scale(beta, oldb, c) for a, c in zip(y, r1)]
-            alfa = _dot(v, y)
+            alfa = self._inner(v, y)
             if np.any(alfa[active] < NEGATIVE_CURVATURE):
                 self.indefinite = True
             y = [a - _scale(alfa, beta, c) for a, c in zip(y, r2)]
             r1, r2 = r2, y
-            oldb, beta = beta, np.sqrt(_dot(r2, r2))
+            oldb, beta = beta, np.sqrt(self._inner(r2, r2))
             oldeps = epsln                                     # the previous rotation
             delta = cs * dbar + sn * alfa
             gbar = sn * dbar - cs * alfa
@@ -231,26 +257,23 @@ class HybridResponse:
         derivatives (n_rhs, n_block, n_level) and the Fermi level's (n_rhs, n_spin) or None."""
         gs = self.gs
         nrhs = v_shell.shape[1]
-        step = max(1, RHS_ELEMENTS // (len(gs.blocks) * self.n * self.n))
+        step = max(1, RHS_ELEMENTS // (len(gs.blocks) * self.nmat * self.nmat))
         nlev = max(len(blk.evals) for blk in gs.blocks)
-        orb = np.zeros((nrhs, self.ns, self.n))
+        orb = np.zeros((nrhs, self.nqm, self.n))
         net = np.zeros((nrhs, self.n))
         dei = np.zeros((nrhs, len(gs.blocks), nlev))
         efnum = np.zeros((nrhs, self.ns))
         for lo in range(0, nrhs, step):
             cols = slice(lo, min(lo + step, nrhs))
-            h = self._h_shell(v_shell[gs.orb_shell, cols].T)
-            h_ext = [h] * self.ns
-            b = self.t_adjoint(h_ext)
+            h_ext = self._external(v_shell[gs.orb_shell, cols].T)
+            b = self._project(self.t_adjoint(h_ext))
             ps = self.t_apply(self._minres(b) if self.scc else b)
             hs = [x + y for x, y in zip(h_ext, self.kernel(ps))]
-            pop = self.populations(ps)
-            orb[cols] = np.stack(pop if self.ns == 1 else [pop[0] + pop[1], pop[0] - pop[1]],
-                                 axis=1)
-            net[cols] = sum(np.einsum("rii->ri", p) for p in ps)
+            orb[cols] = self._orbital_populations(ps)
+            net[cols] = self._net(ps)
             for k, blk in enumerate(gs.blocks):
-                m = self.c[k].T @ hs[blk.spin] @ self.c[k]
-                diag = np.einsum("rii->ri", m)
+                m = self._block_matrix(hs, k, blk)
+                diag = np.einsum("rii->ri", m).real
                 de = diag.copy()
                 for gid in np.unique(blk.group):
                     idx = np.flatnonzero(blk.group == gid)
@@ -278,6 +301,274 @@ class HybridResponse:
                             dfermi[:, s] = efnum[:, s] / gs.dos[s]
         return orb, net, dei, dfermi
 
+    # the pieces of solve that depend on the blocks' layout
+    def _external(self, v_orb) -> list:
+        """H of the external orbital potentials (n_rhs, n), as the kernel's H1."""
+        h = self._h_shell(v_orb)
+        return [h] * self.ns
+
+    def _orbital_populations(self, ps) -> np.ndarray:
+        """(n_rhs, n_qm, n): charge (and magnetisation)."""
+        pop = self.populations(ps)
+        return np.stack(pop if self.ns == 1 else [pop[0] + pop[1], pop[0] - pop[1]], axis=1)
+
+    def _net(self, ps) -> np.ndarray:
+        """On-site populations of the charge (n_rhs, n)."""
+        return sum(np.einsum("rii->ri", p) for p in ps)
+
+    def _block_matrix(self, hs, k: int, blk) -> np.ndarray:
+        """C^+ H1 C of block k."""
+        return self.c[k].T @ hs[blk.spin] @ self.c[k]
+
+
+def _cdot(a, b) -> np.ndarray:
+    """Per right-hand side, sum over the blocks of Re Tr(a^+ b) (Hermitian blocks)."""
+    return sum(np.einsum("rij,rij->r", x.conj(), y).real for x, y in zip(a, b))
+
+
+class KPointHybridResponse(HybridResponse):
+    """The static response at k-points (milestone M6h-4b; collinear): one complex block per
+    (spin, k), P1 of every block weighted by w_k (D as M6h-4's), z Hermitian per block and the
+    real part of the Frobenius products; populations sum_k Re diag(P1(k) S(k)), the block
+    potentials of the dual populations sum_k Re 1/2 (P1 S + S P1) with 1/2 (S(k) V + V S(k)),
+    and the exchange of dP(k) = P1(k) / w_k by the ground state's k-point operator
+    (:meth:`pydftb.hybrid.KPointHybridTerms.response_fock`)."""
+
+    def __init__(self, calc, st, sc, opts: dict, rpa: bool = False):
+        self.gs = gs = R.GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
+        self.scc = calc.scc and not rpa
+        self.kq, self.e, self.w = R.scc_kernel(calc, st, sc)
+        ch = None if getattr(calc, "_response_blocks_compat", False) else R.block_channels(st)
+        self.channels = ch if ch is not None and ch.size else None
+        self.hybrid = st.hybrid
+        self.n, self.ns = gs.norb, gs.nspin
+        self.nk = len(st.kw)
+        self.c = [np.asarray(blk.c) for blk in gs.blocks]
+        self.ch = [c.conj().T for c in self.c]
+        self.sk = [np.asarray(blk.s) for blk in gs.blocks]
+        self.d = [np.sqrt(np.clip(-gs.max_fill * blk.weight * R.static_weights(gs, blk), 0.0,
+                                  None)) for blk in gs.blocks]
+        self.groups = self._fermi_groups()
+        self.nqm, self.nmat = self.ns, self.n
+        self.iterations = 0
+        self.indefinite = False
+
+    _inner = staticmethod(_cdot)
+
+    def t_apply(self, z) -> list:
+        """P1 of every block from z of every block: -C (D o z) C^+."""
+        return [-(self.c[b] @ (self.d[b] * z[b]) @ self.ch[b]) for b in range(len(z))]
+
+    def t_adjoint(self, hs) -> list:
+        """z of every block from H of every block: D o (C^+ H C), projected."""
+        return self._fermi_project([self.d[b] * (self.ch[b] @ hs[b] @ self.c[b])
+                                    for b in range(len(hs))])
+
+    def populations(self, ps) -> list:
+        out = [0.0] * self.ns
+        for b, blk in enumerate(self.gs.blocks):
+            out[blk.spin] = out[blk.spin] + np.einsum("rij,ji->ri", ps[b], self.sk[b]).real
+        return out
+
+    def _h_block(self, v_orb, b: int) -> np.ndarray:
+        return 0.5 * self.sk[b] * (v_orb[:, :, None] + v_orb[:, None, :])
+
+    def kernel(self, ps) -> list:
+        """H1 of every block."""
+        gs, nr = self.gs, ps[0].shape[0]
+        hs = [np.zeros((nr, self.n, self.n), complex) for _ in gs.blocks]
+        if not self.scc:
+            return hs
+        qsh = [gs.shells(q.T) for q in self.populations(ps)]
+        v = self.e @ (self.kq @ (self.e.T @ sum(qsh)))
+        vm = self.w @ (qsh[0] - qsh[1]) if self.ns == 2 and self.w is not None else None
+        for b, blk in enumerate(gs.blocks):
+            vs = v if vm is None else (v + vm if blk.spin == 0 else v - vm)
+            hs[b] += self._h_block(vs[gs.orb_shell].T, b)
+        ch = self.channels
+        if ch is not None:                               # block potentials (+U, onsite)
+            qb = [0.0] * self.ns
+            for b, blk in enumerate(gs.blocks):
+                ps_ = ps[b] @ self.sk[b]
+                dual = 0.5 * (ps_ + np.conj(np.transpose(ps_, (0, 2, 1))))
+                qb[blk.spin] = qb[blk.spin] + dual[:, ch.mu, ch.nu].real
+            comp = qb if self.ns == 1 else [qb[0] + qb[1], qb[0] - qb[1]]
+            vb = ch.kernel @ np.concatenate(comp, axis=1).T
+            vb = [vb[i * ch.size:(i + 1) * ch.size] for i in range(ch.n_comp)]
+            for b, blk in enumerate(gs.blocks):
+                vc = vb[0] if self.ns == 1 else (vb[0] + vb[1] if blk.spin == 0 else vb[0] - vb[1])
+                vmat = np.zeros((nr, self.n, self.n))
+                vmat[:, ch.mu, ch.nu] = vc.T
+                vmat[:, ch.nu, ch.mu] = vc.T
+                sv = self.sk[b] @ vmat
+                hs[b] += 0.5 * (sv + np.conj(np.transpose(sv, (0, 2, 1))))
+        dps = [np.stack([ps[s * self.nk + k] / gs.blocks[s * self.nk + k].weight
+                         for k in range(self.nk)], axis=1) for s in range(self.ns)]
+        for s, hx in enumerate(self.hybrid.response_fock(dps)):
+            for k in range(self.nk):
+                hs[s * self.nk + k] += hx[:, k]
+        return hs
+
+    def _external(self, v_orb) -> list:
+        return [self._h_block(v_orb, b) for b in range(len(self.gs.blocks))]
+
+    def _net(self, ps) -> np.ndarray:
+        return sum(np.einsum("rii->ri", p).real for p in ps)
+
+    def _block_matrix(self, hs, k: int, blk) -> np.ndarray:
+        return self.ch[k] @ hs[k] @ self.c[k]
+
+
+class PauliHybridResponse(HybridResponse):
+    """The static response of a two-component (non-collinear, no spin-orbit coupling) hybrid
+    ground state (milestone M6h-4b; molecules): one spinor block (2N levels, at most one
+    electron each; :class:`pydftb.response_pauli.PauliGroundState`), the populations of the four
+    Pauli components P^b = Tr_spin(sigma^b P1) (charge to gamma and the third order, the
+    magnetisations to the spin constants), H1 = sum_b [1/2 S o (V^b_mu + V^b_nu)] x sigma^b,
+    the block potentials in the four components and the exchange of the spinor P1
+    (:meth:`pydftb.hybrid.HybridTerms.response_fock`).  Without spin-orbit coupling the global
+    spin rotations -i/2 [sigma_b x 1, P0] are zero modes: their images in z are projected out
+    of the right-hand side and every Lanczos vector, i.e. the response without a global
+    rotation (as :mod:`pydftb.response_pauli`'s bordered system)."""
+
+    def __init__(self, calc, st, sc, opts: dict, rpa: bool = False):
+        from . import response_pauli as RP
+        self.gs = gs = RP.PauliGroundState(calc, st, sc, opts["degeneracy_tol"],
+                                           opts["filling_tol"])
+        self.scc = calc.scc and not rpa
+        self.kq, self.e, _ = R.scc_kernel(calc, st, sc)
+        self.w = np.asarray(st.pauli.w, float) if calc.scc else None
+        ch = (None if getattr(calc, "_response_blocks_compat", False)
+              else RP.block_channels(calc, st)[0])
+        self.channels = ch if ch is not None and ch.size else None
+        self.hybrid = st.hybrid
+        self.n, self.ns = gs.norb, 1
+        self.s = np.asarray(st.smat_precise, float)[0]
+        self.c = [np.asarray(blk.c) for blk in gs.blocks]
+        self.ch = [c.conj().T for c in self.c]
+        self.d = [np.sqrt(np.clip(-gs.max_fill * blk.weight * R.static_weights(gs, blk), 0.0,
+                                  None)) for blk in gs.blocks]
+        self.groups = self._fermi_groups()
+        self.nqm, self.nmat = 4, 2 * self.n
+        self.iterations = 0
+        self.indefinite = False
+        self.rotations = self._rotations()
+
+    _inner = staticmethod(_cdot)
+
+    def t_apply(self, z) -> list:
+        return [-(self.c[b] @ (self.d[b] * z[b]) @ self.ch[b]) for b in range(len(z))]
+
+    def t_adjoint(self, hs) -> list:
+        return self._fermi_project([self.d[b] * (self.ch[b] @ hs[b] @ self.c[b])
+                                    for b in range(len(hs))])
+
+    def _components(self, ps) -> np.ndarray:
+        """(4, n_rhs, n): Re diag(P^b S) of the charge and the three magnetisations."""
+        from .spinorbit import components
+        return sum(np.einsum("brij,ji->bri", components(p), self.s).real for p in ps)
+
+    def _spinor(self, op) -> np.ndarray:
+        """sum_b op[b] x sigma^b, (n_rhs, 2N, 2N), of four (n_rhs, N, N) operators."""
+        n, nr = self.n, op.shape[1]
+        h = np.zeros((nr, 2 * n, 2 * n), complex)
+        h[:, :n, :n] = op[0] + op[3]
+        h[:, n:, n:] = op[0] - op[3]
+        h[:, :n, n:] = op[1] - 1j * op[2]
+        h[:, n:, :n] = op[1] + 1j * op[2]
+        return h
+
+    def _h_components(self, v4) -> np.ndarray:
+        """H1 of component potentials per orbital v4 (4, n_rhs, n)."""
+        return self._spinor(0.5 * self.s * (v4[:, :, :, None] + v4[:, :, None, :]))
+
+    def kernel(self, ps) -> list:
+        gs, nr = self.gs, ps[0].shape[0]
+        if not self.scc:
+            return [np.zeros((nr, 2 * self.n, 2 * self.n), complex) for _ in ps]
+        qsh = np.stack([gs.shells(q.T) for q in self._components(ps)])    # (4, n_shell, r)
+        v = np.empty_like(qsh)
+        v[0] = self.e @ (self.kq @ (self.e.T @ qsh[0]))
+        v[1:] = np.einsum("ij,bjr->bir", self.w, qsh[1:])
+        h = self._h_components(np.transpose(v[:, gs.orb_shell, :], (0, 2, 1)))
+        ch = self.channels
+        if ch is not None:                               # block potentials, four components
+            from .spinorbit import components
+            q = 0.0
+            for p in ps:
+                cs = components(p) @ self.s
+                q = q + (0.5 * (cs + np.conj(np.swapaxes(cs, -1, -2))))[:, :, ch.mu, ch.nu].real
+            vb = (ch.kernel @ np.concatenate(list(q), axis=1).T).reshape(4, ch.size, nr)
+            e = np.zeros((4, nr, self.n, self.n))
+            e[:, :, ch.mu, ch.nu] = np.transpose(vb, (0, 2, 1))
+            e[:, :, ch.nu, ch.mu] = np.transpose(vb, (0, 2, 1))
+            se = self.s @ e
+            h = h + self._spinor(0.5 * (se + np.swapaxes(se, -1, -2)))
+        return [h + hx for hx in self.hybrid.response_fock(ps)]
+
+    def _rotations(self) -> list:
+        """Orthonormal z of the global spin rotations -i/2 [sigma_b x 1, P0] (zero modes without
+        spin-orbit coupling): C^-1 = C^+ S of the spinor overlap, z = -X / D on the pairs."""
+        n, out = self.n, []
+        sig = [np.array([[0, 1], [1, 0]]), np.array([[0, -1j], [1j, 0]]), np.diag([1, -1])]
+        for blk, c, d in zip(self.gs.blocks, self.c, self.d):
+            f = R._theta(self.gs.beta * (blk.evals - blk.fermi))
+            p0 = (c * f) @ c.conj().T
+            for sb in sig:
+                g = np.kron(sb, np.eye(n))
+                x = c.conj().T @ blk.s @ (-0.5j * (g @ p0 - p0 @ g)) @ blk.s @ c
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    out.append(np.where(d > 0.0, -x / d, 0.0))
+        basis = []
+        scale = max(np.sqrt(np.vdot(z, z).real) for z in out) if out else 0.0
+        for z in out:
+            for q in basis:
+                z = z - np.vdot(q, z).real * q
+            nz = np.sqrt(np.vdot(z, z).real)
+            if nz > ROTATION_REL * scale:
+                basis.append(z / nz)
+        return basis
+
+    def _project(self, z) -> list:
+        if not self.rotations:
+            return z
+        y = z[0].copy()
+        for q in self.rotations:
+            y = y - np.einsum("ij,rij->r", q.conj(), y).real[:, None, None] * q[None]
+        return [y]
+
+    def _operator(self, z) -> list:
+        z = self._project(z)
+        k = self.t_adjoint(self.kernel(self.t_apply(z)))
+        return self._project([a - b for a, b in zip(z, k)])
+
+    def _external(self, v_orb) -> list:
+        v4 = np.zeros((4,) + v_orb.shape)
+        v4[0] = v_orb
+        h = self._h_components(v4)
+        return [h] * len(self.gs.blocks)
+
+    def _orbital_populations(self, ps) -> np.ndarray:
+        return np.transpose(self._components(ps), (1, 0, 2))
+
+    def _net(self, ps) -> np.ndarray:
+        n = self.n
+        return sum((np.einsum("rii->ri", p[:, :n, :n]) + np.einsum("rii->ri", p[:, n:, n:])).real
+                   for p in ps)
+
+    def _block_matrix(self, hs, k: int, blk) -> np.ndarray:
+        return self.ch[k] @ hs[k] @ self.c[k]
+
+
+def _response(calc, st, sc, opts: dict, rpa: bool = False) -> HybridResponse:
+    """The response class of the ground state: two-component, k-points or the real path."""
+    from .hybrid import KPointHybridTerms
+    if st.pauli is not None:
+        return PauliHybridResponse(calc, st, sc, opts, rpa)
+    if isinstance(st.hybrid, KPointHybridTerms):
+        return KPointHybridResponse(calc, st, sc, opts, rpa)
+    return HybridResponse(calc, st, sc, opts, rpa)
+
 
 # ---- the analyses ----------------------------------------------------------------------------
 def _static(spec, what: str) -> np.ndarray:
@@ -292,7 +583,7 @@ def polarisability(calc, st, sc, spec, opts: dict) -> R.PolarisabilityResult:
     """DFTB+'s ``Polarisability`` with a hybrid functional: the static response to E_x, E_y,
     E_z (as :func:`pydftb.response.polarisability`)."""
     omegas = _static(spec, "polarisability")
-    hr = HybridResponse(calc, st, sc, opts)
+    hr = _response(calc, st, sc, opts)
     gs = hr.gs
     pos = np.asarray(st.pos, float)
     v = pos[gs.shell_atom]                               # (n_shell, 3)
@@ -313,7 +604,7 @@ def response_kernel(calc, st, sc, spec, opts: dict) -> R.ResponseKernelResult:
     spec_d = {} if spec is True else dict(spec)
     rpa = bool(spec_d.get("rpa", False)) or not calc.scc
     omegas = _static(spec, "response_kernel")
-    hr = HybridResponse(calc, st, sc, opts, rpa=rpa)
+    hr = _response(calc, st, sc, opts, rpa=rpa)
     gs = hr.gs
     v = np.eye(gs.natom)[gs.shell_atom]                  # (n_shell, n_atom)
     if getattr(calc, "_response_pc_compat", False) and not rpa:      # DFTB+ 25.1 (B27)
@@ -335,10 +626,10 @@ def external_charge_derivatives(calc, st, sc, spec,
     ncharge = len(st.ext.pc.charges)
     sel = R.external_charge_selection(spec, ncharge)
     charges = np.arange(ncharge) if sel is None else sel
-    hr = HybridResponse(calc, st, sc, opts)
+    hr = _response(calc, st, sc, opts)
     gs = hr.gs
     jac = st.ext.pc_jacobian()[:, charges, :]                   # (n_atom, n_j, 3)
     orb, _, _, _ = hr.solve(jac[gs.shell_atom].reshape(gs.nshell, -1))
-    orb = orb.reshape(len(charges), 3, gs.nspin, gs.norb)
+    orb = orb.reshape(len(charges), 3, hr.nqm, gs.norb)
     return R.ExternalChargeDerivativesResult(charges, R._sum_atoms(orb, gs.orb_atom, gs.natom),
                                              orb, gs.orb_atom.copy())

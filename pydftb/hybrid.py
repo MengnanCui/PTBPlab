@@ -770,10 +770,18 @@ class HybridTerms:
     def response_fock(self, dps) -> list:
         """H_x of first-order densities (M6h-4), every channel's with leading batch axes: the
         exact operator, for the threshold screening its limit (the pairs within the CAM cutoff,
-        as its increments) without touching the screening's state."""
+        as its increments) without touching the screening's state; two-component (M6h-4b): of
+        the spinor matrices (..., 2N, 2N), as :meth:`fock`."""
         if self.pauli:
-            raise ValueError("hybrid functionals: the two-component response is milestone "
-                             "M6h-4b")
+            n, out = self.n, []
+            for d in dps:
+                h = np.empty_like(d)
+                for r, c in ((0, 0), (1, 1), (1, 0)):
+                    h[..., r * n:(r + 1) * n, c * n:(c + 1) * n] = -0.25 * self._four_terms(
+                        self.S, d[..., r * n:(r + 1) * n, c * n:(c + 1) * n])
+                h[..., :n, n:] = np.conj(np.swapaxes(h[..., n:, :n], -1, -2))
+                out.append(h)
+            return out
         s = self.S if self.spec.screening == "matrix" else self.S_cam
         c = -0.125 if len(dps) == 1 else -0.25
         return [c * self._four_terms(s, d) for d in dps]
@@ -1265,6 +1273,30 @@ class KPointHybridTerms:
             out.append(c * h)
         return out
 
+    def response_fock(self, dps) -> list:
+        """H_x(k) of first-order densities (M6h-4b): every spin channel's (n_rhs, nk, n, n) at the
+        k-points, the right-hand sides in one BvK convolution; with ``neighbour_threshold`` the
+        screening's limit (the S of the pairs within the CAM cutoff, no screened increments),
+        the history of the ground state's builds untouched."""
+        c = -0.125 if len(dps) == 1 else -0.25
+        s = self.S_x
+        out = []
+        for d in dps:
+            sd, ds = s @ d, d @ s
+            h = (self._conv_rhs(sd @ s) + self._conv_rhs(sd) @ s + s @ self._conv_rhs(ds)
+                 + s @ self._conv_rhs(d) @ s)
+            out.append(c * h)
+        return out
+
+    def _conv_rhs(self, x) -> np.ndarray:
+        """:meth:`_conv` of (n_rhs, nk, n, n) matrices: the k-points first, the rest as columns."""
+        lay, nr = self.layout, x.shape[0]
+        xk = np.moveaxis(x, 1, 0).reshape(lay.nk, -1)
+        b = lay._cos_w @ xk.real + lay._sin_w @ xk.imag                   # (N, n_rhs n n)
+        b = (b.reshape(lay.ncell, nr, self.n, self.n) * self.G[:, None]).reshape(lay.ncell, -1)
+        y = (lay._cos @ b + 1j * (lay._sin @ b)).reshape(lay.nk, nr, self.n, self.n)
+        return np.moveaxis(y, 0, 1)
+
     # -- DFTB+'s Threshold of the neighbour screening (M6h-3c) ------------------------------------
     def screening_groups(self, pmax: float) -> list:
         """DFTB+'s kept quadruples (getFourLoopCompositeIndex): pair entries p = (M, A@h) and
@@ -1537,6 +1569,9 @@ class NeighbourMinimumImageTerms(KPointHybridTerms):
             out.append(c * self._increment(lay.to_bvk(d), [(self._s_full, self._s_full)]))
         return out
 
+    def response_fock(self, dps) -> list:
+        raise ValueError(_MIC_NEIGHBOUR_RESPONSE)
+
     def fock_at(self, kpts, dps) -> list:
         """H_x at any k-points: the explicit cells' blocks with their own phases (DFTB+'s band
         run builds them at its k-points); with a Threshold one screened build of DeltaP."""
@@ -1564,6 +1599,11 @@ class NeighbourMinimumImageTerms(KPointHybridTerms):
     def gamma_gradient(self, dps):
         raise ValueError(_MIC_NEIGHBOUR_FORCES)
 
+
+_MIC_NEIGHBOUR_RESPONSE = (
+    "hybrid functionals: no response analyses at k-points with the MinimumImage NeighbourBased "
+    "exchange (M6h-4b): that operator is not self-adjoint (B22), so the response equation is not "
+    "symmetric (as its forces, which neither DFTB+ nor pydftb has)")
 
 _MIC_NEIGHBOUR_FORCES = (
     "Hybrid functionals don't yet support gradient calculations for periodic systems beyond the "

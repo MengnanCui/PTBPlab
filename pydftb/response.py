@@ -781,12 +781,12 @@ def _fermi_level_derivative(gs: GroundState, resp: Response, v_col) -> np.ndarra
 def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
     """DFTB+'s ``Polarisability``: the response to E_x, E_y, E_z (H' from the atoms'
     coordinates) at every frequency of ``spec``."""
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4, M6h-4b)
+        from . import response_hybrid
+        return response_hybrid.polarisability(calc, st, sc, spec, opts)
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.polarisability(calc, st, sc, spec, opts)
-    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
-        from . import response_hybrid
-        return response_hybrid.polarisability(calc, st, sc, spec, opts)
     omegas = frequencies(spec, "polarisability")
     gs = GroundState(calc, st, sc, opts["degeneracy_tol"], opts["filling_tol"])
     kernel = scc_kernel(calc, st, sc)
@@ -818,12 +818,12 @@ def polarisability(calc, st, sc, spec, opts: dict) -> PolarisabilityResult:
 def response_kernel(calc, st, sc, spec, opts: dict) -> ResponseKernelResult:
     """DFTB+'s ``ResponseKernel``: the response to a unit potential on each atom (SCC
     screened, or the bare response with ``rpa`` and without SCC)."""
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4, M6h-4b)
+        from . import response_hybrid
+        return response_hybrid.response_kernel(calc, st, sc, spec, opts)
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.response_kernel(calc, st, sc, spec, opts)
-    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
-        from . import response_hybrid
-        return response_hybrid.response_kernel(calc, st, sc, spec, opts)
     spec_d = {} if spec is True else dict(spec)
     rpa = bool(spec_d.get("rpa", False)) or not calc.scc
     omegas = frequencies(spec, "response_kernel")
@@ -1259,12 +1259,12 @@ def external_charge_derivatives(calc, st, sc, spec, opts: dict) -> ExternalCharg
     is the only perturbation (H0 and S do not change), solved like the field (M6g-1)."""
     if st.ext is None or st.ext.pc is None:
         raise ValueError("external charge derivatives need point charges")
+    if st.hybrid is not None:                            # hybrid functionals (M6h-4, M6h-4b)
+        from . import response_hybrid
+        return response_hybrid.external_charge_derivatives(calc, st, sc, spec, opts)
     if st.pauli is not None:                             # two-component (M6g-3b)
         from . import response_pauli
         return response_pauli.external_charge_derivatives(calc, st, sc, spec, opts)
-    if st.hybrid is not None:                            # hybrid functionals (M6h-4)
-        from . import response_hybrid
-        return response_hybrid.external_charge_derivatives(calc, st, sc, spec, opts)
     ncharge = len(st.ext.pc.charges)
     sel = external_charge_selection(spec, ncharge)
     charges = np.arange(ncharge) if sel is None else sel

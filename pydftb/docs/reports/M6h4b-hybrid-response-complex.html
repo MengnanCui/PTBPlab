@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-4b k 点与两分量的杂化响应报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M6h-4b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-4b · 完成报告</p>
+    <h1>长程校正（四 b）：k 点与两分量的杂化响应</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M6h4b-hybrid-response-complex.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">杂化泛函下的静态响应（极化率、响应核、点电荷导数）现在也能用于 k 点（共线自旋）与两分量（非共线自旋，分子）。DFTB+ 25.1 在这两条路径上段错误（B24、B25），所以没有 DFTB+ 参考，验证全靠 pydftb 自己的差分与等价关系。算法仍是 M6h-4 的占据–空轨道对空间与批量 MINRES，只是 z 成为每个块的厄米矩阵、内积取实部；k 点的交换用基态的 BvK 卷积，两分量投影掉整体自旋转动。只有 NumPy 引擎；旧计算逐位不变（含 M6h-4 的 37 个算例）。</p>
+    <ul>
+      <li><strong>k 点的验证</strong>：
+        <ul>
+          <li>不与自身镜像重叠的盒子里的分子，2×1×1 的核等于超胞 Γ 点的核（M6h-4 已与 DFTB+ 对上）：差 ≤ 4.7e-13，含 NeighbourBased 与自旋（三重态 O<sub>2</sub>）。</li>
+          <li>与格点势的差分差 ≤ 1.2e-10：金刚石 LC、30000 K 的金属、O<sub>2</sub> 盒子自旋、干冰 +U、MatrixBased 的 MinimumImage。</li>
+          <li>去掉交换后与 M6g 的 k 点响应一致到 ≤ 3.6e-14；约化与完整的网格 2.3e-13；点电荷导数与移动点电荷的差分 5.3e-12。</li>
+        </ul>
+      </li>
+      <li><strong>两分量的验证</strong>：
+        <ul>
+          <li>极化率与有限场的相对差 ≤ 5.0e-10：HCO、O<sub>2</sub> CAM 90°、H<sub>3</sub> 120°、+U、onsite。</li>
+          <li>核与格点势的差分差 2.5e-10；去掉交换后与 M6g-3b 一致到 1.2e-15。</li>
+          <li>磁矩都沿 z 时等于共线的杂化响应（M6h-4，已与 DFTB+ 对上），差 ≤ 8.6e-12；点电荷导数 3.1e-12。</li>
+        </ul>
+      </li>
+      <li><strong>零模</strong>：没有 SOC 时整体自旋转动不改变能量。磁矩沿一个轴时有 2 个零模，H<sub>3</sub> 120° 有 3 个。pydftb 把它们从右端与每个 Lanczos 向量中投影掉；H<sub>3</sub> 不投影就不收敛。</li>
+      <li><strong>鞍点</strong>：在粗网格上，Full 核（金刚石 2×2×2）与 MatrixBased 的 MinimumImage（3×1×2）的对称 SCC 解是鞍点。后者的稠密算符有 4 个负本征值，最低 −0.56。pydftb 照样求解并警告，与 M6h-4 相同。</li>
+      <li><strong>拒绝</strong>：
+        <ul>
+          <li>MinimumImage 配 NeighbourBased 的 k 点响应：交换算符不自伴（B22），方程不对称。</li>
+          <li>有限频率（M6h-4c）与坐标导数（M6h-4d）：仍按 DFTB+ 的原话拒绝。</li>
+        </ul>
+      </li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">4.7e-13</span><span class="lbl">k 点的核与超胞 Γ 点之差</span></li>
+      <li><span class="num">≤ 1.2e-10</span><span class="lbl">k 点的核与格点势差分之差</span></li>
+      <li><span class="num">≤ 5.0e-10</span><span class="lbl">两分量的极化率与有限场（相对）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#kpoints">三、k 点的验证</a></li>
+      <li><a href="#pauli">四、两分量的验证</a></li>
+      <li><a href="#dftbplus">五、DFTB+ 的情况</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>response_hybrid.py</code></td><td>
+              <ul>
+                <li><code>HybridResponse</code>（M6h-4 的实数路径）的算术不变。依赖块布局的部分拆成几个钩子：
+                  <ul>
+                    <li><code>_external</code>、<code>_orbital_populations</code>、<code>_net</code>、<code>_block_matrix</code>；</li>
+                    <li><code>_fermi_groups</code>、<code>_fermi_project</code>；</li>
+                    <li><code>_inner</code>：内积，实数路径仍是原来的函数；</li>
+                    <li><code>_project</code>：实数路径不投影。</li>
+                  </ul>
+                  <code>nqm</code>、<code>nmat</code> 是布居的分量数与矩阵的大小。</li>
+                <li><code>KPointHybridResponse</code>（新）：
+                  <ul>
+                    <li>每个 (自旋, k) 块各有复数的 C、C<sup>†</sup>、S(k)、D；</li>
+                    <li><code>t_apply</code>、<code>t_adjoint</code> 用 C<sup>†</sup>；布居是 Σ<sub>k</sub> Re diag(P<sub>1</sub>S)；</li>
+                    <li>块势用对偶块布居的实部；</li>
+                    <li>交换：把 P<sub>1</sub>/w<sub>k</sub> 按自旋叠成 (r, n<sub>k</sub>, n, n) 交给基态的 <code>response_fock</code>；</li>
+                    <li>内积是 Re Σ Tr(z<sup>†</sup>y)。</li>
+                  </ul></li>
+                <li><code>PauliHybridResponse</code>（新）：
+                  <ul>
+                    <li>M6g-3b 的 <code>PauliGroundState</code>；布居与 H<sub>1</sub> 都按四个 Pauli 分量：q 进 γ 与三阶，m 进自旋常数 W；</li>
+                    <li>块势用 M6g-3b 的四分量 <code>BlockChannels</code>；交换用 Pauli 算符；</li>
+                    <li><code>_rotations</code>：整体转动 −i/2 [σ<sub>b</sub> ⊗ 1, P<sub>0</sub>] 在 z 里的像，Gram–Schmidt 正交化，小于最大者 1e-8 的丢掉；</li>
+                    <li><code>_project</code> 与 <code>_operator</code> 在右端与每个 Lanczos 向量上投影。</li>
+                  </ul></li>
+                <li><code>_response</code>：三个入口按 <code>st.pauli</code> 与 <code>KPointHybridTerms</code> 选类；点电荷导数按 <code>nqm</code> 整形。</li>
+              </ul></td></tr>
+            <tr><td><code>hybrid.py</code></td><td>
+              <ul>
+                <li><code>HybridTerms.response_fock</code> 的 Pauli 分支：c = −1/4 的四项公式作用在三个 N×N 块上，右上块取左下块的伴随；可带批量维。</li>
+                <li><code>KPointHybridTerms.response_fock</code>（新）：
+                  <ul>
+                    <li>无状态的精确算符；Threshold 取它的极限，即截断以内的 S<sub>x</sub>、不筛选增量，不碰基态的筛选历史。</li>
+                    <li><code>_conv_rhs</code>：r 个右端的 BvK 卷积一起做，即 (N, n<sub>k</sub>) 的余弦与正弦矩阵乘以 (n<sub>k</sub>, r n<sup>2</sup>)，G(n) 按批广播。</li>
+                  </ul></li>
+                <li><code>NeighbourMinimumImageTerms.response_fock</code>：报错（B22）。</li>
+              </ul></td></tr>
+            <tr><td><code>response.py</code></td><td>三个入口里杂化的分支放到两分量的分支之前；不加杂化的两分量计算不受影响。</td></tr>
+            <tr><td><code>calculator.py</code></td><td>
+              <ul>
+                <li>去掉非共线配响应与 k 点配响应的拒绝。</li>
+                <li><code>_check_periodic_hybrid</code>：MinimumImage 配 NeighbourBased 的 k 点响应拒绝，理由同力（算符不自伴）。</li>
+              </ul></td></tr>
+            <tr><td>测试</td><td>
+              <ul>
+                <li>新文件 <code>tests/test_hybrid_response_complex.py</code>：27 项（第三、四节）。</li>
+                <li><code>test_hybrid_response.py</code> 与 <code>test_hybrid.py</code>：只留有限频率与坐标导数的拒绝。</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+        <p>没有 DFTB+ 参考算例（DFTB+ 段错误），所以不加 refgen 的算例。用到的基态都是 M6h-1b、M6h-3b、M6h-3c 的参考算例，它们的基态已与 DFTB+ 对上。</p>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>r = DFTB(sk_lc, hybrid="lc", kpts=supercell_folding((2, 2, 2)),
+         analysis={"response_kernel": True, "polarisability": True}).calculate(labels, pos, cell, pbc)
+r.analysis.response_kernel.atom[0, :, 0, :]   # dN_B / dV_A，与 M6g 相同的结果类
+r = DFTB(sk_lc, hybrid="lc", spin="noncolinear", spin_constants=w, initial_spins=m,
+         analysis={"polarisability": True}).calculate(labels, pos)
+r.analysis.polarisability.charge_derivatives[0]   # (3, 4, n_atom)：q、m<sub>x</sub>、m<sub>y</sub>、m<sub>z</sub></code></pre>
+      <ul>
+        <li><strong>范围</strong>：
+          <ul>
+            <li>k 点：M6h-3b、M6h-3c 的全部基态组合（屏蔽、库仑核、LC/CAM/全局、共线自旋、金属、DFTB3、+U、onsite、外场、点电荷），MinimumImage 配 NeighbourBased 与 MP 展宽除外。周期体系的极化率只有电荷响应，同 M6g 与 DFTB+。</li>
+            <li>两分量：分子（DFTB+ 与 pydftb 的非共线杂化都只有分子、只有 MatrixBased），可带 +U、onsite、DFTB3、外场与点电荷；SOC 配杂化连基态都拒绝。</li>
+            <li>DFTB+ 格式的输出（detailed.out 的块、dE_band.out、dV_band.out）照 M6g 写出。</li>
+          </ul></li>
+        <li><strong>两分量的零模</strong>：整体自旋转动被投影掉，结果是不含整体转动的响应，与 M6g-3b 的加边方程相同。自旋无关的扰动本来就不激发这些转动，投影只去掉 SCC 的噪声。</li>
+        <li><strong>Threshold</strong>：NeighbourBased 的 Threshold 给筛选的极限（与 M6h-4 的分子 Thresholded 相同）。带筛选的 SCC 的增量依赖历史，对它做差分会混进约 1e-6 的筛选噪声。</li>
+        <li><strong>鞍点上的基态</strong>：k 点的 Full 核、粗网格上的 MinimumImage 也可能让对称的 SCC 解成为鞍点。pydftb 警告，给出的仍是这个驻点的响应。</li>
+        <li><strong>耗时</strong>（一个线程）：
+          <ul>
+            <li>干冰（12 个原子、48 个轨道）的核（12 个右端）：2×2×2（8 个 k 点）2.0 s；4×4×4（36 个 k 点）9.7 s、内存 0.4 GB，22 轮；极化率 1.8 s。</li>
+            <li>两分量：HCO 自由基加 10 个水（33 个原子、138 个旋量能级）的极化率 0.44 s，核 6.2 s，31 轮；加 20 个水（63 个原子、258 个能级）的极化率 2.5 s，核 61 s，内存 0.7 GB。每轮每个右端做一次复数的 2N×2N 交换构建。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="kpoints">
+      <h2>三、k 点的验证</h2>
+      <p>基态都是已有的参考算例（M6h-3b、M6h-3c，已与 DFTB+ 对上），scc_tol 1e-13。差分用四点公式：格点势 h = 1e-4 Ha，点电荷位置 h = 1e-3 Bohr。表中“测试的界”是 <code>test_hybrid_response_complex.py</code> 断言的上限。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>检查</th><th>体系</th><th>实测</th><th>测试的界</th></tr></thead>
+        <tbody>
+          <tr><td>超胞 Γ 点（镜像求和）</td><td>CO 盒子 2×1×1：LC MatrixBased、NeighbourBased；同一盒子里的三重态 O<sub>2</sub>（自旋，超胞的未配对电子数乘以 2）</td><td>4.7e-13、4.6e-13、3.6e-13</td><td>1e-11</td></tr>
+          <tr><td>格点势的差分（原子 0 的一列）</td><td>金刚石 2×2×2 LC（|核| 8.75）</td><td>4.3e-12</td><td>2e-9</td></tr>
+          <tr><td></td><td>同上，30000 K（8 个块一个费米组，费米能级移动）</td><td>2.5e-11</td><td>2e-9</td></tr>
+          <tr><td></td><td>O<sub>2</sub> 盒子自旋 2×2×2</td><td>1.2e-10</td><td>2e-9</td></tr>
+          <tr><td></td><td>干冰 2×1×1 +U（关掉 B20 的开关）</td><td>6.0e-11</td><td>2e-9</td></tr>
+          <tr><td></td><td>金刚石 3×1×2 MatrixBased MinimumImage（鞍点，警告）</td><td>1.8e-11</td><td>2e-9</td></tr>
+          <tr><td></td><td>干冰 2×1×1 DFTB3（三阶的 Hessian，不加色散；不在测试里）</td><td>5.4e-11</td><td>—</td></tr>
+          <tr><td>去掉交换 = M6g</td><td>干冰 +U、金刚石 30000 K、O<sub>2</sub> 盒子自旋：核与电荷响应</td><td>核 ≤ 3.6e-14，极化率 ≤ 2.8e-14</td><td>1e-12</td></tr>
+          <tr><td>约化与完整网格</td><td>金刚石 3×1×2：DFTB+ 的 4 个 k 点对 Γ 心网格的 6 个</td><td>2.3e-13</td><td>1e-11</td></tr>
+          <tr><td>dq/dE = Σ<sub>A</sub> x<sub>A</sub> dq/dV<sub>A</sub></td><td>干冰 2×1×1</td><td>9.8e-13</td><td>1e-10</td></tr>
+          <tr><td>点电荷导数对移动点电荷</td><td>干冰 2×1×1 外场加点电荷</td><td>5.3e-12</td><td>1e-7</td></tr>
+          <tr><td>批量与 Threshold 的极限</td><td>金刚石 3×1×2 NeighbourBased Threshold 1e-6：两个右端一起算等于逐个不筛选的 <code>fock</code>，筛选历史不变</td><td>逐位相同</td><td>相对 1e-13</td></tr>
+          <tr><td>Full 核的鞍点</td><td>金刚石 2×2×2 Full</td><td>警告</td><td>—</td></tr>
+          <tr><td>MinimumImage 配 NeighbourBased</td><td>金刚石 2×2×2</td><td>拒绝</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>超胞</strong>：盒子里的原子不与自身镜像重叠，S<sub>μμ</sub>(k) = 1，k 点计算等于超胞的 Γ 点（M6h-3b）。所以晶胞的核等于超胞的核对镜像求和。M6h-3b 的 O<sub>2</sub> 小盒子不能这样比：它的原子与镜像重叠，P<sub>0</sub>(k) 随 k 变。自旋要用分子的自旋基态（第七节）。</li>
+        <li><strong>B20 的开关</strong>：<code>_b20</code> 算例复现 DFTB+ 25.1 的问题（k 点的块布居停在起始值），开着时 SCC 里没有块的响应，差分与核差 0.21（+U）与 0.092（onsite）。所以这里的差分关掉它。</li>
+        <li><strong>周期体系的 dq/dE</strong>：扰动是原子坐标 x 的势，同 M6g 与 DFTB+，不是锯齿外场。跨过锯齿不连续面的分子让锯齿场的差分约为 29、解析值约为 3，所以改用线性关系检查。</li>
+        <li><strong>Threshold 的差分</strong>：对 Threshold 1e-6 的 SCC 做差分，与极限的响应差 1.3e-2（|核| 11.8）：1e-6 的筛选噪声被 1/h 放大。Threshold 取 1e-100 时差 2.2e-11（P94g）。</li>
+      </ul>
+    </section>
+
+    <section id="pauli">
+      <h2>四、两分量的验证</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>检查</th><th>体系</th><th>实测</th><th>测试的界</th></tr></thead>
+        <tbody>
+          <tr><td>极化率对有限场（h = 1e-4，相对）</td><td>HCO</td><td>1.1e-11</td><td>2e-8</td></tr>
+          <tr><td></td><td>O<sub>2</sub> CAM，磁矩 90°</td><td>1.2e-12</td><td>2e-8</td></tr>
+          <tr><td></td><td>H<sub>3</sub>，磁矩 120°（强烈非线性，h = 1e-3 时差分误差 3e-6）</td><td>5.0e-10</td><td>2e-8</td></tr>
+          <tr><td></td><td>HCO +U（四个分量的块势）</td><td>6.1e-11</td><td>2e-8</td></tr>
+          <tr><td></td><td>HCO onsite</td><td>3.1e-12</td><td>2e-8</td></tr>
+          <tr><td>核对格点势的差分</td><td>HCO，原子 0 与 1</td><td>2.5e-10</td><td>2e-9</td></tr>
+          <tr><td></td><td>HCO DFTB3（不加色散；不在测试里）</td><td>9.5e-11</td><td>—</td></tr>
+          <tr><td>去掉交换 = M6g-3b</td><td>H<sub>3</sub> 120°，四个分量</td><td>α 1.7e-16，布居 1.2e-15</td><td>1e-12</td></tr>
+          <tr><td>磁矩沿 z = 共线的杂化响应</td><td>HCO（共线的结果已与 DFTB+ 对上）</td><td>α 3.6e-12，q 1.5e-12，m<sub>z</sub> 8.6e-12，m<sub>x</sub>、m<sub>y</sub> 为 0</td><td>1e-8</td></tr>
+          <tr><td>整体转动</td><td>H<sub>3</sub> 120° 有 3 个，解与它们正交（171 轮）；HCO 有 2 个，投影与不投影的解相同</td><td>2.8e-14（相对）；2.0e-14</td><td>1e-12；1e-10</td></tr>
+          <tr><td>点电荷导数对移动点电荷</td><td>HCO 外场加点电荷</td><td>3.1e-12</td><td>1e-7</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>零模的投影</strong>：转动 δP<sub>b</sub> = −i/2 [σ<sup>b</sup> ⊗ 1, P<sub>0</sub>] 在本征基里是 X = C<sup>−1</sup>δP C<sup>−†</sup>（C<sup>−1</sup> = C<sup>†</sup>S），只有 f<sub>i</sub> ≠ f<sub>j</sub> 的对上不为零，正是 D &gt; 0 的对；所以 z = −X/D 是精确的零模。自旋无关的扰动 H 与 σ<sup>b</sup> ⊗ 1 对易，右端 ⟨z<sub>b</sub>, T<sup>T</sup>H⟩ = Tr(δP<sub>b</sub>H) = 0，投影只去掉噪声。</li>
+        <li><strong>共线的极限</strong>：磁矩沿 z 的 HCO 用两分量的代码算，电荷与 m<sub>z</sub> 的响应等于共线的杂化响应（M6h-4 的 <code>hco_lc_spin_neighbour</code> 基态，换成 MatrixBased）。这把两分量的路径接到了已与 DFTB+ 对上的路径。</li>
+      </ul>
+    </section>
+
+    <section id="dftbplus">
+      <h2>五、DFTB+ 的情况</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+</th><th>pydftb 的做法</th></tr></thead>
+        <tbody>
+          <tr><td>B24：k 点杂化的 <code>ResponseKernel</code> 段错误（<code>dRhoCmplx</code> 没有交换项）</td><td>给出响应，用超胞、差分与 M6g 验证</td></tr>
+          <tr><td>B25：非共线杂化的 <code>Polarisability</code> 段错误（<code>dRhoPauli</code> 也没有）</td><td>给出响应，用有限场、差分、M6g-3b 与共线的极限验证</td></tr>
+          <tr><td>B22：NeighbourBased MinimumImage 的交换算符不自伴（M6h-3c）</td><td>拒绝它的响应，与力相同</td></tr>
+          <tr><td>B20：k 点的 +U 与 onsite 块布居从不更新（M6h-3b）</td><td>默认每轮更新；复现 DFTB+ 的 <code>_b20</code> 基态上做差分时要关掉开关</td></tr>
+          <tr><td>有限频率、坐标导数配杂化：拒绝</td><td>照 DFTB+ 的原话拒绝，到 M6h-4c、M6h-4d</td></tr>
+        </tbody>
+      </table></div>
+      <p>本块没有新的 DFTB+ 问题。</p>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M6h-4 的文档提交 <code>ee78c33</code> 逐字节比较</td><td>conda 1550 个计算、694594 个字段，最小环境 1484 个计算、679745 个字段，都逐位相同（含 M6h-4 的 37 个算例；不需要 <code>--allow-new</code>）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>504 个算例全部通过；torch 74 个通过，430 个按设计跳过（只有 NumPy 的物理）；34 条动力学参考全部通过</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1650 个通过 / 430 个跳过（比 M6h-4 多 26 个：<code>test_hybrid_response_complex.py</code> 的 27 项，<code>test_hybrid.py</code> 少了 1 项拒绝）；最小环境 1401 / 558，torch 1605 / 475。第一次运行时最小环境与 torch 环境各有 1 项失败（超胞测试的三重态 CO，第七节）；改测试后三个环境重跑，全部通过</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>MinimumImage 的鞍点</strong>：设计只把 Full 核列为鞍点（P94i）。实现后，金刚石 3×1×2 的 MatrixBased MinimumImage 也给出不定的警告：稠密的算符有 4 个负本征值，最低 −0.56。这时差分仍与核一致（1.8e-11）：h = 1e-4 的格点势下，SCC 停在同一个驻点上。设计文档已改。</li>
+        <li><strong>超胞测试的自旋分子</strong>：原型与第一版测试用三重态 CO。门槛第一次运行时，最小环境与 torch 环境里这一项失败，核差 4.0e-3：超胞（两份 CO，固定总磁矩 4）的 SCC 200 轮没有收敛，误差停在 0.4，电荷在两份 CO 之间来回振荡（最后一轮差一个电子）；pydftb 与 DFTB+ 的 <code>ConvergentSCCOnly = No</code> 一样只警告，照样在没收敛的态上算了响应。conda 环境里同一个 SCC 碰巧 38 轮收敛到对称态。三重态是 CO 的激发组态，固定总磁矩时电荷可以在两份之间转移；O<sub>2</sub> 的三重态是基态，两个自旋通道都是满壳层。测试改用同一盒子里的三重态 O<sub>2</sub>：两个环境都 7 轮收敛，差 3.6e-13 与 4.4e-13；并把 “SCC not converged” 设为错误，参考计算不收敛时测试直接失败。改测试后重跑了三个环境的 pydftb 测试（第六节）。代码只改了一处报错原文：<code>response_hybrid._real</code> 里过时的 “M6h-4b” 字样（实数路径上见到复数本征向量时的内部错误，不会触发），重跑的测试已含这处改动。</li>
+        <li><strong>测试</strong>：设计的验证清单全部做了，共 27 项。没有 DFTB+ 参考，所以不加 refgen 的算例（与设计相同）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M6h-4c 有限频率</strong>（分子与 Γ 点，再到 k 点与两分量）：
+          <ul>
+            <li>P<sub>1</sub> 分成对称与反对称部分，[[I + DK<sub>s</sub>D, −Ω], [−Ω, I + DK<sub>x</sub>D]]，Ω = ω/Δ。原型与 TD-LC 对全部单重态的求和一致到 2e-13（相对，含第一激发以上的频率）。</li>
+            <li>要定的是离激发很近时的求解器：C<sub>6</sub>H<sub>6</sub> 在离激发 4e-4 Ha 处 MINRES 停在相对残差 3.6e-11。候选是停滞判据加警告、MINRES-QLP、小体系的稠密解。</li>
+          </ul></li>
+        <li><strong>M6h-4d 坐标导数</strong>（分子）：原型的 Born 电荷与解析力对外场的差分一致到 3.4e-12–3.9e-11。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M6h4b-hybrid-response-complex.html">← M6h-4b 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

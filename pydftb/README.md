@@ -665,9 +665,25 @@ respond (DFTB+ never updates the block populations of a hybrid's response, 3-13 
 the point charges' potential is not added to the perturbation (DFTB+ 25.1 adds it to every
 response, with or without a hybrid; fixed in the development version); the class attributes
 `DFTB._response_blocks_compat` and `DFTB._response_pc_compat` (testing) do as DFTB+.
-Refused: finite frequencies and coordinate derivatives (as DFTB+), k-points and two-component
-spin (DFTB+ 25.1 crashes; milestone M6h-4b).  Details:
+Refused: finite frequencies and coordinate derivatives (as DFTB+; milestones M6h-4c and
+M6h-4d).  Details:
 [`docs/reports/M6h4-hybrid-response.html`](docs/reports/M6h4-hybrid-response.html).
+
+The same analyses work at k-points (collinear spin) and with two-component spin (molecules),
+where DFTB+ 25.1 crashes (milestone M6h-4b): z becomes a Hermitian matrix per (spin, k) or
+spinor block and the products take their real part.  At k-points the exchange is the ground
+state's Born-von Karman convolution of dP(k) = P1(k) / w_k, all right-hand sides at once; the
+two-component populations and first-order Hamiltonian have the four Pauli components, and
+without spin-orbit coupling the global spin rotations (zero modes) are projected out: the
+response without a global rotation, as M6g-3b's.  With no DFTB+ reference the checks are
+pydftb's own: the k-point kernel of a cell without self-image overlaps is its supercell's
+Gamma-point kernel (4.7e-13), the kernels match finite differences of site potentials (k-points
+<= 1.2e-10, two-component 2.5e-10), the two-component polarisability finite fields (<= 5.0e-10
+relative), and without the exchange the responses are M6g's and M6g-3b's.  On coarse grids the
+`Full` kernel and the MatrixBased MinimumImage can make the symmetric SCC solution a saddle
+point (the warning above); the MinimumImage NeighbourBased exchange is not self-adjoint (B22),
+so its k-point responses are refused.  Details:
+[`docs/reports/M6h4b-hybrid-response-complex.html`](docs/reports/M6h4b-hybrid-response-complex.html).
 
 ### Analysis outputs
 

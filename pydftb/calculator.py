@@ -786,9 +786,6 @@ class DFTB:
         if self.casida is not None and self.casida.solver == "arpack":
             why = ("the 'arpack' Casida solver works on the Hermitian Omega, which TD-LC does not "
                    "have: use 'exact' or 'davidson' (DFTB+ uses its Stratmann solver)")
-        elif self.noncolinear and _response_analyses(a):
-            why = ("the two-component response analyses are milestone M6h-4b (DFTB+ 25.1 "
-                   "crashes there)")
         elif self.truncate_sk_range is not None:
             why = "truncate_sk_range is refused (DFTB+ silently ignores it then)"
         elif getattr(self.sk, "selected", False):
@@ -1802,9 +1799,9 @@ class DFTB:
                              "currently unavailable (as DFTB+)")
         if gamma_only:
             return None
-        if _response_analyses(self.analysis):
-            raise ValueError("hybrid functionals: the response analyses at k-points are "
-                             "milestone M6h-4b (DFTB+ 25.1 crashes there)")
+        if (_response_analyses(self.analysis) and self.hybrid.coulomb == "minimum_image"
+                and self.hybrid.screening == "neighbour"):
+            raise ValueError(_hybrid._MIC_NEIGHBOUR_RESPONSE)
         nfold = folding_of(kpts, kw)
         if nfold is None:
             raise ValueError("Hybrid functionals using integration with k-points requires a "

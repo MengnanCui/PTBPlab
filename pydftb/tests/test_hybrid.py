@@ -215,8 +215,6 @@ def test_sk_files_and_the_option():
     ({"casida": {"n_excitations": 3, "solver": "arpack"}}, "Hermitian Omega"),
     ({"analysis": {"polarisability": {"frequencies": [0.1]}}}, "Finite frequency hybrid"),
     ({"analysis": {"response_kernel": {"frequencies": [0.1]}}}, "Finite frequency hybrid"),
-    ({"spin": "noncolinear", "spin_constants": W_HCO, "analysis": {"polarisability": True}},
-     "two-component response analyses are milestone M6h-4b"),
     ({"truncate_sk_range": 10.0}, "truncate_sk_range"),
     ({"force_evaluation": "dynamics"}, "traditional"),
 ])
