@@ -168,6 +168,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             opts["type_switching"] = [switch]
         q_init = options.pop("q_init", None)
         calc = DFTB(sk, **{**opts, **options})
+        if case.gamma_q_in_compat:                        # M6h-3a: DFTB+ 25.1's Gamma q_in
+            calc._dftbp_gamma_q_in = True
         if q_init is None and case.read_charges is not None and "charges_file" in inp:
             q_init = charge_file_data(inp, calc._charge_layout(labels)[0].norb_atom)
         cell = np.array(inp["cell_angstrom"]) / BOHR if periodic else None
@@ -266,12 +268,13 @@ def corrections_ase_options(case: Case) -> dict:
 
 def hybrid_ase_options(case: Case) -> dict:
     """:class:`pydftb.ase_calc.PyDFTB` options of a hybrid case (M6h-1): ``cutoff_reduction``
-    in Angstrom."""
+    (and M6h-3a's ``coulomb_cutoff``, ``gsum_cutoff``) in Angstrom."""
     if case.hybrid is None:
         return {}
     spec = case.hybrid
-    if isinstance(spec, dict) and "cutoff_reduction" in spec:
-        spec = {**spec, "cutoff_reduction": spec["cutoff_reduction"] * BOHR}
+    if isinstance(spec, dict):
+        spec = {k: v * BOHR if k in ("cutoff_reduction", "coulomb_cutoff", "gsum_cutoff")
+                and v is not None else v for k, v in spec.items()}
     return {"hybrid": spec}
 
 
@@ -417,6 +420,8 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
         kpts = None
         if periodic and inp["kpoints"] is not None:
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
+        elif periodic and case.hybrid is not None:      # M6h-3a: restarts need the folding
+            kpts = "gamma_folding"
         extra = (dftbplus.dftb3_block(case.dftb3, set(inp["labels"]))
                  + dftbplus.spin_block(case.spin, set(inp["labels"]), case.shell_resolved)
                  + dftbplus.noncolinear_block(case.noncolinear, set(inp["labels"]),
@@ -885,13 +890,14 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
                  if k in ref]
         dev["e_terms"] = max([dev.get("e_terms", 0.0)] + terms)
         if "forces_fd" in ref and not case.casida:   # M6h-1b: DFTB+'s two-component gamma term
-                                                     # (TD-LC's: _compare_excited, M6h-2)
+                                                     # (TD-LC's: _compare_excited, M6h-2); M6h-3a:
+                                                     # its damped HF derivative (LR table)
             dev["forces"] = float(np.abs(res.forces - np.array(ref["forces_fd"])).max())
-            HybridTerms._dftbp_pauli_gamma = True
+            HybridTerms._dftbp_pauli_gamma = HybridTerms._dftbp_hf_damped_derivative = True
             try:
                 compat = run_pydftb(case, inp, solver=solver, fd_delta=fd_delta, **backend)
             finally:
-                HybridTerms._dftbp_pauli_gamma = False
+                HybridTerms._dftbp_pauli_gamma = HybridTerms._dftbp_hf_damped_derivative = False
             dev["forces_dftbp"] = float(np.abs(compat.forces - np.array(ref["forces"])).max())
     if case.overrides:
         dev.update(_compare_fill(case, ref, res))

@@ -1,5 +1,5 @@
 """Range-separated hybrid functionals (milestone M6h-1): LC and CAM for molecules; with
-non-collinear spin (M6h-1b).
+non-collinear spin (M6h-1b).  Periodic systems at the Gamma point (M6h-3a): test_hybrid_periodic.py.
 
 Comparisons with DFTB+ are the frozen references *_lc*, *_cam*, c2h4_global and the restart
 cases *_lc*_read_charges* in test_reference.py, and h2o_lc_opt, h2o_lc_md, ch3_lc_spin_md and
@@ -229,8 +229,9 @@ def test_refusals_of_the_setup():
     sk = _sk(LC_SET, labels)
     with pytest.raises(ValueError, match="shell-resolved"):
         DFTB(_sk(LC_SET, labels, shell_resolved=True), hybrid="lc")
-    with pytest.raises(ValueError, match="molecules only"):
-        DFTB(sk, hybrid="lc").calculate(labels, pos, np.eye(3) * 20.0, np.ones(3, bool))
+    with pytest.raises(ValueError, match="Gamma point only"):          # M6h-3b
+        DFTB(sk, hybrid="lc", kpts=(np.array([[0.0, 0.0, 0.25]]), np.ones(1))).calculate(
+            labels, pos, np.eye(3) * 20.0, np.ones(3, bool))
     with pytest.raises(ValueError, match="too short"):
         DFTB(sk, hybrid={"screening": "neighbour", "cutoff_reduction": 100.0}).calculate(
             labels, pos)

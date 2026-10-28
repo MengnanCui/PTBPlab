@@ -155,8 +155,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     vector the SCC loop mixes, normally ``DFTBResult.q_in`` (DFTB+'s ``charges.bin``): site
     populations, or with spin [up, down] per shell (two-component: [q, m_x, m_y, m_z] per
     shell; with DFTB+U or onsite corrections the block vector of :mod:`pydftb.blockpot`; with a
-    hybrid functional (molecules) followed by the packed DeltaP_in, whose exchange H_x[DeltaP_in]
-    is added: a fresh build, also for the threshold screening); None = the reference populations.
+    hybrid functional followed by the packed DeltaP_in, whose exchange H_x[DeltaP_in] is added: a
+    fresh build, also for the threshold screening; periodic: at the Gamma point only, M6h-3a);
+    None = the reference populations.
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
     band-structure run; ``scc_fermi`` (Hartree, one value or one per spin) is kept as the
@@ -192,6 +193,11 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     pb = st.pairs
     ones = np.ones(norb)
     gamma = len(k) == 1 and not np.any(k[0])
+    periodic = st.cell is not None and np.any(st.pbc)
+    if hyb_dp is not None and periodic and not gamma:                 # M6h-3a
+        raise ValueError("the states of a periodic hybrid calculation are implemented at the "
+                         "Gamma point only (k-points: milestone M6h-3b)")
+    hyb_cell = (st.cell, pb) if periodic else (None, None)
     solver = engine.solver if not isinstance(engine.solver, str) else SOLVERS[engine.solver]()
     if not hasattr(solver, "eig"):
         solver = BatchedSolver()                      # SP2 has no eigenvectors
@@ -215,7 +221,8 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
             else:
                 h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
             if hyb_dp is not None:                    # + H_x[DeltaP_in] (M6h-1b, molecules)
-                terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real)
+                terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real,
+                                             *hyb_cell)
                 h = h + terms.fock(hyb_dp)[0]
             s2 = so.overlap2(s)
             solver.prepare(s2)
@@ -236,8 +243,9 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
                 h = np.concatenate([h + hs, h - hs])                 # up, down
                 s = np.concatenate([s, s])
-        if hyb_dp is not None:                        # + H_x[DeltaP_in] (M6h-1, molecules)
-            terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real)
+        if hyb_dp is not None:              # + H_x[DeltaP_in] (M6h-1; the Gamma point, M6h-3a)
+            terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real,
+                                         *hyb_cell)
             terms.reset(True)                         # the threshold build takes all of DeltaP
             h = h + np.stack(terms.fock(hyb_dp))
         solver.prepare(s)

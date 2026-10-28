@@ -63,6 +63,8 @@ class ChargeData:
     n_quadrupole: int = 0
     extra: dict = field(default_factory=dict)
     rho: np.ndarray | None = None         # (n_spin, N, N) DeltaP_in of a hybrid run (M6h-1)
+    folding: np.ndarray | None = None     # (3, 4) k-point folding and shifts of a periodic
+                                          # hybrid run, before rho (M6h-3a: the Gamma point)
 
     @property
     def n_spin(self) -> int:
@@ -210,18 +212,22 @@ def read_charges(path, norb_atom, text: bool | None = None) -> ChargeData:
         blocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
     if iblock:
         iblocks = _read_blocks(rd, norb_atom, n_atom_file, n_spin)
-    dmat = None
+    dmat = folding = None
     if rho:                                      # hybrid functionals (M6h-1)
-        if kpoint_info:
-            raise ValueError("the charge file has k-point density matrices (periodic hybrid "
-                             "calculations, milestone M6h-3), which pydftb does not read")
+        if kpoint_info:                          # periodic (M6h-3a): coeffsAndShifts, in order
+            rd.start()
+            folding = np.array(rd.reals(12), float).reshape(4, 3).T
+            if not (np.array_equal(folding[:, :3], np.eye(3)) and not folding[:, 3].any()):
+                raise ValueError("the charge file has k-point density matrices (a periodic "
+                                 "hybrid calculation beyond the Gamma point, milestone M6h-3b), "
+                                 "which pydftb does not read")
         if n_atom_file != len(norb_atom):
             raise ValueError("the charge file's density matrix needs all atoms of the system")
         n = int(edges[-1])                       # deltaRhoIn(kk, jj, ii), one value per record
         rd.start()
         dmat = rd.reals(n_spin * n * n).reshape(n_spin, n, n).transpose(0, 2, 1).copy()
     return ChargeData(q, norb_atom, blocks, iblocks, checksum, version, multipolar, rho,
-                      kpoint_info, n_dip, n_quad, rho=dmat)
+                      kpoint_info, n_dip, n_quad, rho=dmat, folding=folding)
 
 
 def _read_blocks(rd, norb_atom, n_atom_file, n_spin) -> list:
@@ -243,14 +249,18 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
     computed from the populations."""
     if text is None:
         text = str(path).endswith(".dat")
-    if data.kpoint_info or data.n_dipole or data.n_quadrupole:
-        raise ValueError("pydftb writes only populations, blocks and a molecule's density matrix")
+    if data.n_dipole or data.n_quadrupole or (data.kpoint_info and data.folding is None):
+        raise ValueError("pydftb writes only populations, blocks and a density matrix (of a "
+                         "molecule or the Gamma point)")
     if data.density_matrix and data.rho is None:
         raise ValueError("density_matrix is set but there is no density matrix (rho)")
+    if data.folding is not None and data.rho is None:
+        raise ValueError("the k-point folding record goes with a density matrix (DFTB+ writes "
+                         "it before one)")
     norb = np.asarray(data.norb_atom, int)
     edges = np.concatenate([[0], np.cumsum(norb)])
-    head_flags = [data.blocks is not None, data.iblocks is not None, data.rho is not None, False,
-                  True]
+    head_flags = [data.blocks is not None, data.iblocks is not None, data.rho is not None,
+                  data.folding is not None, True]
     checksum = data.sums()
     rows = []                                   # (kind, values) records in order
     rows.append(("i", [RESTART_FORMAT]))
@@ -266,6 +276,8 @@ def write_charges(path, data: ChargeData, text: bool | None = None) -> None:
             for a in range(data.n_atom):
                 for ii in range(int(norb[a])):
                     rows.append(("r", np.asarray(blocks[a][s, :, ii], float)))
+    if data.folding is not None:                # periodic hybrids (M6h-3a): coeffsAndShifts
+        rows.append(("r", np.asarray(data.folding, float).ravel(order="F")))
     if data.rho is not None:                    # column by column, one value per record
         rho = np.asarray(data.rho, float)
         if rho.shape != (data.n_spin, edges[-1], edges[-1]):

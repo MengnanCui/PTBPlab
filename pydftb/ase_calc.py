@@ -13,7 +13,8 @@ from dataclasses import replace
 
 import numpy as np
 from ase import units
-from ase.calculators.calculator import (CalculationFailed, Calculator, all_changes,
+from ase.calculators.calculator import (CalculationFailed, Calculator,
+                                        PropertyNotImplementedError, all_changes,
                                         kptdensity2monkhorstpack)
 
 from .analysis import Analysis
@@ -41,12 +42,18 @@ def _fermi_au(value):
     return float(v) if v.ndim == 0 else tuple(float(x) for x in v)
 
 
+_HYBRID_LENGTHS = ("cutoff_reduction", "coulomb_cutoff", "gsum_cutoff")
+
+
 def _hybrid_au(spec):
-    """``hybrid`` with ``cutoff_reduction`` from Angstrom to Bohr (M6h-1)."""
-    if isinstance(spec, dict) and "cutoff_reduction" in spec:
-        return {**spec, "cutoff_reduction": float(spec["cutoff_reduction"]) / BOHR}
+    """``hybrid`` with ``cutoff_reduction`` (M6h-1), ``coulomb_cutoff`` and ``gsum_cutoff``
+    (M6h-3a) from Angstrom to Bohr."""
+    if isinstance(spec, dict):
+        return {k: (None if v is None else float(v) / BOHR) if k in _HYBRID_LENGTHS else v
+                for k, v in spec.items()}
     if isinstance(spec, Hybrid):
-        return replace(spec, cutoff_reduction=spec.cutoff_reduction / BOHR)
+        return replace(spec, **{k: getattr(spec, k) / BOHR for k in _HYBRID_LENGTHS
+                                if getattr(spec, k) is not None})
     return spec
 
 
@@ -181,10 +188,11 @@ class PyDFTB(Calculator):
     Milestone M6f-5: ``selected_shells`` (DFTB+ ``SelectedShells``), a label's shells taken from
     several SK files, as in :class:`pydftb.ParamSet`.
     Milestone M6h-1: ``hybrid`` ("lc", "cam", a dict or a :class:`pydftb.Hybrid`, as in
-    :class:`pydftb.DFTB`; ``cutoff_reduction`` in Angstrom): a range-separated hybrid functional
-    for molecules, with
+    :class:`pydftb.DFTB`; ``cutoff_reduction``, ``coulomb_cutoff`` and ``gsum_cutoff`` in
+    Angstrom): a range-separated hybrid functional for molecules and (M6h-3a) periodic systems
+    at the Gamma point, with
     SK files that have a ``RangeSep`` section; ``reuse_charges`` then carries the density matrix
-    between geometry steps, as DFTB+ does.
+    between geometry steps, as DFTB+ does.  There is no stress with one (DFTB+ has none either).
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole", "energies"]
@@ -360,6 +368,10 @@ class PyDFTB(Calculator):
         a = self.atoms
         periodic = bool(a.pbc.any())
         calc, labels, sk = self._engine(a)
+        if periodic and "stress" in properties and calc.hybrid is not None:      # M6h-3a
+            raise PropertyNotImplementedError(
+                "pydftb: no stress with a hybrid functional (DFTB+ refuses lattice optimisation "
+                "and barostats with one)")
         # As in DFTB+, periodic force runs also give the stress (about 1 % extra
         # time), so ASE cell filters, which ask for forces and then stress, need one run.
         want_forces = "forces" in properties or (periodic and "stress" in properties)
@@ -398,7 +410,8 @@ class PyDFTB(Calculator):
         if self.raw is None:
             raise RuntimeError("no calculation to write the charges of")
         calc, labels, _ = self._engine(self.atoms)
-        write_charges(path, calc.charge_data(labels, self.raw), text)
+        write_charges(path, calc.charge_data(labels, self.raw,
+                                             periodic=bool(self.atoms.pbc.any())), text)
 
     def evaluate(self, atoms, params=None, requires_grad=(), mode: str = "hf",
                  forces: bool = False, stress: bool = False, q_init=None):

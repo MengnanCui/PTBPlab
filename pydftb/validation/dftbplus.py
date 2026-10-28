@@ -132,14 +132,26 @@ def truncate_block(spec) -> str:
             f"    HardCutOff = {'Yes' if spec.get('hard_cutoff', True) else 'No'}\n  }}\n")
 
 
+COULOMB_MATRIX = {"truncated": "Truncated", "damped": "TruncatedAndDamped", "full": "Full",
+                  "minimum_image": "MinimumImage"}
+
+
 def hybrid_block(spec) -> str:
     """Hamiltonian lines ``Hybrid`` (M6h-1) of pydftb's ``hybrid`` option: "lc", "cam" or
     {"type", "screening" ("matrix", "neighbour", "threshold"), "threshold", "cutoff_reduction"
-    (Bohr)}; DFTB+'s default screening (MatrixBased) is written out."""
+    (Bohr)}; DFTB+'s default screening (MatrixBased) is written out.  M6h-3a: a
+    ``CoulombMatrix`` block when "coulomb", "coulomb_cutoff" or "gsum_cutoff" (Bohr) differ from
+    the defaults (Truncated, DFTB+'s cutoffs)."""
     if not spec:
         return ""
     from ..hybrid import Hybrid
     h = Hybrid.make(spec)
+    coulomb = ""
+    if h.coulomb != "truncated" or h.coulomb_cutoff is not None or h.gsum_cutoff is not None:
+        kids = "".join(f"      {key} [Bohr] = {_f(v)}\n"
+                       for key, v in (("CoulombCutoff", h.coulomb_cutoff),
+                                      ("GSummationCutoff", h.gsum_cutoff)) if v is not None)
+        coulomb = f"    CoulombMatrix = {COULOMB_MATRIX[h.coulomb]} {{\n{kids}    }}\n"
     red = f"      CutoffReduction [Bohr] = {_f(h.cutoff_reduction)}\n"
     screening = {
         "matrix": "MatrixBased {}\n",
@@ -148,7 +160,7 @@ def hybrid_block(spec) -> str:
                       f"      Threshold = {_f(1e-6 if h.threshold is None else h.threshold)}\n"
                       + red + "    }\n"),
     }[h.screening]
-    return f"  Hybrid = {h.kind.upper()} {{\n    Screening = {screening}  }}\n"
+    return f"  Hybrid = {h.kind.upper()} {{\n    Screening = {screening}{coulomb}  }}\n"
 
 
 def dftb3_block(opts, labels=None) -> str:
@@ -923,7 +935,8 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
     ``forces=False`` turns off PrintForces; ``autotest`` writes autotest.tag (M6d);
     ``extra_options``: lines of the Options block (M6f); ``fermi``: see :func:`filling_block`;
     ``selected_shells``: {label: [(file label, shell letters), ...]} (M6f-5): SelectedShells
-    and every pair's files listed (the first label's group outer, as DFTB+ reads them)."""
+    and every pair's files listed (the first label's group outer, as DFTB+ reads them);
+    ``kpts="gamma_folding"`` (M6h-3a): the Gamma point as an identity SupercellFolding."""
     sel = selected_shells or {}
     maxl = "\n".join(f'    {e} = "{"spdf"[l]}"' if e not in sel else
                      f"    {e} = SelectedShells {{ {' '.join(chr(34) + s + chr(34) for _, s in sel[e])} }}"
@@ -931,6 +944,11 @@ def make_hsd(skdir, max_l, periodic, kpts=None, scc=True, filling=("fermi", 0.0)
     kblock = ""
     if periodic and klines is not None:
         kblock = klines_block(klines)
+    elif periodic and isinstance(kpts, str) and kpts == "gamma_folding":
+        # M6h-3a: the Gamma point as a supercell folding; DFTB+ 25.1 stops on a periodic hybrid
+        # restart (ReadInitialCharges) with the Gamma point given as a k-point
+        kblock = ("  KPointsAndWeights = SupercellFolding {\n    1 0 0\n    0 1 0\n    0 0 1\n"
+                  "    0.0 0.0 0.0\n  }\n")
     elif periodic:
         if kpts is None:
             kpts = (np.zeros((1, 3)), np.ones(1))

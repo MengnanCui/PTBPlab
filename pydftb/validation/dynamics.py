@@ -176,6 +176,16 @@ DYN_CASES = [
     DynCase("h2co_tdlc_s2_md", "h2co_tdlc_exc_forces", "md", temperature=300.0, steps=20,
             tol={**TOL_MD, "n_scc": 0},
             note="second excited singlet with TD-LC, 20 steps; DeltaP_in reused"),
+    # M6h-3a: the Gamma point of a periodic cell, DeltaP_in carried from step to step
+    DynCase("co2_crystal_lc_md", "co2_crystal_lc", "md", temperature=300.0, steps=20,
+            tol={**TOL_MD, "energy": 1e-7},
+            note="LC in the dry-ice cell at the Gamma point (DFTB+'s default truncated "
+                 "exchange).  The rattled crystal is far from this parameter set's minimum: the "
+                 "kinetic energy rises to 0.6 Ha in 10 fs, so ASE's unit constants (1e-7 off "
+                 "DFTB+'s) give 5.7e-8 Ha; the Verlet in DFTB+'s units agrees to 7.8e-11 Ha"),
+    DynCase("diamond8_lc_opt", "diamond8_lc", "opt", tol=TOL_OPT,
+            note="the rattled diamond cell relaxes back (fixed lattice: no stress with a "
+                 "hybrid)"),
 ]
 DYN_BY_NAME = {c.name: c for c in DYN_CASES}
 
@@ -330,6 +340,8 @@ def run_dftbplus(case: DynCase, inp: dict, threads: int = 1) -> dict:
     base = CASES_BY_NAME[case.base]
     periodic = inp["cell_angstrom"] is not None
     kpts = None if inp["kpoints"] is None else (np.array(inp["kpoints"]), np.array(inp["kweights"]))
+    if periodic and kpts is None and base.hybrid is not None:      # M6h-3a, as refgen
+        kpts = "gamma_folding"
     if case.kind == "opt":
         driver = dftbplus.opt_driver(case.optimiser, case.lattice, case.grad_elem,
                                      isotropic=case.isotropic)

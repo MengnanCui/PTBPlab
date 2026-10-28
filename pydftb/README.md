@@ -495,7 +495,8 @@ H5 and the halogen correction recognise elements, DFTB+ species names (type labe
 
 ### Range-separated hybrid functionals (LC, CAM)
 
-DFTB+'s `Hybrid = LC {}` and `CAM {}` for molecules (milestone M6h-1; NumPy engine only).  The
+DFTB+'s `Hybrid = LC {}` and `CAM {}` for molecules (milestone M6h-1; NumPy engine only) and
+periodic systems at the Gamma point (M6h-3a, below).  The
 SK files hold the functional: their `RangeSep` section (`LC omega` or `CAM omega alpha beta`,
 as in DFTB+'s ob2 files) gives omega, alpha and beta; the option picks DFTB+'s type and
 screening:
@@ -519,7 +520,7 @@ D3/D4, fields, point charges, GBSA, band states (`states()`) and the dynamics dr
 files with a `RangeSep` section need `hybrid=` (DFTB+ needs the `Hybrid` block), or
 `hybrid=False` to ignore the section.  Refused as in DFTB+: no SCC, spin-orbit coupling,
 shell-resolved SCC, the on-site third order, Thresholded with spin, atom-resolved energies,
-coordinate derivatives, XL-BOMD; not yet in pydftb: periodic systems (M6h-3), the response
+coordinate derivatives, XL-BOMD; not yet in pydftb: k-points (M6h-3b), the response
 analyses (M6h-4), torch and `pydftb.autodiff`.  Details:
 [`docs/reports/M6h1-hybrid-molecules.html`](docs/reports/M6h1-hybrid-molecules.html).
 
@@ -546,6 +547,34 @@ DFTB+'s input populations after mixing take only the lower left spin block (othe
 while the spins turn; the same result); DFTB+'s forces drop the imaginary parts of DeltaP's
 Pauli components in the gamma term (1.1e-5 Ha/Bohr off in a non-collinear state).  Details:
 [`docs/reports/M6h1b-hybrid-noncollinear.html`](docs/reports/M6h1b-hybrid-noncollinear.html).
+
+Periodic systems at the Gamma point (milestone M6h-3a; DFTB+ with the Gamma point as its only
+k-point) take the same options and DFTB+'s `CoulombMatrix`:
+
+```python
+calc = DFTB(sk, hybrid="lc")                    # a cell, no kpts: Gamma, DFTB+'s defaults
+DFTB(sk, hybrid={"type": "cam", "coulomb": "damped", "coulomb_cutoff": 8.0, "gsum_cutoff": 16.0})
+r = calc.calculate(labels, pos, cell, forces=True)   # no stress (DFTB+ has none either)
+```
+
+The exchange is the molecular one with S(Gamma) (the image-folded overlap) and the truncated
+Coulomb kernel summed over lattice translations: gamma is zero from `coulomb_cutoff` on
+("truncated"), or also smoothly damped over its last Bohr ("damped", DFTB+'s
+TruncatedAndDamped); by default the cutoff is half the smallest plane spacing and the
+summation radius twice that, as DFTB+ (a molecule refuses these settings: DFTB+ stops on
+its CoulombMatrix).  P0 = q0 / S_mumu(Gamma).  Matrix and neighbour screening (the neighbour
+screening's forces use the reduced overlap, as DFTB+'s); refused as DFTB+: Thresholded,
+non-collinear spin, Casida, CoulombMatrix Full and MinimumImage at Gamma;
+a stress request is an error (`PyDFTB` raises ASE's `PropertyNotImplementedError`).  Charge
+files carry DFTB+'s k-point folding record before DeltaP_in.  Differences from DFTB+ 25.1, where
+pydftb gives the consistent result: with the damped kernel and an HF part (CAM, global) DFTB+'s
+forces take the HF derivative from the long-range table (7e-7 to 6e-6 Ha/Bohr off); in a
+low-symmetry cell DFTB+'s input populations drop half of the intra-atomic off-diagonal terms
+of S(Gamma) (1e-5 e in the charges); a restart with the Gamma point given as a k-point stops
+DFTB+ (an identity SupercellFolding works); a molecule reading a Gamma-point charge file takes
+DeltaP_in one value off.  DFTB+'s default EwaldTolerance (1e-9) moves its energies by about
+1e-7: the references use 1e-12.  Details:
+[`docs/reports/M6h3a-hybrid-gamma.html`](docs/reports/M6h3a-hybrid-gamma.html).
 
 ### Analysis outputs
 

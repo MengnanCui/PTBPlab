@@ -25,8 +25,17 @@ The SCC mixes DeltaP (:meth:`pydftb.calculator.DFTB._scc_hybrid`); the forces ta
 for the gamma derivatives).  Screening as DFTB+'s molecular algorithms: ``matrix`` (dense,
 exact; DFTB+'s default MatrixBased), ``neighbour`` (S blocks beyond the largest SK cutoff minus
 ``cutoff_reduction`` left out; NeighbourBased) and ``threshold`` (DFTB+'s incremental
-Thresholded build).  The forces are always the exact ones, as DFTB+'s.  Molecules only (periodic
-systems: milestone M6h-3).
+Thresholded build).  The forces are always the exact ones, as DFTB+'s.
+
+Periodic systems at the Gamma point (milestone M6h-3a; DFTB+ with one k-point, Gamma): the same
+H_x with S -> S(Gamma), the image-folded overlap (NeighbourBased: of the pairs within the reduced
+cutoff), gamma -> gt(A, B) = sum_g gamma_c(|R_A - R_B - g|) over DFTB+'s parallelepiped of
+lattice translations (|n_i| <= floor(Rg / h_i) + 1, h_i the plane spacings) with the truncated
+Coulomb kernel gamma_c (``coulomb="truncated"``: zero from the cutoff Rc on; ``"damped"``: a
+quintic on (Rc - 1 Bohr, Rc) matching gamma's value, first and second derivative), and P0 =
+diag(q0 / S_mumu(Gamma)).  Defaults as DFTB+: Rc half the smallest plane spacing, Rg = 2 Rc.
+The forces are the energy's derivative (NeighbourBased: with the reduced overlap, as DFTB+'s
+Gamma-point gradient).  k-points: milestone M6h-3b.
 
 TD-LC (milestone M6h-2, :mod:`pydftb.casida`): the Mulliken exchange operator
 K^x[M] = 1/4 :func:`four_terms` (S, G, M) of any square M (K^x[M^T] = K^x[M]^T) gives the
@@ -41,12 +50,17 @@ from dataclasses import dataclass
 import numpy as np
 
 from .coulomb import _GL_S, _GL_W, NEAR_TAU, _short_near
+from .hamiltonian import fold
 
 TOL_SAME_DIST = 1.0e-5          # DFTB+ tolSameDist (Bohr): on-site below this distance
 MIN_HUB_DIFF = 0.3125e-5        # DFTB+ MinHubDiff, on tau = 3.2 U: "equal U" below this
 CAM_EPS = 100 * np.finfo(float).eps   # DFTB+ leaves out an alpha or beta term below this
 SCREENINGS = ("matrix", "neighbour", "threshold")
 KINDS = ("lc", "cam")
+COULOMBS = ("truncated", "damped", "full", "minimum_image")   # DFTB+ CoulombMatrix (periodic)
+DIST_FUDGE = 1.0                # DFTB+ distFudge (Bohr): the damping region is (Rc - 1, Rc)
+LR_DD_DELTA = 1e-8              # DFTB+'s central difference of gamma_LR' at the damping start
+IMAGE_CHUNK = 2 ** 20           # atom pairs x translations per block of the lattice sums
 
 
 @dataclass(frozen=True)
@@ -56,11 +70,18 @@ class Hybrid:
     ``kind``: "lc" needs LC SK files; "cam" takes LC, global (beta = 0) and CAM files.
     ``screening``: "matrix" (DFTB+'s default MatrixBased), "neighbour" (NeighbourBased) or
     "threshold" (Thresholded); ``threshold`` (1e-6) of the latter; ``cutoff_reduction`` (Bohr,
-    0) of the latter two: atom pairs beyond the largest SK cutoff minus it have no exchange."""
+    0) of the latter two: atom pairs beyond the largest SK cutoff minus it have no exchange.
+    Periodic systems only (DFTB+ ``CoulombMatrix``, milestone M6h-3): ``coulomb`` "truncated"
+    (default) or "damped" (TruncatedAndDamped); ``coulomb_cutoff`` (Bohr, None: half the
+    smallest plane spacing) and ``gsum_cutoff`` (Bohr, None: twice the former), as DFTB+'s
+    defaults.  A molecule refuses them (DFTB+ stops on its unread CoulombMatrix)."""
     kind: str = "lc"
     screening: str = "matrix"
     threshold: float = 1e-6
     cutoff_reduction: float = 0.0
+    coulomb: str = "truncated"
+    coulomb_cutoff: float | None = None
+    gsum_cutoff: float | None = None
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -76,6 +97,12 @@ class Hybrid:
             raise ValueError("the matrix screening has no cutoff_reduction (DFTB+ MatrixBased)")
         if not self.threshold >= 0.0:
             raise ValueError("the hybrid screening threshold must not be negative")
+        if self.coulomb not in COULOMBS:
+            raise ValueError(f"hybrid coulomb must be one of {COULOMBS}, not {self.coulomb!r}")
+        for name in ("coulomb_cutoff", "gsum_cutoff"):
+            v = getattr(self, name)
+            if v is not None and not v > 0.0:
+                raise ValueError(f"hybrid {name} must be positive (Bohr)")
 
     @classmethod
     def make(cls, spec) -> "Hybrid | None":
@@ -89,14 +116,15 @@ class Hybrid:
             d = dict(spec)
             if "type" in d:
                 d["kind"] = d.pop("type")
-            unknown = set(d) - {"kind", "screening", "threshold", "cutoff_reduction"}
+            unknown = set(d) - {"kind", "screening", "threshold", "cutoff_reduction", "coulomb",
+                                "coulomb_cutoff", "gsum_cutoff"}
             if unknown:
                 raise ValueError(f"hybrid: unknown keys {sorted(unknown)} (use 'type', "
-                                 "'screening', 'threshold', 'cutoff_reduction')")
-            if "kind" in d:
-                d["kind"] = str(d["kind"]).lower()
-            if "screening" in d:
-                d["screening"] = str(d["screening"]).lower()
+                                 "'screening', 'threshold', 'cutoff_reduction', 'coulomb', "
+                                 "'coulomb_cutoff', 'gsum_cutoff')")
+            for key in ("kind", "screening", "coulomb"):
+                if key in d:
+                    d[key] = str(d[key]).lower()
             return cls(**d)
         raise TypeError(f"hybrid must be None, 'lc', 'cam', a dict or a Hybrid, not {spec!r}")
 
@@ -259,6 +287,44 @@ def dgamma_lr(ua, ub, omega, r):
     return out
 
 
+def _ddy(ta, tb, r, w):
+    """getddYGammaSubPart: d^2/dr^2 of :func:`_y`."""
+    prefac = ta * ta / (ta ** 2 - w ** 2)
+    tmp = prefac * prefac / (ta * ta - tb * tb) ** 3
+    poly = tb ** 6 - 3.0 * ta * ta * tb ** 4 + 2.0 * w * w * tb ** 4
+    dtmp = tmp * poly / r ** 2
+    ddtmp = -2.0 * tmp * poly / r ** 3
+    tmp = tmp * poly / r
+    tmp2 = ta * tb ** 4 * 0.5 * prefac / (tb * tb - ta * ta) ** 2 - tmp
+    e = np.exp(-ta * r)
+    return (ddtmp - tmp / r * ta) * e - (dtmp - tmp2 * ta) * ta * e
+
+
+def ddgamma_hf(ua, ub, r):
+    """d^2 gamma_HF / dr^2 (DFTB+ getddHfAnalyticalGammaValue_workhorse; 0 on site), for the
+    damped Coulomb kernel (M6h-3a); for nearly equal U the central difference of
+    :func:`dgamma_hf` (its Hermite-Genocchi form; DFTB+'s closed form has no precision there)."""
+    ta, tb, r, on, eq, near, ne = _branches(ua, ub, r)
+    out = np.zeros(r.shape)
+    if near.any():
+        a, b, d = ta[near] / 3.2, tb[near] / 3.2, r[near]
+        h = 1e-5 * d
+        out[near] = (dgamma_hf(a, b, d + h) - dgamma_hf(a, b, d - h)) / (2.0 * h)
+    if eq.any():
+        t, d = 0.5 * (ta[eq] + tb[eq]), r[eq]
+        e = np.exp(-t * d)
+        ddtmp = ((2.0 * t ** 3 / 48.0 + 2.0 / d ** 3
+                  - t * (2.0 * d * t ** 3 / 48.0 + 0.1875 * t ** 2 - 1.0 / d ** 2)) * e
+                 + (d ** 2 * t ** 3 / 48.0 + 0.1875 * d * t ** 2 + 0.6875 * t + 1.0 / d)
+                 * t ** 2 * e
+                 - (2.0 * d * t ** 3 / 48.0 + 0.1875 * t ** 2 - 1.0 / d ** 2) * t * e)
+        out[eq] = 2.0 / d ** 3 - ddtmp
+    if ne.any():
+        a, b, d = ta[ne], tb[ne], r[ne]
+        out[ne] = 2.0 / d ** 3 - _ddy(a, b, d, 0.0) - _ddy(b, a, d, 0.0)
+    return out
+
+
 def four_terms(s, g, d):
     """(S D S) o G + ((S D) o G) S + S (D o G) S + S ((D S) o G): four times the Mulliken exchange
     operator K^x[D]_munu = sum_kl (mu kappa|nu lambda) D_kl (G the orbital-level gamma), for any
@@ -309,6 +375,90 @@ def dgamma_cam(ua, ub, r, omega, alpha, beta):
     return out
 
 
+# ---- periodic systems (milestone M6h-3a) -----------------------------------------------------
+def poly5zero(y0, y1, y2, d, rd, rc, derivative: bool = False):
+    """DFTB+ poly5zero: the quintic on (rd, rc) with value, first and second derivative y0, y1,
+    y2 at rd and zero value, first and second derivative at rc; with ``derivative`` its d/dd."""
+    w = rc - rd
+    t = (np.asarray(d, float) - rd) / w
+    f, e, q = y0, y1 * w, 0.5 * y2 * w * w
+    s0, s1, s2 = -(q + e + f), -(2.0 * q + e), -2.0 * q
+    a = 0.5 * (s2 + 12.0 * s0 - 6.0 * s1)
+    b = s1 - 3.0 * s0 - 2.0 * a
+    c = s0 - a - b
+    if derivative:
+        return (5.0 * a * t ** 4 + 4.0 * b * t ** 3 + 3.0 * c * t ** 2 + 2.0 * q * t + e) / w
+    return a * t ** 5 + b * t ** 4 + c * t ** 3 + q * t ** 2 + e * t + f
+
+
+def _damping_tables(ua, ub, omega, rd):
+    """(LR, HF) value, first and second derivative at the damping start rd (DFTB+: the LR second
+    derivative a central difference of the analytical first, the HF one analytical)."""
+    dl = LR_DD_DELTA
+    lr = (float(gamma_lr(ua, ub, omega, rd)), float(dgamma_lr(ua, ub, omega, rd)),
+          float((dgamma_lr(ua, ub, omega, rd + dl) - dgamma_lr(ua, ub, omega, rd - dl))
+                / (2.0 * dl)))
+    hf = (float(gamma_hf(ua, ub, rd)), float(dgamma_hf(ua, ub, rd)),
+          float(ddgamma_hf(ua, ub, rd)))
+    return lr, hf
+
+
+def coulomb_gamma(ua, ub, r, omega, alpha, beta, rc, kind, derivative=False, dftbp_hf=False):
+    """gamma (or with ``derivative`` d gamma/dr) of one pair of Hubbard values with DFTB+'s
+    truncated Coulomb kernel ``kind`` (M6h-3a): "truncated" zero from ``rc`` on; "damped" also
+    :func:`poly5zero` on (rc - 1, rc).  ``dftbp_hf`` (validation only): the HF part's derivative
+    in the damping region from the LR table, as DFTB+ 25.1
+    (getdHfTruncatedAndDampedGammaValue)."""
+    r = np.asarray(r, float)
+    out = (dgamma_cam if derivative else gamma_cam)(ua, ub, r, omega, alpha, beta)
+    if kind == "damped":
+        rd = rc - DIST_FUDGE
+        win = (r > rd) & (r < rc)
+        if win.any():
+            lr, hf = _damping_tables(ua, ub, omega, rd)
+            part = np.zeros(int(win.sum()))
+            if abs(beta) > CAM_EPS:
+                part = part + beta * poly5zero(*lr, r[win], rd, rc, derivative)
+            if abs(alpha) > CAM_EPS:
+                tab = lr if (derivative and dftbp_hf) else hf
+                part = part + alpha * poly5zero(*tab, r[win], rd, rc, derivative)
+            out = np.array(out, float)
+            out[win] = part
+    return np.where(r < rc, out, 0.0)
+
+
+def plane_spacings(cell) -> np.ndarray:
+    """The distances between the lattice planes (cell rows: the lattice vectors)."""
+    cell = np.asarray(cell, float)
+    vol = abs(np.linalg.det(cell))
+    return np.array([vol / np.linalg.norm(np.cross(cell[(i + 1) % 3], cell[(i + 2) % 3]))
+                     for i in range(3)])
+
+
+def default_coulomb_cutoff(cell) -> float:
+    """DFTB+'s default CoulombCutoff of a Gamma-point run: half the smallest plane spacing (the
+    radius of the largest sphere about the cell's centre within it)."""
+    return 0.5 * float(plane_spacings(cell).min())
+
+
+def lattice_translations(cell, rg) -> np.ndarray:
+    """DFTB+ getCellTranslations: the lattice vectors n.cell with |n_i| <= floor(rg / h_i) + 1
+    (a parallelepiped), Cartesian, (n_g, 3)."""
+    nmax = np.floor(rg / plane_spacings(cell)).astype(int) + 1
+    n = np.array(np.meshgrid(*[np.arange(-m, m + 1) for m in nmax], indexing="ij"))
+    return n.reshape(3, -1).T @ np.asarray(cell, float)
+
+
+def dftbp_dense_mulliken(dp, s, orb_atom) -> np.ndarray:
+    """DFTB+ denseMullikenReal on the lower triangle of ``dp`` (validation only, M6h-3a): per
+    orbital, every block below the diagonal by its column sums and, for two different atoms, by
+    its row sums; the atoms' own blocks only by column sums, so half of their off-diagonal terms
+    is lost when S(Gamma) has them (DFTB+'s Gamma-point q_in of a hybrid run)."""
+    low = np.tril(dp) * s
+    oa = np.asarray(orb_atom)
+    return low.sum(axis=0) + (low * (oa[:, None] > oa[None, :])).sum(axis=1)
+
+
 # ---- the terms of one geometry --------------------------------------------------------------
 class HybridTerms:
     """The geometry-dependent parts of the exchange (``_Setup.hybrid``) and its Fock builds.
@@ -317,30 +467,29 @@ class HybridTerms:
     Hubbard U of every atom; ``smat``: the dense real overlap; ``q0_orb``: the reference
     population of every orbital; ``sk_cutoff``: the largest SK cutoff (the neighbour and
     threshold screening's CAM cutoff is that minus the reduction); ``pauli``: non-collinear
-    spin (M6h-1b, the matrix screening): the densities are one 2N x 2N spinor matrix."""
+    spin (M6h-1b, the matrix screening): the densities are one 2N x 2N spinor matrix.
+    Periodic, at the Gamma point (M6h-3a): ``cell`` (Bohr, rows the lattice vectors), ``pairs``
+    the pair blocks with their images, ``smat`` then S(Gamma)."""
 
     # validation only (M6h-1b): the two-component gamma term as DFTB+'s addCamGradientsMatrix_pauli,
     # from the real parts of DeltaP's Pauli components (pauli2components): not the energy's
     # derivative when the components have imaginary parts
     _dftbp_pauli_gamma = False
+    # validation only (M6h-3a): the damped HF part's derivative from the LR table, as DFTB+ 25.1
+    # (getdHfTruncatedAndDampedGammaValue): not the energy's derivative with alpha != 0
+    _dftbp_hf_damped_derivative = False
 
     def __init__(self, spec: Hybrid, params, u_atom, pos, orb_atom, smat, q0_orb, sk_cutoff,
-                 pauli: bool = False):
+                 pauli: bool = False, cell=None, pairs=None):
         self.spec = spec
         self.pauli = pauli
         self.kind, self.omega, self.alpha, self.beta = params
         pos = np.asarray(pos, float)
         nat = len(pos)
-        self.vec = pos[:, None, :] - pos[None, :, :]                 # R_A - R_B
-        self.dist = np.sqrt((self.vec ** 2).sum(-1))
         u = np.asarray(u_atom, float)
-        ua, ub = np.broadcast_arrays(u[:, None], u[None, :])
-        self.g_atom = gamma_cam(ua, ub, self.dist, self.omega, self.alpha, self.beta)
-        self.dg_atom = dgamma_cam(ua, ub, self.dist, self.omega, self.alpha, self.beta)
         self.orb_atom = np.asarray(orb_atom)
         self.offsets = np.concatenate([[0], np.cumsum(np.bincount(self.orb_atom,
                                                                   minlength=nat))])
-        self.G = self.g_atom[np.ix_(self.orb_atom, self.orb_atom)]
         self.S = np.asarray(smat, float)
         self.q0_orb = np.asarray(q0_orb, float)
         self.n = len(self.S)
@@ -349,12 +498,65 @@ class HybridTerms:
         if cam_cutoff < 0.0:
             raise ValueError("Screening cutoff for hybrid xc-functional neighbours too short "
                              "(as DFTB+)")
-        self.neighbours = self.dist < cam_cutoff
-        mask = self.neighbours[np.ix_(self.orb_atom, self.orb_atom)]
-        self.S_cam = self.S * mask
+        self._periodic = cell is not None
+        self._cam_cutoff = cam_cutoff
+        if self._periodic:
+            self._periodic_setup(np.asarray(cell, float), pos, u, pairs)
+        else:
+            self.vec = pos[:, None, :] - pos[None, :, :]                 # R_A - R_B
+            self.dist = np.sqrt((self.vec ** 2).sum(-1))
+            ua, ub = np.broadcast_arrays(u[:, None], u[None, :])
+            self.g_atom = gamma_cam(ua, ub, self.dist, self.omega, self.alpha, self.beta)
+            self.dg_atom = dgamma_cam(ua, ub, self.dist, self.omega, self.alpha, self.beta)
+            self.neighbours = self.dist < cam_cutoff
+            mask = self.neighbours[np.ix_(self.orb_atom, self.orb_atom)]
+            self.S_cam = self.S * mask
+        self.G = self.g_atom[np.ix_(self.orb_atom, self.orb_atom)]
         self._h_prev = None                    # the threshold screening's state
         self._dp_prev = None
         self._t_max = None
+
+    def _periodic_setup(self, cell, pos, u, pairs):
+        """The Gamma point of a periodic cell (M6h-3a, as DFTB+ with one k-point): gt over the
+        lattice translations with the truncated kernel, the reduced S(Gamma) of NeighbourBased
+        (the pairs within the CAM cutoff), P0 = q0 / S_mumu(Gamma)."""
+        spec = self.spec
+        if spec.coulomb not in ("truncated", "damped"):
+            raise ValueError("Hybrid functionals don't yet support Gamma point calculations for "
+                             "CoulombMatrix types other than 'Truncated' or 'Truncated+Damping' "
+                             "(as DFTB+)")
+        rc = (spec.coulomb_cutoff if spec.coulomb_cutoff is not None
+              else default_coulomb_cutoff(cell))
+        if rc - DIST_FUDGE <= 0.0:                  # DFTB+ checks it whatever the kernel
+            raise ValueError("The beginning of the damping region of the truncated Coulomb "
+                             "kernel must be at a positive radius (as DFTB+; the Coulomb cutoff "
+                             f"is {rc:.4f} Bohr)")
+        self.cell, self.rc = cell, rc
+        self.rg = spec.gsum_cutoff if spec.gsum_cutoff is not None else 2.0 * rc
+        self.gvec = lattice_translations(cell, self.rg)
+        self.pos, self.u = pos, u
+        self.g_atom = np.zeros((len(pos), len(pos)))
+        for ia, ib, v, d in self._image_blocks():
+            g = coulomb_gamma(self.u[ia[0]], self.u[ib[0]], d, self.omega, self.alpha, self.beta,
+                              rc, spec.coulomb)
+            self.g_atom[np.ix_(ia, ib)] += g.sum(-1)
+        keep = (pairs.dist < self._cam_cutoff)[pairs.pair_of]        # S(Gamma) as folded
+        self.S_cam = fold(pairs, pairs.s * keep, self.n, None, np.ones(self.n))
+        self.q0_orb = self.q0_orb / np.diag(self.S)
+
+    def _image_blocks(self):
+        """Per pair of Hubbard values: the atoms (ia, ib), R_A - R_B - g (n_a, n_b, n_g, 3) and
+        its length, over blocks of the lattice translations g (at most IMAGE_CHUNK atom pairs
+        times translations each: one block for small cells)."""
+        values, inv = np.unique(self.u, return_inverse=True)
+        groups = [np.flatnonzero(inv == k) for k in range(len(values))]
+        for ia in groups:
+            for ib in groups:
+                step = max(1, IMAGE_CHUNK // (len(ia) * len(ib)))
+                for g0 in range(0, len(self.gvec), step):
+                    v = (self.pos[ia][:, None, None, :] - self.pos[ib][None, :, None, :]
+                         - self.gvec[None, None, g0:g0 + step, :])
+                    yield ia, ib, v, np.sqrt((v * v).sum(-1))
 
     # -- densities ------------------------------------------------------------------------
     @property
@@ -512,12 +714,15 @@ class HybridTerms:
             x = (-0.25 * ((d * g) @ sd + (ds * g) @ d + ds @ (d * g) + d @ (sd * g))).real
             n = self.n
             return (x[:n, :n] + x[n:, n:])[pairs.rows, pairs.cols]
-        s, g = self.S, self.G
+        reduced = self._periodic and self.spec.screening == "neighbour"
+        s, g = (self.S_cam if reduced else self.S), self.G
         c = -0.125 if len(dps) == 1 else -0.25
         x = np.zeros_like(s)
         for d in dps:
             ds, sd = d @ s, s @ d
             x = x + c * ((d * g) @ sd + (ds * g) @ d + ds @ (d * g) + d @ (sd * g))
+        if reduced:             # M6h-3a: DFTB+'s Gamma-point gradient is the energy's derivative
+            return x[pairs.rows, pairs.cols] * (pairs.dist < self._cam_cutoff)[pairs.pair_of]
         return x[pairs.rows, pairs.cols]
 
     def gamma_gradient(self, dps) -> np.ndarray:
@@ -537,7 +742,8 @@ class HybridTerms:
             n = self.n
             de = x[:n, :n] + x[:n, n:] + x[n:, :n] + x[n:, n:]
         else:
-            s = self.S
+            s = (self.S_cam if self._periodic and self.spec.screening == "neighbour"
+                 else self.S)
             c = -0.125 if len(dps) == 1 else -0.25
             de = np.zeros_like(s)
             for d in dps:
@@ -546,10 +752,24 @@ class HybridTerms:
         return self._gamma_force(de)
 
     def _gamma_force(self, de) -> np.ndarray:
-        """sum_AB dE/dgamma_AB dgamma_AB/dR from the orbital-level dE/dG (n_atom, 3)."""
+        """sum_AB dE/dgamma_AB dgamma_AB/dR from the orbital-level dE/dG (n_atom, 3); periodic
+        (M6h-3a): d gt_AB/dR_A = sum_g gamma_c'(d) (R_A - R_B - g) / d over the translations."""
         starts = self.offsets[:-1]
         g = np.add.reduceat(np.add.reduceat(de, starts, axis=0), starts, axis=1)
         nat = len(starts)
+        if self._periodic:
+            w = g + g.T
+            out = np.zeros((nat, 3))
+            for ia, ib, v, d in self._image_blocks():
+                dg = coulomb_gamma(self.u[ia[0]], self.u[ib[0]], d, self.omega, self.alpha,
+                                   self.beta, self.rc, self.spec.coulomb, derivative=True,
+                                   dftbp_hf=self._dftbp_hf_damped_derivative)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    f = np.where(d > 0.0, dg / d, 0.0)
+                t = np.einsum("abg,abgx->abx", f, v)
+                t[ia[:, None] == ib[None, :]] = 0.0          # an atom's own images: no force
+                out[ia] += np.einsum("ab,abx->ax", w[np.ix_(ia, ib)], t)
+            return out
         with np.errstate(divide="ignore", invalid="ignore"):
             w = np.where(np.eye(nat, dtype=bool), 0.0, (g + g.T) * self.dg_atom / self.dist)
         return np.einsum("ab,abx->ax", w, self.vec)

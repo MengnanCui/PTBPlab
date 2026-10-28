@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M6h-3a 周期杂化 Γ 点设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M6h-3a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M6h-3a · 设计</p>
+    <h1>长程校正（三 a）：周期体系的杂化泛函，Γ 点</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-27</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M6h3a-hybrid-gamma.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M6h-1 的 LC/CAM 杂化泛函推广到周期体系的 Γ 点：DFTB+ 25.1 只用 Γ 点时，交换就是分子的四项公式，只是 S 换成镜像折叠的 S(Γ)，γ 换成对晶格平移求和的截断 γ，P<sub>0</sub> 换成 q<sub>0</sub>/S<sub>μμ</sub>(Γ)。SCC、混合、能量的写法都与分子相同。k 点（BvK 超胞上的 ΔP(k) 或 ΔP(R)）另作 M6h-3b。</p>
+    <ul>
+      <li><strong>原型与 DFTB+ 的对照</strong>（第二节，探针 P62–P69）：
+        <ul>
+          <li>能量：CO<sub>2</sub> 晶体、金刚石、铜（Fermi 展宽）、O<sub>2</sub>（自旋）各 1–5 种设置差 ≤ 7.8e-11 Ha，SCC 轮数全部相同；截断与阻尼截断，MatrixBased 与 NeighbourBased（含 CutoffReduction）。</li>
+          <li>力：用 DFTB+ 的 SK 差分步长时差 ≤ 1.2e-11 Ha/Bohr；与原型自身能量的差分一致到 ≤ 2e-9。</li>
+          <li>与 +U、onsite、完整 DFTB3 加 D3、外场加点电荷、MP 展宽、Anderson 混合器、自定义 Hubbard U 同用都一致；从 DFTB+ 的电荷文件重启，轮数相同。</li>
+        </ul>
+      </li>
+      <li><strong>DFTB+ 25.1 的四处问题</strong>（第六节；B1、B6 在原型里照 DFTB+ 改一行就复现到 DFTB+ 的数，B18 照 DFTB+ 的读法错一位就复现它的 SCC 误差）：
+        <ul>
+          <li>B1：TruncatedAndDamped 时，HF 部分的导数在阻尼区里用了 LR 的多项式系数。CAM 与全局杂化的力偏 7.0e-7 与 5.6e-6 Ha/Bohr。</li>
+          <li>B6：输入布居由只存下三角的 ΔP<sub>in</sub> 算 Mulliken，同一原子的非对角块只按列求和。低对称晶胞里 S(Γ) 有原子内的非对角元，三斜的 CO 晶胞电荷偏 1.3e-5，力偏 7.1e-6（能量是二阶，差 3e-11）。</li>
+          <li>B13：k 点写成显式的 Γ 点时，读电荷文件重启会停下（只许单轮的能带计算）；写成 SupercellFolding 就可以。</li>
+          <li>B18（实现时 P70 发现）：分子读 Γ 点的电荷文件时不跳过折叠矩阵记录，ΔP<sub>in</sub> 整体错一位（第一个元素取成折叠矩阵的 1.0）。反过来，Γ 点读分子的文件会停下。</li>
+        </ul>
+      </li>
+      <li><strong>与分子不同的一处</strong>：NeighbourBased 加 CutoffReduction 时，DFTB+ 周期 Γ 点的力用缩减的近邻表，是能量的导数（分子时用完整的表，不是导数）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≤ 7.8e-11</span><span class="lbl">原型与 DFTB+ 25.1 的能量之差（Ha）</span></li>
+      <li><span class="num">≤ 1.2e-11</span><span class="lbl">原型与 DFTB+ 的力之差（Ha/Bohr）</span></li>
+      <li><span class="num">4</span><span class="lbl">DFTB+ 的问题，每一处都复现到它的数字</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#physics">一、DFTB+ 的做法</a></li>
+      <li><a href="#probe">二、DFTB+ 的实测行为与原型</a></li>
+      <li><a href="#api">三、pydftb 的接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">五、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#bugs">六、DFTB+ 的问题与 pydftb 的做法</a></li>
+      <li><a href="#limits">七、不做的事与风险</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="physics">
+      <h2>一、DFTB+ 的做法</h2>
+      <p>源码 25.1（<code>dftb/hybridxc.F90</code>、<code>rshgamma.F90</code>、<code>dftbplus/parser.F90: parseHybridBlock</code>、<code>initprogram.F90</code>、<code>main.F90: getNextInputDensityReal</code>、<code>dftb/populations.F90</code>、<code>dftb/sccinit.F90</code>）；调研记录在草稿目录 <code>m6h3/research_hybrid_periodic.md</code>，行为以 25.1 的二进制为准。</p>
+      <ul>
+        <li><strong>输入</strong>：<code>Hybrid = LC {…}</code> 或 <code>CAM {…}</code> 里多一个只对周期体系读的 <code>CoulombMatrix</code>：
+          <ul>
+            <li><code>Truncated</code>（默认）与 <code>TruncatedAndDamped</code>，子项 <code>CoulombCutoff</code>（R<sub>c</sub>）与 <code>GSummationCutoff</code>（R<sub>g</sub>）；</li>
+            <li><code>Full</code> 与 <code>MinimumImage</code> 在 Γ 点拒绝：“Hybrid functionals don't yet support Gamma point calculations for CoulombMatrix types other than 'Truncated' or 'Truncated+Damping'.”；</li>
+            <li>默认 R<sub>c</sub> 是晶胞最小晶面间距的一半，R<sub>g</sub> = 2R<sub>c</sub>；阻尼区是 (R<sub>c</sub> − 1 Bohr, R<sub>c</sub>)，R<sub>c</sub> ≤ 1 Bohr 时报 “The beginning of the damping region of the truncated Coulomb kernel must be at a positive radius.”。</li>
+          </ul>
+        </li>
+        <li><strong>γ</strong>：gt(A, B) = Σ<sub>g</sub> γ<sub>c</sub>(|R<sub>A</sub> − R<sub>B</sub> − g|)，g 取晶格平移的平行六面体 |n<sub>i</sub>| ≤ ⌊R<sub>g</sub>/h<sub>i</sub>⌋ + 1（h<sub>i</sub> 为晶面间距），A = B 时含在位值与自身镜像。
+          <ul>
+            <li>Truncated：γ<sub>c</sub> = γ（d &lt; R<sub>c</sub>），否则为 0。</li>
+            <li>TruncatedAndDamped：阻尼区内换成 poly5zero，即在 R<sub>d</sub> 处与 γ 的值、一阶、二阶导数相等，在 R<sub>c</sub> 处三者都为 0 的五次多项式。LR 的二阶导数是一阶解析导数的中心差分（δ = 1e-8），HF 的三者都是解析的。</li>
+            <li>γ = α γ<sub>HF</sub> + β γ<sub>LR</sub>，函数与 M6h-1 相同。</li>
+          </ul>
+        </li>
+        <li><strong>交换</strong>：H<sub>x</sub> = c[(SΔPS)∘G + ((SΔP)∘G)S + S(ΔP∘G)S + S((ΔPS)∘G)]，S = S(Γ)（MatrixBased）或只含 CAM 截断以内原子对的 S(Γ)（NeighbourBased），G 是 gt 铺到轨道上。c、E<sub>Fock</sub> = ½ Σ H<sub>x</sub>[ΔP<sub>in</sub>]∘ΔP<sub>in</sub> 都与分子相同。
+          <ul>
+            <li>只用 Γ 点时这是精确的：对实空间的 BvK 表达式求和，镜像和正好分解成 S(Γ) 与 gt。</li>
+            <li>NeighbourBased 的 <code>Threshold</code> 在 Γ 点读入但不使用。</li>
+          </ul>
+        </li>
+        <li><strong>参考密度</strong>：ΔP = P − diag(s q<sub>0μ</sub> / S<sub>μμ</sub>(Γ))，s = 1 或每个自旋 ½；S<sub>μμ</sub>(Γ) 含轨道与自身镜像的重叠，不是 1。</li>
+        <li><strong>SCC</strong>：与分子相同。
+          <ul>
+            <li>混合整个 ΔP 数组（上三角为 0），误差 max|ΔP<sub>out</sub> − ΔP<sub>in</sub>|；</li>
+            <li>第一轮 ΔP<sub>in</sub> = 0；有自旋时第一轮不混合，至少两轮。</li>
+            <li>q<sub>in</sub> = <code>denseMullikenReal</code>(ΔP<sub>in</sub>, S(Γ)) + q<sub>0</sub>：只存下三角，同一原子的块只按列求和（第六节 B6）。</li>
+          </ul>
+        </li>
+        <li><strong>力</strong>（Γ 点两种筛选、两种截断，含自旋）：用 ΔP<sub>out</sub>。
+          <ul>
+            <li>dS 部分加到成对元素的系数上，系数对所有镜像对相同；dγ 部分对镜像求和。</li>
+            <li>NeighbourBased 的 dS 与 dγ 两部分都用缩减的近邻表，是能量的导数（P68）。</li>
+            <li>TruncatedAndDamped 时 HF 部分在阻尼区的导数用了 LR 的系数（B1）。</li>
+          </ul>
+        </li>
+        <li><strong>应力</strong>：所有杂化计算静默关掉（<code>tStress … .and. .not. isHybridXc</code>）；晶格优化与恒压 MD 拒绝。</li>
+        <li><strong>电荷文件</strong>：周期杂化在头部置第 4 个逻辑量（k 点信息），在多极子记录之后写一条 12 个数的记录（3 × 3 折叠矩阵按列，再加 3 个平移；Γ 点为单位矩阵与零），然后是 ΔP<sub>in</sub>（与分子相同，每个数一条记录）。
+          <ul>
+            <li>读入时，k 点写成显式的 Γ 点会被当成能带计算，多于一轮就停下（B13）；用 <code>SupercellFolding</code> 写 Γ 点就能正常重启。</li>
+          </ul>
+        </li>
+        <li><strong>拒绝</strong>（P69 实测）：
+          <ul>
+            <li>Thresholded：“Hybrid functionality for periodic systems currently not implemented for the threshold algorithm.”</li>
+            <li>非共线自旋：“Non-collinear spin only available for hybrids with molecular systems at present.”</li>
+            <li>激发态：“hybrid functional excited states for periodic geometries are currently unavailable”（要激发态力时先报 “Forces in the excited state for periodic geometries are currently unavailable”）。</li>
+            <li>k 点只许不平移的 SupercellFolding（M6h-3b）。</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、DFTB+ 的实测行为与原型</h2>
+      <p>探针 P62–P71（草稿目录 <code>m6h3/</code>；P70、P71 是实现时补做的）。原型 <code>gproto.py</code> 用 pydftb 的分子杂化代码，只替换 S(Γ)、gt、P<sub>0</sub>（以及 NeighbourBased 的缩减 S）。参数集 <code>ptbp_hcocu_lc</code>、<code>_cam</code>、<code>_global</code>，两边 SCC 容差 1e-10，DFTB+ 的 <code>EwaldTolerance</code> 1e-12（默认的 1e-9 让 CO<sub>2</sub> 晶体的能量差 8.6e-8，与杂化无关，同 M6f-1）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P62 能量与 SCC</td><td>CO<sub>2</sub> 晶体（Pa3̄，12 个原子，扰动）：默认截断（R<sub>c</sub> = 5.31 Bohr）、R<sub>c</sub> = 8 的截断与阻尼截断、NeighbourBased（缩减 0 与 4 Bohr）；金刚石（8 个原子，默认与 R<sub>c</sub> = 6）；Cu<sub>4</sub>（1000 K）；5 Å 盒子里的 O<sub>2</sub>（自旋）</td><td>能量差 ≤ 7.8e-11 Ha，E<sub>Fock</sub> ≤ 3.5e-11，电荷 ≤ 1.7e-10，SCC 轮数全部相同（最长 109 轮）。每轮误差前十几轮一致到 1e-8（相对），之后是舍入级的差别（绝对值约 4e-13）。</td></tr>
+          <tr><td>P63 力</td><td>同上，加 CAM 截断、CAM 与全局杂化的阻尼截断</td><td>与 DFTB+ 的力差 ≤ 1.2e-11（DFTB+ 的 SK 步长），与原型自身能量的差分 ≤ 2e-9（解析 SK 导数）。阻尼截断的 CAM 与全局杂化：差 7.0e-7 与 5.6e-6；HF 部分改用 LR 的系数后 6.1e-12（B1）。</td></tr>
+          <tr><td>P64 低对称晶胞</td><td>三斜的 CO 晶胞（原子内 S(Γ) 非对角元 5.2e-3）、单斜的 H<sub>2</sub>O 晶胞（3.2e-4）</td><td>正确的 Mulliken：能量差 3e-11，电荷 1.3e-5 与 4.6e-6，力 7.1e-6 与 3.0e-7，轮数相同但每轮误差从第 2 轮起不同。照 DFTB+ 的 <code>denseMullikenReal</code> 算 q<sub>in</sub>：电荷 1.4e-11，力 1.1e-12，每轮误差 9e-9（B6）。</td></tr>
+          <tr><td>P65 电荷文件</td><td>DFTB+ 写的 charges.dat 与 charges.bin</td><td>头部 <code>F F T T T</code>；“0 0” 之后一条 12 个数的折叠矩阵记录；然后 n × n 个 ΔP<sub>in</sub>。二进制长度相符。</td></tr>
+          <tr><td>P66 组合</td><td>CO<sub>2</sub> 晶体加 +U、onsite、完整 DFTB3 加 D3、外场加点电荷、MP 展宽、Anderson 混合器、自定义 Hubbard U</td><td>能量差 ≤ 9.3e-11，力 ≤ 8.8e-12，轮数全部相同（Anderson 187/187）。</td></tr>
+          <tr><td>P67 重启</td><td>run 1 写 charges.dat，run 2 移动一个原子后读入</td><td>显式 Γ 点：DFTB+ 停下（B13）。SupercellFolding：DFTB+ 25 轮，原型读同一个文件 25 轮，能量差 1.1e-11。</td></tr>
+          <tr><td>P68 邻居筛选的力</td><td>CO<sub>2</sub>，CutoffReduction 10 Bohr（CAM 截断 5.36 Bohr，去掉所有分子间原子对），R<sub>c</sub> = 8</td><td>DFTB+ 的力对能量差分 2.7e-9：是导数。原型用完整的 S：差 3.1e-5；只在 dS 部分用缩减的 S：9.8e-7；dS 与 dγ 两部分都用：6.1e-12。</td></tr>
+          <tr><td>P69 拒绝</td><td>Thresholded、非共线、MinimumImage、Full、R<sub>c</sub> = 0.8 的阻尼截断、激发态</td><td>原话见第一节。</td></tr>
+          <tr><td>P71 分子的 CoulombMatrix</td><td>水分子的 <code>Hybrid = LC</code> 加 <code>CoulombMatrix = TruncatedAndDamped</code> 或 <code>Full</code></td><td>DFTB+ 停下：“The following 1 node(s) have been ignored by the parser … CoulombMatrix”（没读的输入）。不加时照常运行。</td></tr>
+          <tr><td>P70 跨类型重启</td><td>CO<sub>2</sub> 晶体的原子：分子写的 charges.dat 给 Γ 点读，Γ 点写的给分子读（文本文件）</td><td>Γ 点读分子的文件：DFTB+ 停下（“only identical k-point samplings”，折叠矩阵印成 0）。分子读 Γ 点的文件：DFTB+ 照常运行，75 轮。它不跳过折叠矩阵记录，ΔP<sub>in</sub>(1,1) 取成该记录的第一个数 1.0，其后每个数错后一位、最后一个丢掉（B18）：pydftb 从错位的矩阵出发，前两轮的 SCC 误差与 DFTB+ 印出的每一位相同（1.892735、1.801576）；从正确的矩阵出发是 0.0256，24 轮，最后的能量相同。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>三、pydftb 的接口</h2>
+<pre><code>calc = DFTB(sk_lc, hybrid={"type": "lc", "screening": "matrix",
+                           "coulomb": "truncated", "coulomb_cutoff": 8.0, "gsum_cutoff": 16.0})
+r = calc.calculate(labels, pos, cell, forces=True)      # 只用 Γ 点（kpts=None）
+r.e_fock, r.q_in                                         # q_in = [布居 | ΔP 的下三角]</code></pre>
+      <ul>
+        <li><strong>新选项</strong>（<code>Hybrid</code>）：
+          <ul>
+            <li><code>coulomb</code>：<code>"truncated"</code>（默认）或 <code>"damped"</code>（DFTB+ 的 TruncatedAndDamped）；</li>
+            <li><code>coulomb_cutoff</code>、<code>gsum_cutoff</code>（Bohr）：默认同 DFTB+（最小晶面间距的一半，及其两倍）；</li>
+            <li>分子给了这三项就报错：DFTB+ 只在周期体系里读 <code>CoulombMatrix</code>，分子的会作为没读的输入停下（P71，实现时补做；设计原写“分子不读”）。</li>
+          </ul>
+        </li>
+        <li><strong>条件</strong>：
+          <ul>
+            <li>周期体系只用 Γ 点；其他 k 点是 M6h-3b，在那之前拒绝；</li>
+            <li>拒绝（DFTB+ 的原话）：Thresholded、非共线自旋、激发态（TD-LC）、R<sub>c</sub> ≤ 1 Bohr 的阻尼截断；</li>
+            <li>应力：DFTB+ 静默关掉，pydftb 在要求应力时报错，默认不算。</li>
+          </ul>
+        </li>
+        <li><strong>输入布居</strong>：pydftb 用 ΔP<sub>in</sub> 真正的 Mulliken 布居。低对称晶胞里与 DFTB+ 不同（B6），验证用的兼容开关能复现 DFTB+。</li>
+        <li><strong>力</strong>：精确的导数（NeighbourBased 用缩减的近邻表，同 DFTB+）。阻尼截断的 HF 部分用正确的系数；验证用的开关能复现 DFTB+（B1）。</li>
+        <li><strong>电荷文件</strong>：<code>charge_data</code> 写 DFTB+ 的格式（含单位折叠矩阵）；<code>populations_from_file</code> 读 Γ 点的文件，k 点的文件留给 M6h-3b。</li>
+        <li><strong>组合</strong>：自旋、展宽、+U、onsite、完整 DFTB3、D3、外场、点电荷、各混合器、自定义 Hubbard U、重启、优化与 MD（几何步之间沿用 ΔP）。</li>
+      </ul>
+    </section>
+
+    <details class="dev" id="impl">
+      <summary><span class="tag">开发细节</span><span class="title">四、实现</span></summary>
+      <div class="body">
+        <ul>
+          <li><code>hybrid.py</code>：
+            <ul>
+              <li><code>Hybrid</code> 加 <code>coulomb</code>、<code>coulomb_cutoff</code>、<code>gsum_cutoff</code>（<code>make</code> 认这三个键）。</li>
+              <li>新函数：
+                <ul>
+                  <li><code>ddgamma_hf</code>：解析二阶导数，即 DFTB+ 的 <code>getddHfAnalyticalGammaValue_workhorse</code> 与 <code>getddYGammaSubPart</code>；U 几乎相等时用一阶导数的中心差分，因为 pydftb 在那里本来就用 Hermite–Genocchi 形式。</li>
+                  <li><code>poly5zero</code>；<code>coulomb_gamma(…, kind, derivative=…)</code>：两种截断的值与导数（<code>dftbp_hf</code> 是 B1 的开关）。</li>
+                  <li><code>plane_spacings</code>、<code>default_coulomb_cutoff</code>、<code>lattice_translations</code>。</li>
+                </ul>
+              </li>
+              <li><code>HybridTerms(…, cell=…, pairs=…)</code>：
+                <ul>
+                  <li>接收晶胞、成对的块（含镜像）与 S(Γ)；按 Hubbard U 分组对原子对与平移求 gt，用与 S(Γ) 相同的 <code>fold</code> 建 NeighbourBased 的缩减 S(Γ)（缩减为 0 时与 S(Γ) 逐位相同），P<sub>0</sub> 除以 S<sub>μμ</sub>(Γ)。</li>
+                  <li><code>pair_coefficient</code>、<code>gamma_gradient</code>：NeighbourBased 用缩减的 S，且只给 CAM 截断以内的原子对系数；<code>_gamma_force</code> 对镜像求和。</li>
+                  <li>分子的路径不变（逐位）。</li>
+                  <li>验证用的类属性 <code>_dftbp_hf_damped_derivative</code>（B1）。</li>
+                </ul>
+              </li>
+              <li><code>dftbp_dense_mulliken</code>：DFTB+ 的 <code>denseMullikenReal</code> 在只存下三角的 ΔP 上的结果（B6 的兼容开关用）。</li>
+            </ul>
+          </li>
+          <li><code>calculator.py</code>：
+            <ul>
+              <li><code>_setup</code>：周期体系且只有 Γ 点时建周期的 <code>HybridTerms</code>；其余 k 点拒绝（M6h-3b）；Thresholded、非共线、激发态按 DFTB+ 的原话拒绝。</li>
+              <li><code>_run</code>：杂化时默认不算应力，明确要求时报错。</li>
+              <li><code>_scc_hybrid</code>：验证用的类属性 <code>_dftbp_gamma_q_in</code> 打开时，q<sub>in</sub> 用 <code>dftbp_dense_mulliken</code>（B6）。</li>
+              <li><code>charge_data</code>、<code>populations_from_file</code>：周期杂化的折叠矩阵记录。</li>
+            </ul>
+          </li>
+          <li><code>dftbplus_io.py</code>：读写 k 点信息记录（12 个数），Γ 点以外的折叠矩阵在读入密度矩阵时拒绝（M6h-3b）。</li>
+          <li><code>bands.py</code>：<code>eigenstates</code> 在 Γ 点加周期的 H<sub>x</sub>[ΔP<sub>in</sub>]，其他 k 点拒绝（M6h-3b）。</li>
+          <li><code>ase_calc.py</code>：杂化的周期体系要应力时报 ASE 的 <code>PropertyNotImplementedError</code>；<code>coulomb_cutoff</code>、<code>gsum_cutoff</code> 以 Å 为单位；<code>write_charges</code> 写折叠矩阵记录。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="dev" id="validation">
+      <summary><span class="tag">开发细节</span><span class="title">五、验证</span></summary>
+      <div class="body">
+        <ul>
+          <li><strong>验证工具</strong>：
+            <ul>
+              <li><code>dftbplus.hybrid_block</code> 写 <code>CoulombMatrix</code>（周期体系）；</li>
+              <li>周期杂化的 k 点写成 <code>SupercellFolding</code>（Γ 点为单位矩阵，避开 B13）；</li>
+              <li>周期算例的 <code>EwaldTolerance</code> 1e-12；</li>
+              <li>B1：<code>forces_fd</code>（同 M6h-1b）：参考存 DFTB+ 能量的差分，兼容模式对照 DFTB+ 的力。</li>
+              <li>B6：<code>Case.gamma_q_in_compat</code>：两个低对称晶胞的算例在对照时打开兼容开关（DFTB+ 的不动点不是自洽解，它能量的差分也就不是好的参考）；pydftb 自己的结果在测试里与 DFTB+ 比较（电荷差 1e-5 量级），力用能量差分检查。</li>
+            </ul>
+          </li>
+          <li><strong>参考算例</strong>（最后 23 个，DFTB+ 25.1）：
+            <ul>
+              <li>CO<sub>2</sub> 晶体：默认截断、R<sub>c</sub> = 8 的截断与阻尼截断、NeighbourBased（缩减 0 与 10 Bohr）、CAM 截断、CAM 与全局杂化的阻尼截断（B1）；</li>
+              <li>金刚石（默认与 R<sub>c</sub> = 6）、Cu<sub>4</sub>（Fermi）、O<sub>2</sub> 盒子（自旋）；</li>
+              <li>三斜的 CO 与单斜的 H<sub>2</sub>O（B6）；</li>
+              <li>组合：+U、onsite、DFTB3 + D3、外场加点电荷、MP、Anderson、自定义 Hubbard U、从 DFTB+ 的电荷文件重启（二进制，以及 O<sub>2</sub> 自旋的文本文件）；</li>
+              <li>动力学：CO<sub>2</sub> 晶体的一条短 MD 与金刚石的一次结构优化（ΔP 跨几何步沿用）。</li>
+            </ul>
+          </li>
+          <li><strong>自洽测试</strong>：
+            <ul>
+              <li>两种截断的 γ：阻尼区两端的值、一阶与二阶导数；导数对差分；<code>ddgamma_hf</code> 对差分；</li>
+              <li>默认截断与晶面间距；平移集；</li>
+              <li>力对能量的差分（两种筛选、两种截断、CAM 与全局、自旋、缩减的近邻表）；</li>
+              <li>B1、B6 兼容开关复现 DFTB+；</li>
+              <li>电荷文件与 DFTB+ 写的逐字节相同、读写往返；</li>
+              <li>拒绝；分子的杂化逐位不变（golden）。</li>
+            </ul>
+          </li>
+          <li><strong>门槛</strong>：golden 两个环境逐位相同；refgen（NumPy、torch）；dynamics；pytest 三个环境；PTBP 测试；G1。</li>
+        </ul>
+      </div>
+    </details>
+
+    <section id="bugs">
+      <h2>六、DFTB+ 的问题与 pydftb 的做法</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>DFTB+ 25.1</th><th>证据</th><th>pydftb</th></tr></thead>
+        <tbody>
+          <tr><td>B1：TruncatedAndDamped 时，HF 部分的导数在阻尼区里用了 LR 的多项式系数（<code>hybridxc.F90</code> 第 4370–4373 行；值在第 3801–3804 行用 HF 的系数）</td><td>CO<sub>2</sub> 晶体 R<sub>c</sub> = 8：CAM 的力偏 7.0e-7，全局杂化 5.6e-6 Ha/Bohr；照 DFTB+ 改后 6.1e-12</td><td>精确的导数；验证用的兼容开关复现 DFTB+</td></tr>
+          <tr><td>B6：Γ 点的 q<sub>in</sub> 由只存下三角的 ΔP<sub>in</sub> 经 <code>denseMullikenReal</code> 算出，同一原子的块只按列求和，丢了一半原子内非对角的贡献（<code>populations.F90</code> 第 540–552 行）</td><td>三斜 CO 晶胞：电荷偏 1.3e-5，力偏 7.1e-6，SCC 的不动点不是自洽解（能量是二阶的，3e-11）；照 DFTB+ 改后电荷 1.4e-11、力 1.1e-12。立方、正交、六方晶胞因对称不受影响</td><td>真正的 Mulliken 布居；验证用的兼容开关复现 DFTB+</td></tr>
+          <tr><td>B13：显式的 Γ 点加 <code>ReadInitialCharges</code> 被当成能带计算，多于一轮就停下（<code>parser.F90</code> 第 3102–3103 行不查是否只有 Γ 点）</td><td>P67</td><td>验证工具对周期杂化写 <code>SupercellFolding</code></td></tr>
+          <tr><td>B18：分子读 Γ 点的电荷文件不跳过折叠矩阵记录，ΔP<sub>in</sub> 整体错一位（<code>sccinit.F90</code> 第 552–573 行：只有本次是周期杂化（<code>tKpointInfo</code>）才读这条记录，第 594–603 行随后逐个读 ΔP）</td><td>P70</td><td>两种文件都按格式读（折叠矩阵记录解析后检查）；分子与 Γ 点的 ΔP 是同样的稠密矩阵，互相可读</td></tr>
+          <tr><td>默认的 <code>EwaldTolerance</code> 1e-9</td><td>CO<sub>2</sub> 晶体的能量差 8.6e-8（与杂化无关，M6f-1 记录过）</td><td>周期算例用 1e-12</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="limits">
+      <h2>七、不做的事与风险</h2>
+      <ul>
+        <li><strong>M6h-3b（k 点）</strong>：
+          <ul>
+            <li>MatrixBased 混合每个 k 的复数 ΔP(k)，NeighbourBased 混合 BvK 实空间的 ΔP(R)；</li>
+            <li>k 点的 E<sub>Fock</sub> 用 ΔP<sub>out</sub>；</li>
+            <li>力只有 Truncated、不加自旋；MinimumImage。</li>
+            <li>调研记下的默认截断问题（BvK 向量按分量缩放、对角线交点的求法不稳）也在那时处理。</li>
+          </ul>
+        </li>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>应力（DFTB+ 没有）；</li>
+            <li><code>Full</code>（DFTB+ 只在 k 点、仅供测试）；</li>
+            <li>周期体系的 TD-LC 与非共线（DFTB+ 拒绝）；</li>
+            <li>Thresholded（DFTB+ 拒绝）。</li>
+          </ul>
+        </li>
+        <li><strong>规模</strong>：gt 对原子对与平移逐一求 γ，平移数由 R<sub>g</sub> 决定（默认 5 × 5 × 5 以内）；按平移分块，每块至多 2<sup>20</sup> 个原子对 × 平移，大晶胞的内存因此有界（实现时补上：一次建整个数组时，500 个原子的晶胞要几 GB）；交换仍是 N<sub>orb</sub> 的稠密矩阵积。</li>
+        <li><strong>风险</strong>：U 几乎相等时的 HF 二阶导数用差分，与 DFTB+ 的闭式不同；DFTB+ 的闭式在那里本来就失去精度（M6h-1 坑 117）。测试参数集里没有这样的元素对。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

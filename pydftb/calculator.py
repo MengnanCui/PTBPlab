@@ -463,11 +463,15 @@ class DFTB:
                           and masses (and equal per-label options); NumPy only, not with Casida,
                           XL-BOMD or the analysis outputs.
     hybrid : "lc" | "cam" | dict | Hybrid  a range-separated hybrid functional (DFTB+
-                          ``Hybrid``, milestone M6h-1; molecules): LC-DFTB or CAM, omega, alpha
+                          ``Hybrid``, milestone M6h-1; molecules, and periodic systems at the
+                          Gamma point, M6h-3a): LC-DFTB or CAM, omega, alpha
                           and beta from the SK files' ``RangeSep`` section; a dict sets
                           ``type``, ``screening`` ("matrix", "neighbour", "threshold"),
-                          ``threshold`` and ``cutoff_reduction`` (Bohr), see
-                          :class:`pydftb.hybrid.Hybrid`.  ``DFTBResult.e_fock`` is the exchange
+                          ``threshold`` and ``cutoff_reduction`` (Bohr), and for a periodic
+                          system DFTB+'s ``CoulombMatrix``: ``coulomb`` ("truncated",
+                          "damped"), ``coulomb_cutoff`` and ``gsum_cutoff`` (Bohr), see
+                          :class:`pydftb.hybrid.Hybrid`; no stress then (as DFTB+).
+                          ``DFTBResult.e_fock`` is the exchange
                           (in ``energy``); ``q_in``/``q_out`` are then [populations | packed
                           DeltaP], what the SCC carries between geometries.  SK files with a
                           ``RangeSep`` section need it (as DFTB+) unless ``hybrid=False``.
@@ -488,6 +492,9 @@ class DFTB:
     _halogen_compat = False
     # test use only: DFTB+'s atom-resolved D3 library energy, spread evenly (E/N) (M6f-4a)
     _atom_energy_compat = False
+    # test use only: a periodic Gamma-point hybrid's input populations as DFTB+ 25.1 takes them
+    # (denseMullikenReal of the lower-triangular DeltaP_in; M6h-3a)
+    _dftbp_gamma_q_in = False
     # test use only: the finite-frequency response of complex eigenvectors with DFTB+'s
     # eta term (it cancels between k and -k; DFTB+ keeps it for reduced k-point sets) (M6g-1)
     _response_eta_compat = False
@@ -1056,9 +1063,12 @@ class DFTB:
             if scc_control is None:
                 scc_control = SCCControl(1, self.max_scc, self.scc_tol)
         if stress is None:
-            stress = forces and periodic and self.point_charges is None
+            stress = forces and periodic and self.point_charges is None and self.hybrid is None
         if stress and not periodic:
             raise ValueError("stress needs a periodic system")
+        if stress and self.hybrid is not None:                          # M6h-3a
+            raise ValueError("no stress with a hybrid functional (DFTB+ silently skips it and "
+                             "refuses lattice optimisation and barostats)")
         if self.independent_k_filling and not periodic:
             raise ValueError("independent_k_filling needs a periodic system (DFTB+ reads it for "
                              "periodic systems only)")
@@ -1148,12 +1158,13 @@ class DFTB:
                                               self._block_shell_occupation(basis))
         return basis, np.asarray(site_of_orb), rep, block
 
-    def charge_data(self, species, result: DFTBResult) -> ChargeData:
+    def charge_data(self, species, result: DFTBResult, periodic: bool = False) -> ChargeData:
         """``result``'s input populations of the last SCC iteration (``q_in``, what DFTB+
         writes) as a DFTB+ charge file (:func:`pydftb.dftbplus_io.write_charges`): every class
         total on its first orbital, collinear spin as (q, m), blocks per atom; with a hybrid
         functional also DeltaP_in of every spin channel (up, down), its lower triangle as DFTB+
-        keeps it (M6h-1)."""
+        keeps it (M6h-1), and for a ``periodic`` one DFTB+'s k-point folding record before it
+        (the Gamma point, M6h-3a)."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         vec = np.asarray(result.q_in, float)
         rho = None
@@ -1181,8 +1192,12 @@ class DFTB:
             q_orb = np.stack([q_orb[0] + q_orb[1], q_orb[0] - q_orb[1]])
             blocks = None if blocks is None else [np.stack([b[0] + b[1], b[0] - b[1]])
                                                   for b in blocks]
+        folding = None
+        if rho is not None and periodic:                   # M6h-3a: the Gamma point
+            folding = np.hstack([np.eye(3), np.zeros((3, 1))])
         return ChargeData(q_orb, np.asarray(basis.norb_atom, int), blocks, iblocks,
-                          density_matrix=rho is not None, rho=rho)
+                          density_matrix=rho is not None, kpoint_info=folding is not None,
+                          rho=rho, folding=folding)
 
     def _split_hybrid_vector(self, basis: Basis, vec) -> tuple:
         """A hybrid run's mixing vector -> (populations, DeltaP per spin channel as DFTB+ keeps
@@ -1228,7 +1243,10 @@ class DFTB:
         magnetisation (1e-3; not with ``skip_charge_test``, DFTB+ ``SkipChargeTest``, or a
         fixed Fermi level).  With a hybrid functional (M6h-1): the populations followed by the
         file's DeltaP_in (its lower triangle), or the populations alone (DeltaP_in = 0, as
-        DFTB+) when the file has no density matrix; a non-hybrid calculation ignores one."""
+        DFTB+) when the file has no density matrix; a non-hybrid calculation ignores one.  The
+        Gamma-point folding record of a periodic run (M6h-3a) is read and checked; pydftb takes
+        such a file for a molecule and a molecule's for the Gamma point (DeltaP_in is the same
+        dense matrix; DFTB+ 25.1 stops on the latter and reads the former one value off)."""
         basis, site_of_orb, rep, block = self._charge_layout(species)
         if not isinstance(data, ChargeData):
             data = dftbplus_io.read_charges(data, basis.norb_atom, text)
@@ -1625,24 +1643,47 @@ class DFTB:
         hybrid = None
         if self.hybrid is not None:                                   # M6h-1
             if periodic:
-                raise ValueError("hybrid functionals are implemented for molecules only "
-                                 "(periodic systems: milestone M6h-3)")
+                self._check_periodic_hybrid(gamma_only)               # M6h-3a
+            elif (self.hybrid.coulomb != "truncated" or self.hybrid.coulomb_cutoff is not None
+                  or self.hybrid.gsum_cutoff is not None):
+                raise ValueError("coulomb, coulomb_cutoff and gsum_cutoff are DFTB+'s "
+                                 "CoulombMatrix of periodic systems (DFTB+ stops on one for a "
+                                 "molecule)")
             if matrices:
-                hybrid = self._hybrid_terms(species, pos, basis, np.asarray(smat[0]).real)
+                hybrid = self._hybrid_terms(species, pos, basis, np.asarray(smat[0]).real,
+                                            cell if periodic else None, pb if periodic else None)
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
                       pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
                       dipole_corr=dipole_corr, switching=mix, hybrid=hybrid)
 
-    def _hybrid_terms(self, species, pos, basis: Basis, smat) -> "_hybrid.HybridTerms":
-        """The exchange terms of a molecule's geometry (M6h-1): tau from the first shell's
-        Hubbard U, P0 from the reference shell populations spread over their orbitals."""
+    def _hybrid_terms(self, species, pos, basis: Basis, smat, cell=None,
+                      pairs=None) -> "_hybrid.HybridTerms":
+        """The exchange terms of a geometry (M6h-1): tau from the first shell's Hubbard U, P0
+        from the reference shell populations spread over their orbitals; a periodic cell at the
+        Gamma point (M6h-3a) with its pair blocks, ``smat`` then S(Gamma)."""
         ls = np.asarray(basis.shell_l)
         q0_orb = (self._reference_shell_populations(basis) / (2 * ls + 1))[basis.orb_shell]
         return _hybrid.HybridTerms(self.hybrid, self._range_sep,
                                    [self.sk.hubbard[lab][0] for lab in species], pos,
                                    basis.orb_atom, smat, q0_orb, self.sk.cutoff,
-                                   pauli=self.pauli)
+                                   pauli=self.pauli, cell=cell, pairs=pairs)
+
+    def _check_periodic_hybrid(self, gamma_only: bool):
+        """A hybrid functional in a periodic cell (M6h-3a): the Gamma point only so far; DFTB+'s
+        refusals in its words."""
+        if not gamma_only:
+            raise ValueError("hybrid functionals of periodic systems are implemented at the Gamma "
+                             "point only (k-points: milestone M6h-3b)")
+        if self.hybrid.screening == "threshold":
+            raise ValueError("Hybrid functionality for periodic systems currently not implemented "
+                             "for the threshold algorithm (as DFTB+)")
+        if self.noncolinear:
+            raise ValueError("Non-collinear spin only available for hybrids with molecular "
+                             "systems at present (as DFTB+)")
+        if self.casida is not None:
+            raise ValueError("hybrid functional excited states for periodic geometries are "
+                             "currently unavailable (as DFTB+)")
 
     def _external_setup(self, pos, cell, pbc, coul, pb) -> "external.ExternalTerms":
         """Field, point charges and site potentials of this geometry (M6c); the field is
@@ -2253,7 +2294,7 @@ class DFTB:
             else:
                 x_in = mixer.mix(x_in, x_out)
                 dp = hy.unpack(x_in, nspin)
-                q_in = self._populations(st, np.stack([d + p for d, p in zip(dp, p0)]))[1]
+                q_in = self._hybrid_input_populations(st, dp, p0)
             dp_in = hy.unpack(x_in, nspin)
         if forces:
             t1 = time.perf_counter()
@@ -2268,6 +2309,23 @@ class DFTB:
         state = _HybridState(dp_in, dp_out, x_in, x_out, e_fock)
         return _SCCState(q_in, q_out, q_orb, v_orb, h, rho, wdm, evals, occ, mu, ts, nit,
                          converged, diff, vs_orb, errors, hybrid=state)
+
+    def _hybrid_input_populations(self, st: _Setup, dp, p0) -> np.ndarray:
+        """The populations to mix of DeltaP_in + P0 (Mulliken).  ``_dftbp_gamma_q_in``
+        (validation only, M6h-3a): at the Gamma point of a periodic cell those DFTB+ 25.1 takes,
+        :func:`pydftb.hybrid.dftbp_dense_mulliken` of the lower-triangular DeltaP_in plus q0,
+        which in a low-symmetry cell are not DeltaP_in's Mulliken populations."""
+        if not (self._dftbp_gamma_q_in and st.hybrid._periodic):
+            return self._populations(st, np.stack([d + p for d, p in zip(dp, p0)]))[1]
+        if st.block is not None or st.pauli is not None:
+            raise ValueError("_dftbp_gamma_q_in: not with block potentials or two-component spin")
+        s = st.hybrid.S
+        q = [_hybrid.dftbp_dense_mulliken(d, s, st.basis.orb_atom) + np.diag(p) * np.diag(s)
+             for d, p in zip(dp, p0)]
+        if st.spin is None:
+            return ops.segment_sum(q[0], st.site_of_orb, len(st.q0))
+        shells, nsh = st.basis.orb_shell, len(st.basis.shell_l)
+        return np.concatenate([ops.segment_sum(x, shells, nsh) for x in q])
 
     def _energies_pauli(self, st: _Setup, sc: _SCCState) -> DFTBResult:
         """Energies and populations of a two-component calculation (from the last output,

@@ -1,0 +1,217 @@
+{
+ "schema": 1,
+ "case": "diamond8_lc_opt",
+ "base": "diamond8_lc",
+ "kind": "opt",
+ "note": "the rattled diamond cell relaxes back (fixed lattice: no stress with a hybrid)",
+ "dftbplus": {
+  "version": "DFTB+ development version (commit: a23bfb2)",
+  "parser_version": 14
+ },
+ "settings": {
+  "lattice": false,
+  "isotropic": false,
+  "ewald_tolerance": null,
+  "grad_elem": 1e-07,
+  "optimiser": "LBFGS {}",
+  "temperature": 500.0,
+  "seed": 1,
+  "steps": 40,
+  "time_step_fs": 0.5,
+  "xlbomd": null,
+  "force_evaluation": null
+ },
+ "libraries": {},
+ "input": {
+  "labels": [
+   "C",
+   "C",
+   "C",
+   "C",
+   "C",
+   "C",
+   "C",
+   "C"
+  ],
+  "positions_angstrom": [
+   [
+    0.2628405081546551,
+    0.6659862218771492,
+    -0.09731312600013367
+   ],
+   [
+    -0.004591846131452788,
+    -0.1418826476839829,
+    1.8770027965378948
+   ],
+   [
+    -0.003864679194983314,
+    1.4802486482756794,
+    1.8736104288054634
+   ],
+   [
+    1.1552370038745163,
+    2.4502113358672664,
+    2.756598151147601
+   ],
+   [
+    1.940797380358715,
+    -0.1438336408167443,
+    1.799152092772395
+   ],
+   [
+    1.942066066747563,
+    1.480120601756577,
+    1.796658064230168
+   ],
+   [
+    2.6923671135649516,
+    1.6340699009329005,
+    0.3890673963094295
+   ],
+   [
+    2.692579583663179,
+    3.2686505495414324,
+    0.3929407495870373
+   ]
+  ],
+  "cell_angstrom": [
+   [
+    3.567,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    3.567,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    3.567
+   ]
+  ],
+  "kpoints": null,
+  "kweights": null,
+  "max_l": {
+   "C": 1
+  },
+  "dispersion": null,
+  "klines": null,
+  "band_kpoints": null,
+  "regions": null,
+  "prerelaxed": {
+   "fmax_eV_A": 0.02,
+   "bfgs_steps": 80
+  }
+ },
+ "hsd": "Driver = GeometryOptimisation {\n  Optimiser = LBFGS {}\n  LatticeOpt = No\n  MaxSteps = 3000\n  Convergence { GradElem = 1e-07 }\n}\nGeometry = GenFormat {\n  <<< \"geo.gen\"\n}\nHamiltonian = DFTB {\n  SCC = Yes\n  SCCTolerance = 1e-10\n  MaxSCCIterations = 500\n  ShellResolvedSCC = No\n  Charge = 0.0\n  SlaterKosterFiles = Type2FileNames {\n    Prefix = \"/tmp/pydftb_dyn_2v4larz_/plain/\"\n    Separator = \"-\"\n    Suffix = \".skf\"\n  }\n  MaxAngularMomentum {\n    C = \"p\"\n  }\n  Filling = Fermi {\n    Temperature [K] = 0.0\n  }\n  KPointsAndWeights = SupercellFolding {\n    1 0 0\n    0 1 0\n    0 0 1\n    0.0 0.0 0.0\n  }\n  Hybrid = LC {\n    Screening = MatrixBased {}\n  }\n  EwaldTolerance = 1e-12\n\n}\nAnalysis {\n  PrintForces = Yes\n  MullikenAnalysis = Yes\n}\nOptions {\n  WriteDetailedOut = Yes\n  WriteResultsTag = Yes\n  TimingVerbosity = 0\n}\nParserOptions {\n  ParserVersion = 14\n}\nParallel {\n  UseOmpThreads = Yes\n}\n",
+ "reference": {
+  "n_scc": [
+   33,
+   21,
+   23,
+   22,
+   25,
+   22,
+   23,
+   22,
+   22,
+   22,
+   22,
+   22,
+   20,
+   20,
+   20,
+   19,
+   19,
+   20,
+   20,
+   20,
+   19,
+   19,
+   18,
+   19,
+   19,
+   19,
+   19,
+   19,
+   18,
+   16,
+   16,
+   16,
+   15,
+   15,
+   13,
+   13
+  ],
+  "geometry_steps": 36,
+  "wall": 2.771030083000369,
+  "free_energy": -12.7516518829,
+  "positions": [
+   [
+    0.2638124858,
+    0.6675353189,
+    -0.09577357178
+   ],
+   [
+    -0.004997235501,
+    -0.1428860534,
+    1.876105143
+   ],
+   [
+    -0.004975016719,
+    1.479045617,
+    1.87564162
+   ],
+   [
+    1.155212861,
+    2.4512638,
+    2.756030548
+   ],
+   [
+    1.940853614,
+    -0.1438263576,
+    1.797149591
+   ],
+   [
+    1.940964504,
+    1.479697976,
+    1.796843421
+   ],
+   [
+    2.693291094,
+    1.634182204,
+    0.3906138021
+   ],
+   [
+    2.693268824,
+    3.268558465,
+    0.3911060016
+   ]
+  ],
+  "cell": [
+   [
+    3.567,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    3.567,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    3.567
+   ]
+  ]
+ },
+ "tolerances": {
+  "energy": 1e-09,
+  "positions": 0.0001,
+  "cell": 1e-05
+ }
+}

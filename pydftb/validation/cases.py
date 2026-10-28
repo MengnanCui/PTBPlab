@@ -192,12 +192,17 @@ class Case:
     fd_delta: float | None = None
     hessian: dict | None = None
     # milestone M6h-1: a hybrid functional, pydftb's ``hybrid`` option ("lc", "cam" or {"type",
-    # "screening", "threshold", "cutoff_reduction" (Bohr)}); the SK set must have RangeSep
+    # "screening", "threshold", "cutoff_reduction" (Bohr)}; M6h-3a, periodic: "coulomb",
+    # "coulomb_cutoff", "gsum_cutoff" (Bohr)); the SK set must have RangeSep
     hybrid: str | dict | None = None
     # milestone M6h-1b: the reference forces are 4-point differences of DFTB+'s energy (where its
     # analytic forces are not that derivative); pydftb's DFTB+-compatible forces are compared with
     # DFTB+'s own (forces_dftbp)
     forces_fd: bool = False
+    # milestone M6h-3a: pydftb takes DFTB+ 25.1's input populations of a periodic Gamma-point
+    # hybrid (the lower-triangular DeltaP_in's dense Mulliken, DFTB._dftbp_gamma_q_in), which in
+    # a low-symmetry cell are not DeltaP_in's Mulliken populations
+    gamma_q_in_compat: bool = False
 
     @property
     def corrections(self) -> bool:
@@ -2070,5 +2075,120 @@ CASES += [
          note="576 transitions: pydftb's Stratmann iteration and conjugate gradients; DFTB+'s "
               "Stratmann leaves its Omega 1e-8 and its forces 6.6e-7 off (its forces against "
               "the differences of its own E0 + w; pydftb's 1.1e-9)"),
+]
+
+# M6h-3a: hybrid functionals of periodic systems at the Gamma point (DFTB+: one k-point, Gamma;
+# the references give it as an identity SupercellFolding, which DFTB+ needs for a restart).
+# EwaldTolerance 1e-12: DFTB+'s default (1e-9) moves the energies by 8.6e-8
+LC_GAMMA = {**LC, "ewald_tolerance": 1e-12}
+CAM_GAMMA = {**LC_GAMMA, "skf_set": "ptbp_hcocu_cam", "hybrid": "cam"}
+RC8 = {"coulomb_cutoff": 8.0, "gsum_cutoff": 16.0}            # Bohr
+
+
+def _co2_crystal():
+    """Dry ice (Pa-3, a = 5.624 A), rattled: DFTB+'s default Coulomb cutoff is a / 2 = 5.31 Bohr,
+    within the 5.8 Bohr between neighbouring molecules' atoms."""
+    a, x = 5.624, 0.1185
+    c = [(0, 0, 0), (.5, 0, .5), (0, .5, .5), (.5, .5, 0)]
+    o = [(x, x, x), (-x, -x, -x), (.5 - x, -x, .5 + x), (.5 + x, x, .5 - x),
+         (-x, .5 + x, .5 - x), (x, .5 - x, .5 + x), (.5 + x, .5 - x, -x), (.5 - x, .5 + x, x)]
+    at = Atoms("C4O8", scaled_positions=c + o, cell=[a, a, a], pbc=True)
+    at.rattle(0.02, seed=7)
+    return at
+
+
+def _diamond8():
+    at = bulk("C", "diamond", a=3.567, cubic=True)
+    at.rattle(0.02, seed=8)
+    return at
+
+
+def _cu4_cubic():
+    at = bulk("Cu", "fcc", a=3.61, cubic=True)
+    at.rattle(0.02, seed=9)
+    return at
+
+
+def _o2_box():
+    return Atoms("O2", positions=[(0, 0, 0), (1.21, 0.05, 0.03)], cell=[5.0, 5.2, 5.4], pbc=True)
+
+
+def _co_triclinic():
+    """CO in a small triclinic cell: S(Gamma) has intra-atomic off-diagonal elements (5.2e-3)
+    from the atoms' overlaps with their own images, which cubic, orthorhombic and hexagonal cells
+    cancel by symmetry."""
+    cell = [[3.0, 0.0, 0.0], [1.2, 2.8, 0.0], [0.5, 0.7, 3.1]]
+    return Atoms("CO", positions=[(0.2, 0.3, 0.1), (1.3, 0.5, 0.4)], cell=cell, pbc=True)
+
+
+def _h2o_monoclinic():
+    cell = [[3.2, 0.0, 0.0], [0.0, 3.0, 0.0], [1.1, 0.0, 2.9]]
+    return Atoms("OH2", positions=[(0.1, 0.2, 0.3), (1.05, 0.25, 0.35), (-0.15, 1.1, 0.4)],
+                 cell=cell, pbc=True)
+
+
+B1_NOTE = ("DFTB+'s forces are not the energy's derivative: in the damping region it takes the "
+           "HF part's derivative from the long-range polynomial (getdHfTruncatedAndDampedGamma"
+           "Value); compared with differences of DFTB+'s energy (SCC tolerance 1e-12; good to "
+           "about 1e-8 here: pydftb's exact derivative is 1.2e-8 and 7e-9 off them), and with "
+           "that derivative as DFTB+'s (HybridTerms._dftbp_hf_damped_derivative) with DFTB+'s "
+           "forces")
+TOL_B1 = {**TOL_HYB, "forces": 5e-8, "forces_dftbp": 1e-10, "n_scc": 1}
+B6_NOTE = ("DFTB+'s input populations are denseMullikenReal of the lower-triangular DeltaP_in: "
+           "of an atom's own block only the column sums, which drops half of the intra-atomic "
+           "off-diagonal terms of S(Gamma); compared with that (DFTB._dftbp_gamma_q_in).  "
+           "pydftb's Mulliken populations differ from DFTB+'s by {}")
+CASES += [
+    Case("co2_crystal_lc", _co2_crystal, **LC_GAMMA,
+         note="DFTB+'s defaults: Truncated, cutoff a / 2 = 5.31 Bohr, summation radius 10.6 Bohr"),
+    Case("co2_crystal_lc_rc8", _co2_crystal, **{**LC_GAMMA, "hybrid": {"type": "lc", **RC8}},
+         note="cutoff 8 Bohr: the neighbouring molecules' exchange (65 SCC iterations)"),
+    Case("co2_crystal_lc_damped_rc8", _co2_crystal,
+         **{**LC_GAMMA, "hybrid": {"type": "lc", "coulomb": "damped", **RC8}},
+         note="TruncatedAndDamped: a quintic over (7, 8) Bohr"),
+    Case("co2_crystal_lc_neighbour", _co2_crystal,
+         **{**LC_GAMMA, "hybrid": {"type": "lc", "screening": "neighbour"}}),
+    Case("co2_crystal_lc_neighbour_red10_rc8", _co2_crystal,
+         **{**LC_GAMMA, "hybrid": {"type": "lc", "screening": "neighbour",
+                                   "cutoff_reduction": 10.0, **RC8}},
+         note="the CAM cutoff 5.36 Bohr leaves the neighbouring molecules out of S(Gamma); the "
+              "forces with the reduced overlap (DFTB+'s are the energy's derivative here)"),
+    Case("co2_crystal_cam", _co2_crystal, **CAM_GAMMA),
+    Case("co2_crystal_cam_damped_rc8", _co2_crystal,
+         **{**CAM_GAMMA, "hybrid": {"type": "cam", "coulomb": "damped", **RC8},
+            "tol": TOL_B1}, scc_tol=1e-12, forces_fd=True,
+         note="CAM: " + B1_NOTE + " (7.0e-7 Ha/Bohr).  At 1e-12 the codes stop one iteration "
+              "apart (31 and 32) at round-off"),
+    Case("co2_crystal_global_damped_rc8", _co2_crystal,
+         **{**CAM_GAMMA, "skf_set": "ptbp_hcocu_global",
+            "hybrid": {"type": "cam", "coulomb": "damped", **RC8},
+            "tol": TOL_B1}, scc_tol=1e-12, forces_fd=True,
+         note="a global hybrid: " + B1_NOTE + " (5.6e-6 Ha/Bohr)"),
+    Case("diamond8_lc", _diamond8, **LC_GAMMA, note="the default cutoff 3.37 Bohr"),
+    Case("diamond8_lc_rc6", _diamond8, **{**LC_GAMMA, "hybrid": {"type": "lc",
+                                                                 "coulomb_cutoff": 6.0}},
+         note="Rc 6 Bohr, the summation radius twice that (DFTB+'s default)"),
+    Case("cu4_lc_1000K", _cu4_cubic, **LC_GAMMA, filling=("fermi", 1000.0),
+         note="d shells, a metal"),
+    Case("o2_box_lc_spin", _o2_box, **LC_GAMMA,
+         spin={"unpaired_electrons": 2.0, "spin_constants": W_HCO}),
+    Case("co_triclinic_lc", _co_triclinic, **LC_GAMMA, gamma_q_in_compat=True,
+         note=B6_NOTE.format("1.3e-5 e (forces 7.1e-6 Ha/Bohr)")),
+    Case("h2o_monoclinic_lc", _h2o_monoclinic, **LC_GAMMA, gamma_q_in_compat=True,
+         note=B6_NOTE.format("4.6e-6 e (forces 3.0e-7 Ha/Bohr)")),
+    # with the rest of the Hamiltonian
+    Case("co2_crystal_lc_plusu", _co2_crystal, **LC_GAMMA, plus_u=U_O),
+    Case("co2_crystal_lc_onsite", _co2_crystal, **LC_GAMMA, onsite=ONS),
+    Case("co2_crystal_lc_dftb3_d3", _co2_crystal, **LC_GAMMA, dftb3=DFTB3_3OB,
+         dispersion=D3BJ_3OB),
+    Case("co2_crystal_lc_field_pc", _co2_crystal, **LC_GAMMA, efield=FIELD, point_charges=PC3),
+    Case("co2_crystal_lc_mp", _co2_crystal, **LC_GAMMA, filling=("mp", 1000.0, 2)),
+    Case("co2_crystal_lc_anderson", _co2_crystal, **LC_GAMMA, mixer="anderson"),
+    Case("co2_crystal_lc_custom_hubbards", _co2_crystal, **LC_GAMMA,
+         hubbard={"C": 0.4, "O": 0.5}),
+    # restarts: the folding record before DeltaP_in
+    Case("co2_crystal_lc_read_charges", _co2_crystal, **LC_GAMMA, read_charges={"text": False}),
+    Case("o2_box_lc_spin_read_charges_text", _o2_box, **LC_GAMMA, read_charges={"text": True},
+         spin={"unpaired_electrons": 2.0, "spin_constants": W_HCO}),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}
