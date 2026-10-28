@@ -505,6 +505,9 @@ def write_band_out(path, res) -> None:
     list-directed header "KPT k SPIN s KWEIGHT w", lines (I6, F12.4, F9.5) of every level (eV)
     and its occupation (with the factor 2 without spin, not times the k weight), then a blank
     line.  ``res`` is a :class:`pydftb.DFTBResult`."""
+    if res.eigenvalues is None:                  # M7a: the purification has no eigenvalues
+        raise ValueError("band.out needs the eigenvalues: this solver gives none (use "
+                         "pydftb.bands.eigenstates at the SCC charges)")
     kw = np.ones(1) if res.kweights is None else np.asarray(res.kweights, float)
     nk = len(kw)
     lines = []

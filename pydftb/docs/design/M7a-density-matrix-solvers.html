@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7a 免对角化的密度矩阵求解器设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7a · 设计</p>
+    <h1>大体系（一）：免对角化的密度矩阵求解器与 DFTB+ 的 ELSI 求解器</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="M6h4d-hybrid-coord-derivatives.html">M6h-4d 设计</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M7 做大体系。第一块 M7a 是不用本征分解、只用矩阵乘法求密度矩阵的求解器。DFTB+ 通过 ELSI 提供这类求解器：<code>Solver = NTPoly</code>（四种纯化）、<code>OMM</code>、<code>PEXSI</code>；另有三种 LAPACK 驱动与 <code>ELPA</code>。pydftb 照 NTPoly 的代码移植四种纯化，逐轮复现 DFTB+；三种 LAPACK 驱动也照做。在 DFTB+ 不支持的地方，pydftb 继续做：自旋通道、两分量、k 点、杂化泛函、torch 设备与混合精度。</p>
+    <ul>
+      <li><strong>参考程序</strong>：
+        <ul>
+          <li>本机 conda 的 DFTB+ 25.1 没有 ELSI。conda-forge 的 25.1 MPICH 版把 ELSI 列为依赖，但没有链接它，选这些求解器时报 “Not compiled with ELSI supported solvers”。</li>
+          <li>24.1 的 MPICH 版链接了 ELSI 2.9.1（ELPA 2021.11、NTPoly 2.7.1、libOMM 1.0；没有 PEXSI），用作参考。它用 LAPACK 时与 25.1 冻结的参考差 ≤ 1e-13，SCC 轮数相同。</li>
+        </ul></li>
+      <li><strong>P100</strong>：pydftb 移植的 NTPoly 在 9 个算例 × 6 种设置上复现 DFTB+：
+        <ul>
+          <li>SCC 轮数全部相同，包括 TRS2 在默认容差下多出的轮数；</li>
+          <li>能量差 ≤ 1.1e-10 Ha（DFTB+ 打印 10 位小数）；</li>
+          <li>化学势在默认设置下差 ≤ 1e-11 Ha。</li>
+        </ul></li>
+      <li><strong>精度</strong>（P99，DFTB+ 的 NTPoly 对它自己的对角化）：
+        <ul>
+          <li>默认的 TRS4 ≤ 2.4e-8 e，把容差收紧也不变，原因是迭代在 tr G &lt; 1e-14 时提前退出；</li>
+          <li>TRS2 在默认容差 1e-5 下差到 2.7e-4 e，收紧容差后精确到 1e-14；</li>
+          <li>PM、HPCP 约 1e-10–1e-9。</li>
+        </ul></li>
+      <li><strong>发现的 DFTB+ 问题</strong>：
+        <ul>
+          <li>B28：NTPoly 用稠密输入（<code>Sparse = No</code>）且有块势（+U、onsite）时结果错，H<sub>2</sub>O 4.3e-3 Ha，水盒子 3.6e-2 Ha。</li>
+          <li>B29：没有自旋而电子数为奇数时，NTPoly 把电子数悄悄进到偶数，H<sub>2</sub>O<sup>+</sup> 按中性水算。</li>
+          <li>OMM：16 次默认设置的运行里 9 次 SCC 不收敛，其余要多 3–30 倍的轮数。pydftb 不实现 OMM。</li>
+        </ul></li>
+      <li><strong>速度</strong>（P102，本机 4 核）：稠密纯化比本征分解慢 4–6 倍（1296–3072 个轨道）。它的用处在 GPU 上；GPU 的实测等用户运行自检脚本。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">54 / 54</span><span class="lbl">SCC 轮数与 DFTB+ NTPoly 相同</span></li>
+      <li><span class="num">≤ 1.1e-10</span><span class="lbl">能量对 DFTB+ NTPoly（Ha）</span></li>
+      <li><span class="num">2</span><span class="lbl">新发现的 DFTB+ 问题（B28、B29）</span></li>
+      <li><span class="num">4–6×</span><span class="lbl">CPU 上纯化比本征分解慢</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#m7">一、M7 的分块</a></li>
+      <li><a href="#scope">二、DFTB+ 的求解器与范围</a></li>
+      <li><a href="#probe">三、探针与原型</a></li>
+      <li><a href="#method">四、算法</a></li>
+      <li><a href="#api">五、pydftb 的接口</a></li>
+      <li><a href="#impl">六、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">七、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">八、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="m7">
+      <h2>一、M7 的分块</h2>
+      <p>路线图里的 M7 是 “大体系：GPU 混合精度 SP2、Chebyshev、分治多机”，CPU 原型见 <code>RESEARCH.md</code> 第三节。按功能分五块，每块照常有探针、设计、实现、门槛与报告：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>块</th><th>内容</th><th>对照</th></tr></thead>
+        <tbody>
+          <tr><td>M7a</td><td>稠密的免对角化求解器：DFTB+ 的 NTPoly 纯化（PM、TRS2、TRS4、HPCP）、LAPACK 驱动、ELPA；自旋通道、两分量、k 点、杂化；torch 设备与混合精度</td><td>DFTB+ 24.1 + ELSI；pydftb 的本征分解</td></tr>
+          <tr><td>M7b</td><td>有限温度的免对角化：Chebyshev 费米算符展开（金属、自旋共用费米能级、熵）</td><td>pydftb 的本征分解（DFTB+ 的 PEXSI 不在这些构建里）</td></tr>
+          <tr><td>M7c</td><td>稀疏的线性标度：块稀疏的 H、S，稀疏的 S<sup>−1/2</sup> 与带截断的纯化（NTPoly <code>Sparse = Yes</code> 的对应），O(N) 的布居与力</td><td>DFTB+ 的 NTPoly；本征分解</td></tr>
+          <tr><td>M7d</td><td>分治（divide-and-conquer）：按空间分块加缓冲区，多进程与多机</td><td>本征分解（缓冲区收敛）</td></tr>
+          <tr><td>M7e</td><td>GPU 自检脚本的新项目与跨结构批量</td><td>用户的 GPU</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="scope">
+      <h2>二、DFTB+ 的求解器与范围</h2>
+      <p>DFTB+ 的 <code>Hamiltonian { Solver = ... }</code>（<code>parser.F90</code>，ELSI 的接口在 <code>elecsolvers/elsisolver.F90</code>）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>求解器</th><th>DFTB+ 的默认与限制</th><th>M7a</th></tr></thead>
+        <tbody>
+          <tr><td><code>RelativelyRobust</code>（默认）、<code>QR</code>、<code>DivideAndConquer</code></td><td>LAPACK 的 hegvr（Cholesky + hegst + heevr，abstol 取安全最小值 + trsm）、hegv、hegvd</td><td>做（三个驱动名）；pydftb 的 <code>"eigh"</code> 一直是 hegvd，不变</td></tr>
+          <tr><td><code>ELPA</code></td><td>Mode = 2；只在 MPI 构建里</td><td>做（等于本征分解）</td></tr>
+          <tr><td><code>NTPoly</code></td><td>PurificationMethod = 2（TRS4），Tolerance = 1e-5，Truncation = 1e-10，Sparse = Yes；只用 Fermi 填充（温度不起作用）；拒绝自旋（共线与非共线）；每个 (k, 自旋) 要一个 MPI 组；不给本征值，TS = 0，费米能级是 NTPoly 的化学势</td><td>做，DFTB+ 的默认与语义；越过 DFTB+ 的见下</td></tr>
+          <tr><td><code>OMM</code></td><td>nIterationsELPA = 5，Tolerance = 1e-10，Choleskii = Yes；自旋要共用费米能级；不写费米能级</td><td>不做（P99：SCC 常常不收敛）</td></tr>
+          <tr><td><code>PEXSI</code></td><td>conda-forge 的 ELSI 没有编译 PEXSI</td><td>不做；有限温度放在 M7b</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>MPI 构建的其他限制</strong>（P99c）：杂化泛函（“Range separated calculations do not work with MPI yet”）与 Casida（“Linear response calc. does not work with MPI yet”）在 MPI 构建里都停下，所以 DFTB+ 没有 “杂化 + NTPoly”。</li>
+        <li><strong>M7a 越过 DFTB+ 的部分</strong>（只要密度矩阵与能量加权密度矩阵的功能都可以用纯化）：
+          <ul>
+            <li>共线自旋（固定总自旋，每个通道各自纯化）；</li>
+            <li>两分量（非共线、SOC，2N × 2N 的复矩阵，每个能级一个电子）；</li>
+            <li>k 点（每个 k 各自纯化，占据数相同，只适用于有带隙的体系）；</li>
+            <li>杂化泛函（分子、Γ 点、k 点）、+U、onsite、DFTB3、外场、点电荷、溶剂、色散；</li>
+            <li>力、应力、结构优化与 MD（含 XL-BOMD）；</li>
+            <li>torch 设备与混合精度。</li>
+          </ul></li>
+        <li><strong>拒绝</strong>：
+          <ul>
+            <li>要本征值或本征矢的功能：Casida、响应与坐标导数、eigenvec.out、SCC 自己的 band.out、Pipek–Mezey、固定费米能级、每个 k 单独填充（能带与 DOS 的后处理在 SCC 电荷上自己对角化，照样可用，见报告）；</li>
+            <li>自旋共用费米能级（<code>relax_total_spin</code>）；MP 与 Gaussian 展宽（DFTB+ 的原话）；</li>
+            <li>每个通道的电子数不是整数（DFTB+ 悄悄进位，B29）。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>三、探针与原型</h2>
+      <p>草稿目录 <code>m7a/</code>：<code>p99_elsi.py</code>、<code>p99b_odd.py</code>（DFTB+ 24.1），<code>ntproto.py</code>、<code>ommproto.py</code>（原型），<code>p100_compare.py</code>，<code>p102_timing.py</code>。NTPoly 2.7.2 与 ELSI 2.9.1 的源码只在草稿目录里参考。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P99</td><td>DFTB+ 24.1 + ELSI 在 9 个有带隙的冻结算例（分子、Γ 点水盒子、onsite、自定义 U、H5、DIIS）上：三种 LAPACK 驱动、ELPA 两种模式、NTPoly 四种方法（默认与收紧）、稠密输入、OMM 四种设置；另跑拒绝与边界情况，共 188 次</td><td>
+            <ul>
+              <li>LAPACK 与 ELPA：对 25.1 的参考 ≤ 1e-13，轮数相同。</li>
+              <li>NTPoly：TRS4 ≤ 2.4e-8 e（收紧也不变），TRS2 默认 ≤ 2.7e-4 e（水二聚体多 2 轮），PM、HPCP ≤ 1.7e-9；费米能级与 LAPACK 的差 1e-5–3e-2 Ha（它是纯化多项式的 0.5 等值点，不是 HOMO–LUMO 的中点）。不写本征值，不打印 Mermin 自由能。</li>
+              <li>OMM：9 次 SCC 不收敛，其余轮数是 LAPACK 的 3–30 倍，<code>nIterationsELPA = 0</code> 时一次收敛到差 75 Ha 的态。</li>
+              <li>拒绝原文：“Solver does not currently support spin polarisation”“This electronic solver can only be used for Fermi function distributed electrons”“This solver requires as many parallel processor groups as there are independent spin and k-point combinations”“This solver currently requires spin values to be relaxed”。</li>
+              <li>Cu<sub>4</sub>CO 300 K：NTPoly 给 T = 0 的密度（电荷差 2.1e-3 e），不报错。</li>
+            </ul></td></tr>
+          <tr><td>P99 稠密输入</td><td><code>Sparse = No</code> 对 <code>Sparse = Yes</code>：没有块势、+U、+U 加 onsite、onsite</td><td>相同、5.3e-6、2.2e-2、4.3e-3–3.6e-2 Ha（B28）。DFTB+ 的 <code>unpackHSRealBlacs</code> 把原子自身的块照原样写进稠密矩阵，只对不同原子的块写转置；LAPACK 与 ELPA 只读一个三角，NTPoly 的稠密输入读整个矩阵。最可能的原因是带块势的对角块不对称。</td></tr>
+          <tr><td>P99b</td><td>奇数电子、没有自旋：OH、H<sub>2</sub>O<sup>+</sup></td><td>LAPACK 正确；NTPoly 按 2·nint(N/2) 个电子算：OH 的净电荷 −1，H<sub>2</sub>O<sup>+</sup> 的能量与中性水逐位相同（B29）。</td></tr>
+          <tr><td>P100</td><td>pydftb 的 NTPoly 原型（ISR、四种方法、化学势、能量加权密度矩阵、截断）接在 pydftb 的 SCC 上，对 P99 的 DFTB+ NTPoly</td><td>54 次运行：SCC 轮数全部相同；能量差 ≤ 1.1e-10 Ha；化学势在默认设置下 ≤ 1e-11 Ha。收紧容差时化学势的二分法达不到 |p − 0.5| &lt; 1e-10，走满 100 步，结果随舍入变，差到 4e-4 Ha。水盒子对冻结参考的 1.3e-7 Ha 是参考用了 DFTB+ 默认的 Ewald 容差（pydftb 的本征分解同样差 1.32e-7）。</td></tr>
+          <tr><td>P101</td><td>libOMM 的原型（Polak–Ribière CG、精确的四次线搜索、能量的相对变化作收敛判据）</td><td>60 维随机矩阵：容差 1e-10 时密度差 7e-5，1e-14 时 2e-6。判据只看能量，密度收敛得慢，这正是 P99 里 SCC 不收敛的原因。</td></tr>
+          <tr><td>P102</td><td>本机 4 核：水盒子（64、216、512 个水，384–3072 个轨道）的非 SCC H<sub>0</sub>，本征分解对 TRS4、TRS2（DFTB+ 默认与收紧）与 float32 迭代</td><td>
+            <ul>
+              <li>3072 个轨道：本征分解 3.2 s，TRS4 19 s，TRS2 收紧 16 s，float32 14 s。</li>
+              <li>float64 的电荷误差 ≤ 1.5e-12（3072）；64 个水时 TRS4 收紧后反而是 6e-8：收敛后 σ 的步骤不保持迹。</li>
+              <li>float32 迭代后接 float64 的步骤：能量差 5e-11 Ha（二阶），电荷差 2–3e-6 e。float32 舍入造成的子空间误差，之后只用 X 的多项式步骤修不掉。</li>
+            </ul></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="method">
+      <h2>四、算法</h2>
+      <p>照 NTPoly 2.7（<code>DensityMatrixSolversModule.F90</code>、<code>SquareRootSolversModule.F90</code>）与 ELSI 2.9（<code>elsi_ntpoly.f90</code>）。下面的 X 是正交基里的投影（每个轨道占据 1），n 是矩阵维数，n<sub>e</sub> 是一个通道的 “电子数” 参数（见下）。</p>
+      <h3>S<sup>−1/2</sup></h3>
+      <ul>
+        <li>耦合的 Newton–Schulz（Taylor 五阶）：λ = 1/max(|e<sub>min</sub>|, |e<sub>max</sub>|)（Gershgorin），Z<sub>0</sub> = I，Y<sub>0</sub> = λS；每步 X = Z Y − I，范数取列绝对值和的最大值；X 的五阶多项式（系数由 −40/35、48/35、−64/35、128/35 给出）乘到 Z 左边与 Y 右边；范数 ≤ Tolerance 后再走一步才退出。Z·√λ = S<sup>−1/2</sup>。</li>
+        <li>截断 max(0.01·Truncation, 1e-15)。每个几何算一次。</li>
+      </ul>
+      <h3>四种纯化</h3>
+      <p>H̃ = Z H Z<sup>T</sup>（每次乘法后截断）。四种方法共用两件事。收敛判据：每步之后 E = 2 tr(X H̃)，|E − E<sub>前</sub>| ≤ Tolerance 时退出。化学势：在 [0, 1] 上二分，把每步的多项式依次作用在中点上，找出映到 0.5 的点；|p − 0.5| &lt; Tolerance 或走满 100 步就停。二分只用 “退出步数 − 1” 步，最后一步不计入，这是 NTPoly 的 <code>outer_counter − 1</code>。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方法</th><th>起点</th><th>每步</th><th>化学势</th></tr></thead>
+        <tbody>
+          <tr><td>PM（0）</td><td>λ = tr H̃/n，α = min(n<sub>e</sub>/2/(e<sub>max</sub> − λ), (n − n<sub>e</sub>/2)/(λ − e<sub>min</sub>))，X<sub>0</sub> = α/n (λ − H̃) + n<sub>e</sub>/(2n)</td><td>c = tr(X² − X³)/tr(X − X²)；c &gt; ½：X ← ((1+c)X² − X³)/c，否则 ((1−2c)X + (1+c)X² − X³)/(1−c)</td><td>λ − (n·mid − n<sub>e</sub>/2)/α</td></tr>
+          <tr><td>TRS2（1）</td><td>X<sub>0</sub> = (e<sub>max</sub> − H̃)/(e<sub>max</sub> − e<sub>min</sub>)</td><td>tr X &gt; n<sub>e</sub>/2：X²；否则 2X − X²</td><td>e<sub>max</sub> + (e<sub>min</sub> − e<sub>max</sub>)·mid</td></tr>
+          <tr><td>TRS4（2，默认）</td><td>同 TRS2</td><td>F = X²(4X − 3X²)，G = X²(I − X)²，σ = (n<sub>e</sub>/2 − tr F)/tr G；σ &gt; 6：2X − X²，σ &lt; 0：X²，否则 F + σG；|tr G| &lt; 1e-14 时直接退出</td><td>同 TRS2</td></tr>
+          <tr><td>HPCP（3）</td><td>μ = tr H̃/n，β<sub>1</sub> = n<sub>e</sub>/(2n)，β<sub>2</sub> = min(β<sub>1</sub>/(e<sub>max</sub> − μ), (1 − β<sub>1</sub>)/(μ − e<sub>min</sub>))，D<sub>0</sub> = β<sub>1</sub> + β<sub>2</sub>(μ − H̃)</td><td>σ = tr(D²(I − D))/tr(D(I − D))，D ← D + 2D²(I − D) − 2σD(I − D)</td><td>μ + (β<sub>1</sub> − mid)/β<sub>2</sub></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>密度：P = g·Z<sup>T</sup> X Z（g = 2 闭壳层，1 自旋通道与两分量）；能量加权密度矩阵 W = P H P / g（ELSI 的 <code>EnergyDensityMatrix</code>）。每次乘法后截断。</li>
+        <li>复矩阵（k 点、两分量）：迹与 tr(AB) 取实部，转置换成共轭转置。</li>
+      </ul>
+      <h3>电子数、自旋与 k 点</h3>
+      <ul>
+        <li>DFTB+/ELSI 把 n<sub>e</sub> = 2·nint(N/(n<sub>spin</sub>·g)) 交给 NTPoly，奇数时进位（B29）。pydftb 要求每个通道的占据数 N/g 是整数，否则报错。</li>
+        <li>共线自旋（固定总自旋）：上、下自旋各纯化一次，占据数 n<sub>↑</sub>、n<sub>↓</sub>，各有一个化学势（<code>fermi_spin</code>）。</li>
+        <li>两分量：一个 2N × 2N 的厄米矩阵，占据数 N。</li>
+        <li>k 点：每个 k 纯化一次，占据数相同。这只对每个 k 的占据带数相同的体系（有带隙）成立；报告的费米能级是各 k 化学势按权重的平均。</li>
+        <li>温度：纯化给出 T = 0 的投影（DFTB+ 相同）。Fermi 填充的 T &gt; 0 时警告；MP 与 Gaussian 报错（DFTB+ 的原话）。</li>
+      </ul>
+      <h3>混合精度</h3>
+      <ul>
+        <li><code>precision="mixed"</code>：S<sup>−1/2</sup> 与 H̃ 用 float64，纯化先用 float32 迭代。tr(X − X²) 到达 float32 的噪声（10·n·ε<sub>32</sub>），或者已小于 1e-2·√n 而两步内不再下降时，转到 float64，最多再走 4 步或到 NTPoly 的判据满足。P、W 用 float64。原先设想的能量判据（|ΔE| 不再减小就转）让 TRS2 过早停下、HPCP 走满 100 步，所以实现改用这个幂等性判据（见报告第八节）。</li>
+        <li>精度（P102）：能量 ≈ 5e-11 Ha，电荷 ≈ 3e-6 e。float32 引入的子空间误差（占据与空轨道之间的混合）只靠 X 的多项式修不掉，文档写明；要 1e-10 的结果用 float64。在 SCC 里，scc_tol &lt; 1e-5 时警告（1e-10 时 Broyden 不收敛）。</li>
+      </ul>
+      <h3>LAPACK 驱动</h3>
+      <ul>
+        <li><code>"qr"</code> = hegv，<code>"divideandconquer"</code> = hegvd（等于 pydftb 一直用的 <code>"eigh"</code>），<code>"relativelyrobust"</code> = DFTB+ 的 hegvr：Cholesky，hegst 化成标准形式，heevr（abstol = 安全最小值），trsm 回代。结果只在舍入上不同（P99 ≤ 1e-13）。</li>
+        <li><code>"elpa"</code>：ELPA 是并行的本征分解，结果与本征分解相同，取 <code>"eigh"</code>。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>五、pydftb 的接口</h2>
+      <pre><code>DFTB(sk, solver="ntpoly")                    # DFTB+ Solver = NTPoly {}：TRS4，1e-5，1e-10
+from pydftb.purification import NTPoly
+DFTB(sk, solver=NTPoly(method="trs2", tolerance=1e-10, truncation=0.0))
+DFTB(sk, solver=NTPoly(precision="mixed"), backend="torch", device="cuda")
+DFTB(sk, solver="relativelyrobust")          # 或 "qr"、"divideandconquer"、"elpa"</code></pre>
+      <ul>
+        <li><code>method</code>：<code>"pm"</code>、<code>"trs2"</code>、<code>"trs4"</code>、<code>"hpcp"</code>，或 DFTB+ 的 0–3。</li>
+        <li>结果：<code>eigenvalues</code> 与 <code>occupations</code> 为 None，<code>fermi</code> 是化学势（自旋时 <code>fermi_spin</code>），TS = 0；<code>solver.last_iterations</code> 记录当前几何每次纯化的步数，<code>solver.isr_iterations</code> 记录 S<sup>−1/2</sup> 的步数。</li>
+        <li><code>PyDFTB(solver=...)</code> 同样可用；<code>solver="omm"</code>、<code>"pexsi"</code> 报错并说明原因。</li>
+        <li>原来的 <code>"sp2"</code> 原型（M0，Kruchinin 判据）保持不变。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>六、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>purification.py</code>（新）</td><td>
+            <ul>
+              <li>与后端无关的 NTPoly 移植（数组命名空间取自输入：NumPy 或 torch）：<code>inverse_sqrt</code>；四种方法的类 <code>_PM</code>、<code>_TRS2</code>、<code>_TRS4</code>、<code>_HPCP</code>；<code>purify</code>；化学势的二分。</li>
+              <li><code>NTPoly</code> 求解器类：<code>prepare(S)</code> 算 Z，<code>density(h, n_occ, g, need_w)</code> 对每个 k 纯化。另有混合精度、截断、化学势的平均，以及 <code>eigenpairs = False</code> 的标记。</li>
+            </ul></td></tr>
+          <tr><td><code>solvers.py</code></td><td><code>EighSolver(driver=...)</code>：<code>None</code> 时调用不变（逐位相同）；<code>"gv"</code>、<code>"gvd"</code>、<code>"gvr"</code>（DFTB+ 的 hegvr）。<code>SOLVERS</code> 加 <code>"qr"</code>、<code>"divideandconquer"</code>、<code>"relativelyrobust"</code>、<code>"elpa"</code>、<code>"ntpoly"</code>。</td></tr>
+          <tr><td><code>calculator.py</code></td><td>
+            <ul>
+              <li><code>_solve</code>：没有本征对的求解器另走一支，按无自旋、自旋通道、两分量调用 <code>density</code>。</li>
+              <li>torch 后端用同一个 NTPoly 类（设备上的张量）。</li>
+              <li>原来对 <code>"sp2"</code> 的检查改成 “求解器是否给本征对”，覆盖各功能；新增自旋共用费米能级、展宽、温度与电子数的检查。</li>
+            </ul></td></tr>
+          <tr><td><code>ase_calc.py</code>、<code>dftbplus_io.py</code></td><td>求解器对象照常传入；结果没有本征值或占据数时，ASE 的 <code>get_eigenvalues</code>、<code>get_occupation_numbers</code> 与 <code>write_band_out</code> 给出说明。</td></tr>
+          <tr><td>validation</td><td>
+            <ul>
+              <li><code>cases.py</code> 的新字段 <code>solver</code>（驱动名或 NTPoly 的设置）。</li>
+              <li><code>dftbplus.solver_block</code> 写 <code>Solver = ...</code>。</li>
+              <li>需要 ELSI 的算例由 <code>$DFTBPLUS_ELSI</code> 指定程序（单进程的 MPI 包装）；24.1 的 MPI 版在单进程时接受 <code>UseOmpThreads</code>，HSD 不变。</li>
+              <li>参考里没有 Mermin 自由能与本征值时，比较只用总能量。</li>
+            </ul></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="validation">
+      <h2>七、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li><strong>DFTB+ 24.1 + ELSI 的参考算例</strong>（冻结，记下程序与 ELSI 的版本）：
+          <ul>
+            <li>NTPoly 的四种方法、默认与收紧的设置、截断，覆盖分子、Γ 点水盒子、onsite、+U 的稀疏输入、自定义 U、H5、DIIS、非 SCC；</li>
+            <li>比较能量、力（DFTB+ 的差分步长）、电荷、化学势与 SCC 轮数；</li>
+            <li>LAPACK 驱动与 ELPA 的参考用 25.1 生成（不需要 ELSI）。</li>
+          </ul></li>
+        <li><strong>越过 DFTB+ 的部分</strong>（pydftb 自身）：收紧的 TRS2 等于本征分解。
+          <ul>
+            <li>自旋通道、两分量（SOC）、k 点（有带隙的体系，与本征分解比）、杂化（分子与 k 点）、+U、onsite、H5、外场、点电荷与溶剂、应力、XL-BOMD 的一段 MD、能带的后处理；</li>
+            <li>力：收紧时与本征分解的力差 ≤ 1e-10（本征分解的力已对过差分与 DFTB+），不另做差分；</li>
+            <li>torch（CPU）的 float64 等于 NumPy，混合精度的界。</li>
+          </ul></li>
+        <li><strong>单元测试</strong>：
+          <ul>
+            <li>四种方法在随机矩阵上收敛到投影，化学势在带隙里；</li>
+            <li>S<sup>−1/2</sup>；</li>
+            <li>截断的作用；</li>
+            <li>拒绝的原文。</li>
+          </ul></li>
+        <li><strong>门槛</strong>：golden 两个环境逐位相同（旧的求解器不变）、refgen（NumPy、torch）、dynamics、pytest 三个环境、PTBP 测试与 G1。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>八、风险与之后</h2>
+      <ul>
+        <li><strong>速度</strong>：本机上稠密纯化比本征分解慢 4–6 倍，价值在 GPU 与之后的稀疏版（M7c）。GPU 的耗时写进自检脚本，由用户实测。</li>
+        <li><strong>精度</strong>：DFTB+ 的默认 TRS4 有 1e-8 量级的误差，TRS2 默认容差下有 1e-4 量级的误差；pydftb 照搬（为了逐轮对照），文档写明怎样设置得到精确结果。</li>
+        <li><strong>k 点</strong>：每个 k 的占据数相同，只适用于有带隙的体系；金属会悄悄给出错误的占据（与 DFTB+ 的组并行相同），文档写明。</li>
+        <li><strong>OMM</strong>：不实现。DFTB+ 的 OMM 在 P99 里大多不收敛；M7c 的稀疏版若需要局域轨道的极小化，另作设计。</li>
+        <li><strong>之后</strong>：M7b 有限温度（Chebyshev），M7c 稀疏线性标度，M7d 分治，M7e GPU 与批量。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M6h4d-hybrid-coord-derivatives.html">← M6h-4d 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

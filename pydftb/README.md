@@ -849,6 +849,45 @@ On 4 threads the eigensolver part runs 1.9–2.9× faster and a whole calculatio
 [`docs/reports/M3a-dispatch.html`](docs/reports/M3a-dispatch.html)).  Use the default
 `solver="batched"`: the `"eigh"` solver calls SciPy, which keeps the GIL.
 
+### Density matrices without diagonalisation (DFTB+'s `Solver` block)
+
+```python
+from pydftb.purification import NTPoly
+
+DFTB(sk, solver="ntpoly")                    # DFTB+'s Solver = NTPoly {}: TRS4, 1e-5, 1e-10
+DFTB(sk, solver=NTPoly("trs2", tolerance=1e-10, truncation=1e-15))   # the eigensolver's result
+DFTB(sk, solver=NTPoly(precision="mixed"), backend="torch", device="cuda", scc_tol=1e-5)
+DFTB(sk, solver="relativelyrobust")          # or "qr", "divideandconquer", "elpa"
+```
+
+Milestone M7a ports NTPoly 2.7's dense purifications as DFTB+ runs them through ELSI
+(`PurificationMethod` 0-3: PM, TRS2, TRS4, HPCP) step for step: S^-1/2 by the coupled
+Newton-Schulz iteration, the flushing of small elements (`truncation`), the test
+|E - E_previous| <= `tolerance` and NTPoly's chemical potential, which is the Fermi level
+(DFTB+ reports it too).  The result has no eigenvalues or occupations and TS = 0.  Each
+spin channel (or the spinor matrix) and k-point is purified at its own whole number of
+occupied levels, so the solver also covers what DFTB+'s NTPoly refuses or gets wrong:
+collinear and two-component spin, k-points of gapped systems, hybrid functionals, and +U or
+onsite corrections (DFTB+'s dense input is wrong with them, bug B28).  Forces, stress, MD and
+XL-BOMD need only the density matrices; band structures and DOS diagonalise at the SCC
+charges as before.  Refused: analyses that need eigenvectors, Casida, fixed Fermi levels,
+MP and Gaussian smearing (DFTB+'s message), `relax_total_spin` and a fractional number of
+levels in a channel (DFTB+ rounds an odd electron count up without a word, bug B29); a
+temperature is ignored with a warning, as DFTB+ ignores it.  The LAPACK drivers are DFTB+'s
+hegv, hegvd (= `"eigh"`) and hegvr; `"elpa"` is the eigensolver.  OMM and PEXSI are not
+provided (DFTB+'s OMM leaves the SCC unconverged in most runs; finite temperatures follow
+in M7b).
+
+13 frozen DFTB+ references (NTPoly's from DFTB+ 24.1 with ELSI 2.9.1, all four methods;
+`$DFTBPLUS_ELSI` names that binary for `refgen --regenerate`) agree to <= 9.4e-11 Ha with
+the same SCC iterations, the chemical potential to <= 6.8e-12 Ha; a tight TRS2 equals the
+eigensolver to <= 1.6e-10 for twelve Hamiltonians.  DFTB+'s default TRS4 is good to about
+1e-8 e (it stops when |tr G| < 1e-14).  `precision="mixed"` (pydftb's) runs the first steps
+in single precision: charges to about 1e-6, for SCC tolerances >= 1e-5.  On a 4-core CPU the
+dense purification is 4-6x slower than LAPACK's eigensolver (3072 orbitals: 16-19 s against
+3.2 s); it is meant for GPUs and for the sparse version (M7c).  Details:
+[`docs/reports/M7a-density-matrix-solvers.html`](docs/reports/M7a-density-matrix-solvers.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

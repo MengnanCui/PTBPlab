@@ -9,6 +9,9 @@ level and the entropic term T*S.
 * ``SP2Solver``      diagonalisation-free second-order spectral projection
                      (Niklasson 2002).  Only GEMMs => GPU / tensor-core
                      friendly; optional mixed precision.  Gamma, T = 0, gapped.
+* DFTB+'s ``Solver`` choices (M7a): ``"qr"``, ``"divideandconquer"`` (= ``"eigh"``),
+  ``"relativelyrobust"`` (LAPACK drivers), ``"elpa"`` (= ``"eigh"``) and ``"ntpoly"``
+  (purification without eigenvalues, :mod:`pydftb.purification`).
 
 ``EighSolver`` and ``BatchedSolver`` take ``threads`` (a :class:`pydftb.parallel.KThreads`):
 the per-k work then runs on chunks of k-points in threads, bitwise identical to
@@ -16,12 +19,15 @@ the whole stack (see :mod:`pydftb.parallel`).
 """
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 
 from .backend import ops
 from .backend.spec import NUMPY, Backend
 
 from .occupations import fill
+from .purification import NTPoly
 
 
 def _kmap(threads, fn, nk, norb):
@@ -64,10 +70,13 @@ def _density(evals, evecs, kw, nelec, smearing, need_w, spin_factor=2.0, threads
 
 
 class EighSolver:
+    """``driver`` (M7a): one of DFTB+'s LAPACK drivers ("gv" QR, "gvd" DivideAndConquer,
+    "gvr" RelativelyRobust, :func:`pydftb.backend.ops.eigh_driver`); None: :func:`ops.eigh`."""
     name = "eigh"
 
-    def __init__(self, threads=None):
+    def __init__(self, threads=None, driver: str | None = None):
         self.threads = threads
+        self.driver = driver
 
     def prepare(self, s):
         self.s = s
@@ -77,7 +86,10 @@ class EighSolver:
         def part(sl):
             ev, vec = [], []
             for hk, sk in zip(h[sl], self.s[sl]):
-                e, c = ops.eigh(hk, sk)
+                if self.driver is None:
+                    e, c = ops.eigh(hk, sk)
+                else:
+                    e, c = ops.eigh_driver(hk, sk, self.driver)
                 ev.append(e)
                 vec.append(c)
             return np.array(ev), np.array(vec)
@@ -165,6 +177,7 @@ def sp2(hp: np.ndarray, nocc: float, dtype=np.float64, refine_fp64: int = 0,
 class SP2Solver:
     """Gamma-point, zero-temperature, diagonalisation-free solver."""
     name = "sp2"
+    eigenpairs = False
 
     def __init__(self, dtype=np.float64, refine_fp64: int = 0, threads=None):
         self.dtype = dtype
@@ -191,4 +204,17 @@ class SP2Solver:
         return rho[None], None if wdm is None else wdm[None], None, np.nan, 0.0
 
 
-SOLVERS = {"eigh": EighSolver, "batched": BatchedSolver, "sp2": SP2Solver}
+SOLVERS = {"eigh": EighSolver, "batched": BatchedSolver, "sp2": SP2Solver,
+           # DFTB+'s Solver block (M7a)
+           "qr": partial(EighSolver, driver="gv"),
+           "divideandconquer": partial(EighSolver, driver="gvd"),
+           "relativelyrobust": partial(EighSolver, driver="gvr"),
+           "elpa": EighSolver, "ntpoly": NTPoly}
+# DFTB+ solvers that pydftb does not provide, and why (M7a)
+UNSUPPORTED_SOLVERS = {
+    "omm": "DFTB+'s OMM (libOMM through ELSI) is not implemented: in DFTB+ 24.1 its densities, "
+           "converged on the energy only, leave the SCC unconverged in most runs (M7a report); "
+           "use 'ntpoly' or an eigensolver",
+    "pexsi": "PEXSI is not implemented (DFTB+'s conda-forge builds do not include it); "
+             "finite-temperature densities without eigenvalues are planned for M7b",
+}

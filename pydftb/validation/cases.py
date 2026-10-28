@@ -168,7 +168,10 @@ class Case:
                                           # DFTB+'s energy}
     dipole_correction: bool | dict | None = None   # True or {"layer_position": z0 (A)}
     dftbplus: str = "25.1"                # "dev": references from the development build
-                                          # ($DFTBPLUS_DEV), for what 25.1 does not have
+                                          # ($DFTBPLUS_DEV), for what 25.1 does not have;
+                                          # "elsi" (M7a): a build with ELSI ($DFTBPLUS_ELSI;
+                                          # conda-forge's 25.1 MPI build does not link it, the
+                                          # 24.1 MPICH build does)
     # milestone M6f-4a: analysis outputs; {"atom_energies", "net_populations", "cm5",
     # "esp": {"points" (A)} | {"grid": {"spacing" (A), "origin" (A), "points"}},
     # "eigenvectors", "band_out" (compare band.out), "compat" (DFTB+'s E/N for D3)}
@@ -213,6 +216,10 @@ class Case:
     # milestone M6h-3b: both codes stop after this many SCC iterations unconverged (DFTB+
     # ConvergentSCCOnly = No; the untruncated kernel, whose SCC does not settle)
     fixed_scc: int | None = None
+    # milestone M7a: DFTB+'s Solver: "qr", "divideandconquer", "relativelyrobust", "elpa" or
+    # {"name": "ntpoly", "method", "tolerance", "truncation"} (pydftb's NTPoly options; the
+    # DFTB+ defaults when left out)
+    solver: str | dict | None = None
 
     @property
     def dftbp_forces(self) -> bool:
@@ -2521,5 +2528,53 @@ CASES += [
            tol={**TOL_HRESP, "dqdxext": 1e-9, "extq_text": 2e-8}, dftbplus="dev"),
     _hresp("h2o_lc", "h2o_lc_pc_pol", POL, point_charges=PC3, dftbplus="dev",
            note="the development build's response has no point-charge potential (B27 fixed)"),
+]
+
+# --- DFTB+'s Solver block (milestone M7a) ---------------------------------------------------
+# NTPoly's purification (references from DFTB+ 24.1 with ELSI 2.9.1 and NTPoly 2.7.1: conda-forge's
+# 25.1 MPI build does not link ELSI, see the M7a report; its LAPACK results equal 25.1's to
+# 1e-13) and the LAPACK drivers (25.1).  pydftb with DFTB+'s difference step, so that the forces
+# are DFTB+'s; DFTB+ prints the energies with 10 decimals.
+TOL_SOLVER = {"energy": 1e-9, "forces": 1e-9, "charges": 1e-9, "spins": 1e-9, "orbital": 1e-9,
+              "n_scc": 0, "scc_errors": 1e-4, "fermi_level": 1e-9}
+NTPOLY = {"name": "ntpoly"}
+
+
+def _solver_case(base: str, name: str, solver, dftbplus: str = "elsi", **kw) -> Case:
+    """A copy of case ``base`` with DFTB+'s Solver (M7a)."""
+    src = next(c for c in CASES if c.name == base)
+    opts = dict(name=name, solver=solver, dftbplus=dftbplus, fd_delta=FD_DFTBP,
+                tol={**src.tol, **TOL_SOLVER}, note=kw.pop("note", ""))
+    return replace(src, **{**opts, **kw})
+
+
+CASES += [
+    _solver_case("h2o", "h2o_ntpoly", NTPOLY,
+                 note="NTPoly's TRS4 with DFTB+'s defaults (Tolerance 1e-5, Truncation 1e-10)"),
+    _solver_case("h2o_nonscc", "h2o_nonscc_ntpoly", NTPOLY,
+                 note="TRS4 stops at |tr G| < 1e-14: 2.4e-8 e from the eigensolver's charges"),
+    _solver_case("ch3oh", "ch3oh_ntpoly_pm", {**NTPOLY, "method": "pm"}),
+    _solver_case("water_dimer_typed", "water_dimer_typed_ntpoly_trs2",
+                 {**NTPOLY, "method": "trs2"},
+                 note="TRS2 at DFTB+'s Tolerance 1e-5: 2.7e-4 e off, 13 SCC iterations (11 with "
+                      "the eigensolver), as in DFTB+"),
+    _solver_case("ch3oh_custom_hubbards", "ch3oh_custom_hubbards_ntpoly_trs2_tight",
+                 {**NTPOLY, "method": "trs2", "tolerance": 1e-10, "truncation": 1e-15},
+                 note="a tight TRS2: the eigensolver's density"),
+    _solver_case("water_box_h5", "water_box_h5_ntpoly_hpcp", {**NTPOLY, "method": "hpcp"}),
+    _solver_case("water_box_ons", "water_box_ons_ntpoly", NTPOLY, torch=False,
+                 note="onsite corrections; DFTB+'s sparse input (its dense input is wrong with "
+                      "block potentials, B28)"),
+    _solver_case("water_box_mixer_diis", "water_box_mixer_diis_ntpoly", NTPOLY, torch=False),
+    _solver_case("cu4co_plusu", "cu4co_plusu_ntpoly", NTPOLY, torch=False,
+                 note="DFTB+U; NTPoly gives the T = 0 density (the 300 K are ignored, by DFTB+ "
+                      "and pydftb with a warning): 22 SCC iterations"),
+    _solver_case("h2o", "h2o_qr", "qr", dftbplus="25.1", torch=False),
+    _solver_case("ch3oh", "ch3oh_divideandconquer", "divideandconquer", dftbplus="25.1",
+                 torch=False),
+    _solver_case("water_box_h5", "water_box_h5_relativelyrobust", "relativelyrobust",
+                 dftbplus="25.1", torch=False),
+    _solver_case("water_dimer_typed", "water_dimer_typed_elpa", "elpa", torch=False,
+                 note="ELPA (Mode 2) through ELSI: the eigensolver's results"),
 ]
 CASES_BY_NAME = {c.name: c for c in CASES}

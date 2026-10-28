@@ -111,6 +111,36 @@ def eigh(a: np.ndarray, b: np.ndarray | None = None):
     return sla.eigh(a, b, driver="gvd")
 
 
+def eigh_driver(a: np.ndarray, b: np.ndarray, driver: str):
+    """The generalised eigenproblem with DFTB+'s LAPACK drivers (M7a): "gv" (QR), "gvd"
+    (DivideAndConquer, what :func:`eigh` uses) or "gvr" (RelativelyRobust: DFTB+'s hegvr,
+    Cholesky, hegst, heevr with abstol = the safe minimum, triangular back-substitution)."""
+    if driver in ("gv", "gvd"):
+        return sla.eigh(a, b, driver=driver)
+    if driver != "gvr":
+        raise ValueError(f"unknown LAPACK driver {driver!r}: 'gv', 'gvd' or 'gvr'")
+    cplx = np.iscomplexobj(a) or np.iscomplexobj(b)
+    dt = np.complex128 if cplx else np.float64
+    a = np.asarray(a, dt)
+    b = np.asarray(b, dt)
+    prefix = "z" if cplx else "d"
+    potrf, = sla.get_lapack_funcs(("potrf",), (b,))
+    hegst = getattr(sla.lapack, prefix + ("hegst" if cplx else "sygst"))
+    heevr = getattr(sla.lapack, prefix + ("heevr" if cplx else "syevr"))
+    u, info = potrf(b, lower=0, clean=1)               # S = U^H U (DFTB+: uplo "L" of the
+    if info:                                          # transposed storage, the same factor)
+        raise np.linalg.LinAlgError("the overlap matrix is not positive definite")
+    c, info = hegst(a, u, itype=1, lower=0)
+    if info:
+        raise np.linalg.LinAlgError(f"{prefix}hegst failed (info {info})")
+    c = np.triu(c) + np.triu(c, 1).conj().T            # hegst fills one triangle
+    safe_min = sla.lapack.dlamch("S")
+    w, v, m, _, info = heevr(c, compute_v=1, range="A", lower=0, abstol=safe_min)
+    if info:
+        raise np.linalg.LinAlgError(f"{prefix}{'heevr' if cplx else 'syevr'} failed (info {info})")
+    return w[:m], sla.solve_triangular(u, v[:, :m], lower=False)
+
+
 def batched_eigh(a: np.ndarray):
     """Standard Hermitian eigenproblem for a stack of matrices (..., n, n)."""
     return np.linalg.eigh(a)

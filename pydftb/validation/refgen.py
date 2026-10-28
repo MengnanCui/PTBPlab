@@ -130,6 +130,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     symbol, the SK set with all its types;
     ``options``: other DFTB settings that replace the case's (e.g. ``scc_tol``)."""
     tmp = None
+    if case.solver is not None and solver == "eigh":                   # M7a: DFTB+'s Solver
+        solver = solver_from_spec(case.solver)
     if skdir is None and case.typed:
         tmp = tempfile.mkdtemp(prefix="pydftb_case_")
         skdir = write_typed_copies(SKF_SETS[case.skf_set], tmp, case.typed,
@@ -185,6 +187,14 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def solver_from_spec(spec):
+    """pydftb's solver of a case's ``solver`` (M7a): the name, or an NTPoly object."""
+    if spec is None or isinstance(spec, str):
+        return spec or "eigh"
+    from ..purification import NTPoly
+    return NTPoly(**{k: v for k, v in spec.items() if k != "name"})
 
 
 def scc_start_options(case: Case) -> dict:
@@ -286,7 +296,13 @@ def hybrid_ase_options(case: Case) -> dict:
 
 def dftbplus_binary(case: Case) -> str | None:
     """The DFTB+ executable of a case: the development build ($DFTBPLUS_DEV) for what 25.1
-    does not have (M6f-3), else the default."""
+    does not have (M6f-3), a build with ELSI ($DFTBPLUS_ELSI, M7a: a script that runs the MPI
+    executable on one process), else the default."""
+    if case.dftbplus == "elsi":
+        path = os.environ.get("DFTBPLUS_ELSI")
+        if not path:
+            raise FileNotFoundError(f"{case.name} needs a DFTB+ with ELSI: set $DFTBPLUS_ELSI")
+        return path
     if case.dftbplus == "dev":
         path = os.environ.get("DFTBPLUS_DEV")
         if not path:
@@ -445,7 +461,8 @@ def run_dftbplus(case: Case, inp: dict, threads: int = 1, hessian: bool = False)
                  + dftbplus.truncate_block(case.truncate_sk)
                  + dftbplus.hybrid_block(case.hybrid, kpoints=case.folding is not None)
                  + dftbplus.corrections_block(case.h5, case.halogen, case.dipole_correction,
-                                              inp["labels"]))
+                                              inp["labels"])
+                 + dftbplus.solver_block(case.solver))
         if case.casida and case.casida.get("spin_constants") and not case.spin:
             extra += dftbplus.spin_constants_block(case.casida["spin_constants"],
                                                    set(inp["labels"]))
@@ -664,7 +681,9 @@ def regenerate(names=None, threads: int = 1):
                          **({"fd_delta": case.fd_delta} if case.fd_delta is not None else {}),
                          **({"hybrid": case.hybrid, "charge": case.charge}
                             if case.hybrid is not None else {}),
-                         **({"hessian": case.hessian} if case.hessian is not None else {})},
+                         **({"hessian": case.hessian} if case.hessian is not None else {}),
+                         **({"solver": case.solver, "dftbplus": case.dftbplus}
+                            if case.solver is not None else {})},
             "libraries": ({lib: library_versions()[lib]} if (lib := dispersion_library(inp))
                           else {}),
             "input": inp,
@@ -695,7 +714,10 @@ def regenerate(names=None, threads: int = 1):
                                                      "e_ls", "e_plus_u", "e_onsite", "e_ext",
                                                      "e_solv", "e_halogen", "analysis")
                           or case.hybrid is not None and k in ("scc_errors", "e_fock", "e_3rd",
-                                                               "e_spin", "spins")},
+                                                               "e_spin", "spins")
+                          or case.solver is not None and k in ("scc_errors", "e_3rd", "e_spin",
+                                                               "spins", "e_onsite",
+                                                               "e_plus_u")},
             "tolerances": case.tol,
         }
         if case.block and not (case.klines or case.regions or case.dp_dos):
@@ -870,7 +892,7 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
         ref_stress = np.array(ref["stress_fd"])
     dev = {
         "energy": abs(res.energy - ref["energy"]),
-        "free_energy": abs(res.free_energy - ref["free_energy"]),
+        "free_energy": abs(res.free_energy - ref.get("free_energy", ref["energy"])),
         "e_zero": abs(res.e_zero - ref["e_zero"]) if "e_zero" in ref else 0.0,
         "stress": (float(np.abs(res.stress - ref_stress).max())
                    if ref_stress is not None else 0.0),
@@ -928,6 +950,8 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.hessian is not None:                                      # M6g-2
         dev.update(_compare_hessian(case, inp, ref, res, solver=solver, fd_delta=fd_delta,
                                     **backend))
+    if case.solver is not None:                                       # M7a
+        dev.update(_compare_solver(case, ref, res))
     tol = doc["tolerances"]
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
@@ -1007,6 +1031,22 @@ def _compare_scc_start(case: Case, inp: dict, ref: dict, res, **run) -> dict:
         q_file = calc.populations_from_file(
             inp["labels"], data, positions=np.array(inp1["positions_angstrom"]) / BOHR, cell=cell)
         dev["charges_file"] = float(np.abs(q_file - r1.q_in).max())
+    return dev
+
+
+def _compare_solver(case: Case, ref: dict, res) -> dict:
+    """Deviations of an M7a case (DFTB+'s Solver): the SCC iterations (exactly), the SCC error
+    of every iteration (relative, above ``SCC_ERROR_FLOOR``) and, for the purification, NTPoly's
+    chemical potential as the Fermi level."""
+    dev = {"n_scc": abs(int(res.n_scc) - int(ref["n_scc"]))}
+    t = np.array(ref.get("scc_errors") or [])
+    e = np.asarray(res.scc_errors if res.scc_errors is not None else [])
+    n = min(len(t), len(e))
+    keep = t[:n] > SCC_ERROR_FLOOR
+    dev["scc_errors"] = (float((np.abs(e[:n] - t[:n]) / t[:n])[keep].max()) if keep.any()
+                         else 0.0)
+    if isinstance(case.solver, dict):
+        dev["fermi_level"] = abs(float(res.fermi) - float(ref["fermi"]))
     return dev
 
 
@@ -1464,7 +1504,7 @@ def _compare_block(ref: dict, res, inp: dict) -> dict:
         norb = [(inp["max_l"][lab] + 1) ** 2 for lab in inp["labels"]]    # shells 0..l_max
         flat = np.concatenate([oc[a, :n] for a, n in enumerate(norb)])
         dev["orbital"] = float(np.abs(res.q_orbital - flat).max())
-    if "scc_eigenvalues" in ref:
+    if ref.get("scc_eigenvalues") is not None:     # not with DFTB+'s NTPoly (M7a)
         ev = np.array(ref["scc_eigenvalues"])
         dev["eigenvalues"] = float(np.abs(np.array(res.eigenvalues).reshape(ev.shape) - ev).max())
     return dev

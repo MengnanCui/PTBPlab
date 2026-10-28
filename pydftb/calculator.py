@@ -60,12 +60,22 @@ from .kpoints import folding_of
 from .occupations import Smearing, fill_at, fill_independent_k
 from .neighbors import neighbor_list
 from .parallel import as_kthreads
-from .solvers import SOLVERS, _density
+from .solvers import SOLVERS, UNSUPPORTED_SOLVERS, _density
 from .skf import SKSet, shell_names
 from . import spinorbit as so
 from .thirdorder import ThirdOrder
 from . import typeswitch as _typeswitch                 # M5a
 from .hamiltonian import build_mixed_pairs              # M5a
+
+
+def _density_solver(solver) -> str | None:
+    """The display name of a solver without eigenpairs ("SP2", "NTPoly"; M7a), or None."""
+    if isinstance(solver, str):
+        return {"sp2": "SP2", "ntpoly": "NTPoly"}.get(solver)
+    if getattr(solver, "eigenpairs", True) is False:
+        return {"sp2": "SP2", "ntpoly": "NTPoly"}.get(getattr(solver, "name", ""),
+                                                     type(solver).__name__)
+    return None
 
 
 @dataclass
@@ -335,7 +345,10 @@ class DFTB:
                           (see :func:`pydftb.mixer.mixer_spec`).
     mixing : float        the mixing parameter (DFTB+ ``MixingParameter``); None (default):
                           DFTB+'s default for the mixer (0.2 Broyden, 0.05 Simple and Anderson).
-    solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py).
+    solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py); DFTB+'s
+                          ``Solver`` (M7a): "qr", "divideandconquer", "relativelyrobust",
+                          "elpa", or "ntpoly" / a :class:`pydftb.purification.NTPoly`
+                          (densities by purification, no eigenvalues).
     repulsive : str       "skf" (spline, else polynomial), "polynomial"
                           (DFTB+ ``PolynomialRepulsive = Yes``) or "none".
     warn_unconverged : bool  warn (but still return results, like DFTB+
@@ -587,6 +600,11 @@ class DFTB:
         self.mixer = mixer
         mixer_spec(mixer, mixing)            # checked now (a new mixer for every SCC)
         self.charge = charge
+        if isinstance(solver, str) and solver.lower() in UNSUPPORTED_SOLVERS:
+            raise ValueError(UNSUPPORTED_SOLVERS[solver.lower()])
+        if isinstance(solver, str) and solver not in SOLVERS:
+            raise ValueError(f"unknown solver {solver!r}: one of {sorted(SOLVERS)} or a solver "
+                             "object")
         self.solver = solver
         self.verbose = verbose
         self.repulsive = repulsive
@@ -669,6 +687,8 @@ class DFTB:
         self._check_corrections()
         self.analysis = _analysis.Analysis.make(analysis)              # M6f-4a
         self._check_response()                                         # M6g-1
+        if _density_solver(solver) == "NTPoly":                        # M7a
+            self._check_purification()
         if getattr(self.sk, "selected", False):                        # M6f-5
             self._check_selected_shells(type_switching)
         # smooth switching between the parameter sets of an element (M5a)
@@ -711,9 +731,9 @@ class DFTB:
             raise ValueError(f"{', '.join(self.numpy_only_options)}: implemented for the NumPy "
                              "backend only (milestone M6f)")
         if self.backend.is_torch:
-            if solver not in ("eigh", "batched"):
+            if solver not in ("eigh", "batched") and _density_solver(solver) != "NTPoly":
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
-                                 f"or 'batched', not {solver!r}")
+                                 f"or 'batched' (or 'ntpoly', M7a), not {solver!r}")
             if self.k_threads.n > 1:
                 warnings.warn("k-point threads are not used with the torch backend",
                               RuntimeWarning, stacklevel=2)
@@ -836,9 +856,10 @@ class DFTB:
             if self.independent_k_filling:
                 raise ValueError("independent_k_filling does not combine with a fixed Fermi "
                                  "level (DFTB+ does not read IndependentKFilling then)")
-        if (self.fixed_fermi_level is not None or self.independent_k_filling) and solver == "sp2":
+        name = _density_solver(solver)
+        if (self.fixed_fermi_level is not None or self.independent_k_filling) and name:
             raise ValueError("a fixed Fermi level or independent k-point filling needs the "
-                             "eigenvalues (not the SP2 solver)")
+                             f"eigenvalues (not the {name} solver)")
         if self.independent_k_filling and self.spin:
             raise ValueError("independent_k_filling does not support collinear spin (DFTB+ 25.1 "
                              "crashes there: its array of k-point weights is too short)")
@@ -942,6 +963,40 @@ class DFTB:
             raise ValueError(f"selected_shells (milestone M6f-5) is not supported with "
                              f"{', '.join(used)}")
 
+    def _check_purification(self):
+        """The purification solver's conditions (M7a, DFTB+'s ``Solver = NTPoly``): Fermi filling
+        (the T = 0 density: a temperature is ignored, as by DFTB+), a fixed electron count in
+        each spin channel, no analysis that needs eigenpairs."""
+        if self.smearing.kind != "fermi":
+            raise ValueError("the NTPoly purification works with Fermi filling only (as DFTB+: "
+                             "'This electronic solver can only be used for Fermi function "
+                             "distributed electrons')")
+        if self.smearing.kt > MIN_TEMP:
+            warnings.warn("the NTPoly purification gives the zero-temperature density: the "
+                          "electronic temperature is ignored (as by DFTB+)", RuntimeWarning,
+                          stacklevel=3)
+        if self.spin and self.relax_total_spin:
+            raise ValueError("the NTPoly purification needs a fixed number of electrons in each "
+                             "spin channel: relax_total_spin needs a shared Fermi level (use an "
+                             "eigensolver)")
+        from .purification import MIXED_SCC_TOL
+        if (getattr(self.solver, "mixed", False) and self.scc
+                and self.scc_tol < MIXED_SCC_TOL):
+            warnings.warn(f"scc_tol = {self.scc_tol:g} is below what the mixed-precision "
+                          f"purification resolves (charges to about 1e-6): use scc_tol >= "
+                          f"{MIXED_SCC_TOL:g}", RuntimeWarning, stacklevel=3)
+        a = self.analysis
+        if a is not None:
+            response = (a.polarisability is not False or a.response_kernel is not False
+                        or a.coord_derivatives is not False
+                        or a.external_charge_derivatives is not False)
+            used = [name for name, on in (("eigenvectors", a.eigenvectors),
+                                          ("localised orbitals", a.localise),
+                                          ("responses", response)) if on]
+            if used:
+                raise ValueError(f"the analysis ({', '.join(used)}) needs an eigensolver (not "
+                                 "the NTPoly solver)")
+
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
         why = None
@@ -957,8 +1012,8 @@ class DFTB:
             why = "does not support DFTB+U"
         elif self.solvation is not None:
             why = "does not work with implicit solvation"
-        elif solver == "sp2":
-            why = "needs eigenvectors (not the SP2 solver)"
+        elif _density_solver(solver):
+            why = f"needs eigenvectors (not the {_density_solver(solver)} solver)"
         if why:
             raise ValueError(f"Casida linear response {why} (as in DFTB+)")
         if (self.casida.symmetry != "singlet" or self.spin) and self.spin_constants is None:
@@ -2141,6 +2196,8 @@ class DFTB:
         """Densities for H, stacked [up k-points, down k-points] with spin; one Fermi
         level per spin channel, or a shared one (DFTB+ RelaxTotalSpin).  Two-component:
         one Fermi level, at most one electron per spinor level."""
+        if getattr(solver, "eigenpairs", True) is False and hasattr(solver, "density"):
+            return self._solve_density(solver, st, h, need_w)          # M7a: purification
         if self._custom_filling:             # fixed Fermi level, independent k-points (M6f)
             return self._solve_filling(solver, st, h, need_w)
         if st.pauli is not None:
@@ -2169,6 +2226,25 @@ class DFTB:
         evals = np.concatenate([p[2] for p in parts])
         occ = list(parts[0][5]) + list(parts[1][5])
         return rho, wdm, evals, (parts[0][3], parts[1][3]), parts[0][4] + parts[1][4], occ
+
+    def _solve_density(self, solver, st: _Setup, h, need_w):
+        """:meth:`_solve` for a solver without eigenpairs (M7a, :class:`pydftb.purification.
+        NTPoly`): every spin channel (or the spinor matrix) at its whole occupation, the T = 0
+        density; no eigenvalues or occupations, TS = 0; the chemical potential as the Fermi
+        level (one per spin channel)."""
+        if st.pauli is not None:
+            rho, wdm, mu = solver.density(h, st.kw, st.nelec, 1.0, need_w)
+            return rho, wdm, None, mu, 0.0, None
+        if st.spin is None:
+            rho, wdm, mu = solver.density(h, st.kw, st.nelec / 2.0, 2.0, need_w)
+            return rho, wdm, None, mu, 0.0, None
+        nk = len(st.kw)
+        parts = [solver.density(h[i * nk:(i + 1) * nk], st.kw, n, 1.0, need_w, offset=i * nk)
+                 for i, n in enumerate((st.spin.n_up, st.spin.n_down))]
+        xp = self.backend.xp
+        rho = xp.concatenate([p[0] for p in parts])
+        wdm = xp.concatenate([p[1] for p in parts]) if need_w else None
+        return rho, wdm, None, (parts[0][2], parts[1][2]), 0.0, None
 
     def _solve_filling(self, solver, st: _Setup, h, need_w):
         """:meth:`_solve` with a fixed Fermi level or independent k-point filling (M6f): the
@@ -2242,7 +2318,10 @@ class DFTB:
         if st.hybrid is not None:                                     # M6h-1
             return self._scc_hybrid(st, q_init, forces, timings)
         b = self.backend
-        if b.is_torch:
+        if b.is_torch and _density_solver(self.solver) == "NTPoly":     # M7a: on the device
+            solver = (self.solver if not isinstance(self.solver, str)
+                      else SOLVERS[self.solver]())
+        elif b.is_torch:
             from .backend.torch_solver import TorchSolver
             solver = TorchSolver(b)
         else:

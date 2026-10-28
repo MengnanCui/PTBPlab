@@ -529,7 +529,10 @@ class PyDFTB(Calculator):
         return np.asarray(r.eigenvalues[self._index(kpt, spin)]) * units.Hartree
 
     def get_occupation_numbers(self, kpt=0, spin=0):
-        return np.asarray(self._raw().occupations[self._index(kpt, spin)])
+        r = self._raw()
+        if r.occupations is None:
+            raise RuntimeError("occupations are not available with this solver")
+        return np.asarray(r.occupations[self._index(kpt, spin)])
 
     def get_fermi_level(self):
         """Fermi level (eV); with two spin Fermi levels, that of spin up."""

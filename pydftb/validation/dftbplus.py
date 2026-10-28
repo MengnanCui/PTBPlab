@@ -175,6 +175,32 @@ def hybrid_block(spec, kpoints: bool = False) -> str:
     return f"  Hybrid = {h.kind.upper()} {{\n    Screening = {screening}{coulomb}  }}\n"
 
 
+SOLVER_NAMES = {"qr": "QR", "divideandconquer": "DivideAndConquer",
+                "relativelyrobust": "RelativelyRobust", "elpa": "ELPA"}
+
+
+def solver_block(spec) -> str:
+    """Hamiltonian line ``Solver`` (M7a) of a case's solver: a LAPACK driver name or "elpa", or
+    {"name": "ntpoly", "method", "tolerance", "truncation"} (only what differs from DFTB+'s
+    defaults is written; the method by DFTB+'s number)."""
+    if not spec:
+        return ""
+    if isinstance(spec, str):
+        return f"  Solver = {SOLVER_NAMES[spec]} {{}}\n"
+    from ..purification import method_index
+    if spec.get("name") != "ntpoly":
+        raise ValueError(f"unknown solver spec {spec!r}")
+    lines = []
+    if "method" in spec:
+        lines.append(f"    PurificationMethod = {method_index(spec['method'])}")
+    if "tolerance" in spec:
+        lines.append(f"    Tolerance = {_f(spec['tolerance'])}")
+    if "truncation" in spec:
+        lines.append(f"    Truncation = {_f(spec['truncation'])}")
+    body = "".join(line + "\n" for line in lines)
+    return f"  Solver = NTPoly {{\n{body}  }}\n"
+
+
 def dftb3_block(opts, labels=None) -> str:
     """HSD lines for pydftb's third_order / hubbard_derivs / h_damping options.
 
