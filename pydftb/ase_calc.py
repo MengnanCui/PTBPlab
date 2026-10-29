@@ -236,6 +236,10 @@ class PyDFTB(Calculator):
                 hot = Smearing.from_spec(smearing).kt > MIN_TEMP
                 force_evaluation = "dynamics" if hot else "dynamics_t0"
         self._xl = None                               # the XL-BOMD state (Integrator)
+        if isinstance(solver, str) and solver == "foe":
+            # M7b: one solver for all the steps, whose chemical potential carries over
+            from .fermi_operator import FermiOperator
+            solver = FermiOperator()
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,

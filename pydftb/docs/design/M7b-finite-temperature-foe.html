@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7b 有限温度的 Fermi 算符展开设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7b · 设计</p>
+    <h1>大体系（二）：有限温度、不做本征分解的密度矩阵</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-28</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="M7a-density-matrix-solvers.html">M7a 设计</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M7a 的纯化只给 T = 0 的密度，体系要有带隙。M7b 给出有限温度的 Fermi 密度 f((H − μ)/kT)，同样不做本征分解。这样金属、k 点共用的费米能级、自旋共用的费米能级与熵 TS 都能算。方法是 Niklasson 的递归 Fermi 算符展开（Phys. Rev. B 68, 233104 (2003)）：映射 x → x²/(x² + (1 − x)²) 把 y = β(ε − μ) 精确加倍，从高温的近似出发，加倍 n 次到目标温度，每步一次 Cholesky 分解。DFTB+ 在这些构建里没有有限温度、不做对角化的求解器（ELSI 的 PEXSI 没有编译），所以验证用的是 DFTB+ 本征分解的冻结参考：134 个 Fermi 填充的参考算例换成新求解器后，SCC 轮数全部不变。</p>
+    <ul>
+      <li><strong>方法的选择</strong>（P104）：
+        <ul>
+          <li>Chebyshev 展开在这些体系上要 293–5593 阶（1e-12），就是同样多次矩阵乘法；</li>
+          <li>极点展开要几十次稠密复数 LU，也不比本征分解快；</li>
+          <li>递归只要 22 步。</li>
+        </ul></li>
+      <li><strong>数值上的两点</strong>：
+        <ul>
+          <li>递归写成 D = X − ½ 的形式（D ← 2D(1 + 4D²)<sup>−1</sup>），舍入误差约为 βρε，不随步数变。直接写 X 的形式舍入误差约为 2<sup>n</sup>ε（1e-12），使 48 个算例的 SCC 多走轮数，5 个不收敛。</li>
+          <li>化学势用精确的平移关系 P(μ + d) = P[P + e<sup>−βd</sup>(1 − P)]<sup>−1</sup> 求：在 ±5 kT 之内用这个关系，更远就重新递归。</li>
+        </ul></li>
+      <li><strong>精度</strong>（P105）：
+        <ul>
+          <li>134 个算例：114 个与本征分解差 ≤ 3e-13 Ha（电荷 5e-12 e，力 6e-13 Ha/Bohr，TS 2e-14 Ha）；</li>
+          <li>另外 20 个的差别来自 DFTB+ 的费米能级规则：有带隙时，若带隙中点的电子数与整数差 ≤ 1e-7，就取中点。新求解器用精确的电子数，与 <code>fermi_level="exact"</code> 的本征分解差 ≤ 1e-13 e。</li>
+        </ul></li>
+      <li><strong>速度</strong>（P106，本机 4 核）：每次 SCC 迭代一次递归，是本征分解的 10–16 倍（288–3072 个轨道）。好处在 GPU（矩阵乘法与 Cholesky 比本征分解好并行）与之后的稀疏版本。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">134 / 134</span><span class="lbl">Fermi 参考算例的 SCC 轮数与本征分解相同</span></li>
+      <li><span class="num">≤ 3e-13</span><span class="lbl">其中 114 个与本征分解的能量差（Ha）</span></li>
+      <li><span class="num">22</span><span class="lbl">递归步数（Chebyshev 要 293–5593 阶）</span></li>
+      <li><span class="num">10–16×</span><span class="lbl">CPU 上一次递归相对本征分解的耗时</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围</a></li>
+      <li><a href="#choice">二、方法的选择</a></li>
+      <li><a href="#method">三、算法</a></li>
+      <li><a href="#probe">四、探针与原型</a></li>
+      <li><a href="#api">五、pydftb 的接口</a></li>
+      <li><a href="#impl">六、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">七、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">八、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围</h2>
+      <ul>
+        <li><strong>做</strong>：
+          <ul>
+            <li>Fermi 填充、T &gt; 0 的密度矩阵 ρ、能量加权密度矩阵 W、熵 TS 与费米能级，不要本征值；</li>
+            <li>无自旋、共线自旋（固定总自旋时每个通道一个费米能级，<code>relax_total_spin</code> 时共用）、两分量（非共线、SOC）；</li>
+            <li>k 点共用一个费米能级，所以金属也可以；</li>
+            <li>固定费米能级（<code>fixed_fermi_level</code>，不用求 μ）与每个 k 点单独填充（每个 k 一个 μ）；</li>
+            <li>所有只要 ρ、W 的功能：力、应力、MD、XL-BOMD、杂化泛函、块势、外场、溶剂等；torch 设备。</li>
+          </ul></li>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>MP 与 Gaussian 展宽（DFTB+ 的 PEXSI 与 NTPoly 同样只用 Fermi）；</li>
+            <li>T = 0（用 M7a 的 <code>"ntpoly"</code>）；</li>
+            <li>要本征矢的分析与 Casida（同 M7a）。</li>
+          </ul></li>
+        <li><strong>参考</strong>：DFTB+ 的有限温度、不做对角化的求解器是 ELSI 的 PEXSI，conda-forge 的构建里没有，没有直接的对照。新求解器给的是同一个 Fermi 密度，所以 DFTB+ 本征分解的冻结参考就是它的参考：每个 Fermi 填充的参考算例换成新求解器，结果与 SCC 轮数都应该不变。差别只在 DFTB+ 的费米能级规则（见第三节）。</li>
+      </ul>
+    </section>
+
+    <section id="choice">
+      <h2>二、方法的选择</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方法</th><th>代价</th><th>P104 的结果</th></tr></thead>
+        <tbody>
+          <tr><td>Chebyshev 展开（Goedecker）</td><td>阶数约 βρ ln(1/ε)/π（ρ 是谱的半宽），每阶一次矩阵乘法；求 μ 要第二遍或存下所有 T<sub>k</sub></td><td>1e-12 需要的阶数：Li bcc 1000 K 293，Cu<sub>4</sub> LC 1000 K 478，CuO 链 500 K 2048，Cu<sub>4</sub>CO 300 K 5593；3000 K 时 103–1954</td></tr>
+          <tr><td>极点展开（PEXSI 的做法）</td><td>log(βρ) 量级的极点（几十个），每个一次复数线性方程</td><td>稠密时每个极点约 4 次实数 LU 的工作量，几十个极点比本征分解慢；它的价值在稀疏的选择性求逆（M7c）</td></tr>
+          <tr><td>递归 Fermi 算符展开（Niklasson 2003）</td><td>n ≈ 22 步，每步一次乘法、一次 Cholesky 分解与求解</td><td>密度 ≤ 1e-14，熵 ≤ 3e-12（以 k 为单位）</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="method">
+      <h2>三、算法</h2>
+      <p>与 M7a 相同，先用 Z = S<sup>−1/2</sup>（Newton–Schulz，每个几何一次）化成正交基 H̃ = Z H Z<sup>†</sup>；结果是 P̃ = f(H̃)，ρ = g Z<sup>†</sup> P̃ Z。</p>
+      <h3>递归</h3>
+      <ul>
+        <li>f(y) = 1/(1 + e<sup>y</sup>)。映射 x ↦ x²/(x² + (1 − x)²) 把 f(y) 变成 f(2y)，是精确的。从 T = β(H̃ − μ<sub>0</sub>)/2<sup>n</sup> 出发，X<sub>0</sub> = ½ − T/4（f(t) 的一阶近似，也就是 R = (1 + T/2)(1 − T/2)<sup>−1</sup> 时的 (1 + R)<sup>−1</sup>），走 n 步得到 f(Y′)，Y′ = 2<sup>n+1</sup> artanh(T/2) = Y + Y³/(12·4<sup>n</sup>) + …。</li>
+        <li>截断误差：Y′ 与 Y 只在远离 μ 的能级上差得多，那里 f 已经是 0 或 1；对占据数的影响最大约为 0.1/4<sup>n</sup>。n = 22 时约 6e-15。</li>
+        <li><strong>步数</strong>：至少 22 步；若 ‖Y‖<sub>1</sub> &gt; 2<sup>n−8</sup>，就自动加步，使 ‖T‖<sub>1</sub> ≤ 2<sup>−8</sup>。这样 X<sub>0</sub> 的本征值在 (0, 1) 之内，tr ln(1 + T/2) 的级数也短。1000 K 时 22 步对 ‖H̃ − μ‖<sub>1</sub> ≤ 52 Ha 都够；在 Cu<sub>4</sub> 与 Cu<sub>4</sub>CO 上，10 K 用 22–24 步，1 K 用 25–27 步，0.1 K 用 29–31 步，密度与精确值差都 ≤ 3.5e-13。</li>
+        <li><strong>D 形式</strong>：设 D = X − ½，映射变成 D ↦ 2D(1 + 4D²)<sup>−1</sup>（tanh 的倍角公式）。矩阵 1 + 4D² 的本征值在 [1, 2] 之内，用 Cholesky 分解求解。舍入误差与 D 的大小成比例；早期 D 很小，所以误差总共约为 βρε，不随 n 增长。直接写 X 时 X ≈ ½ 的舍入（ε）每步翻倍，误差约为 2<sup>n</sup>ε（P104：n = 18 时 1e-12，n = 24 时 5e-10）。</li>
+      </ul>
+      <h3>化学势</h3>
+      <ul>
+        <li>μ 是 1 的倍数，所以 P(μ<sub>0</sub> + d) = P[P + e<sup>−βd</sup>(1 − P)]<sup>−1</sup> 是精确的关系（D 形式：D′ = [(1 − c)/4 + (1 + c)D/2][(1 + c)/2 + (1 − c)D]<sup>−1</sup>，c = e<sup>−βd</sup>）。每次只要一次 Cholesky，不必重新递归。</li>
+        <li>舍入使这个关系只在 |d| ≲ 5 kT 之内精确：离 μ<sub>0</sub> 远的能级的占据数只有绝对精度 ε，平移后误差放大约 e<sup>β|d|</sup> 倍。</li>
+        <li>做法：
+          <ul>
+            <li>在 μ<sub>0</sub> 递归一次，然后算 d = ±5 kT 时的电子数。</li>
+            <li>目标电子数在这两个值之间时，在窗口里用 Newton 法加二分求 d。导数是 dN/dμ = β Σ<sub>k</sub> w<sub>k</sub> tr P(1 − P)，同样精确。</li>
+            <li>目标在窗口之外时，从窗口边上按 Newton 法走一步；在带隙里导数太小，就在 Gershgorin 界之内二分，再递归一次。</li>
+          </ul></li>
+        <li>SCC 中 μ<sub>0</sub> 取上一次的 μ，通常一次递归就够。P105 的 OH 非共线算例在第 1、2 轮之间 μ 移动了 110 kT；只靠平移每次移动有限，原型的第一版因此给出错误的 μ。</li>
+        <li><strong>费米能级规则</strong>：新求解器求的是精确的电子数（pydftb 的 <code>fermi_level="exact"</code>）。DFTB+（与 pydftb 的默认）在电子数为整数时先看带隙中点：那里的电子数与整数差 ≤ 1e-7，就用中点。没有本征值时找不到 HOMO 与 LUMO，所以不仿照这条规则。差别只在有带隙的体系里，电荷差 &lt; 1e-7 e（P105 最大 2e-8 e，能量 1.6e-8 Ha）。</li>
+      </ul>
+      <h3>熵</h3>
+      <ul>
+        <li>对任意起点 X<sub>0</sub>，递归给出 ln P 与 ln(1 − P) 的乘积分解，所以计算出的 P 的熵是 S = Σ<sub>k</sub> 2<sup>n−1−k</sup> tr ln M<sub>k</sub> − 2<sup>n</sup> tr[P ln X<sub>0</sub> + (1 − P) ln(1 − X<sub>0</sub>)]，M<sub>k</sub> = ½ + 2D<sub>k</sub>²。</li>
+        <li>线性起点下化简为 S = N ln 2 + Σ<sub>k</sub> 2<sup>n−1−k</sup> tr ln(1 + 4D<sub>k</sub>²) − 2<sup>n</sup> tr ln(1 + T/2) + tr(P Y′)。其中 2<sup>n</sup>N ln 2 的大项已经在解析上相消。</li>
+        <li>各项的求法：
+          <ul>
+            <li>早期 1 + 4D² 接近 1，tr ln 用迹的级数。4D² 半正定，各项交替且递减，某一项的迹小于 1e-19 就停。</li>
+            <li>后期用 Cholesky 对角元的对数；</li>
+            <li>tr ln(1 + T/2) 用 T 的幂的迹。T 不定，奇次幂的迹可以为零，比如 μ<sub>0</sub> 正好在能级对称的中点。所以停的条件用上界 N‖T/2‖<sub>1</sub><sup>j</sup>/j &lt; 1e-19，而不用迹。第一版按迹停，在每个 k 单独填充的 Li 算例上（μ 在两个能级正中）漏掉二次项，熵差 4.8e-6。</li>
+          </ul></li>
+        <li>必须用 P 自己对应的 Y′，而不是 Y：深能级上 ln(1 + e<sup>−y</sup>) ≈ −y 与 y·f(y) 相消，Y′ − Y 在那里大到 1e-3（P104 的第一版熵差 4e-5–2）。</li>
+        <li>化学势平移后：tr ln(1 + e<sup>−(Y′−βd)</sup>) 增加 Nβd + ln det[P + c(1 − P)]，tr(Y′P) 换成 tr((Y′ − βd)P′)。</li>
+        <li>TS = kT g Σ<sub>k</sub> w<sub>k</sub> S<sub>k</sub>，与 DFTB+ 的 Fermi 填充相同。</li>
+      </ul>
+      <h3>W 与其他</h3>
+      <ul>
+        <li>W̃ = f(H̃)H̃，两者可交换，取 (P̃H̃ + H̃P̃)/2。</li>
+        <li>自旋共用费米能级：上、下自旋的矩阵一起，作为同一个 μ 的 2N<sub>k</sub> 个块。</li>
+        <li>两分量：一个 2N × 2N 的复数矩阵，g = 1。</li>
+        <li>固定费米能级：不求 μ。每个 k 单独填充：每个 k 的 μ 分开求，费米能级与 TS 按 k 点权重求和（同 M6f）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>四、探针与原型</h2>
+      <p>草稿目录 <code>m7b/</code>：<code>foe_proto*.py</code>（递归）、<code>cheb_degree.py</code>、<code>p105_scc.py</code>（SCC）、<code>p106_timing.py</code>。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P104</td><td>在 4 个有限温度算例的收敛 H 上（Cu<sub>4</sub>CO +U 300 K，CuO 链 4×2×2 500 K，Li bcc 1000 K，Cu<sub>4</sub> LC 1000 K），递归对本征分解；Chebyshev 的阶数</td><td>
+            <ul>
+              <li>X 形式：n = 14–18 时密度 3e-13–6e-12，n 增大误差反而增大（2<sup>n</sup>ε）；</li>
+              <li>D 形式：n = 22–24 时 ≤ 7e-15，熵 ≤ 3e-12；</li>
+              <li>精确平移从 μ + 0.01 Ha 出发 7–10 步收敛到 1e-13；</li>
+              <li>Chebyshev 见第二节。</li>
+            </ul></td></tr>
+          <tr><td>P105</td><td>原型接在 pydftb 的 SCC 上，跑所有 Fermi 填充、T &gt; 0 的冻结参考（143 个，其中 9 个用固定费米能级或每个 k 单独填充，原型不做）</td><td>
+            <ul>
+              <li>最终版：134 个算例的 SCC 轮数全部与本征分解相同，能量都在 DFTB+ 参考的容差之内；</li>
+              <li>114 个差 ≤ 3e-13 Ha、电荷 ≤ 5e-12 e、力 ≤ 6e-13 Ha/Bohr、TS ≤ 2e-14 Ha；</li>
+              <li>其余 20 个（Cu<sub>4</sub>CO 壳层分辨、CuO 链自旋、Cu<sub>4</sub>CO +U 等）是费米能级规则，与 <code>fermi_level="exact"</code> 的本征分解差 ≤ 1e-13 e。</li>
+            </ul>
+            过程中的两个问题：
+            <ul>
+              <li>X 形式的 1e-12 噪声使 48 个算例多走 SCC 轮数（非共线 OH 26 对 63 轮），scc_tol 1e-12 的 4 个算例与 GdO 非共线不收敛；</li>
+              <li>第一版的 μ 搜索在 μ 大幅移动时出错。</li>
+            </ul></td></tr>
+          <tr><td>P106</td><td>本机 4 核：水盒子（绝缘体）与 Cu fcc 超胞（金属）的非 SCC H<sub>0</sub>，1000 K，Γ 点；一次密度的耗时，μ 已知（SCC 中的情形）与从头求 μ</td><td>
+            <ul>
+              <li>水 64（384 个轨道）：eigh 0.022 s，FOE 0.21 s（9.6 倍），从头 0.47 s（2 次递归）；</li>
+              <li>Cu 2×2×2（288）：0.011 s 对 0.10 s（9.9 倍），从头 0.24 s（2 次）；</li>
+              <li>水 216（1296）：0.26 s 对 3.24 s（12.6 倍），从头 3.08 s（1 次）；</li>
+              <li>Cu 3×3×3（972）：0.11 s 对 1.34 s（12.7 倍），从头 3.06 s（2 次）；</li>
+              <li>Cu 4×4×4（2304）：1.11 s 对 17.4 s（15.7 倍），从头 37.4 s（2 次）；</li>
+              <li>水 512（3072）：3.23 s 对 40.0 s（12.4 倍），从头 43.4 s（1 次）；</li>
+              <li>S<sup>−1/2</sup>（每个几何一次）：0.011–7.6 s；密度与 W 的误差 ≤ 1.3e-13。</li>
+            </ul></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="api">
+      <h2>五、pydftb 的接口</h2>
+      <pre><code>DFTB(sk, solver="foe", smearing=("fermi", 1000.0))      # 金属、k 点、自旋都可以
+from pydftb.fermi_operator import FermiOperator
+DFTB(sk, solver=FermiOperator(steps=22), backend="torch", device="cuda")</code></pre>
+      <ul>
+        <li>结果：<code>eigenvalues</code> 与 <code>occupations</code> 为 None；<code>fermi</code>（自旋时 <code>fermi_spin</code>）是求出的化学势；TS 与本征分解相同。</li>
+        <li>拒绝：MP 与 Gaussian 展宽、T = 0（提示用 <code>"ntpoly"</code>）、要本征矢的分析与 Casida。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>六、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>fermi_operator.py</code>（新）</td><td>
+            <ul>
+              <li><code>recursion</code>（D 形式与熵的各项）、<code>shift</code>（精确平移）与化学势的窗口搜索；NumPy 或 torch（Cholesky 在设备上）。</li>
+              <li>求解器类 <code>FermiOperator</code>（<code>eigenpairs = False</code>，<code>finite_temperature = True</code>）：<code>prepare(S)</code> 用 M7a 的 <code>inverse_sqrt</code>；<code>density(...)</code> 返回 (ρ, W, μ, TS)；μ 留给下一次调用作起点。</li>
+            </ul></td></tr>
+          <tr><td><code>purification.py</code></td><td>不改：<code>NTPoly.density</code> 仍返回 (ρ, W, μ)，计算器按 <code>finite_temperature</code> 区分两种求解器。</td></tr>
+          <tr><td><code>calculator.py</code></td><td>
+            <ul>
+              <li><code>_solve_fermi_operator</code>（新）：把 kT、固定费米能级与 k 点的单独填充交给求解器；自旋共用费米能级时上下自旋一起交出；TS 用求解器给的值。<code>_solve_density</code> 遇到有限温度的求解器就转到这里。</li>
+              <li><code>solver="foe"</code> 时每个计算器只建一个 <code>FermiOperator</code>（<code>_solver_object</code>），下一个几何从上一个 μ 出发；<code>_scc</code>、<code>_scc_hybrid</code>、<code>_scc_hybrid_kpoints</code> 三处都用它。eigh 类求解器的创建不变。</li>
+              <li>检查（<code>_check_fermi_operator</code>）：只要 Fermi 填充与 T &gt; 0；放开固定费米能级与每个 k 单独填充的拒绝；要本征对的分析同 M7a（共用 <code>_check_density_analysis</code>）。</li>
+              <li>torch：<code>_scc</code> 的设备分支也用于 FOE，Cholesky 在 <code>linalg_device</code> 上。</li>
+            </ul></td></tr>
+          <tr><td><code>ase_calc.py</code></td><td>ASE 每一步新建一个 DFTB 对象，所以 <code>solver="foe"</code> 在构造时换成一个 <code>FermiOperator</code> 对象，所有步共用，μ 照样延续。</td></tr>
+          <tr><td><code>solvers.py</code></td><td><code>SOLVERS["foe"]</code>；PEXSI 的拒绝改为指向 <code>"foe"</code>。</td></tr>
+          <tr><td>validation</td><td>refgen 的 <code>--solver foe</code>：用新求解器检查所有适用的 Fermi 参考算例（容差与 SCC 轮数同原来），不适用的算例打印原因跳过。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="validation">
+      <h2>七、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li><strong>DFTB+ 参考</strong>：所有适用的 Fermi 填充、T &gt; 0 的冻结参考算例用新求解器，过原来的容差，SCC 轮数相同。费米能级规则造成的差别都在容差之内。门槛里跑全部，单元测试里跑一组代表。</li>
+        <li><strong>对本征分解</strong>（<code>fermi_level="exact"</code>）：无自旋、两种共线自旋、两分量、k 点、杂化、块势、固定费米能级、每个 k 单独填充：ρ、能量、电荷、力、TS ≤ 1e-12。</li>
+        <li><strong>单元测试</strong>：随机矩阵上的密度、熵、μ 的大幅移动与带隙里的 μ；D 形式对 X 形式的舍入；拒绝的原文；torch。</li>
+        <li><strong>门槛</strong>：golden 两个环境逐位相同、refgen（NumPy、torch）、dynamics、pytest 三个环境、PTBP 测试与 G1。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>八、风险与之后</h2>
+      <ul>
+        <li><strong>速度</strong>：本机 CPU 上是本征分解的 10–16 倍。GPU 上 Cholesky 与矩阵乘法的并行度比本征分解好，实测要等你运行自检脚本（M7e）。还可以用更高阶的起点减少步数，或用 Newton–Schulz 求逆（只用矩阵乘法）。</li>
+        <li><strong>费米能级规则</strong>：有带隙的体系与 DFTB+ 差 &lt; 1e-7 e，文档写明。报出的费米能级是隙中的某一点（与 <code>fermi_level="exact"</code> 相同）。</li>
+        <li><strong>极低温</strong>：步数自动增加（见第三节），0.1 K 时密度仍到 1e-13。T = 0 用 M7a 的纯化。</li>
+        <li><strong>之后</strong>：M7c 稀疏线性标度，M7d 分治，M7e GPU 与批量。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7a-density-matrix-solvers.html">← M7a 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

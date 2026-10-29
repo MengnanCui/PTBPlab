@@ -12,6 +12,8 @@ level and the entropic term T*S.
 * DFTB+'s ``Solver`` choices (M7a): ``"qr"``, ``"divideandconquer"`` (= ``"eigh"``),
   ``"relativelyrobust"`` (LAPACK drivers), ``"elpa"`` (= ``"eigh"``) and ``"ntpoly"``
   (purification without eigenvalues, :mod:`pydftb.purification`).
+* ``"foe"`` (M7b): Fermi densities at T > 0 without eigenvalues, the recursive Fermi-operator
+  expansion (:mod:`pydftb.fermi_operator`; DFTB+'s finite-temperature ELSI solver is PEXSI).
 
 ``EighSolver`` and ``BatchedSolver`` take ``threads`` (a :class:`pydftb.parallel.KThreads`):
 the per-k work then runs on chunks of k-points in threads, bitwise identical to
@@ -27,6 +29,7 @@ from .backend import ops
 from .backend.spec import NUMPY, Backend
 
 from .occupations import fill
+from .fermi_operator import FermiOperator
 from .purification import NTPoly
 
 
@@ -209,12 +212,14 @@ SOLVERS = {"eigh": EighSolver, "batched": BatchedSolver, "sp2": SP2Solver,
            "qr": partial(EighSolver, driver="gv"),
            "divideandconquer": partial(EighSolver, driver="gvd"),
            "relativelyrobust": partial(EighSolver, driver="gvr"),
-           "elpa": EighSolver, "ntpoly": NTPoly}
+           "elpa": EighSolver, "ntpoly": NTPoly,
+           "foe": FermiOperator}                                   # M7b
 # DFTB+ solvers that pydftb does not provide, and why (M7a)
 UNSUPPORTED_SOLVERS = {
     "omm": "DFTB+'s OMM (libOMM through ELSI) is not implemented: in DFTB+ 24.1 its densities, "
            "converged on the energy only, leave the SCC unconverged in most runs (M7a report); "
            "use 'ntpoly' or an eigensolver",
     "pexsi": "PEXSI is not implemented (DFTB+'s conda-forge builds do not include it); "
-             "finite-temperature densities without eigenvalues are planned for M7b",
+             "finite-temperature densities without eigenvalues: use 'foe' (the recursive "
+             "Fermi-operator expansion, M7b)",
 }

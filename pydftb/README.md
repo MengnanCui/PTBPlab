@@ -875,8 +875,8 @@ MP and Gaussian smearing (DFTB+'s message), `relax_total_spin` and a fractional 
 levels in a channel (DFTB+ rounds an odd electron count up without a word, bug B29); a
 temperature is ignored with a warning, as DFTB+ ignores it.  The LAPACK drivers are DFTB+'s
 hegv, hegvd (= `"eigh"`) and hegvr; `"elpa"` is the eigensolver.  OMM and PEXSI are not
-provided (DFTB+'s OMM leaves the SCC unconverged in most runs; finite temperatures follow
-in M7b).
+provided (DFTB+'s OMM leaves the SCC unconverged in most runs; for finite temperatures use
+`"foe"`, below).
 
 13 frozen DFTB+ references (NTPoly's from DFTB+ 24.1 with ELSI 2.9.1, all four methods;
 `$DFTBPLUS_ELSI` names that binary for `refgen --regenerate`) agree to <= 9.4e-11 Ha with
@@ -887,6 +887,40 @@ in single precision: charges to about 1e-6, for SCC tolerances >= 1e-5.  On a 4-
 dense purification is 4-6x slower than LAPACK's eigensolver (3072 orbitals: 16-19 s against
 3.2 s); it is meant for GPUs and for the sparse version (M7c).  Details:
 [`docs/reports/M7a-density-matrix-solvers.html`](docs/reports/M7a-density-matrix-solvers.html).
+
+### Finite temperatures without diagonalisation (`solver="foe"`)
+
+```python
+from pydftb.fermi_operator import FermiOperator
+
+DFTB(sk, solver="foe", temperature=1000.0)   # metals, k-points, spin: Fermi densities at T > 0
+DFTB(sk, solver=FermiOperator(steps=24), smearing=("fermi", 300.0), backend="torch")
+```
+
+Milestone M7b computes the Fermi density f((H - mu)/kT), W and the entropy TS without
+eigenvalues: Niklasson's recursive Fermi-operator expansion, whose map x -> x^2/(x^2 + (1 - x)^2)
+doubles f(y) to f(2y) exactly, 22 doublings (more at very low temperature) from a high-temperature
+start, each a matrix product and a Cholesky solve.  The recursion runs on D = X - 1/2, so its
+rounding does not grow with the number of steps; the chemical potential follows from the exact
+shift P(mu + d) = P [P + e^(-d/kT) (1 - P)]^-1 within 5 kT (a new recursion farther away; the
+SCC starts from the last value, one recursion per iteration); the entropy comes from the
+recursion's log-determinants.  Unlike the purification it handles metals, a Fermi level shared
+by k-points or by both spin channels (`relax_total_spin`), fixed Fermi levels and independent
+k-point filling, as well as everything M7a covers (two-component spin, hybrids, +U, fields,
+forces, stress, MD, XL-BOMD, torch).  It fills to the exact electron count (pydftb's
+`fermi_level="exact"`): DFTB+'s mid-gap Fermi level needs the eigenvalues, so in a gap the
+reported Fermi level is some level inside it and the charges differ from DFTB+'s by < 1e-7 e.
+Refused: MP and Gaussian smearing, T = 0 (use `"ntpoly"`), analyses that need eigenvectors,
+Casida.
+
+Against the eigensolver with the exact count it agrees to <= 2e-12 Ha in the same SCC iterations
+(TS to 1e-14); `refgen --check --solver foe` passes all 103 applicable Fermi references of
+DFTB+, one of them (independent k-point filling, DFTB+'s mid-gap level at some k-points) in the
+exact count's 17 SCC iterations instead of DFTB+'s 18.  On a 4-core CPU a recursion costs 10-16
+eigendecompositions (288-3072 orbitals); the method is for GPUs and the sparse version (M7c).
+DFTB+ has no counterpart in its conda-forge builds (its finite-temperature ELSI solver is
+PEXSI).  Details:
+[`docs/reports/M7b-finite-temperature-foe.html`](docs/reports/M7b-finite-temperature-foe.html).
 
 ### Cost model
 

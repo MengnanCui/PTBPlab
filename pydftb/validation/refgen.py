@@ -29,10 +29,11 @@ import numpy as np
 from ..bands import broaden, eigenstates, klines
 from ..calculator import DFTB
 from ..casida import AU_DEBYE, Casida
-from ..constants import BOHR, HARTREE, VOLT_PER_ANGSTROM_AU
+from ..constants import BOHR, HARTREE, MIN_TEMP, VOLT_PER_ANGSTROM_AU
 from ..dispersion import library_versions
 from ..external import PointCharges
 from ..hybrid import HybridTerms
+from ..occupations import Smearing
 from ..params import ParamSet
 from ..skf import shell_names, write_typed_copies
 from . import dftbplus
@@ -195,6 +196,28 @@ def solver_from_spec(spec):
         return spec or "eigh"
     from ..purification import NTPoly
     return NTPoly(**{k: v for k, v in spec.items() if k != "name"})
+
+
+EIGENPAIR_ANALYSES = ("eigenvectors", "localise", "polarisability", "response_kernel",
+                      "coord_derivatives", "external_charge_derivatives")
+
+
+def foe_skip(case: Case) -> str | None:
+    """Why a case is not checked with ``--solver foe`` (M7b), or None: the Fermi-operator
+    expansion needs Fermi filling at T > 0 and gives no eigenpairs (the calculator's refusals);
+    a case of DFTB+'s Solver block keeps its own solver."""
+    if case.solver is not None:
+        return "DFTB+'s Solver case (M7a)"
+    if case.filling[0] != "fermi":
+        return f"{case.filling[0]} smearing (the Fermi-operator expansion: Fermi filling only)"
+    if Smearing.from_spec(tuple(case.filling)).kt <= MIN_TEMP:
+        return "T = 0 (the Fermi-operator expansion needs T > 0)"
+    if case.casida:
+        return "Casida excitations need eigenpairs"
+    used = [k for k in EIGENPAIR_ANALYSES if (case.analysis or {}).get(k)]
+    if used:
+        return f"the analysis needs eigenpairs ({', '.join(used)})"
+    return None
 
 
 def scc_start_options(case: Case) -> dict:
@@ -953,6 +976,9 @@ def compare(doc: dict, solver: str = "eigh", fd_delta: float | None = None,
     if case.solver is not None:                                       # M7a
         dev.update(_compare_solver(case, ref, res))
     tol = doc["tolerances"]
+    if solver == "foe" and (dev.get("n_scc", 0) > tol.get("n_scc", 0)
+                            or dev.get("scc_errors", 0.0) > tol.get("scc_errors", np.inf)):
+        dev.update(_compare_fermi_rule(case, inp, res, fd_delta=fd_delta, **backend))   # M7b
     ok = (all(dev[k] <= tol[k] for k in ("energy", "forces", "charges"))
           and max(dev["free_energy"], dev["e_zero"], dev["e_disp"],
                   dev.get("e_terms", 0.0)) <= tol["energy"]
@@ -1048,6 +1074,21 @@ def _compare_solver(case: Case, ref: dict, res) -> dict:
     if isinstance(case.solver, dict):
         dev["fermi_level"] = abs(float(res.fermi) - float(ref["fermi"]))
     return dev
+
+
+def _compare_fermi_rule(case: Case, inp: dict, res, **run) -> dict:
+    """M7b: the Fermi-operator expansion's SCC iterations or per-iteration errors differ from
+    DFTB+'s.  It fills to the exact electron count, DFTB+ (and pydftb's default) takes the
+    middle of a gap when that holds the count to 1e-7, which moves the densities by less than
+    1e-7 but can change the SCC path.  If the eigensolver with the exact count takes the FOE's
+    path (its iterations, the energy to 1e-10), that rule is the difference: the iterations are
+    not counted against the FOE (the energies, charges and forces still are)."""
+    exact = run_pydftb(case, inp, smearing=Smearing(case.filling[0], case.filling[1],
+                                                    fermi_level="exact"), **run)
+    out = {"fermi_rule": int(exact.n_scc), "fermi_rule_energy": abs(exact.energy - res.energy)}
+    if exact.n_scc == res.n_scc and out["fermi_rule_energy"] <= 1e-10:
+        out.update(n_scc=0, scc_errors=0.0)
+    return out
 
 
 def _compare_fill(case: Case, ref: dict, res) -> dict:
@@ -1504,7 +1545,8 @@ def _compare_block(ref: dict, res, inp: dict) -> dict:
         norb = [(inp["max_l"][lab] + 1) ** 2 for lab in inp["labels"]]    # shells 0..l_max
         flat = np.concatenate([oc[a, :n] for a, n in enumerate(norb)])
         dev["orbital"] = float(np.abs(res.q_orbital - flat).max())
-    if ref.get("scc_eigenvalues") is not None:     # not with DFTB+'s NTPoly (M7a)
+    if ref.get("scc_eigenvalues") is not None and res.eigenvalues is not None:
+        # not with DFTB+'s NTPoly (M7a) nor pydftb's solvers without eigenpairs (M7b)
         ev = np.array(ref["scc_eigenvalues"])
         dev["eigenvalues"] = float(np.abs(np.array(res.eigenvalues).reshape(ev.shape) - ev).max())
     return dev
@@ -1715,6 +1757,10 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
                   "M6c environment, M6d excitations, M6f SCC start, mixers, occupations, "
                   "overrides and corrections)")
             continue
+        why = foe_skip(case) if solver == "foe" else None             # M7b
+        if why:
+            print(f"{case.name:26s} skipped: {why}")
+            continue
         r = compare(doc, solver, casida_solver=casida_solver, **backend)
         d = r["dev"]
         all_ok &= r["ok"]
@@ -1765,6 +1811,10 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
         if "switch" in d:                                  # M5a
             print(f"{'':26s}   Type switching: largest difference from the explicit labels "
                   f"{d['switch']:.1e} (bitwise: 0)")
+        if "fermi_rule" in d:                              # M7b
+            print(f"{'':26s}   Fermi-level rule: the SCC path of the exact electron count "
+                  f"(the eigensolver's: {d['fermi_rule']} iterations, |dE| "
+                  f"{d['fermi_rule_energy']:.1e} Ha), not DFTB+'s mid-gap level")
     return all_ok
 
 

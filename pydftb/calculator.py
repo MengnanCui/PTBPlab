@@ -68,13 +68,16 @@ from . import typeswitch as _typeswitch                 # M5a
 from .hamiltonian import build_mixed_pairs              # M5a
 
 
+_DENSITY_SOLVERS = {"sp2": "SP2", "ntpoly": "NTPoly", "foe": "FOE"}
+
+
 def _density_solver(solver) -> str | None:
-    """The display name of a solver without eigenpairs ("SP2", "NTPoly"; M7a), or None."""
+    """The display name of a solver without eigenpairs ("SP2", "NTPoly"; M7a; "FOE", the
+    finite-temperature Fermi-operator expansion; M7b), or None."""
     if isinstance(solver, str):
-        return {"sp2": "SP2", "ntpoly": "NTPoly"}.get(solver)
+        return _DENSITY_SOLVERS.get(solver)
     if getattr(solver, "eigenpairs", True) is False:
-        return {"sp2": "SP2", "ntpoly": "NTPoly"}.get(getattr(solver, "name", ""),
-                                                     type(solver).__name__)
+        return _DENSITY_SOLVERS.get(getattr(solver, "name", ""), type(solver).__name__)
     return None
 
 
@@ -348,7 +351,9 @@ class DFTB:
     solver : str | object "eigh" (reference), "batched" or "sp2" (see solvers.py); DFTB+'s
                           ``Solver`` (M7a): "qr", "divideandconquer", "relativelyrobust",
                           "elpa", or "ntpoly" / a :class:`pydftb.purification.NTPoly`
-                          (densities by purification, no eigenvalues).
+                          (densities by purification, no eigenvalues); "foe" / a
+                          :class:`pydftb.fermi_operator.FermiOperator` (M7b: Fermi densities
+                          at T > 0 without eigenvalues, the exact electron count).
     repulsive : str       "skf" (spline, else polynomial), "polynomial"
                           (DFTB+ ``PolynomialRepulsive = Yes``) or "none".
     warn_unconverged : bool  warn (but still return results, like DFTB+
@@ -689,6 +694,8 @@ class DFTB:
         self._check_response()                                         # M6g-1
         if _density_solver(solver) == "NTPoly":                        # M7a
             self._check_purification()
+        elif _density_solver(solver) == "FOE":                         # M7b
+            self._check_fermi_operator()
         if getattr(self.sk, "selected", False):                        # M6f-5
             self._check_selected_shells(type_switching)
         # smooth switching between the parameter sets of an element (M5a)
@@ -731,9 +738,10 @@ class DFTB:
             raise ValueError(f"{', '.join(self.numpy_only_options)}: implemented for the NumPy "
                              "backend only (milestone M6f)")
         if self.backend.is_torch:
-            if solver not in ("eigh", "batched") and _density_solver(solver) != "NTPoly":
+            if (solver not in ("eigh", "batched")
+                    and _density_solver(solver) not in ("NTPoly", "FOE")):
                 raise ValueError("the torch backend has its own eigensolver: use solver='eigh' "
-                                 f"or 'batched' (or 'ntpoly', M7a), not {solver!r}")
+                                 f"or 'batched' (or 'ntpoly', M7a, or 'foe', M7b), not {solver!r}")
             if self.k_threads.n > 1:
                 warnings.warn("k-point threads are not used with the torch backend",
                               RuntimeWarning, stacklevel=2)
@@ -857,7 +865,8 @@ class DFTB:
                 raise ValueError("independent_k_filling does not combine with a fixed Fermi "
                                  "level (DFTB+ does not read IndependentKFilling then)")
         name = _density_solver(solver)
-        if (self.fixed_fermi_level is not None or self.independent_k_filling) and name:
+        if ((self.fixed_fermi_level is not None or self.independent_k_filling) and name
+                and name != "FOE"):                   # M7b: the Fermi operator at mu, or per k
             raise ValueError("a fixed Fermi level or independent k-point filling needs the "
                              f"eigenvalues (not the {name} solver)")
         if self.independent_k_filling and self.spin:
@@ -985,17 +994,34 @@ class DFTB:
             warnings.warn(f"scc_tol = {self.scc_tol:g} is below what the mixed-precision "
                           f"purification resolves (charges to about 1e-6): use scc_tol >= "
                           f"{MIXED_SCC_TOL:g}", RuntimeWarning, stacklevel=3)
+        self._check_density_analysis("NTPoly")
+
+    def _check_fermi_operator(self):
+        """The Fermi-operator expansion's conditions (M7b): Fermi filling at T > 0 (T = 0: the
+        purification), no analysis that needs eigenpairs.  A fixed Fermi level, independent
+        k-point filling and relax_total_spin (a shared Fermi level) work."""
+        if self.smearing.kind != "fermi":
+            raise ValueError("the Fermi-operator expansion works with Fermi filling only (MP and "
+                             "Gaussian smearing need the eigenvalues; DFTB+'s PEXSI is also "
+                             "Fermi only)")
+        if self.smearing.kt <= MIN_TEMP:
+            raise ValueError("the Fermi-operator expansion needs an electronic temperature: use "
+                             "solver='ntpoly' for the zero-temperature density (M7a)")
+        self._check_density_analysis("FOE")
+
+    def _check_density_analysis(self, name: str):
+        """A solver without eigenpairs (M7a, M7b): no analysis that needs them."""
         a = self.analysis
         if a is not None:
             response = (a.polarisability is not False or a.response_kernel is not False
                         or a.coord_derivatives is not False
                         or a.external_charge_derivatives is not False)
-            used = [name for name, on in (("eigenvectors", a.eigenvectors),
+            used = [what for what, on in (("eigenvectors", a.eigenvectors),
                                           ("localised orbitals", a.localise),
                                           ("responses", response)) if on]
             if used:
                 raise ValueError(f"the analysis ({', '.join(used)}) needs an eigensolver (not "
-                                 "the NTPoly solver)")
+                                 f"the {name} solver)")
 
     def _check_casida(self, sk, solver):
         """DFTB+'s conditions for linear response (initprogram ensureLinRespConditions)."""
@@ -2192,6 +2218,16 @@ class DFTB:
             h = so.spinor(hq, *(0.5 * smat * (v[:, None] + v[None, :]) for v in vs_orb))
         return h if hso is None else h + hso
 
+    def _solver_object(self):
+        """The given solver object, or for ``solver="foe"`` one
+        :class:`~pydftb.fermi_operator.FermiOperator` per calculator (M7b): the chemical
+        potential of one geometry starts the search at the next."""
+        if not isinstance(self.solver, str):
+            return self.solver
+        if getattr(self, "_foe", None) is None:
+            self._foe = SOLVERS["foe"]()
+        return self._foe
+
     def _solve(self, solver, st: _Setup, h, need_w):
         """Densities for H, stacked [up k-points, down k-points] with spin; one Fermi
         level per spin channel, or a shared one (DFTB+ RelaxTotalSpin).  Two-component:
@@ -2231,7 +2267,9 @@ class DFTB:
         """:meth:`_solve` for a solver without eigenpairs (M7a, :class:`pydftb.purification.
         NTPoly`): every spin channel (or the spinor matrix) at its whole occupation, the T = 0
         density; no eigenvalues or occupations, TS = 0; the chemical potential as the Fermi
-        level (one per spin channel)."""
+        level (one per spin channel).  Finite temperature (M7b): :meth:`_solve_fermi_operator`."""
+        if getattr(solver, "finite_temperature", False):
+            return self._solve_fermi_operator(solver, st, h, need_w)
         if st.pauli is not None:
             rho, wdm, mu = solver.density(h, st.kw, st.nelec, 1.0, need_w)
             return rho, wdm, None, mu, 0.0, None
@@ -2245,6 +2283,31 @@ class DFTB:
         rho = xp.concatenate([p[0] for p in parts])
         wdm = xp.concatenate([p[1] for p in parts]) if need_w else None
         return rho, wdm, None, (parts[0][2], parts[1][2]), 0.0, None
+
+    def _solve_fermi_operator(self, solver, st: _Setup, h, need_w):
+        """:meth:`_solve` for a finite-temperature solver without eigenpairs (M7b,
+        :class:`pydftb.fermi_operator.FermiOperator`): Fermi densities at kT for the electron
+        count (a chemical potential shared by the k-points, and by both spin channels with
+        relax_total_spin), at the fixed Fermi level, or for every k-point on its own; T S from
+        the solver; no eigenvalues or occupations."""
+        ffl = self.fixed_fermi_level
+        opts = dict(kt=self.kt, independent_k=bool(self.independent_k_filling))
+        if st.pauli is not None or st.spin is None:
+            g = 1.0 if st.pauli is not None else 2.0
+            rho, wdm, mu, ts = solver.density(h, st.kw, st.nelec / g, g, need_w,
+                                              mu=None if ffl is None else ffl[0], **opts)
+            return rho, wdm, None, mu, ts, None
+        if st.spin.shared_ef:
+            rho, wdm, mu, ts = solver.density(h, st.kw, st.nelec, 1.0, need_w, channels=2, **opts)
+            return rho, wdm, None, (mu, mu), ts, None
+        nk = len(st.kw)
+        parts = [solver.density(h[i * nk:(i + 1) * nk], st.kw, n, 1.0, need_w, offset=i * nk,
+                                mu=None if ffl is None else ffl[i], **opts)
+                 for i, n in enumerate((st.spin.n_up, st.spin.n_down))]
+        xp = self.backend.xp
+        rho = xp.concatenate([p[0] for p in parts])
+        wdm = xp.concatenate([p[1] for p in parts]) if need_w else None
+        return rho, wdm, None, (parts[0][2], parts[1][2]), parts[0][3] + parts[1][3], None
 
     def _solve_filling(self, solver, st: _Setup, h, need_w):
         """:meth:`_solve` with a fixed Fermi level or independent k-point filling (M6f): the
@@ -2321,11 +2384,15 @@ class DFTB:
         if b.is_torch and _density_solver(self.solver) == "NTPoly":     # M7a: on the device
             solver = (self.solver if not isinstance(self.solver, str)
                       else SOLVERS[self.solver]())
+        elif b.is_torch and _density_solver(self.solver) == "FOE":     # M7b: on the device
+            solver = self._solver_object()
+            solver.linalg_device = b.linalg_device              # Cholesky (None: the device)
         elif b.is_torch:
             from .backend.torch_solver import TorchSolver
             solver = TorchSolver(b)
         else:
-            solver = (self.solver if not isinstance(self.solver, str)
+            solver = (self._solver_object() if self.solver == "foe" else
+                      self.solver if not isinstance(self.solver, str)
                       else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
         t1 = time.perf_counter()
         s = st.smat_precise
@@ -2427,7 +2494,8 @@ class DFTB:
             return self._scc_hybrid_kpoints(st, q_init, forces, timings)
         pauli = st.pauli is not None
         threads = self.k_threads if self.k_threads.n > 1 else None
-        solver = (self.solver if not isinstance(self.solver, str)
+        solver = (self._solver_object() if self.solver == "foe" else
+                  self.solver if not isinstance(self.solver, str)
                   else SOLVERS[self.solver](threads=threads))
         t1 = time.perf_counter()
         s = st.smat_precise
@@ -2531,7 +2599,8 @@ class DFTB:
         minimum iterations, no mixing after the last one) as DFTB+'s and the Gamma point's."""
         hy = st.hybrid
         threads = self.k_threads if self.k_threads.n > 1 else None
-        solver = (self.solver if not isinstance(self.solver, str)
+        solver = (self._solver_object() if self.solver == "foe" else
+                  self.solver if not isinstance(self.solver, str)
                   else SOLVERS[self.solver](threads=threads))
         t1 = time.perf_counter()
         s = st.smat_precise
