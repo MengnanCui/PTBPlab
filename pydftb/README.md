@@ -922,6 +922,50 @@ DFTB+ has no counterpart in its conda-forge builds (its finite-temperature ELSI 
 PEXSI).  Details:
 [`docs/reports/M7b-finite-temperature-foe.html`](docs/reports/M7b-finite-temperature-foe.html).
 
+### Sparse matrices and linear scaling (`NTPoly(sparse=True)`)
+
+```python
+from pydftb.purification import NTPoly
+
+DFTB(sk, solver=NTPoly(sparse=True))                     # DFTB+'s Sparse = Yes: TRS4, 1e-5, 1e-10
+DFTB(sk, solver=NTPoly(sparse=True, truncation=1e-6))    # large gapped systems
+DFTB(sk, solver=NTPoly("trs2", sparse=True, threads=2))  # two threads for the CSR products
+```
+
+Milestone M7c runs M7a's purification on sparse matrices end to end, as DFTB+ does with
+`Solver = NTPoly { Sparse = Yes }`: H0 and S are assembled on the pattern of the neighbour
+blocks (the images folded onto the central cell, no N x N matrix), and S^-1/2, H~, the
+purification, P and W are SciPy CSR products with NTPoly's flushing of small elements (two
+factors filled above 10 % are multiplied dense, NTPoly's rule; the CSR products run in row
+panels on threads).  Mulliken populations, the band energy, forces and stress use only the
+density matrix on that pattern.  The algorithm is the same code as the dense path, so with the
+same settings the results agree to rounding; only TRS4's last step, where tr G is down to
+rounding, can take the other branch and move the result within NTPoly's tolerance band
+(DFTB+'s own results have the same noise).  Covered: molecules, the Gamma point and k-points,
+no spin and collinear spin, the SCC terms that act through potentials (DFTB3, H damping, H5,
+dispersion, fields, point charges, site potentials, solvation, halogen and dipole
+corrections), type switching, charge files, forces, stress, ASE.  Refused: two-component spin
+(DFTB+ refuses it too), +U and onsite corrections, hybrids, Casida, analyses, XL-BOMD force
+evaluations, torch, `precision="mixed"`.  The default `sparse=False` is M7a's dense path,
+bitwise unchanged.
+
+Only gapped systems are sparse: in water at truncation 1e-6 the orthogonalised density matrix
+has about 270 elements per row at every size, while in Cu at 1000-3000 K it is full within an
+18 A cell.  DFTB+'s default truncation 1e-10 keeps the matrices nearly full up to a thousand
+waters; 1e-6 changes the SCC energy, charges and forces of 216 waters by 3e-7 Ha, 5e-7 e and
+3e-7 Ha/Bohr against the eigensolver (1e-7: 5e-9, 1e-8, 1e-8).  The 7 frozen DFTB+ NTPoly
+references without block potentials pass through the sparse path as through the dense one
+(`refgen --check --solver sparse`, or `sparse-csr` for every product as CSR).  On a 4-core CPU
+(water boxes, truncation 1e-6, SCC with forces) the sparse path matches the eigensolver at 512
+waters (77 s against 79 s) and at 1000 waters needs 156 s for the density matrices against
+336 s (the whole calculation 219 s against 404 s); its solver time per SCC iteration grows
+linearly with N (9.8 ms per water at 1000 and 1728 waters), and 1728 waters (10368 orbitals)
+take 411 s, where the eigensolver would need about 1800 s (one diagonalisation takes 101 s).
+Below a few hundred waters it is slower than the dense path.  Outside the solver
+the neighbour lists and the Ewald setup remain (O(N^1.5-2), with a memory peak of 9.3 GiB at
+1728 waters).  Details and timings:
+[`docs/reports/M7c-sparse-linear-scaling.html`](docs/reports/M7c-sparse-linear-scaling.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

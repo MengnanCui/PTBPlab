@@ -42,6 +42,7 @@ from ase.data import atomic_numbers as _NUMBERS
 
 from . import analysis as _analysis
 from . import blockpot, external
+from . import csr as _csr
 from . import casida as _casida
 from . import casida_grad as _cgrad
 from . import hybrid as _hybrid
@@ -250,6 +251,7 @@ class _Setup:
     dipole_corr: "_corrections.DipoleSetup | None" = None  # dipole correction (M6f-3)
     switching: "_typeswitch.TypeMixing | None" = None      # type weights (M5a)
     hybrid: "_hybrid.HybridTerms | None" = None              # hybrid functionals (M6h)
+    sparse: _Sparse | None = None           # H0, S on the neighbour pattern (M7c; h0, smat None)
 
     @property
     def kw_dev(self):
@@ -260,6 +262,29 @@ class _Setup:
     def smat_precise(self):
         """The overlap stack in double precision (for the Cholesky factor)."""
         return self.smat if self.dev is None else self.dev.smat_precise
+
+
+@dataclass
+class _Sparse:
+    """H0 and S on the pattern of the neighbour blocks (M7c, ``NTPoly(sparse=True)``): (nk, nnz)
+    values, real at the Gamma point, complex at k-points."""
+    pattern: _csr.Pattern
+    h0: np.ndarray
+    s: np.ndarray
+
+    def s_matrices(self) -> list:
+        return [self.pattern.matrix(x) for x in self.s]
+
+    def hamiltonian(self, h0, v, vs=None) -> list:
+        """CSR matrices of H = H0 + 1/2 S (v_mu + v_nu) for every k-point (``h0``: the values of
+        H0 with the net site potentials); with spin potentials ``vs`` the up, then the down
+        channel (as the dense SCC)."""
+        pat = self.pattern
+        h = h0 + 0.5 * self.s * (v[pat.rows] + v[pat.cols])
+        if vs is not None:
+            hs = 0.5 * self.s * (vs[pat.rows] + vs[pat.cols])
+            h = np.concatenate([h + hs, h - hs])
+        return [pat.matrix(x) for x in h]
 
 
 @dataclass
@@ -761,6 +786,31 @@ class DFTB:
             raise ValueError(f"the SK files {tagged} are a hybrid parametrisation (RangeSep): set "
                              "hybrid='lc' or 'cam' (DFTB+: 'Hybrid SK-file provided, but the "
                              "hybrid block is missing'), or hybrid=False to ignore it")
+        if getattr(solver, "sparse", False):                           # M7c
+            self._check_sparse()
+
+    def _check_sparse(self):
+        """The sparse NTPoly path's conditions (M7c, DFTB+'s ``Sparse = Yes``): the terms that
+        need more than the values on the pattern of the neighbour blocks are not there."""
+        why = []
+        if self.backend.is_torch:
+            why.append("the torch backend (the CSR matrices are SciPy's)")
+        if self.pauli:
+            why.append("two-component spin (as DFTB+: 'Sparse solver not currently avaible for "
+                       "two component complex hamiltonians')")
+        if self.block_terms:
+            why.append("DFTB+U and onsite corrections")
+        if self.hybrid is not None:
+            why.append("hybrid functionals")
+        if self.casida is not None:
+            why.append("Casida excitations")
+        if self.analysis is not None:
+            why.append("analysis outputs")
+        if self.force_evaluation != "traditional":
+            why.append(f"force_evaluation={self.force_evaluation!r} (the dense rho and H)")
+        if why:
+            raise ValueError(f"the sparse NTPoly path (sparse=True, milestone M7c) does not "
+                             f"support {'; '.join(why)}: use NTPoly() (dense) or an eigensolver")
 
     def _check_hybrid(self) -> tuple:
         """The conditions of a hybrid functional (M6h-1): DFTB+'s (initprogram
@@ -1748,8 +1798,13 @@ class DFTB:
             kpts, kw = np.zeros((1, 3)), np.ones(1)
         gamma_only = len(kpts) == 1 and not np.any(kpts[0])
         b = self.backend
-        dev = None
+        dev = sparse = None
         if not matrices:
+            h0 = smat = None
+        elif getattr(self.solver, "sparse", False):          # M7c: on the pattern, no N x N
+            pat = _csr.Pattern(pb, norb)
+            kp = None if gamma_only else kpts
+            sparse = _Sparse(pat, pat.fold(pb.h, eps0, kp), pat.fold(pb.s, np.ones(norb), kp))
             h0 = smat = None
         elif gamma_only:
             h0 = fold(pb, pb.h, norb, None, eps0)[None]
@@ -1839,7 +1894,7 @@ class DFTB:
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
                       pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
-                      dipole_corr=dipole_corr, switching=mix, hybrid=hybrid)
+                      dipole_corr=dipole_corr, switching=mix, hybrid=hybrid, sparse=sparse)
 
     def _hybrid_terms(self, species, pos, basis: Basis, smat, cell=None,
                       pairs=None) -> "_hybrid.HybridTerms":
@@ -1916,6 +1971,10 @@ class DFTB:
         if st.ext is None or st.ext.v_net is None:
             return h0
         v = st.ext.v_net[st.basis.orb_atom]
+        if st.sparse is not None:                       # M7c: the diagonal entries of the pattern
+            h0 = h0.copy()
+            h0[:, st.sparse.pattern.diag] += v
+            return h0
         idx = np.arange(len(v))
         h0 = h0.copy()
         h0[:, idx, idx] += v
@@ -1928,6 +1987,9 @@ class DFTB:
             rho = so.components(rho)[0]
         diag = np.zeros(st.basis.norb)
         for s in range(0, len(rho), nk):
+            if st.sparse is not None:                   # M7c: values on the pattern
+                diag = diag + st.kw @ rho[s:s + nk][:, st.sparse.pattern.diag].real
+                continue
             diag = diag + np.einsum("k,kii->i", st.kw, rho[s:s + nk]).real
         return ops.segment_sum(diag, st.basis.orb_atom, len(st.species))
 
@@ -2267,9 +2329,12 @@ class DFTB:
         """:meth:`_solve` for a solver without eigenpairs (M7a, :class:`pydftb.purification.
         NTPoly`): every spin channel (or the spinor matrix) at its whole occupation, the T = 0
         density; no eigenvalues or occupations, TS = 0; the chemical potential as the Fermi
-        level (one per spin channel).  Finite temperature (M7b): :meth:`_solve_fermi_operator`."""
+        level (one per spin channel).  Finite temperature (M7b): :meth:`_solve_fermi_operator`.
+        CSR matrices (M7c): :meth:`_solve_sparse`."""
         if getattr(solver, "finite_temperature", False):
             return self._solve_fermi_operator(solver, st, h, need_w)
+        if st.sparse is not None:
+            return self._solve_sparse(solver, st, h, need_w)
         if st.pauli is not None:
             rho, wdm, mu = solver.density(h, st.kw, st.nelec, 1.0, need_w)
             return rho, wdm, None, mu, 0.0, None
@@ -2283,6 +2348,27 @@ class DFTB:
         rho = xp.concatenate([p[0] for p in parts])
         wdm = xp.concatenate([p[1] for p in parts]) if need_w else None
         return rho, wdm, None, (parts[0][2], parts[1][2]), 0.0, None
+
+    def _solve_sparse(self, solver, st: _Setup, h, need_w):
+        """:meth:`_solve_density` on CSR matrices (M7c): every spin channel at its occupation, the
+        densities' values on the pattern of the neighbour blocks ((channels, nnz) arrays, the
+        channels stacked as the dense matrices)."""
+        pat = st.sparse.pattern
+        nk = len(st.kw)
+        if st.spin is None:
+            calls = [(h, st.nelec / 2.0, 2.0, 0)]
+        else:
+            calls = [(h[i * nk:(i + 1) * nk], n, 1.0, i * nk)
+                     for i, n in enumerate((st.spin.n_up, st.spin.n_down))]
+        rho, wdm, mus = [], [], []
+        for hh, n_occ, g, offset in calls:
+            p, w, mu = solver.density(hh, st.kw, n_occ, g, need_w, offset=offset)
+            rho += [pat.sample(m) for m in p]
+            if need_w:
+                wdm += [pat.sample(m) for m in w]
+            mus.append(mu)
+        mu = mus[0] if st.spin is None else tuple(mus)
+        return np.array(rho), (np.array(wdm) if need_w else None), None, mu, 0.0, None
 
     def _solve_fermi_operator(self, solver, st: _Setup, h, need_w):
         """:meth:`_solve` for a finite-temperature solver without eigenpairs (M7b,
@@ -2361,6 +2447,8 @@ class DFTB:
 
     def _mulliken(self, st: _Setup, rho) -> np.ndarray:
         """sum_k w_k Re (rho_k S_k)_{mu mu} per orbital, as a host array."""
+        if st.sparse is not None:       # M7c: sum_nu rho_mu,nu conj(S_mu,nu) on the pattern
+            return st.sparse.pattern.row_sums(st.kw @ (rho * st.sparse.s.conj()).real)
         if not self.backend.is_torch:
             return np.einsum("k,kij,kji->i", st.kw, rho, st.smat).real
         b = self.backend
@@ -2369,6 +2457,8 @@ class DFTB:
 
     def _trace(self, st: _Setup, rho, m) -> float:
         """sum_k w_k Re Tr(rho_k M_k)."""
+        if st.sparse is not None:       # M7c: Hermitian values on the pattern
+            return float(st.kw @ (rho * m.conj()).real.sum(axis=1))
         if not self.backend.is_torch:
             return float(np.einsum("k,kij,kji->", st.kw, rho, m).real)
         b = self.backend
@@ -2396,7 +2486,10 @@ class DFTB:
                       else SOLVERS[self.solver](threads=self.k_threads if self.k_threads.n > 1 else None))
         t1 = time.perf_counter()
         s = st.smat_precise
-        if st.pauli is not None:
+        if st.sparse is not None:                               # M7c: CSR matrices
+            s = st.sparse.s_matrices()
+            solver.prepare(s if st.spin is None else s + s)
+        elif st.pauli is not None:
             solver.prepare(st.pauli.s2)
         else:
             solver.prepare(s if st.spin is None else b.xp.concatenate([s, s]))
@@ -2418,11 +2511,14 @@ class DFTB:
         max_iter, tol = (self.max_scc if self.scc else 1), self.scc_tol
         if control is not None:
             min_iter, max_iter, tol = control.min_iter, control.max_iter, control.tol
-        h0 = self._with_net(st, st.h0)          # net site potentials (M6c)
+        # net site potentials (M6c); M7c: H0 on the pattern
+        h0 = self._with_net(st, st.h0 if st.sparse is None else st.sparse.h0)
         errors = []
         for nit in range(1, max_iter + 1):
             v_orb, vs_orb = self._potentials(st, q_in)
-            if st.block is not None:
+            if st.sparse is not None:                           # M7c: on the pattern
+                h = st.sparse.hamiltonian(h0, v_orb, vs_orb)
+            elif st.block is not None:
                 # DFTB+ leaves the onsite corrections out of the first iteration's H unless it
                 # read its charges (ReadInitialCharges): given charges count as read
                 pots = self._block_potentials(st, q_in, onsite=nit > 1 or q_init is not None)
@@ -2802,7 +2898,8 @@ class DFTB:
         if st.pauli is not None:
             return self._energies_pauli(st, sc)
         nk = len(st.kw)
-        e_band = sum(self._trace(st, sc.rho[s:s + nk], st.h0)
+        h0 = st.h0 if st.sparse is None else st.sparse.h0      # M7c: on the pattern
+        e_band = sum(self._trace(st, sc.rho[s:s + nk], h0)
                      for s in range(0, len(sc.rho), nk))       # Tr(rho H0), summed over spins
         dq, m = self._charge_and_magnetisation(st, sc.q_out)
         e_scc = st.coulomb.energy_shift(dq)[0] if self.scc else 0.0
@@ -2992,6 +3089,11 @@ class DFTB:
         nspin = len(sc.rho) // nk
         kw = np.tile(st.kw, nspin)                        # weights of the stacked channels
         sgn = np.repeat([1.0, -1.0][:nspin], nk)          # up - down: magnetisation density
+        if st.sparse is not None:                         # M7c: values on the pattern
+            pat = st.sparse.pattern
+            kc = None if st.gamma_only else np.tile(st.kpts, (nspin, 1))
+            p_m = pat.at_pairs(sc.rho, kw * sgn, kc) if nspin == 2 else None
+            return pat.at_pairs(sc.rho, kw, kc), pat.at_pairs(sc.wdm, kw, kc), p_m
         # real-space (energy-weighted) density at the pair elements, summed over spins:
         # P_e = Re sum_k w_k rho_k[nu, mu] exp(2 pi i k.T)
         # with the torch backend the densities are on the device: only the pair elements

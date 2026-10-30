@@ -13,15 +13,19 @@ ELSI ``elsi_ntpoly.f90``), step for step, including where NTPoly flushes small e
   maps to 1/2, over all steps but the last;
 * P = g Z^T X Z and W = P H P / g (g = 2 closed shell, 1 per spin channel or spinor).
 
-Matrices are NumPy arrays or torch tensors (any device); scalars of the control flow are
+Matrices are NumPy arrays, torch tensors (any device) or SciPy CSR matrices (``sparse=True``,
+milestone M7c: DFTB+'s ``Sparse = Yes``, see :mod:`pydftb.csr`); scalars of the control flow are
 Python floats.  ``NTPoly`` is the solver object of :class:`pydftb.DFTB` (``solver="ntpoly"``):
 no eigenvalues, the T = 0 density, one purification per k-point and spin channel.
 """
 from __future__ import annotations
 
+import contextlib
 import warnings
 
 import numpy as np
+
+from . import csr as _csr
 
 METHODS = {"pm": 0, "trs2": 1, "trs4": 2, "hpcp": 3}
 NAMES = {v: k for k, v in METHODS.items()}
@@ -31,15 +35,20 @@ MIXED_FULL_STEPS = 4                     # precision="mixed": full-precision ste
 MIXED_SCC_TOL = 1e-5                     # precision="mixed": SCC tolerances below it are not met
 
 
-# ---- array helpers: NumPy arrays or torch tensors ----------------------------------------
+# ---- array helpers: NumPy arrays, torch tensors or CSR matrices ------------------------------
 def _is_torch(a) -> bool:
     return type(a).__module__.startswith("torch")
+
+
+_is_sparse = _csr.is_sparse
 
 
 def _eye(n: int, like):
     if _is_torch(like):
         import torch
         return torch.eye(n, dtype=like.dtype, device=like.device)
+    if _is_sparse(like):
+        return _csr.eye(n, like.dtype)
     return np.eye(n, dtype=like.dtype)
 
 
@@ -47,12 +56,16 @@ def _ct(a):
     """Conjugate transpose."""
     if _is_torch(a):
         return a.mH
+    if _is_sparse(a):
+        return _csr.ct(a)
     return a.conj().T
 
 
 def _trace(a) -> float:
     if _is_torch(a):
         return float(a.diagonal(dim1=-2, dim2=-1).sum().real)
+    if _is_sparse(a):
+        return _csr.trace(a)
     return float(np.trace(a).real)
 
 
@@ -60,11 +73,15 @@ def _dot(a, b) -> float:
     """Re sum(conj(a) * b) = tr(A^H B), NTPoly's DotMatrix (the real case)."""
     if _is_torch(a):
         return float((a.conj() * b).sum().real)
+    if _is_sparse(a):
+        return _csr.dot(a, b)
     return float(np.vdot(a, b).real)
 
 
 def _drop(a, threshold: float):
     """NTPoly's flushing: elements with |a| < threshold set to zero."""
+    if _is_sparse(a):
+        return _csr.drop(a, threshold)
     if threshold <= 0.0:
         return a
     if _is_torch(a):
@@ -74,12 +91,16 @@ def _drop(a, threshold: float):
 
 
 def _mm(a, b, threshold: float):
+    if _is_sparse(a):
+        return _csr.matmul(a, b, threshold)
     return _drop(a @ b, threshold)
 
 
 def _abs_column_sums(a):
     if _is_torch(a):
         return a.abs().sum(dim=0)
+    if _is_sparse(a):
+        return _csr.abs_column_sums(a)
     return np.abs(a).sum(axis=0)
 
 
@@ -89,6 +110,8 @@ def gershgorin(h) -> tuple[float, float]:
         d = h.diagonal().real
         r = h.abs().sum(dim=0) - h.diagonal().abs()
         return float((d - r).min()), float((d + r).max())
+    if _is_sparse(h):
+        return _csr.gershgorin(h)
     d = np.diag(h).real
     r = np.abs(h).sum(axis=0) - np.abs(np.diag(h))
     return float((d - r).min()), float((d + r).max())
@@ -366,12 +389,20 @@ class NTPoly:
     the flushing of small elements; ``precision="mixed"``: the purification steps in single
     precision first (pydftb's, not NTPoly's; the charges are then good to about 1e-6).
     Each k-point and spin channel (or spinor matrix) is purified at its own integer occupation;
-    the chemical potential of several k-points is their weighted mean."""
+    the chemical potential of several k-points is their weighted mean.
+
+    ``sparse=True`` (M7c, DFTB+'s ``Sparse = Yes``): the calculator keeps H0, S, H, rho and W on
+    the pattern of the neighbour blocks and hands CSR matrices to the solver, whose products are
+    then sparse with the same flushing (:mod:`pydftb.csr`); ``threads``: the threads of the CSR
+    products (None: all cores); ``dense_fill``: two factors filled above it are multiplied
+    dense (NTPoly's 0.1; 1 or more: always sparse).  ``last_fill``: the mean number of elements
+    per row of the last density's X."""
     name = "ntpoly"
     eigenpairs = False
 
     def __init__(self, method="trs4", tolerance: float = 1e-5, truncation: float = 1e-10,
-                 precision: str | None = None, max_iterations: int = 100, threads=None):
+                 precision: str | None = None, max_iterations: int = 100, threads=None,
+                 sparse: bool = False, dense_fill: float = _csr.DENSE_FILL):
         self.method = method_index(method)
         self.tolerance = float(tolerance)
         self.truncation = float(truncation)
@@ -379,36 +410,57 @@ class NTPoly:
             raise ValueError(f"precision must be None, 'double' or 'mixed', not {precision!r}")
         self.mixed = precision == "mixed"
         self.max_iterations = int(max_iterations)
+        self.sparse = bool(sparse)
+        if self.sparse and self.mixed:
+            raise ValueError("precision='mixed' is not used with sparse=True: the CSR products "
+                             "are not faster in single precision (milestone M7c)")
+        self.product_threads = int(threads) if self.sparse and threads is not None else None
+        self.dense_fill = float(dense_fill)
         self.threads = None            # one purification after another
         self.last_iterations = []
         self.isr_iterations = []
+        self.last_fill = None
 
     def __repr__(self):
         return (f"NTPoly(method={NAMES[self.method]!r}, tolerance={self.tolerance:g}, "
                 f"truncation={self.truncation:g}"
-                + (", precision='mixed'" if self.mixed else "") + ")")
+                + (", precision='mixed'" if self.mixed else "")
+                + (", sparse=True" if self.sparse else "") + ")")
+
+    def _products(self):
+        """The threads and the dense fill of the CSR products (M7c)."""
+        if not self.sparse:
+            return contextlib.nullcontext()
+        return _csr.options(self.product_threads, self.dense_fill)
 
     def prepare(self, s):
         """S^-1/2 for every matrix of the stack (a repeated half, the spin channels' copy of
         the k-points, is not computed twice), once per geometry; ``last_iterations`` then
-        collects the purification steps of this geometry's SCC, a list per density call."""
+        collects the purification steps of this geometry's SCC, a list per density call.
+        A list of CSR matrices: the sparse path (M7c)."""
         self.last_iterations = []
         thr = max(0.01 * self.truncation, 1e-15)
         n = len(s)
         half = n // 2
-        same = n % 2 == 0 and n > 1 and _equal(s[:half], s[half:])
+        if isinstance(s, list):
+            same = n % 2 == 0 and n > 1 and all(a is b or _equal(a, b)
+                                                for a, b in zip(s[:half], s[half:]))
+        else:
+            same = n % 2 == 0 and n > 1 and _equal(s[:half], s[half:])
         zs, its = [], []
-        for i in range(half if same else n):
-            z, it = inverse_sqrt(s[i], self.tolerance, thr, self.max_iterations)
-            zs.append(z)
-            its.append(it)
+        with self._products():
+            for i in range(half if same else n):
+                z, it = inverse_sqrt(s[i], self.tolerance, thr, self.max_iterations)
+                zs.append(z)
+                its.append(it)
         self.z = zs + zs if same else zs
         self.isr_iterations = its
 
     def density(self, h, kw, n_occ: float, spin_factor: float, need_w: bool, offset: int = 0):
         """(P stack, W stack or None, chemical potential) of the matrices ``h`` (k-points of
         one channel), each with ``n_occ`` occupied levels of ``spin_factor`` electrons;
-        ``offset``: the first matrix's index in the prepared stack."""
+        ``offset``: the first matrix's index in the prepared stack.  CSR matrices (M7c): lists
+        of CSR matrices."""
         n_int = round(float(n_occ))
         if abs(n_occ - n_int) > 1e-8:
             raise ValueError(
@@ -418,20 +470,25 @@ class NTPoly:
         thr = self.truncation
         nel = 2.0 * n_int
         ps, ws, mus = [], [], []
-        its = []
-        for i, hk in enumerate(h):
-            z = _like(self.z[offset + i], hk)
-            zh = _ct(z)
-            hw = _mm(_mm(z, hk, thr), zh, thr)
-            x, _, mu, it = purify(hw, nel, self.method, self.tolerance, thr,
-                                  self.max_iterations, self.mixed)
-            p = _mm(_mm(zh, x, thr), z, thr) * spin_factor
-            ps.append(p)
-            if need_w:
-                ws.append(_mm(_mm(p, hk, thr), p, thr) * (1.0 / spin_factor))
-            mus.append(mu)
-            its.append(it)
+        its, fills = [], []
+        with self._products():
+            for i, hk in enumerate(h):
+                z = _like(self.z[offset + i], hk)
+                zh = _ct(z)
+                hw = _mm(_mm(z, hk, thr), zh, thr)
+                x, _, mu, it = purify(hw, nel, self.method, self.tolerance, thr,
+                                      self.max_iterations, self.mixed)
+                p = _mm(_mm(zh, x, thr), z, thr) * spin_factor
+                ps.append(p)
+                if need_w:
+                    ws.append(_mm(_mm(p, hk, thr), p, thr) * (1.0 / spin_factor))
+                mus.append(mu)
+                its.append(it)
+                if _is_sparse(x):
+                    fills.append(x.nnz / x.shape[0])
         self.last_iterations.append(its)
+        if fills:
+            self.last_fill = float(np.mean(fills))
         mu = float(np.dot(np.asarray(kw, float), mus) / np.sum(kw))
         return _stack(ps), (_stack(ws) if need_w else None), mu
 
@@ -453,6 +510,8 @@ def _equal(a, b) -> bool:
     if _is_torch(a):
         import torch
         return bool(torch.equal(a, b))
+    if _is_sparse(a):
+        return _csr.equal(a, b)
     return bool(np.array_equal(a, b))
 
 
@@ -460,4 +519,6 @@ def _stack(parts):
     if _is_torch(parts[0]):
         import torch
         return torch.stack(parts)
+    if _is_sparse(parts[0]):
+        return list(parts)
     return np.stack(parts)

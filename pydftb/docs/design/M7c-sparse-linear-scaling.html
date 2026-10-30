@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7c 稀疏矩阵与线性标度设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7c · 设计</p>
+    <h1>大体系（三）：稀疏矩阵与线性标度</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-30</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M7c-sparse-linear-scaling.html">完成报告</a> · <a href="M7b-finite-temperature-foe.html">M7b 设计</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M7a 的 NTPoly 纯化用稠密矩阵：内存 O(N²)，每次乘法 O(N³)。M7c 让这条路径在稀疏矩阵上走完。H<sub>0</sub> 与 S 直接按邻居表组装成 CSR 矩阵。S<sup>−1/2</sup>、H̃、纯化、P 与 W 都是带 NTPoly 逐元素截断的稀疏乘法。Mulliken 布居、能量、力与应力只用 H/S 图样上的密度矩阵元。这对应 DFTB+ 的 <code>Solver = NTPoly { Sparse = Yes }</code>，也是 DFTB+ 的默认。有带隙的体系在截断 1e-6 时，正交基里的密度矩阵 X 每行约 250 个非零元，不随体系增大，所以每次乘法的耗时与 N 成正比。</p>
+    <ul>
+      <li><strong>格式</strong>（P108）：
+        <ul>
+          <li>选 SciPy 的 CSR 加逐元素截断，与 NTPoly 的语义相同。</li>
+          <li>X·X 一次乘法，截断 1e-6：1000 个水分子时，单线程 CSR 已比 4 线程稠密快（0.85 s 对 1.94 s）；1728 个时 1.44 s 对 9.90 s。CSR 的耗时与 N 成正比。</li>
+          <li>自写的空间单元块（块内稠密）在 Python 里不比 CSR 快。</li>
+          <li>SciPy 的 CSR 乘法会释放 GIL，按行分块用线程：3 个线程快 2.6 倍（P108c）。</li>
+          <li>两个因子的填充都超过 10% 时改用稠密 GEMM，这是 NTPoly 的 <code>sparsity_threshold</code>。</li>
+        </ul></li>
+      <li><strong>局域性</strong>（P107）：
+        <ul>
+          <li>水在截断 1e-6 时，X 每行约 153 个原子块，从 216 到 1000 个分子不变。</li>
+          <li>Cu 金属（1000 K、3000 K）在 18 Å 的超胞里 X 完全不稀疏。</li>
+          <li>所以线性标度只对有带隙的体系有效。有限温度的 FOE 不做稀疏版：P109 的估计是每次递归的乘法约为 TRS4 的 11 倍，而需要 T &gt; 0 的金属本来就不稀疏。</li>
+        </ul></li>
+      <li><strong>精度</strong>（P111）：216 个水分子的 SCC 加力，对本征分解：
+        <ul>
+          <li>截断 1e-6：能量 3.4e-7 Ha（每个原子 5e-10），电荷 4.7e-7 e，力 3.2e-7 Ha/Bohr；</li>
+          <li>1e-7：5e-9 Ha、1.2e-8 e、1.3e-8 Ha/Bohr；</li>
+          <li>1e-8：1e-10 Ha、6.6e-9 e、3.2e-9 Ha/Bohr；</li>
+          <li>SCC 轮数与本征分解相同；截断 1e-5 时 SCC 不收敛。</li>
+        </ul></li>
+      <li><strong>与稠密版一致</strong>（P109）：
+        <ul>
+          <li>同一份算法代码，数组函数按类型分派；截断 1e-6 时稀疏与稠密的 P 差 2e-12。</li>
+          <li>差别只在 TRS4 的最后一步。σ = (n/2 − tr F)/tr G 中的 tr G 到了舍入噪声时，σ 没有意义，求和次序不同就会走另一个分支（216 个水、截断 1e-10：σ 为 15.4 对 −0.75）。</li>
+          <li>这时两者在 NTPoly 的容差带里不同（Tolerance 1e-5 时能量差 4e-6 Ha）。DFTB+ 自己也是这样：非 SCC 的能量与 RelativelyRobust 差 3e-10–4.8e-6 Ha（P110）。</li>
+        </ul></li>
+      <li><strong>DFTB+ 对照</strong>（P110，DFTB+ 24.1 + NTPoly 2.7.1，单进程）：
+        <ul>
+          <li>默认截断 1e-10：216、512 个水分子比 RelativelyRobust 慢 5.7 倍与 6.6 倍。</li>
+          <li>截断 1e-6：512 个时 13.5 s，RR 10.0 s；1000 个时 36.2 s，RR 76.3 s，快 2.1 倍。</li>
+        </ul></li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">≈ 250</span><span class="lbl">水的 X 每行非零元（截断 1e-6），不随 N 变</span></li>
+      <li><span class="num">6.9×</span><span class="lbl">1728 个水分子：单线程 CSR 对 4 线程稠密的乘法</span></li>
+      <li><span class="num">3.2e-7</span><span class="lbl">截断 1e-6 时力的误差（Ha/Bohr）</span></li>
+      <li><span class="num">≈ 44</span><span class="lbl">一次密度的稀疏乘法次数（S<sup>−1/2</sup>、H̃、TRS4、P）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围</a></li>
+      <li><a href="#probe">二、探针</a></li>
+      <li><a href="#format">三、数据结构与截断</a></li>
+      <li><a href="#method">四、算法</a></li>
+      <li><a href="#calc">五、计算器的稀疏路径</a></li>
+      <li><a href="#api">六、pydftb 的接口</a></li>
+      <li><a href="#impl">七、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">八、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">九、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围</h2>
+      <ul>
+        <li><strong>做</strong>：
+          <ul>
+            <li><code>NTPoly(sparse=True)</code>：整个 SCC 在稀疏矩阵上，四种纯化（PM、TRS2、TRS4、HPCP）与 M7a 相同；</li>
+            <li>分子、周期体系的 Γ 点（实数），k 点（复数 CSR，DFTB+ 同样有 <code>getDensityCmplxSparse</code>）；</li>
+            <li>无自旋与共线自旋（每个通道单独纯化，同 M7a；DFTB+ 的 NTPoly 拒绝自旋）；</li>
+            <li>力与应力；</li>
+            <li>只改变电势或能量项的功能：DFTB3（含 H 阻尼、H5）、色散、外场、点电荷、位点电势、溶剂（分子）、卤素与偶极修正、自定义 Hubbard 与参考占据、混合器、初始电荷与电荷文件；</li>
+            <li>ASE 的计算器与 MD。</li>
+          </ul></li>
+        <li><strong>不做</strong>（报错并说明原因，稠密的 <code>NTPoly()</code> 照样可用）：
+          <ul>
+            <li>两分量（非共线、SOC）：DFTB+ 同样拒绝稀疏输入（原话 “Sparse solver not currently avaible for two component complex hamiltonians”）。</li>
+            <li>块势（+U、onsite）：DFTB+ 可以。pydftb 的稀疏路径暂不做。块布居要 ρS 的原子对角块，力要块势的 dS 系数，都要改写成图样上的运算。块势不改变 H 的图样，以后能加。</li>
+            <li>杂化泛函、Casida、响应、要本征矢的分析：同 M7a。其余的分析输出（原子能量、CM5、ESP 等）在稀疏路径上也暂不做。</li>
+            <li>XL-BOMD 的力（<code>force_evaluation</code>）与 <code>xl</code> 步：它们要稠密的 ρ 与 H。</li>
+            <li>有限温度的 FOE 稀疏版（P109，见关键信息）。</li>
+            <li>torch 后端：稀疏只用 NumPy 与 SciPy。</li>
+            <li><code>precision="mixed"</code>：float32 的 CSR 乘法不更快（P108c：0.41 s 对 0.43 s），稀疏乘法受的是索引而非浮点运算的限制。</li>
+          </ul></li>
+        <li><strong>照旧</strong>：Coulomb 的 γ 矩阵（原子数 × 原子数）仍是稠密的。DFTB+ 的 <code>invRMat</code> 同样是 nAtom × nAtom。周期体系的 Ewald 在建立时是 O(N<sub>at</sub>² N<sub>G</sub>)，P111 量出它的份额（第二节）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、探针</h2>
+      <p>草稿目录 <code>m7c/</code>：<code>p107_sparsity.py</code>、<code>cellblock.py</code>、<code>p108_formats.py</code>、<code>p108b_lean.py</code>、<code>p108c_threads.py</code>、<code>csrproto.py</code>、<code>p109_sparse_solvers.py</code>、<code>p110_dftbp_ntpoly.py</code>、<code>p111_pipeline.py</code>。水盒子由 M7a 的 <code>water_box</code> 生成（约 1 g/cm³），参数是 ptbp_hcocu 的 H、O，Γ 点。本机 4 核，15 GB 内存。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P107</td><td>精确的稠密矩阵上，S、Z = S<sup>−1/2</sup>、H̃、X、ρ、W 每行的原子块数（块内最大元 ≥ τ），X 随距离的衰减，事后截断 X 的误差；水 216、512、1000 个分子（T = 0），Cu fcc 3×3×3、4×4×4、5×5×5（1000 K、3000 K）</td><td>
+            <ul>
+              <li>水，τ = 1e-6，每行原子块数：S 35，Z 52，H̃ 66，X 151–153，ρ 187–191，W 139，三个尺寸都一样。τ = 1e-10 时 X 为 577、867、970，还在增长。</li>
+              <li>X 随距离的衰减（1000 个水分子，每 1 Å 内的最大元）：4 Å 处 1e-2，10 Å 处 4e-5，20 Å 处 2e-12，10 Å 之外每 Å 约 0.7 个数量级。Cu 3000 K 在 14 Å 处仍有 3e-3。</li>
+              <li>事后截断 X（τ = 1e-6）的能带能量误差为 3e-9–1.7e-8 Ha。</li>
+              <li>Cu：Z 与 H̃ 在 τ = 1e-6 时已接近全满，X、ρ、W 在两个温度下都全满。</li>
+            </ul></td></tr>
+          <tr><td>P108</td><td>同一个乘法 X·X（X 先按 τ 截断）的三种做法：NumPy 稠密（1、4 线程）、SciPy CSR（单线程）、空间单元块（边长 4、6、8 Å，块内稠密，按行面板做 GEMM）；水 512、1000、1728 个分子</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子</th><th>轨道</th><th>τ</th><th>稠密 4 线程</th><th>CSR 1 线程</th><th>单元 6 Å，4 线程</th></tr></thead>
+              <tbody>
+                <tr><td>512</td><td>3072</td><td>1e-6</td><td>0.31 s</td><td>0.51 s</td><td>0.57 s</td></tr>
+                <tr><td>1000</td><td>6000</td><td>1e-6</td><td>1.94 s</td><td>0.85 s</td><td>1.35 s</td></tr>
+                <tr><td>1728</td><td>10368</td><td>1e-6</td><td>9.90 s</td><td>1.44 s</td><td>2.57 s</td></tr>
+                <tr><td>512</td><td>3072</td><td>1e-7</td><td>0.29 s</td><td>1.29 s</td><td>0.86 s</td></tr>
+                <tr><td>1000</td><td>6000</td><td>1e-7</td><td>2.39 s</td><td>2.84 s</td><td>2.85 s</td></tr>
+                <tr><td>1728</td><td>10368</td><td>1e-7</td><td>11.5 s</td><td>5.70 s</td><td>7.79 s</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>CSR 每行的非零元：τ = 1e-6 时 270，τ = 1e-7 时 479，三个尺寸都一样。</li>
+              <li>6 Å 单元块的填充是 0.18–0.69：块内的零也要乘，又只能用小的 GEMM，4 线程只快 1.3–1.5 倍。8 Å 的单元在 1000 个水分子以下就是整个盒子（27 个单元，填充 1）。</li>
+              <li>P108c（512 个水，τ = 1e-6）：串行 0.43 s；把行分成 4·线程数块放进线程池：1、2、3 线程为 0.59、0.23、0.17 s，结果逐位相同。float32 为 0.41 s。</li>
+            </ul></td></tr>
+          <tr><td>P109</td><td>M7a 的 ISR 与 TRS4（Tolerance 1e-5）在稠密数组与 CSR 上各跑一遍，CSR 版本只把数组函数换成稀疏的；FOE 的稀疏递归（Newton–Schulz 求逆）的乘法次数</td><td>
+            <ul>
+              <li>216 个水：τ = 1e-6 时 P 差 2.5e-12，能量 2e-13，步数相同。τ = 1e-8 时能量差 1e-13，P 差 3e-8。τ = 1e-10 时 TRS4 第 9 步的分支不同（见第四节），能量差 4.3e-6 Ha。</li>
+              <li>512 个水：τ = 1e-6 时 P 差 2e-12，步数相同。CSR 单线程一次密度 12.8 s，稠密截断版 4 线程 23 s。τ = 1e-8 时步数 12 对 10，能量差 4.5e-12，化学势差 0.011 Ha（在带隙里，哪一点都对）。</li>
+              <li>每次密度约 44 次乘法：S<sup>−1/2</sup> 4 步共 20 次，H̃ 2 次，TRS4 9–10 步共 18–20 次，P 2 次。</li>
+              <li>CSR 每行非零元（τ = 1e-6，512 个水）：S 212，Z 208，H̃ 109，X 249，P 250。S 的图样由截断半径决定，而不是由矩阵元的大小决定。</li>
+              <li>FOE（300 K）：22 步，每步 1 + 1 + 2m 次乘法，m 是 Newton–Schulz 的步数（从 2/(λ<sub>min</sub> + λ<sub>max</sub>) I 出发，约 5–6 步）；熵的对数行列式在后期还要每步 10–30 次乘法。合计是 TRS4 的约 11 倍（原型里 Newton–Schulz 的停止条件没有随截断放宽，共 1364 次）。</li>
+            </ul></td></tr>
+          <tr><td>P110</td><td>DFTB+ 24.1（conda-forge 的 MPICH 构建，ELSI 2.9.1、NTPoly 2.7.1），一个进程，非 SCC，水盒子：RelativelyRobust、NTPoly 默认（截断 1e-10、稀疏输入）、稠密输入、截断 1e-6 与 1e-8</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子</th><th>RR</th><th>NTPoly</th><th>Sparse = No</th><th>截断 1e-6</th><th>截断 1e-8</th></tr></thead>
+              <tbody>
+                <tr><td>216</td><td>1.50 s</td><td>8.53 s</td><td>7.87 s</td><td>4.39 s</td><td>6.05 s</td></tr>
+                <tr><td>512</td><td>10.0 s</td><td>66.5 s</td><td>65.6 s</td><td>13.5 s</td><td>41.8 s</td></tr>
+                <tr><td>1000</td><td>76.3 s</td><td>—</td><td>—</td><td>36.2 s</td><td>132 s</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>截断 1e-6 在 1000 个水分子时比 RR 快 2.1 倍；交叉点在 512 与 1000 个之间。截断 1e-8 时每行的非零元多两倍，仍比 RR 慢。</li>
+              <li>能带能量对 RR：默认设置 216 个水差 3.2e-7 Ha，512 个差 3e-10；截断 1e-6 时 2.5e-7、1.0e-6、1.4e-6（216、512、1000 个）；截断 1e-8 时 4.3e-6、3e-10、4.8e-6。误差主要来自 Tolerance 1e-5 与 TRS4 最后一步的分支，而不是截断。</li>
+              <li>NTPoly 在一个进程里的局部乘法：两个因子的填充都 &gt; 0.1 时用稠密 GEMM（<code>GemmMatrix</code> 的 <code>sparsity_threshold</code>），所以小体系与默认截断下它基本是稠密计算；稀疏或稠密输入只改变 DFTB+ 交给 ELSI 的格式，时间相近。</li>
+            </ul></td></tr>
+          <tr><td>P111</td><td>pydftb 现有的稠密路径：SCC 加力的各段耗时（邻居对、折叠、γ、求解、布居、力）；NTPoly 截断与 Tolerance 对能量、电荷、力的影响（216 个水，scc_tol 1e-7）</td><td>
+            <ul>
+              <li>精度见关键信息。Tolerance 1e-9 配截断 1e-6 或 1e-7 时，S<sup>−1/2</sup> 的 Newton–Schulz 达不到容差，走满 100 步。截断为 0 时与本征分解差 3e-12 Ha。</li>
+              <li>各段耗时（4 线程，15 轮 SCC 加力，不算应力）见下表。求解器之外：邻居对（含导数）与 N 成正比；γ 从 1.3–1.5 s 增到 9–10 s，约 N<sup>2.2</sup>，是 Ewald 的 O(N<sub>at</sub>² N<sub>G</sub>)；稠密的 Mulliken（einsum）是 N²，512 个水分子时共 2 s。稀疏路径里折叠、布居与能量都变成 O(nnz)，γ 不变。</li>
+            </ul>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子</th><th>求解器</th><th>总计</th><th>邻居对</th><th>折叠</th><th>γ</th><th>求解</th><th>布居</th><th>力</th></tr></thead>
+              <tbody>
+                <tr><td>216</td><td>eigh</td><td>8.3 s</td><td>1.74</td><td>0.01</td><td>1.51</td><td>4.33</td><td>0.08</td><td>0.45</td></tr>
+                <tr><td>216</td><td>NTPoly（稠密）</td><td>19.9 s</td><td>1.90</td><td>0.01</td><td>1.27</td><td>15.0</td><td>0.08</td><td>0.81</td></tr>
+                <tr><td>512</td><td>eigh</td><td>73.5 s</td><td>5.86</td><td>0.22</td><td>9.07</td><td>52.4</td><td>1.97</td><td>2.48</td></tr>
+                <tr><td>512</td><td>NTPoly（稠密）</td><td>247 s</td><td>5.58</td><td>0.29</td><td>9.92</td><td>217</td><td>2.02</td><td>2.12</td></tr>
+              </tbody>
+            </table></div></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="format">
+      <h2>三、数据结构与截断</h2>
+      <ul>
+        <li><strong>矩阵</strong>：<code>scipy.sparse.csr_matrix</code>，实数（分子、Γ 点）或复数（k 点）。下标排好序。</li>
+        <li><strong>截断</strong>：NTPoly 的 <code>PruneList</code> 在乘积里保留 |a| &gt; τ；pydftb 稠密路径的 <code>_drop</code> 把 |a| &lt; τ 置零。两者只在恰好相等的元素上不同。稀疏路径用 <code>_drop</code> 的规则，所以与稠密路径一致。截断只在 NTPoly 截断的地方做：每次乘法之后，加法不截断。</li>
+        <li><strong>乘法</strong> <code>_mm(A, B, τ)</code>：
+          <ul>
+            <li>min(A 的填充, B 的填充) &gt; 0.1 时转成稠密数组做 GEMM（多线程 BLAS），再截断，转回 CSR。这是 NTPoly <code>GemmMatrix</code> 的规则，小体系因此不比 M7a 慢。</li>
+            <li>否则用 SciPy 的 CSR 乘法：A 按行分成 4·t 块，t 是线程数，在线程池里各乘 B，再 <code>vstack</code>；最后截断，去掉显式的零。</li>
+          </ul></li>
+        <li><strong>其余的运算</strong>：
+          <ul>
+            <li>加减与数乘：CSR 的运算。</li>
+            <li>迹：对角元之和。</li>
+            <li>tr(A<sup>H</sup>B)：<code>A.conj().multiply(B).sum()</code> 的实部。</li>
+            <li>Gershgorin 界、列绝对值和、单位阵、共轭转置：在 CSR 上实现。</li>
+          </ul></li>
+        <li><strong>图样</strong>：
+          <ul>
+            <li>由邻居表的原子块（含 onsite 块）构成，周期体系的像在 Γ 点折叠到同一个 (μ, ν) 上。DFTB+ 的 <code>elsicsc</code> 也是这样把它的压缩格式变成 CSC。</li>
+            <li>记下：每个邻居对的矩阵元在图样里的位置 <code>elem</code>，它的转置位置 <code>elem_t</code>，对角元的位置，每个图样元素的行号与列号。</li>
+            <li>H<sub>0</sub>、S、H 与输出的 ρ、W 都是图样上的数值数组（每个 k 或自旋通道一行）。这就是 DFTB+ 的压缩格式。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="method">
+      <h2>四、算法</h2>
+      <ul>
+        <li><strong>不变</strong>：M7a 的 S<sup>−1/2</sup>（耦合 Newton–Schulz，Taylor 五阶）、四种纯化、化学势的二分、P = g Z<sup>†</sup>XZ、W = PHP/g，都是同一份代码。<code>purification.py</code> 的数组函数（<code>_mm</code>、<code>_drop</code>、<code>_eye</code>、<code>_ct</code>、<code>_trace</code>、<code>_dot</code>、<code>_abs_column_sums</code>、<code>gershgorin</code>、<code>_equal</code>）加一个 CSR 分支，与已有的 torch 分支并列。</li>
+        <li><strong>P 与 W 在图样上</strong>：先算出完整的乘积（同 NTPoly），再在图样位置上取值（<code>m[rows, cols]</code>，SciPy 的 <code>csr_sample_values</code>）。ELSI 也是把 NTPoly 的矩阵映回输入的 CSC 图样。ρ 与 W 的其余元素用不到。</li>
+        <li><strong>TRS4 最后一步的分支</strong>：
+          <ul>
+            <li>σ = (n<sub>e</sub>/2 − tr F)/tr G，G = X²(1 − X)²。X 接近幂等时，tr G 很小，分子却是两个约 n<sub>e</sub>/2 大小的数相减，舍入约为 n<sub>e</sub>ε 乘上点积的长度。</li>
+            <li>tr G 落到这个噪声以下时，σ 的符号与大小都由舍入决定：σ &gt; 6 走 2X − X²，σ &lt; 0 走 X²。NTPoly 只在 |tr G| &lt; 1e-14 时退出，这个界不随 n 变。</li>
+            <li>走错分支的一步会把一半本征值离 0 或 1 的距离放大一倍，然后能量判据（|ΔE| ≤ Tolerance）就停了。结果在容差带里变动。</li>
+            <li>稀疏与稠密的点积求和次序不同，所以在这一步可能分开。DFTB+ 自己的结果也一样含有这个噪声（P110）。这是 NTPoly 的算法性质，不改，以保持与 DFTB+ 相同的步数；文档与测试按此处理（第八节）。</li>
+          </ul></li>
+        <li><strong>k 点</strong>：每个 k 一个复数的 CSR 矩阵，图样相同，数值是 Σ<sub>T</sub> M(T) e<sup>2πik·T</sup>。迹与 tr(A<sup>H</sup>B) 取实部，转置换成共轭转置（同 M7a）。</li>
+      </ul>
+    </section>
+
+    <section id="calc">
+      <h2>五、计算器的稀疏路径</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步骤</th><th>稠密（现在）</th><th>稀疏（M7c）</th></tr></thead>
+        <tbody>
+          <tr><td>建立</td><td><code>fold</code> 把邻居对的元素累加成 N × N 的 H<sub>0</sub>、S（每个 k 一个）</td><td>图样与 <code>elem</code>；每个 k 的 H<sub>0</sub>、S 数值用 <code>bincount</code> 累加到图样上，k 点乘相位。不建稠密矩阵。</td></tr>
+          <tr><td>SCC 的 H</td><td>H = H<sub>0</sub> + ½ S ∘ (v<sub>μ</sub> + v<sub>ν</sub>)，净位点电势加在对角上</td><td>同一个公式作用在图样的数值上：v 按图样的行号与列号取值。</td></tr>
+          <tr><td>求解</td><td>稠密的 ρ、W</td><td>CSR 进，CSR 出，在图样上取值，得到 (通道数, nnz) 的数组。</td></tr>
+          <tr><td>Mulliken</td><td>Σ<sub>k</sub> w<sub>k</sub> Re(ρ<sub>k</sub>S<sub>k</sub>)<sub>μμ</sub>，einsum</td><td>q<sub>μ</sub> = Σ<sub>k</sub> w<sub>k</sub> Re Σ<sub>ν</sub> ρ<sub>k,μν</sub> conj(S<sub>k,μν</sub>)，按行 <code>bincount</code>（S 是厄米的）。</td></tr>
+          <tr><td>能量</td><td>Tr(ρH<sub>0</sub>)</td><td>Σ<sub>k</sub> w<sub>k</sub> Re Σ ρ conj(H<sub>0</sub>)，在图样上求和。</td></tr>
+          <tr><td>净布居</td><td>ρ 的对角元</td><td>图样里对角元的位置。</td></tr>
+          <tr><td>力与应力</td><td>在邻居对元素上收集 ρ<sub>νμ</sub> 与 W<sub>νμ</sub>（k 点先按平移 T 求实空间矩阵）</td><td>p<sub>e</sub> = Re Σ<sub>k</sub> w<sub>k</sub> ρ<sub>k</sub>[elem_t] e<sup>2πik·T</sup>，W 相同；之后的 dH、dS 系数与位力不变。</td></tr>
+          <tr><td>Coulomb、排斥、色散</td><td colspan="2">不变（γ 是原子数 × 原子数，与 DFTB+ 相同）。</td></tr>
+        </tbody>
+      </table></div>
+      <p>内存：H<sub>0</sub>、S、H、ρ、W 都是 O(nnz)；求解器里的 Z、H̃、X 与乘积是截断后的 CSR；γ 是 N<sub>at</sub>²。1728 个水分子（5184 个原子）时 γ 为 215 MB，截断 1e-7 的 X 约 60 MB，而一个稠密的 N × N 矩阵是 860 MB。</p>
+    </section>
+
+    <section id="api">
+      <h2>六、pydftb 的接口</h2>
+      <pre><code>from pydftb.purification import NTPoly
+DFTB(sk, solver=NTPoly(sparse=True))                       # DFTB+ 的 Sparse = Yes：TRS4，1e-5，1e-10
+DFTB(sk, solver=NTPoly(sparse=True, truncation=1e-6))      # 大体系：力的误差约 3e-7 Ha/Bohr
+DFTB(sk, solver=NTPoly("trs2", sparse=True, threads=2))    # 稀疏乘法用 2 个线程</code></pre>
+      <ul>
+        <li><code>sparse</code>：默认 False，也就是 M7a 的稠密路径，结果逐位不变。DFTB+ 的默认是 <code>Sparse = Yes</code>，但两者结果相同（在第四节的容差带之内），稀疏只对大体系更快。</li>
+        <li><code>threads</code>：稀疏乘法的线程数，默认是本进程可用的全部核。稠密的 GEMM 用 BLAS 自己的线程。</li>
+        <li>结果与 M7a 相同：没有本征值与占据数，费米能级是 NTPoly 的化学势。<code>solver.last_iterations</code>、<code>solver.isr_iterations</code> 照旧，另加 <code>solver.last_fill</code>：最后一次密度里 X 每行的平均非零元数。</li>
+        <li><code>PyDFTB(solver=NTPoly(sparse=True))</code> 同样可用；求解器对象在各步之间共用。</li>
+        <li>拒绝：见第一节“不做”。原话指向稠密的 <code>NTPoly()</code> 或本征分解。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>七、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>csr.py</code>（新；M0 的原型 <code>sparse.py</code> 不动）</td><td>
+            <ul>
+              <li>CSR 的运算：截断、带稠密分支与线程面板的乘法、迹、点积、Gershgorin、列绝对值和、单位阵、共轭转置；当前的线程数用 <code>contextvars</code> 传给乘法，不改变各函数的参数。</li>
+              <li><code>Pattern</code>：由邻居对与轨道数建立；<code>fold(values, phases)</code> 给出图样上的数值，<code>matrix(data)</code> 给出共用下标的 CSR，<code>sample(m)</code> 在图样上取值，<code>row_sum</code> 与 <code>pair_values</code> 供布居与力使用。</li>
+            </ul></td></tr>
+          <tr><td><code>purification.py</code></td><td>数组函数加 CSR 分支；<code>NTPoly(sparse=False, threads=None)</code>；<code>prepare</code> 与 <code>density</code> 接受 CSR 的列表并返回 CSR 的列表；<code>last_fill</code>。稠密路径的代码不动，逐位不变。</td></tr>
+          <tr><td><code>calculator.py</code></td><td>
+            <ul>
+              <li><code>_check_sparse</code>：第一节的拒绝。</li>
+              <li><code>_setup</code>：稀疏时建图样与 H<sub>0</sub>、S 的数值（<code>st.sparse</code>），<code>st.h0</code>、<code>st.smat</code> 为 None，误用会立刻报错。</li>
+              <li><code>_scc</code>：在图样上组装 H；<code>_solve_density</code> 取值到图样。</li>
+              <li><code>_mulliken</code>、<code>_trace</code>、<code>_net_populations</code>、<code>_pair_densities</code>：稀疏分支。</li>
+            </ul></td></tr>
+          <tr><td>validation</td><td>refgen 的 <code>--sparse</code>：M7a 的 NTPoly 参考算例改用 <code>sparse=True</code>，块势的 2 个算例打印原因跳过；<code>--sparse-branch</code> 让所有乘法走 CSR（填充阈值设为 1），在小体系上也测到稀疏乘法。</td></tr>
+          <tr><td><code>tests/test_sparse.py</code>（新）</td><td>见第八节。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="validation">
+      <h2>八、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li><strong>DFTB+ 参考</strong>：M7a 的 9 个 NTPoly 参考算例中的 7 个（块势的 2 个不适用）用 <code>sparse=True</code> 过 M7a 的容差（能量、电荷、力 1e-9，SCC 轮数相同），也在 <code>--sparse-branch</code> 下过。这些是小体系，TRS4 最后一步的 σ 没有落到噪声里。</li>
+        <li><strong>对稠密的 NTPoly</strong>：分子、周期 Γ 点、k 点、两种共线自旋、四种方法，加外场、点电荷、色散、DFTB3：能量、电荷、力、应力与 SCC 轮数相同，差到舍入（≤ 1e-10）。用小体系与收紧的 Tolerance，避开第四节的噪声。</li>
+        <li><strong>对本征分解</strong>：截断 0、Tolerance 1e-10 的 TRS2（M7a 的收紧设置）在稀疏路径上等于本征分解（≤ 1e-10）。</li>
+        <li><strong>大体系</strong>（报告，不进单元测试）：水 216–1728 个分子的 SCC 加力，截断 1e-6 与 1e-7，对本征分解的误差应与 P111 一致；耗时与内存随 N 的增长，对 eigh、稠密 NTPoly 与 DFTB+ 的 NTPoly。</li>
+        <li><strong>单元测试</strong>：CSR 运算对稠密（截断规则、稠密分支与线程面板逐位相同）；图样的折叠、取值、布居、能量对稠密；拒绝的原文；ASE 计算器。</li>
+        <li><strong>门槛</strong>：golden 两个环境逐位相同，refgen（NumPy、torch），dynamics，pytest 三个环境，PTBP 测试与 G1。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>九、风险与之后</h2>
+      <ul>
+        <li><strong>速度</strong>：SciPy 的 CSR 乘法每个线程约 5e8 次乘加/秒，比 NTPoly 的 Fortran 慢。线程面板能补回 2–3 倍。交叉点（快过本征分解）按 P108 的数估计在几百到一千个水分子之间，实现后在报告里实测。</li>
+        <li><strong>TRS4 的噪声</strong>：大体系配宽松的 Tolerance 时，最后一步的分支由舍入决定，结果在容差带里变动（第四节）。要稳定的结果，用较小的 Tolerance 或 TRS2，文档写明。</li>
+        <li><strong>Coulomb</strong>：γ 的内存是 N<sub>at</sub>²，周期体系的 Ewald 建立是 O(N<sub>at</sub>² N<sub>G</sub>)，与 DFTB+ 相同。几万个原子时要换成不建矩阵的 Ewald（每轮 SCC 用结构因子算电势），之后再做。</li>
+        <li><strong>之后</strong>：块势的稀疏路径；M7d 分治与多机；M7e GPU 与跨结构批量。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7b-finite-temperature-foe.html">← M7b 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -131,8 +131,8 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     symbol, the SK set with all its types;
     ``options``: other DFTB settings that replace the case's (e.g. ``scc_tol``)."""
     tmp = None
-    if case.solver is not None and solver == "eigh":                   # M7a: DFTB+'s Solver
-        solver = solver_from_spec(case.solver)
+    if case.solver is not None and solver in ("eigh",) + SPARSE_SOLVERS:  # M7a: DFTB+'s Solver
+        solver = solver_from_spec(case.solver, sparse=solver)
     if skdir is None and case.typed:
         tmp = tempfile.mkdtemp(prefix="pydftb_case_")
         skdir = write_typed_copies(SKF_SETS[case.skf_set], tmp, case.typed,
@@ -190,12 +190,29 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def solver_from_spec(spec):
-    """pydftb's solver of a case's ``solver`` (M7a): the name, or an NTPoly object."""
+SPARSE_SOLVERS = ("sparse", "sparse-csr")     # refgen --solver: NTPoly(sparse=True) (M7c)
+
+
+def solver_from_spec(spec, sparse: str = "eigh"):
+    """pydftb's solver of a case's ``solver`` (M7a): the name, or an NTPoly object; ``sparse``
+    "sparse": the NTPoly object with sparse=True (M7c), "sparse-csr": every product as CSR."""
     if spec is None or isinstance(spec, str):
         return spec or "eigh"
     from ..purification import NTPoly
-    return NTPoly(**{k: v for k, v in spec.items() if k != "name"})
+    opts = {k: v for k, v in spec.items() if k != "name"}
+    if sparse in SPARSE_SOLVERS:
+        opts.update(sparse=True, dense_fill=2.0 if sparse == "sparse-csr" else 0.1)
+    return NTPoly(**opts)
+
+
+def sparse_skip(case: Case) -> str | None:
+    """Why a case is not checked with ``--solver sparse`` or ``sparse-csr`` (M7c), or None: the
+    NTPoly cases (DFTB+'s Solver block) without block potentials."""
+    if not (isinstance(case.solver, dict) and case.solver.get("name") == "ntpoly"):
+        return "not an NTPoly case (M7a)"
+    if case.block:
+        return "DFTB+U or onsite corrections (the sparse path does not have block potentials)"
+    return None
 
 
 EIGENPAIR_ANALYSES = ("eigenvectors", "localise", "polarisability", "response_kernel",
@@ -1758,6 +1775,8 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
                   "overrides and corrections)")
             continue
         why = foe_skip(case) if solver == "foe" else None             # M7b
+        if solver in SPARSE_SOLVERS:                                   # M7c
+            why = sparse_skip(case)
         if why:
             print(f"{case.name:26s} skipped: {why}")
             continue
