@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7d 空间分治与多机报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M7d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7d · 完成报告</p>
+    <h1>大体系（四）：空间分治与多机</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-31</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M7d-divide-and-conquer.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 有了空间分治的求解器 <code>Subsystems</code>（新模块 <code>subsystems.py</code>）。体系被切成子体系：一块核心区加上它周围的缓冲区，单位是成键的片段。每个子体系在全局 H(k)、S(k) 的主子矩阵上单独做本征分解，再按分区矩阵把各自的密度矩阵拼回 M7c 的图样（Yang 与 Lee 的分治密度矩阵，Nakai 组的 DC-DFTB）。所有子体系的态带着核心权重共用一个化学势，按 DFTB+ 的规则求。子体系分给本机的工作进程（<code>processes=n</code>）或多台机器上的 MPI 进程（<code>processes="mpi"</code>，可选的 mpi4py），结果与进程数无关，逐位相同。DFTB+ 没有这种求解器，对照用 pydftb 的本征分解。别的求解器不变，旧路径逐位不变。</p>
+    <ul>
+      <li><strong>精确极限</strong>：缓冲区覆盖全部原子时（<code>buffer=float("inf")</code>）等于本征分解。14 种哈密顿量（分子、Γ 点、k 点、两种共线自旋、300 K、固定费米能级、每个 k 单独填充、DFTB3、溶剂、外场、点电荷、位点电势）的能量差 ≤ 4.3e-14 Ha，电荷 ≤ 7.5e-14 e，力 ≤ 1.5e-14 Ha/Bohr，应力 ≤ 1.8e-17，费米能级 ≤ 1.1e-14 Ha，SCC 轮数相同。在这个极限下，<code>refgen --check --solver subsystems</code> 通过全部 144 个适用的 DFTB+ 参考。</li>
+      <li><strong>精度由缓冲区决定</strong>（真实的水：DFTB+ 测试用的 mio-1-1，216 个分子，先弛豫）：6 Å 时电荷差 1.9e-5 e、力差 3.2e-5 Ha/Bohr；8 Å 时 1.3e-7 与 5.5e-8，相当于 M7c 截断 1e-6 的稀疏路径。216 个水分子的 NVE（6 Å，每步重新分区，4 个进程）与本征分解的轨迹每步相差 ≤ 7.6e-6 Ha，Verlet 自身的起伏是 5.8e-3 Ha，SCC 轮数相同。</li>
+      <li><strong>速度</strong>（本机 4 核，M7c 的水盒子，SCC 加力）：1000 个水分子、缓冲 6 Å、4 个工作进程共 115 s，本征分解 404 s，稀疏路径 219 s；其中分治本身 63 s。缓冲 8 Å 时 287 s，比稀疏路径慢 1.3 倍。1728 个水分子、6 Å 共 216 s：稀疏路径 411 s，本征分解估计约 1800 s。分治的求解每轮每个水分子 3.9 ms，随 N 线性。</li>
+      <li><strong>多机</strong>：<code>mpiexec -n 3 python -m pydftb.subsystems script.py</code> 与主进程串行的能量、电荷、力与应力逐位相同；本机 1、2、4 个工作进程也一样。</li>
+      <li><strong>不适用的</strong>：
+        <ul>
+          <li>金属：Cu 在 1000–3000 K 时缓冲到 5 Å，每个原子仍差 4e-4–7e-4 Ha。</li>
+          <li>缓冲小于 6 Å 且 T = 0 时，SCC 可能不收敛，要加电子温度。</li>
+          <li>更大的体系卡在 Ewald 的建立阶段（与稀疏路径共用），由紧接的一块 M7d2 处理。</li>
+        </ul></li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">144 / 144</span><span class="lbl">适用的 DFTB+ 参考在精确极限下通过</span></li>
+      <li><span class="num">≤ 4.3e-14</span><span class="lbl">精确极限对本征分解的能量差（Ha）</span></li>
+      <li><span class="num">115 s</span><span class="lbl">1000 个水分子 SCC 加力（4 个进程；本征分解 404 s）</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#exact">三、精确极限与 DFTB+ 的参考</a></li>
+      <li><a href="#buffers">四、有限缓冲区的精度</a></li>
+      <li><a href="#speed">五、速度、并行与内存</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>subsystems.py</code>（新）</td><td>
+              <ul>
+                <li>分区：<code>bonded_fragments</code>（ASE 的共价半径，d &lt; 1.2 (r<sub>a</sub> + r<sub>b</sub>)，含周期像，<code>connected_components</code>），<code>grid_cores</code>（沿晶格矢量分格子，片段按第一个原子归入），<code>subsystem_atoms</code>（含周期像的邻居表），<code>partition</code>。片段大于 <code>max_unit</code>（64 个原子）时按原子。</li>
+                <li>图样上的子体系：<code>_index</code> 用一个存着位置编号的 CSR 矩阵取出子体系块的 (行, 列, 图样位置)，以及分区系数 p &gt; 0 的那部分；<code>eig_subsystems</code>（hegvd，核心权重），<code>density_subsystems</code>（占据的列，一次 GEMM，按 p 加到图样上）。</li>
+                <li>化学势：<code>chemical_potential</code> 是 DFTB+ 的 Efilling 推广到带权重的能级：带隙中点规则（几个子体系里同一能级的拷贝算一个能级），否则二分；DFTB+ 的 1e-15 截断，按权重的熵，电子数的重新归一。</li>
+                <li>执行：<code>_Serial</code>（本进程，BLAS 单线程），<code>_Workers</code>（fork 的工作进程，管道），<code>_MPI</code> 与 <code>serve()</code>（mpi4py），<code>python -m pydftb.subsystems script.py</code>。</li>
+                <li><code>Subsystems(buffer=6.0, core=6.0, units="auto", processes=None, max_unit=64)</code>：<code>set_geometry</code>、<code>prepare</code>、<code>density</code>；诊断量 <code>n_subsystems</code>、<code>sizes</code>、<code>last_count_error</code>、<code>timings</code>。</li>
+              </ul></td></tr>
+            <tr><td><code>calculator.py</code></td><td><code>solver="subsystems"</code> 建默认的对象；<code>_setup</code> 在 M7c 的图样之后调用 <code>set_geometry</code>；<code>_check_subsystems</code>（M7c 的拒绝，抽成 <code>_pattern_refusals</code>，加上非 Fermi 的展宽）；<code>_solve_subsystems</code>：无自旋、各通道的 μ、<code>relax_total_spin</code> 的共用 μ、固定费米能级、每个 k 单独填充；<code>_check_filling</code> 放开 Subsystems。布居、能量、力与应力是 M7c 的稀疏分支，不改。</td></tr>
+            <tr><td><code>solvers.py</code></td><td><code>SOLVERS["subsystems"] = Subsystems</code>。</td></tr>
+            <tr><td>validation</td><td><code>refgen --check --solver subsystems</code>：精确极限（<code>Subsystems(buffer=inf)</code>），不适用的算例按 <code>subsystems_skip</code> 打印原因跳过。</td></tr>
+            <tr><td><code>pyproject.toml</code></td><td>可选依赖 <code>mpi = ["mpi4py"]</code>。</td></tr>
+            <tr><td>测试</td><td>新文件 <code>tests/test_subsystems.py</code>：25 项（见第六节）。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+<pre><code>from pydftb.subsystems import Subsystems
+DFTB(sk, solver=Subsystems())                           # 核心 6 Å、缓冲 6 Å，本进程
+DFTB(sk, solver=Subsystems(buffer=8.0, processes=4))    # 4 个本机工作进程
+DFTB(sk, solver=Subsystems(processes="mpi"))            # mpiexec -n 17 python -m pydftb.subsystems run.py
+DFTB(sk, solver="subsystems", temperature=300.0)        # 默认参数，300 K
+PyDFTB(skdir, solver=Subsystems(processes=4))           # ASE：每一步重新分区</code></pre>
+      <ul>
+        <li><strong>缓冲区</strong>：默认 6 Å，真实的水电荷约 2e-5 e、力约 3e-5 Ha/Bohr，MD 的能量守恒与本征分解相同；8 Å 与 M7c 截断 1e-6 的稀疏路径同等精度（第四节）。小于 6 Å 时给一个电子温度（300 K 就够）。</li>
+        <li><strong>进程</strong>：<code>processes=None</code>（默认）在本进程里逐个对角化，BLAS 单线程；<code>processes=n</code> 起 n 个工作进程，本机核数个最快（第五节）。线程没有用：SciPy 的广义本征求解不释放 GIL。</li>
+        <li><strong>多机</strong>：<code>pip install pydftb[mpi]</code>（mpi4py）。0 号进程运行脚本，其余进程服务：<code>mpiexec -n N python -m pydftb.subsystems run.py</code>，脚本不用改；或者在脚本开头写 <code>if pydftb.subsystems.serve(): sys.exit()</code>。</li>
+        <li><strong>能用的</strong>：M7c 稀疏路径能用的全部（分子、Γ 点、k 点；无自旋与共线自旋；DFTB3、H 阻尼、H5、色散、外场、点电荷、位点电势、溶剂、卤素与偶极修正、自定义 Hubbard 与参考占据、混合器、电荷文件、类型切换；力、应力、优化、MD），加上 T = 0 与 T &gt; 0 的 Fermi 填充、<code>relax_total_spin</code>、固定费米能级、每个 k 单独填充。</li>
+        <li><strong>报错的</strong>：M7c 拒绝的那些（两分量、+U 与 onsite、杂化、Casida、分析输出、XL-BOMD 的力、torch），以及 MP 与 Gaussian 展宽。</li>
+        <li><strong>结果</strong>：没有本征值与占据数；<code>fermi</code> 是化学势，有限缓冲时一般在带边（二分让跨过电子数的那一级取分数占据）。<code>solver.n_subsystems</code>、<code>solver.sizes</code>（每个子体系的轨道数）、<code>solver.last_count_error</code>、<code>solver.timings</code>。</li>
+      </ul>
+    </section>
+
+    <section id="exact">
+      <h2>三、精确极限与 DFTB+ 的参考</h2>
+      <p><code>Subsystems(buffer=inf, core=3)</code>：分子与小晶胞是一个子体系，水盒子与平板是 4–5 个，每个子体系都是整个体系，P 由各子体系的核心部分拼起来。对 pydftb 的本征分解（测试 <code>test_exact_limit_is_the_eigensolver</code>，scc_tol 与原算例相同）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>子体系</th><th>能量</th><th>电荷</th><th>力</th><th>应力</th><th>费米能级</th><th>SCC 轮数</th></tr></thead>
+        <tbody>
+          <tr><td>h2o</td><td>分子</td><td>1</td><td>4.4e-16</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（8）</td></tr>
+          <tr><td>h2o_nonscc</td><td>分子，非 SCC</td><td>1</td><td>4.4e-16</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（1）</td></tr>
+          <tr><td>ch3oh</td><td>分子</td><td>1</td><td>3.6e-15</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（12）</td></tr>
+          <tr><td>water_box_gamma</td><td>周期，Γ 点</td><td>5</td><td>1.1e-14</td><td>5.4e-14</td><td>8.9e-15</td><td>6.1e-18</td><td>6.6e-15</td><td>相同（19）</td></tr>
+          <tr><td>water_box_field</td><td>周期，外场</td><td>5</td><td>0</td><td>7.5e-14</td><td>1.5e-14</td><td>1.8e-17</td><td>1.1e-14</td><td>相同（19）</td></tr>
+          <tr><td>water_slab_dipole</td><td>k 点，偶极修正</td><td>4</td><td>7.1e-15</td><td>5.3e-15</td><td>6.4e-16</td><td>2.2e-19</td><td>2.2e-15</td><td>相同（16）</td></tr>
+          <tr><td>o2_triplet</td><td>共线自旋</td><td>1</td><td>8.9e-16</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（2）</td></tr>
+          <tr><td>o2_relaxed_spin</td><td>共线自旋，共用费米能级</td><td>1</td><td>0</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（5）</td></tr>
+          <tr><td>cu4co_300K</td><td>300 K</td><td>1</td><td>2.0e-14</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（11）</td></tr>
+          <tr><td>cu4co_300K_fixed_ef</td><td>300 K，固定费米能级</td><td>1</td><td>1.1e-14</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（38）</td></tr>
+          <tr><td>cuo_chain_k422_indep_k</td><td>k 点，每个 k 单独填充</td><td>1</td><td>3.4e-14</td><td>3.6e-15</td><td>1.0e-16</td><td>7.6e-18</td><td>2.1e-15</td><td>相同（18）</td></tr>
+          <tr><td>water_box_dftb3</td><td>DFTB3</td><td>5</td><td>4.3e-14</td><td>8.0e-15</td><td>1.0e-15</td><td>1.3e-18</td><td>2.2e-16</td><td>相同（18）</td></tr>
+          <tr><td>h2o_gb_field_pc</td><td>溶剂、外场、点电荷</td><td>1</td><td>0</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（8）</td></tr>
+          <tr><td>h2o_site</td><td>位点电势</td><td>1</td><td>4.4e-16</td><td>0</td><td>0</td><td>—</td><td>0</td><td>相同（8）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>T = 0 的算例走带隙中点规则（拼起来的电子数在 1e-7 以内），费米能级与本征分解相同；300 K 与固定费米能级的算例走二分与给定的 μ。</li>
+        <li><strong>DFTB+ 的参考</strong>：<code>pydftb refgen --check --solver subsystems</code> 用精确极限跑全部冻结的参考。144 个通过。每个算例对 DFTB+ 的偏差与本征分解的检查（M7c 门槛的 <code>refgen --check</code>）相同：能量偏差两者之差 ≤ 2e-11 Ha（DFTB+ 只打印 10 位小数），SCC 轮数全部相同（water_box_hess 两者都是 23 轮，DFTB+ 24 轮）。</li>
+        <li>373 个按 <code>subsystems_skip</code> 跳过：杂化 139、分析输出 62、两分量 60、+U 与 onsite 55、Casida 31、DFTB+ 的 <code>Solver</code> 算例（M7a）13、MP 展宽 8、极化率的 Hessian 3、Gaussian 展宽 2。</li>
+      </ul>
+    </section>
+
+    <section id="buffers">
+      <h2>四、有限缓冲区的精度</h2>
+      <p>探针 P112–P115（设计文档第二节）的原型与这里的实现用同样的分区（水分子就是成键的片段），所以设计里的误差表照样成立。实现之后的核对：</p>
+      <ul>
+        <li><strong>M7c 的计时盒子</strong>（P119，ptbp_hcocu 的参数，没有弛豫，核心 6 Å，第五节的运行）：
+          <ul>
+            <li>1000 个水分子对本征分解：6 Å 时每个原子的能量差 6.6e-10 Ha、电荷 2.0e-6 e、力 4.0e-7 Ha/Bohr；8 Å 时 4.1e-12、4.9e-7、4.4e-7。同一盒子上稀疏路径 1e-6 是 3.4e-10、2.4e-6、1.4e-6。</li>
+            <li>最大值由个别原子决定：力差的中位数 6 Å 时 3e-9、8 Å 时 6e-10，99% 分位 8e-8 与 2e-8；8 Å 的最大力差落在另一个原子上，没有比 6 Å 小。</li>
+            <li>1728 个水分子 6 Å 对 M7c 截断 1e-7 的稀疏结果（它对本征分解约差 1e-8）：6.1e-10、1.8e-6、2.7e-7。</li>
+            <li>SCC 轮数全部与本征分解相同（16 轮）。</li>
+          </ul></li>
+        <li><strong>测试</strong>（<code>test_finite_buffers</code>，64 个水分子，核心 4 Å）：4 Å 时电荷与力 &lt; 2e-4，6 Å 时 &lt; 1e-6，SCC 轮数与本征分解相同，电子数的误差 &lt; 1e-9。</li>
+        <li><strong>真实的水</strong>（P115d，mio-1-1，216 个分子，先弛豫）：缓冲 4、5、6、8 Å 时电荷差 5.2e-3、1.0e-4、1.9e-5、1.3e-7 e，力差 8.4e-3、2.0e-4、3.2e-5、5.5e-8 Ha/Bohr；M7c 截断 1e-6 的稀疏路径 1.1e-7 与 8.2e-8。</li>
+        <li><strong>MD</strong>：
+          <ul>
+            <li>64 个水分子（P115c，原型，100 步）：6 Å 时总能量漂移 2.7e-4 Ha/ps（分区固定）与 2.8e-4（每步重分），本征分解 2.8e-4；4 Å 时 1.0e-2 与 2.3e-2。</li>
+            <li>216 个水分子（P120，这里的实现）：缓冲 6 Å、核心 4 Å，每步重新分区（121–122 个子体系，平均 323 个轨道），4 个进程，0.5 fs，60 步，与 P115e 的本征分解同一起点与初速度。每一步的总能量与本征分解的轨迹相差 ≤ 7.6e-6 Ha（终点 5.6e-6），Verlet 自身的起伏是 5.8e-3 Ha。漂移 9.7e-3 Ha/ps，本征分解 9.9e-3：60 步太短，漂移由起伏决定。SCC 平均 10.0 轮、最多 13 轮，与本征分解相同。</li>
+            <li>每步 11 s，本征分解 4.9 s：这个大小（1296 个轨道）上本征分解更快，分治要到上千个水分子才划算（第五节）。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="speed">
+      <h2>五、速度、并行与内存</h2>
+      <p>本机 4 核，M7c 的水盒子（约 1 g/cm³，ptbp_hcocu），Γ 点，DFTB2，scc_tol 1e-7，SCC 加力（不算应力），核心 6 Å。每个配置单独一个进程，峰值内存是主进程的 VmHWM。对照的本征分解与稀疏路径来自 M7c 的报告。</p>
+      <div class="table-wrap"><table id="timing">
+        <thead><tr><th>水分子 / 轨道</th><th>求解器</th><th>总计</th><th>求解</th><th>分治：本征分解 / 密度</th><th>邻居对</th><th>γ</th><th>力</th><th>峰值内存</th><th>子体系 / 平均轨道</th></tr></thead>
+        <tbody>
+          <tr><td>1000 / 6000</td><td>eigh（M7c）</td><td>404 s</td><td>336 s</td><td>—</td><td>18.3 s</td><td>30.5 s</td><td>7.7 s</td><td>4.91 GiB</td><td>—</td></tr>
+          <tr><td>1000 / 6000</td><td>稀疏 1e-6（M7c）</td><td>219 s</td><td>156 s</td><td>—</td><td>16.6 s</td><td>29.9 s</td><td>12.0 s</td><td>4.21 GiB</td><td>—</td></tr>
+          <tr><td>1000 / 6000</td><td>分治 6 Å，本进程</td><td>249 s</td><td>199 s</td><td>181 / 19 s</td><td>11.3 s</td><td>25.1 s</td><td>11.1 s</td><td>4.80 GiB</td><td>125 / 630</td></tr>
+          <tr><td>1000 / 6000</td><td>分治 6 Å，4 个进程</td><td>115 s</td><td>63 s</td><td>51 / 12 s</td><td>14.0 s</td><td>25.4 s</td><td>9.2 s</td><td>4.53 GiB</td><td>125 / 630</td></tr>
+          <tr><td>1000 / 6000</td><td>分治 8 Å，本进程</td><td>914 s</td><td>870 s</td><td>800 / 71 s</td><td>11.5 s</td><td>19.6 s</td><td>9.4 s</td><td>6.68 GiB</td><td>125 / 1086</td></tr>
+          <tr><td>1000 / 6000</td><td>分治 8 Å，4 个进程</td><td>287 s</td><td>237 s</td><td>213 / 24 s</td><td>12.3 s</td><td>25.4 s</td><td>9.3 s</td><td>4.57 GiB</td><td>125 / 1086</td></tr>
+          <tr><td>1728 / 10368</td><td>稀疏 1e-6（M7c）</td><td>411 s</td><td>271 s</td><td>—</td><td>28.9 s</td><td>72.4 s</td><td>30.6 s</td><td>9.33 GiB</td><td>—</td></tr>
+          <tr><td>1728 / 10368</td><td>分治 6 Å，4 个进程</td><td>216 s</td><td>107 s</td><td>86 / 20 s</td><td>23.0 s</td><td>60.2 s</td><td>21.9 s</td><td>9.74 GiB</td><td>216 / 632</td></tr>
+          <tr><td>1728 / 10368</td><td>eigh，一次对角化（M7c，非 SCC，不算力）</td><td>130 s</td><td>101 s</td><td>—</td><td>6.6 s</td><td>—</td><td>—</td><td>6.16 GiB</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>线性</strong>：分治的求解每轮 SCC 每个水分子 3.9 ms（6 Å、4 个进程，1000 与 1728 个水分子都是），稀疏路径 1e-6 是 9.8 ms。</li>
+        <li><strong>对本征分解与稀疏路径</strong>（6 Å、4 个进程）：1000 个水分子的求解 63 s，本征分解 336 s、稀疏路径 156 s（快 5.3 与 2.5 倍）；总计 115 s 对 404 s 与 219 s（3.5 与 1.9 倍）。1728 个水分子总计 216 s，稀疏路径 411 s（1.9 倍），本征分解按一次对角化估计约 1800 s（约 8 倍）。</li>
+        <li><strong>进程的加速</strong>：4 个进程时子体系的本征分解 181 → 51 s（6 Å，3.5 倍）、800 → 213 s（8 Å，3.8 倍），子体系越大越接近 4 倍。总计的加速小一些（6 Å 时 2.2 倍）：邻居对、γ 与力（约 50 s）不在分治里。线程不加速（P116b：SciPy 的广义本征求解不释放 GIL）。</li>
+        <li><strong>8 Å</strong>：子体系平均 1086 个轨道，本征分解是 6 Å 的 4.2 倍（m³ 是 5.1 倍）。4 个进程共 287 s，比稀疏路径 1e-6 慢 1.3 倍；在这个盒子上它的误差比稀疏 1e-6 小（第四节），在真实的水上两者相当（P115d）。</li>
+        <li><strong>逐位相同</strong>：1000 个水分子 6 Å 与 8 Å 时，本进程与 4 个工作进程的能量、电荷与力逐位相同。</li>
+        <li><strong>内存</strong>：主进程的峰值出现在建立 γ 的阶段，与本征分解、稀疏路径相近（1728 个水分子 9.7 GiB，稀疏路径 9.3 GiB）。本进程运行时，主进程还要存所有子体系的 C（8 Å 时 125 × 1086² × 8 B ≈ 1.2 GB，峰值 6.7 GiB）；用工作进程时这些分在各进程里，表中的峰值不含工作进程。</li>
+        <li><strong>与原型</strong>（P116，同样的盒子与参数）：1000 个水分子 4 个进程 115 s 对 119 s，1728 个 216 s 对 232 s。分区改用 ASE 的共价半径找成键片段，与原型按 O–H 距离找的分子相同；缓冲区的边界条件稍有不同，子体系的平均轨道数差 1–3 个，能量差 5e-9 Ha。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <p><code>tests/test_subsystems.py</code>（25 项）：</p>
+      <ul>
+        <li>分区：跨晶胞边界的分子保持完整，核心与缓冲区按整个分子进出；缓冲区经过周期像（最小像）；金属是一个大片段，<code>"auto"</code> 改按原子，<code>"fragments"</code> 保留整个。</li>
+        <li>带权重能级的化学势：两个子体系里的同一组能级（权重加起来为 1）给出这组能级自己的带隙中点与占据；分数的电子数走二分，电子数守恒。</li>
+        <li>精确极限：第三节的 14 个算例；refgen 的跳过规则。</li>
+        <li>有限缓冲区：64 个水分子的误差界（第四节）。</li>
+        <li>逐位相同：主进程串行与 1、2 个工作进程（27 个水分子，能量、电荷、力与应力）；<code>mpiexec -n 3 python -m pydftb.subsystems</code> 对主进程串行（没有 mpi4py 或 mpiexec 时跳过）。</li>
+        <li>ASE 计算器的两步（每一步重新分区）对本征分解；拒绝的原文；torch 拒绝。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M7c 的文档提交 <code>fcd8722</code> 逐字节比较</td><td>conda 1589 个计算、706593 个字段，最小环境 1523 个计算、691675 个字段，都逐位相同。M7d 没有新的 <code>_Setup</code> 字段，不用 <code>--allow-new</code>；字段数比 M7c 多 3863 与 3794 个，是 M7c 加的 <code>sparse</code> 字段，现在新旧两边都有</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>517 个算例全部通过；torch 78 个通过，439 个按设计跳过；34 条动力学参考全部通过；都与 M7c 相同</td></tr>
+          <tr><td>分治的参考</td><td><code>pydftb refgen --check --solver subsystems</code></td><td>144 个通过，373 个按 <code>subsystems_skip</code> 跳过（第三节）</td></tr>
+          <tr><td>其他求解器的参考</td><td><code>--solver sparse</code>、<code>sparse-csr</code>、<code>foe</code></td><td>7、7、103 个通过，与 M7c 相同</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1856 个通过 / 440 个跳过（比 M7c 多 24 个通过、1 个跳过：<code>test_subsystems.py</code>，MPI 那一项因为没有 mpi4py 跳过）；最小环境 1597 / 578，torch 1810 / 486</td></tr>
+          <tr><td>MPI 环境</td><td>草稿环境（MPICH 4.3.2、mpi4py 4.1.2）里的 <code>test_subsystems.py</code></td><td>24 个通过，1 个跳过（torch）；<code>mpiexec -n 3</code> 的结果与主进程串行逐位相同</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与改动前相同）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>MPI 的通信</strong>：设计写数值数组用 <code>Bcast</code> 与 <code>Reduce</code>（缓冲区接口）。实现用 mpi4py 的小写方法（<code>bcast</code>、<code>scatter</code>、<code>gather</code>，经 pickle），0 号进程按进程的固定次序相加：与本机工作进程是同一套消息，求和次序也一样，逐位相同的论证不用另做。传输量与本机相同（每轮每个进程一份 H 的图样数值），几千个水分子以内不是瓶颈；需要时再换缓冲区接口。</li>
+        <li><strong>本机工作进程的下标</strong>：设计写工作进程自己建立子矩阵的下标。本机的工作进程在 fork 时从主进程继承建好的下标；MPI 的进程照设计自己建。</li>
+        <li><strong>费米能级的选项</strong>：设计没有提 <code>smearing</code> 的 <code>fermi_level</code>。实现照用：<code>"dftb+"</code>（默认，带隙中点规则）与 <code>"exact"</code>（总是二分到电子数）。</li>
+        <li><strong>T = 0 的填充</strong>：设计写 “跨过电子数的那一级取余数”。实现用 DFTB+ 自己的二分（kT = 1e-8，pydftb 的约定），效果相同：那一级的拷贝能量相同、占据相同，其余的态是 0 或 1。</li>
+        <li><strong>216 个水分子的 MD</strong>：设计时串行原型太慢没有跑完，这里用实现与 4 个进程补做（第四节）。</li>
+        <li>其余按设计：范围、分区、分区矩阵、两次交换、本机与 MPI 两种传输、拒绝的项目、可选的 mpi4py。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M7d2：大体系的 Coulomb</strong>。分治与稀疏路径之后，瓶颈是 Ewald 的实空间对表：1728 个水分子时 2.7 GiB，建立时峰值 9.3 GiB，随 N<sup>1.5</sup> 增长。实空间部分分块计算、不存对表（力也分块），γ 之外的内存降到 O(N)；小体系保留原来的代码，golden 逐位不变。</li>
+        <li>之后是 M7e GPU 自检与跨结构批量，再后是 M8。</li>
+        <li>向 DFTB+ 报告 B28、B29（以及 B1、B2、B3、B6、B13、B18–B26）：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M7d-divide-and-conquer.html">← M7d 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

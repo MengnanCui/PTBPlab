@@ -31,6 +31,7 @@ from .backend.spec import NUMPY, Backend
 from .occupations import fill
 from .fermi_operator import FermiOperator
 from .purification import NTPoly
+from .subsystems import Subsystems
 
 
 def _kmap(threads, fn, nk, norb):
@@ -213,7 +214,8 @@ SOLVERS = {"eigh": EighSolver, "batched": BatchedSolver, "sp2": SP2Solver,
            "divideandconquer": partial(EighSolver, driver="gvd"),
            "relativelyrobust": partial(EighSolver, driver="gvr"),
            "elpa": EighSolver, "ntpoly": NTPoly,
-           "foe": FermiOperator}                                   # M7b
+           "foe": FermiOperator,                                   # M7b
+           "subsystems": Subsystems}                               # M7d
 # DFTB+ solvers that pydftb does not provide, and why (M7a)
 UNSUPPORTED_SOLVERS = {
     "omm": "DFTB+'s OMM (libOMM through ELSI) is not implemented: in DFTB+ 24.1 its densities, "

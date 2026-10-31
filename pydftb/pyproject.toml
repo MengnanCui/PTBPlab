@@ -27,6 +27,7 @@ dependencies = ["numpy", "scipy>=1.15", "ase>=3.23", "threadpoolctl"]
 [project.optional-dependencies]
 torch = ["torch>=2.14"]           # torch backend, GPUs, pydftb.autodiff (tested 2.14.1)
 dispersion = ["dftd3", "dftd4"]   # D3/D4 dispersion; conda: dftd3-python, dftd4-python
+mpi = ["mpi4py"]                  # Subsystems(processes="mpi") over MPI ranks (tested 4.1.2)
 test = ["pytest"]
 
 [project.scripts]

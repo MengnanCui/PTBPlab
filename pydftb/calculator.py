@@ -69,12 +69,13 @@ from . import typeswitch as _typeswitch                 # M5a
 from .hamiltonian import build_mixed_pairs              # M5a
 
 
-_DENSITY_SOLVERS = {"sp2": "SP2", "ntpoly": "NTPoly", "foe": "FOE"}
+_DENSITY_SOLVERS = {"sp2": "SP2", "ntpoly": "NTPoly", "foe": "FOE", "subsystems": "Subsystems"}
 
 
 def _density_solver(solver) -> str | None:
     """The display name of a solver without eigenpairs ("SP2", "NTPoly"; M7a; "FOE", the
-    finite-temperature Fermi-operator expansion; M7b), or None."""
+    finite-temperature Fermi-operator expansion; M7b; "Subsystems", divide and conquer; M7d), or
+    None."""
     if isinstance(solver, str):
         return _DENSITY_SOLVERS.get(solver)
     if getattr(solver, "eigenpairs", True) is False:
@@ -635,6 +636,8 @@ class DFTB:
         if isinstance(solver, str) and solver not in SOLVERS:
             raise ValueError(f"unknown solver {solver!r}: one of {sorted(SOLVERS)} or a solver "
                              "object")
+        if solver == "subsystems":                    # M7d: the object holds the partition
+            solver = SOLVERS["subsystems"]()
         self.solver = solver
         self.verbose = verbose
         self.repulsive = repulsive
@@ -786,12 +789,31 @@ class DFTB:
             raise ValueError(f"the SK files {tagged} are a hybrid parametrisation (RangeSep): set "
                              "hybrid='lc' or 'cam' (DFTB+: 'Hybrid SK-file provided, but the "
                              "hybrid block is missing'), or hybrid=False to ignore it")
-        if getattr(solver, "sparse", False):                           # M7c
+        if getattr(self.solver, "subsystems", False):                  # M7d
+            self._check_subsystems()
+        elif getattr(solver, "sparse", False):                         # M7c
             self._check_sparse()
 
     def _check_sparse(self):
         """The sparse NTPoly path's conditions (M7c, DFTB+'s ``Sparse = Yes``): the terms that
         need more than the values on the pattern of the neighbour blocks are not there."""
+        why = self._pattern_refusals()
+        if why:
+            raise ValueError(f"the sparse NTPoly path (sparse=True, milestone M7c) does not "
+                             f"support {'; '.join(why)}: use NTPoly() (dense) or an eigensolver")
+
+    def _check_subsystems(self):
+        """The divide-and-conquer conditions (M7d): those of the pattern (M7c), and Fermi filling
+        (the chemical potential and the entropy of the subsystems' weighted levels)."""
+        why = self._pattern_refusals()
+        if self.smearing.kind != "fermi":
+            why.append(f"{self.smearing.kind} smearing (Fermi filling only)")
+        if why:
+            raise ValueError(f"the subsystems (Subsystems, milestone M7d) do not support "
+                             f"{'; '.join(why)}: use an eigensolver")
+
+    def _pattern_refusals(self) -> list:
+        """What needs more than the values on the pattern of the neighbour blocks (M7c, M7d)."""
         why = []
         if self.backend.is_torch:
             why.append("the torch backend (the CSR matrices are SciPy's)")
@@ -808,9 +830,7 @@ class DFTB:
             why.append("analysis outputs")
         if self.force_evaluation != "traditional":
             why.append(f"force_evaluation={self.force_evaluation!r} (the dense rho and H)")
-        if why:
-            raise ValueError(f"the sparse NTPoly path (sparse=True, milestone M7c) does not "
-                             f"support {'; '.join(why)}: use NTPoly() (dense) or an eigensolver")
+        return why
 
     def _check_hybrid(self) -> tuple:
         """The conditions of a hybrid functional (M6h-1): DFTB+'s (initprogram
@@ -916,7 +936,7 @@ class DFTB:
                                  "level (DFTB+ does not read IndependentKFilling then)")
         name = _density_solver(solver)
         if ((self.fixed_fermi_level is not None or self.independent_k_filling) and name
-                and name != "FOE"):                   # M7b: the Fermi operator at mu, or per k
+                and name not in ("FOE", "Subsystems")):   # M7b, M7d: at mu, or per k
             raise ValueError("a fixed Fermi level or independent k-point filling needs the "
                              f"eigenvalues (not the {name} solver)")
         if self.independent_k_filling and self.spin:
@@ -1806,6 +1826,9 @@ class DFTB:
             kp = None if gamma_only else kpts
             sparse = _Sparse(pat, pat.fold(pb.h, eps0, kp), pat.fold(pb.s, np.ones(norb), kp))
             h0 = smat = None
+            if getattr(self.solver, "subsystems", False):            # M7d: the partition
+                self.solver.set_geometry(species, pos, cell if periodic else None,
+                                         pbc if periodic else None, basis, pat)
         elif gamma_only:
             h0 = fold(pb, pb.h, norb, None, eps0)[None]
             smat = fold(pb, pb.s, norb, None, np.ones(norb))[None]
@@ -2330,7 +2353,9 @@ class DFTB:
         NTPoly`): every spin channel (or the spinor matrix) at its whole occupation, the T = 0
         density; no eigenvalues or occupations, TS = 0; the chemical potential as the Fermi
         level (one per spin channel).  Finite temperature (M7b): :meth:`_solve_fermi_operator`.
-        CSR matrices (M7c): :meth:`_solve_sparse`."""
+        CSR matrices (M7c): :meth:`_solve_sparse`.  Subsystems (M7d): :meth:`_solve_subsystems`."""
+        if getattr(solver, "subsystems", False):
+            return self._solve_subsystems(solver, st, h, need_w)
         if getattr(solver, "finite_temperature", False):
             return self._solve_fermi_operator(solver, st, h, need_w)
         if st.sparse is not None:
@@ -2369,6 +2394,30 @@ class DFTB:
             mus.append(mu)
         mu = mus[0] if st.spin is None else tuple(mus)
         return np.array(rho), (np.array(wdm) if need_w else None), None, mu, 0.0, None
+
+    def _solve_subsystems(self, solver, st: _Setup, h, need_w):
+        """:meth:`_solve` for the divide-and-conquer subsystems (M7d): Fermi filling of the
+        subsystems' weighted levels (T = 0 is kT = 1e-8 Ha, DFTB+'s mid-gap rule when the count
+        there is exact), one chemical potential per spin channel or a shared one
+        (relax_total_spin), the fixed Fermi level, independent k-point filling; densities on the
+        pattern, T S from the solver, no eigenvalues or occupations."""
+        ffl = self.fixed_fermi_level
+        opts = dict(kt=self.kt, independent_k=bool(self.independent_k_filling),
+                    fermi_level=self.smearing.fermi_level)
+        if st.spin is None:
+            rho, wdm, mu, ts = solver.density(h, st.kw, st.nelec / 2.0, 2.0, need_w,
+                                              mu=None if ffl is None else ffl[0], **opts)
+            return rho, wdm, None, mu, ts, None
+        if st.spin.shared_ef:
+            rho, wdm, mu, ts = solver.density(h, st.kw, st.nelec, 1.0, need_w, channels=2, **opts)
+            return rho, wdm, None, (mu, mu), ts, None
+        nk = len(st.kw)
+        parts = [solver.density(h[i * nk:(i + 1) * nk], st.kw, n, 1.0, need_w, offset=i * nk,
+                                mu=None if ffl is None else ffl[i], **opts)
+                 for i, n in enumerate((st.spin.n_up, st.spin.n_down))]
+        rho = np.concatenate([p[0] for p in parts])
+        wdm = np.concatenate([p[1] for p in parts]) if need_w else None
+        return rho, wdm, None, (parts[0][2], parts[1][2]), parts[0][3] + parts[1][3], None
 
     def _solve_fermi_operator(self, solver, st: _Setup, h, need_w):
         """:meth:`_solve` for a finite-temperature solver without eigenpairs (M7b,

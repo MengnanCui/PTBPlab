@@ -966,6 +966,59 @@ the neighbour lists and the Ewald setup remain (O(N^1.5-2), with a memory peak o
 1728 waters).  Details and timings:
 [`docs/reports/M7c-sparse-linear-scaling.html`](docs/reports/M7c-sparse-linear-scaling.html).
 
+### Divide and conquer over processes and machines (`Subsystems`)
+
+```python
+from pydftb.subsystems import Subsystems
+
+DFTB(sk, solver=Subsystems())                          # cores and buffers of 6 A, in this process
+DFTB(sk, solver=Subsystems(buffer=8.0, processes=4))   # four worker processes
+DFTB(sk, solver=Subsystems(processes="mpi"))           # mpiexec -n 17 python -m pydftb.subsystems run.py
+DFTB(sk, solver=Subsystems(buffer=float("inf")))       # the exact limit: the eigensolver (checks)
+```
+
+Milestone M7d cuts the system into subsystems and diagonalises each on its own (Yang and Lee's
+divide-and-conquer density matrix, as in Nakai's DC-DFTB): a core of whole bonded fragments on
+a grid of cells of about `core` Angstrom, and the fragments within `buffer` Angstrom of it
+(periodic images included).  The H and S of a subsystem are principal submatrices of the global
+H(k) and S(k) on M7c's pattern; its eigenstates fill one density matrix through the partition
+matrix p_ij = (c_i + c_j)/2 (1 for core-core entries, 1/2 for core-buffer ones), and all states
+share one chemical potential, found from their core weights by DFTB+'s rules (the mid-gap level,
+else the bisection).  A subsystem of all the atoms is therefore the eigensolver to rounding, the
+Fermi level included: in that exact limit `refgen --check --solver subsystems` passes all 144
+applicable DFTB+ references with the eigensolver's deviations and SCC iterations.  DFTB+ has
+nothing like it (its `Solver = DivideAndConquer` is LAPACK's hegvd, pydftb's
+`"divideandconquer"`).  Covered: what the sparse path covers (molecules, the Gamma point and
+k-points, no spin and collinear spin
+with a Fermi level per channel or a shared one, the SCC terms that act through potentials,
+forces, stress, ASE), Fermi filling at T = 0 and T > 0, fixed Fermi levels and independent
+k-point filling.  Refused: what the sparse path refuses, and MP and Gaussian smearing.  There
+are no eigenvalues; the Fermi level is the chemical potential, which for finite buffers usually
+sits at a band edge (the bisection fills the level that crosses the electron count).
+
+The buffer sets the error.  For relaxed water (216 molecules, mio-1-1) a buffer of 6 A gives
+the charges to 1.9e-5 e and the forces to 3.2e-5 Ha/Bohr, and NVE runs conserve the energy as
+well as with the eigensolver; 8 A gives 1.3e-7 e and 5.5e-8 Ha/Bohr, the accuracy of the sparse
+path at truncation 1e-6.  Metals do not work: Cu at 1000-3000 K is still off by 4e-4-7e-4 Ha per
+atom with buffers of 5 A.  With buffers below 6 A at T = 0 the SCC may not converge (states of
+the cut hydrogen-bond network sit in the gap): give an electron temperature, 300 K is enough.
+
+`processes=n` forks n worker processes that keep their subsystems for the whole SCC: in each
+iteration they get the values of H on the pattern and return the eigenvalues with their core
+weights, then get the occupations and return their part of P and W.  `processes="mpi"` does the
+same over the ranks of MPI.COMM_WORLD with the optional mpi4py (`pip install pydftb[mpi]`):
+rank 0 runs the script and the others serve it (`mpiexec -n N python -m pydftb.subsystems
+run.py`, or `if pydftb.subsystems.serve(): sys.exit()` at the top of the script).  Every entry
+of the pattern gets at most two contributions and the subsystems' BLAS runs on one thread in
+every case, so the results are bitwise the same for any number of processes or ranks.  On a
+4-core CPU (water boxes, cores and buffers of 6 A, SCC with forces) 1000 waters take 115 s with
+four processes, against 404 s for the eigensolver and 219 s for the sparse path at 1e-6; the
+solver time per SCC iteration grows linearly (3.9 ms per water at 1000 and 1728 waters, the
+sparse path 9.8 ms), and 1728 waters take 216 s (the sparse path 411 s).  With buffers of 8 A
+1000 waters take 287 s, 1.3 times the sparse path.  Outside the solver the Ewald setup remains
+the limit, as for the sparse path.  Details and timings:
+[`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

@@ -133,6 +133,9 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
     tmp = None
     if case.solver is not None and solver in ("eigh",) + SPARSE_SOLVERS:  # M7a: DFTB+'s Solver
         solver = solver_from_spec(case.solver, sparse=solver)
+    if solver in SUBSYSTEM_SOLVERS:                       # M7d: the exact limit
+        from ..subsystems import Subsystems
+        solver = Subsystems(buffer=float("inf"))
     if skdir is None and case.typed:
         tmp = tempfile.mkdtemp(prefix="pydftb_case_")
         skdir = write_typed_copies(SKF_SETS[case.skf_set], tmp, case.typed,
@@ -191,6 +194,7 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
 
 
 SPARSE_SOLVERS = ("sparse", "sparse-csr")     # refgen --solver: NTPoly(sparse=True) (M7c)
+SUBSYSTEM_SOLVERS = ("subsystems",)            # refgen --solver: Subsystems(buffer=inf) (M7d)
 
 
 def solver_from_spec(spec, sparse: str = "eigh"):
@@ -234,6 +238,30 @@ def foe_skip(case: Case) -> str | None:
     used = [k for k in EIGENPAIR_ANALYSES if (case.analysis or {}).get(k)]
     if used:
         return f"the analysis needs eigenpairs ({', '.join(used)})"
+    return None
+
+
+def subsystems_skip(case: Case) -> str | None:
+    """Why a case is not checked with ``--solver subsystems`` (M7d), or None: the subsystems in
+    their exact limit (every subsystem holds all atoms) need Fermi filling and the values on the
+    pattern of the neighbour blocks (the calculator's refusals); a case of DFTB+'s Solver block
+    keeps its own solver."""
+    if case.solver is not None:
+        return "DFTB+'s Solver case (M7a)"
+    if case.filling[0] != "fermi":
+        return f"{case.filling[0]} smearing (the subsystems: Fermi filling only)"
+    if case.pauli:
+        return "two-component spin (not on the pattern of the neighbour blocks)"
+    if case.block:
+        return "DFTB+U or onsite corrections (no block potentials on the pattern)"
+    if case.hybrid:
+        return "hybrid functionals (not on the pattern)"
+    if case.casida:
+        return "Casida excitations need eigenpairs"
+    if case.analysis:
+        return "analysis outputs (not on the pattern)"
+    if (case.hessian or {}).get("polarisability"):
+        return "the polarisability derivatives need eigenpairs (the response)"
     return None
 
 
@@ -1777,6 +1805,9 @@ def check(names=None, solver: str = "eigh", casida_solver: str = "auto", **backe
         why = foe_skip(case) if solver == "foe" else None             # M7b
         if solver in SPARSE_SOLVERS:                                   # M7c
             why = sparse_skip(case)
+        if solver in SUBSYSTEM_SOLVERS:                                # M7d
+            why = ("the subsystems run on NumPy" if backend.get("backend") == "torch"
+                   else subsystems_skip(case))
         if why:
             print(f"{case.name:26s} skipped: {why}")
             continue

@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7d 空间分治与多机设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7d · 设计</p>
+    <h1>大体系（四）：空间分治与多机</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-10-31</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M7d-divide-and-conquer.html">完成报告</a> · <a href="M7c-sparse-linear-scaling.html">M7c 设计</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M7d 把体系按空间分成子体系：每个子体系是一块核心区加上它周围的缓冲区，在全局 H(k)、S(k) 的主子矩阵上单独做本征分解，再按分区矩阵把各子体系的密度矩阵拼回全局（Yang 与 Lee 的分治密度矩阵，Nakai 组的 DC-DFTB）。子体系互相独立，分给本机的多个进程或多台机器上的 MPI 进程。整条路径建在 M7c 的图样上，没有 N × N 的矩阵。DFTB+ 没有这种求解器：它的 <code>Solver = DivideAndConquer</code> 是 LAPACK 的 hegvd（pydftb 已有同名驱动），所以新求解器叫 <code>Subsystems</code>，对照用 pydftb 的本征分解。</p>
+    <ul>
+      <li><strong>精确极限</strong>（P112、P114）：缓冲区覆盖全部原子时，任意分法都到舍入等于本征分解：216 个水分子每个原子的能量差 7e-16，电荷 4e-14 e，力 4e-14 Ha/Bohr；k 点（2×2×2）、两种共线自旋与 300 K 的共用费米能级也一样，SCC 轮数相同。</li>
+      <li><strong>缓冲区收敛</strong>（Γ 点，SCC 加力，对本征分解）：
+        <ul>
+          <li>真实的水（P115d：DFTB+ 测试用的 mio-1-1，216 个水分子，先弛豫）：缓冲 4、5、6、8 Å 时电荷差 5.2e-3、1.0e-4、1.9e-5、1.3e-7 e，力差 8.4e-3、2.0e-4、3.2e-5、5.5e-8 Ha/Bohr。同一盒子上 M7c 截断 1e-6 的稀疏路径是 1.1e-7 e 与 8.2e-8 Ha/Bohr，所以要它的精度，分治需要 8 Å。</li>
+          <li>M7c 的计时盒子（P112，ptbp_hcocu 的参数，分子取向随机、没有弛豫）氢键耦合弱，误差小得多：6 Å 时电荷差约 1e-6 e，从 512 到 1728 个水分子不变。这组数只用来比较做法与计时，精度以上一条为准。</li>
+          <li>按原子取缓冲区会切断 O–H 键，同样 6 Å 时电荷差大两个数量级，所以分区的单位是成键的片段；核心区大一些也更准（216 个水分子、6 Å：核心 6 Å 时每个原子的能量差 4e-12，核心 4 Å 时 7e-10）。</li>
+          <li>金属不行（P113）：Cu 在 1000 K 与 3000 K 时缓冲到 5 Å（子体系 753 个轨道），每个原子的能量差仍有 4e-4–7e-4 Ha、电荷 0.04–0.08 e，与 M7c 里金属不稀疏是一回事。</li>
+        </ul></li>
+      <li><strong>费米能级</strong>（P113）：子体系的态带着核心权重（核心轨道上的 Mulliken 布居）一起求公共的 μ。有限缓冲下这些权重之和与电子数差约 1e-6 e，所以 T = 0 时按能量顺序填充，跨过电子数的那一级取余数，μ 落在价带顶或导带底；精确极限下电子数恰好守恒，用 DFTB+ 的带隙中点规则，费米能级与本征分解相同。</li>
+      <li><strong>SCC 的收敛</strong>：缓冲区 ≤ 4 Å 时，被切开的氢键网络在带隙里留下边界态，T = 0 时 μ 钉在这样的态上，它的占据随每轮电势跳变，SCC 可能不收敛（O<sub>2</sub> 盒子 200 轮不收敛）。300 K 的 Fermi 展宽或 6 Å 的缓冲区都能收敛。</li>
+      <li><strong>力与 MD</strong>（P115、P115c）：用分区的 P 与 W 照常算力，不是分治能量的严格导数。扣掉有限差分自身的截断误差后，6 Å 时两者差约 3e-8 Ha/Bohr，与分治本身的误差同量级；4 Å 时差 5e-6，分治误差 3.6e-5。mio 的 64 个水分子 NVE（0.5 fs，50 fs）：6 Å 时总能量漂移 2.7e-4 Ha/ps（分区固定）与 2.8e-4（每步重分），本征分解 2.8e-4；4 Å 时 1.0e-2 与 2.3e-2，每步重分时还有一步 SCC 200 轮不收敛。</li>
+      <li><strong>速度</strong>（P116，本机 4 核，核心 6 Å、缓冲 6 Å）：
+        <ul>
+          <li>1000 个水分子 SCC 加力：4 个进程共 119 s，本征分解 404 s，M7c 的稀疏路径 219 s；</li>
+          <li>1728 个水分子：232 s，本征分解估计约 1800 s，稀疏路径 411 s；</li>
+          <li>分治的部分每轮 SCC 每个水分子 4.2–4.5 ms，随 N 线性（稀疏路径 9.8 ms）；</li>
+          <li>4 个进程的本征分解比单进程快 3.0 倍；线程几乎不加速，4 个线程只快 1.1 倍（SciPy 的这个调用看来没有释放 GIL）。</li>
+          <li>这是 6 Å 的计时。真实的水要与稀疏路径同等精度需要 8 Å，子体系大约 5 倍的本征分解时间。实现后实测（报告第五节）：1000 个水分子 8 Å、4 个进程共 287 s，比稀疏路径（219 s）慢 1.3 倍。分治的长处在别处：内存分在各进程上、每轮只交换图样上的数值，适合多机；有限温度可用；6 Å 已是 MD 够用的精度。</li>
+        </ul></li>
+      <li><strong>多机</strong>（P117）：mpi4py 的原型，0 号进程跑 SCC，其余进程常驻子体系。1、2、3 个进程的能量、电荷与力逐位相同；本机 0–4 个工作进程也逐位相同（P116b，BLAS 线程数相同时）。</li>
+      <li><strong>建立阶段</strong>（P118）：分治之后，瓶颈是 Ewald 的实空间对表。1728 个水分子时对表 2.7 GiB、建立时峰值 9.3 GiB，随 N<sup>1.5</sup> 增长；5000 个水分子约要 46 GiB。这与求解器无关，作为紧接的一块另做（第九节）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">7e-16</span><span class="lbl">精确极限：每个原子的能量差（Ha）</span></li>
+      <li><span class="num">1.3e-7</span><span class="lbl">真实的水（mio，216 个分子）8 Å 缓冲的电荷误差（e）；6 Å 为 1.9e-5</span></li>
+      <li><span class="num">4.2 ms</span><span class="lbl">1728 个水分子每轮 SCC 每个分子的分治耗时（4 个进程）</span></li>
+      <li><span class="num">逐位</span><span class="lbl">1–4 个进程与 1–3 个 MPI 进程的结果相同</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围</a></li>
+      <li><a href="#probe">二、探针</a></li>
+      <li><a href="#method">三、方法</a></li>
+      <li><a href="#parallel">四、并行</a></li>
+      <li><a href="#calc">五、计算器的接入</a></li>
+      <li><a href="#api">六、pydftb 的接口</a></li>
+      <li><a href="#impl">七、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">八、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">九、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围</h2>
+      <ul>
+        <li><strong>做</strong>：
+          <ul>
+            <li><code>Subsystems(buffer=…, core=…, units=…, processes=…)</code>：空间分治的密度矩阵，建在 M7c 的图样上；</li>
+            <li>分子、周期体系的 Γ 点与 k 点；无自旋与共线自旋（各通道的 μ，或 <code>relax_total_spin</code> 的共用 μ）；</li>
+            <li>T = 0 与 T &gt; 0 的 Fermi 填充，熵按核心权重算；固定费米能级与每个 k 单独填充；</li>
+            <li>力与应力（第三节，近似）；M7c 稀疏路径能用的电势项与能量项照样能用；</li>
+            <li>本机多进程（标准库的 <code>multiprocessing</code>）与多机（可选的 mpi4py），结果与进程数无关，逐位相同；</li>
+            <li>ASE 的计算器与 MD：每一步重新分区。</li>
+          </ul></li>
+        <li><strong>不做</strong>（报错并说明原因）：
+          <ul>
+            <li>与 M7c 相同的那些：两分量、块势、杂化、Casida、要本征矢的分析、XL-BOMD 的力、torch；</li>
+            <li>MP 与 Gaussian 展宽：分治的熵与 μ 只按 Fermi 函数做（同 M7b 的 FOE）；</li>
+            <li>全局的本征值与占据数：没有，结果里是 None（同 M7a）。</li>
+          </ul></li>
+        <li><strong>照旧</strong>：Coulomb 的 γ 与 Ewald 的建立（第九节）。</li>
+        <li><strong>DFTB+</strong>：没有空间分治。它的 MPI <code>Parallel { Groups }</code> 把 k 点与自旋分到进程上，pydftb 的 k 点线程（M3）在一台机器内做了这件事，多机的 k 点分组不做（小晶胞的 k 点多机意义不大，PTBP 的多结构已经分进程）。</li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、探针</h2>
+      <p>草稿目录 <code>m7d/</code>：原型 <code>dcproto.py</code>（串行）、<code>dcpar.py</code>（本机进程与线程）、<code>dcmpi.py</code>（MPI），探针 <code>p112_buffers.py</code>、<code>p113_general.py</code>、<code>p115_forces.py</code>、<code>p115c_md.py</code>、<code>p116_parallel.py</code>、<code>p116b_threads.py</code>、<code>p117_mpi.py</code>、<code>p118_setup.py</code>。原型是一个鸭子类型的求解器，走 M7c 的稀疏路径（<code>sparse = True</code>，没有本征对，有限温度），不改 pydftb。水盒子与 M7c 相同（M7a 的 <code>water_box</code>，约 1 g/cm³，ptbp_hcocu 的 H、O），参考是 M7c 计时时存下的本征分解结果。本机 4 核，15 GB。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>探针</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>P112</td><td>缓冲半径 3–8 Å，核心 4 Å 与 6 Å 的格子，缓冲按分子或按原子；水 216、512、1000 个分子，Γ 点，SCC 加力，scc_tol 1e-7，对本征分解</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子</th><th>核心</th><th>缓冲</th><th>子体系 / 平均轨道</th><th>能量（每个原子）</th><th>电荷</th><th>力</th></tr></thead>
+              <tbody>
+                <tr><td>216</td><td>9 Å</td><td>全部</td><td>8 / 1296</td><td>7.0e-16</td><td>4.3e-14</td><td>4.1e-14</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>3 Å</td><td>124 / 65</td><td>1.4e-7</td><td>1.2e-4</td><td>1.2e-4</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>4 Å</td><td>124 / 137</td><td>1.9e-7</td><td>1.4e-4</td><td>1.2e-4</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>5 Å</td><td>124 / 202</td><td>2.6e-8</td><td>6.1e-5</td><td>5.7e-5</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>6 Å</td><td>124 / 317</td><td>7.3e-10</td><td>8.4e-7</td><td>7.7e-7</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>7 Å</td><td>124 / 525</td><td>2.1e-10</td><td>3.7e-7</td><td>1.5e-7</td></tr>
+                <tr><td>216</td><td>6 Å</td><td>6 Å</td><td>27 / 639</td><td>4.4e-12</td><td>4.3e-7</td><td>3.7e-7</td></tr>
+                <tr><td>216</td><td>4 Å</td><td>6 Å（按原子）</td><td>124 / 252</td><td>8.8e-8</td><td>1.1e-4</td><td>4.6e-5</td></tr>
+                <tr><td>512</td><td>4 Å</td><td>4 Å</td><td>215 / 161</td><td>2.1e-7</td><td>7.6e-4</td><td>1.3e-4</td></tr>
+                <tr><td>512</td><td>4 Å</td><td>5 Å</td><td>215 / 228</td><td>7.3e-10</td><td>4.5e-5</td><td>4.5e-5</td></tr>
+                <tr><td>512</td><td>4 Å</td><td>6 Å</td><td>215 / 360</td><td>7.3e-10</td><td>1.3e-6</td><td>1.5e-7</td></tr>
+                <tr><td>512</td><td>4 Å</td><td>7 Å</td><td>215 / 576</td><td>2.4e-10</td><td>3.0e-6</td><td>1.1e-6</td></tr>
+                <tr><td>512</td><td>4 Å</td><td>8 Å</td><td>215 / 710</td><td>1.5e-11</td><td>1.1e-7</td><td>1.2e-7</td></tr>
+                <tr><td>512</td><td>6 Å</td><td>4 Å</td><td>64 / 314</td><td>1.2e-7</td><td>7.2e-4</td><td>7.7e-5</td></tr>
+                <tr><td>512</td><td>6 Å</td><td>6 Å</td><td>64 / 636</td><td>4.5e-10</td><td>4.4e-7</td><td>3.7e-7</td></tr>
+                <tr><td>512</td><td>6 Å</td><td>8 Å</td><td>64 / 1093</td><td>2.8e-11</td><td>4.6e-8</td><td>3.8e-8</td></tr>
+                <tr><td>1000</td><td>4 Å</td><td>4 Å</td><td>511 / 146</td><td>2.6e-7</td><td>1.2e-3</td><td>1.1e-4</td></tr>
+                <tr><td>1000</td><td>4 Å</td><td>6 Å</td><td>511 / 334</td><td>9.0e-10</td><td>1.3e-6</td><td>4.9e-7</td></tr>
+                <tr><td>1000</td><td>6 Å</td><td>6 Å</td><td>125 / 632</td><td>6.6e-10</td><td>2.0e-6</td><td>4.0e-7</td></tr>
+                <tr><td>1728</td><td>6 Å</td><td>6 Å</td><td>216 / 635</td><td>6.0e-10</td><td>1.7e-6</td><td>2.7e-7</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>1000 与 1728 个水分子的核心 6 Å 来自 P116；1728 个的参考是 M7c 截断 1e-7 的稀疏结果（它对本征分解约差 1e-8）。</li>
+              <li>误差随缓冲区大致按指数下降，不严格单调（缓冲区的成员是离散的，512 个水分子 7 Å 的电荷比 6 Å 差）。SCC 轮数全部与本征分解相同，电子数的误差在 1e-12 以内（T = 0 的二分，见第三节）。</li>
+            </ul></td></tr>
+          <tr><td>P113</td><td>费米能级与温度：水 216 个分子在 316 K 与 1579 K（β = 200 a.u.，GAMESS 的分治默认）；Cu fcc 5×5×5（500 个原子）在 1000 K 与 3000 K，缓冲 2–5 Å</td><td>
+            <ul>
+              <li>T = 0：二分在 kT = 1e-8 下守恒电子数，μ 落在带边：216 个水分子的 μ 为 −0.157 或 +0.037 Ha（看电子数的缺额是正是负），本征分解的带隙中点约 −0.06 Ha。能量不受影响。</li>
+              <li>有温度的水：1579 K 与 316 K 时误差与 T = 0 相同（216 个水分子，6 Å：每个原子的能量 7e-10，电荷 4e-7；4 Å：1.9e-7，1.4e-4）。有带隙的体系，温度只在填补电子数的那几个边界态上起作用。</li>
+              <li>Cu fcc 5×5×5（500 个原子），对同温度的本征分解：
+                <div class="table-wrap"><table>
+                  <thead><tr><th>温度</th><th>缓冲</th><th>平均轨道</th><th>能量（每个原子）</th><th>电荷</th><th>力</th><th>SCC 轮数</th></tr></thead>
+                  <tbody>
+                    <tr><td>3000 K</td><td>2 Å</td><td>36</td><td>9.1e-2</td><td>3.2e-1</td><td>2.3e-2</td><td>67 / 32</td></tr>
+                    <tr><td>3000 K</td><td>3 Å</td><td>279</td><td>1.9e-3</td><td>3.4e-2</td><td>6.6e-3</td><td>36 / 32</td></tr>
+                    <tr><td>3000 K</td><td>4 Å</td><td>377</td><td>2.4e-3</td><td>5.7e-2</td><td>4.7e-3</td><td>34 / 32</td></tr>
+                    <tr><td>3000 K</td><td>5 Å</td><td>753</td><td>6.9e-4</td><td>4.1e-2</td><td>3.2e-3</td><td>32 / 32</td></tr>
+                    <tr><td>1000 K</td><td>3 Å</td><td>279</td><td>2.0e-3</td><td>5.7e-2</td><td>6.7e-3</td><td>37 / 30</td></tr>
+                    <tr><td>1000 K</td><td>5 Å</td><td>753</td><td>4.4e-4</td><td>7.5e-2</td><td>4.1e-3</td><td>33 / 30</td></tr>
+                  </tbody>
+                </table></div>
+                金属的密度矩阵衰减慢（M7c 的 P107：Cu 在 14 Å 处仍有 3e-3），几个 Å 的缓冲远远不够；要够的缓冲时子体系就接近整个盒子，分治没有好处。</li>
+            </ul></td></tr>
+          <tr><td>P114</td><td>k 点与自旋：水 64 个分子配 2×2×2 的 k 点；27 与 64 个 O<sub>2</sub>（三重态，共线自旋，固定自旋与 300 K 的共用费米能级）</td><td>
+            <ul>
+              <li>k 点：精确极限每个原子的能量差 3e-16；4 Å 缓冲 1.4e-8（电荷 7.6e-5），6 Å 7.9e-11（6.7e-8），与 Γ 点相同。H(k) 的主子矩阵这一做法在 k 点上照样收敛。</li>
+              <li>O<sub>2</sub>：精确极限 1.6e-15，两个自旋通道各有 μ；6 Å 缓冲 2.5e-11（电荷 3.5e-9），SCC 8 轮同本征分解。3 Å 与 4 Å 在 T = 0 时 SCC 200 轮不收敛；4 Å 在 300 K（共用 μ）时 10 轮收敛，每个原子的能量差 5e-7。</li>
+            </ul></td></tr>
+          <tr><td>P115</td><td>力：分治的力（分区的 P、W）对分治能量的中心差分（分区固定），以及对本征分解的力；64 个水分子，6 个分量；本征分解的同一差分作对照</td><td>
+            <ul>
+              <li>差分步长 2e-3 Bohr 自身有约 1e-6 Ha/Bohr 的截断误差：本征分解的能量做同样差分，与它的解析力也差 1e-6（步长 1e-2 时 2.5e-5，与步长平方成正比）。比较时两者相减。</li>
+              <li>6 Å：分治的力对本征分解的力差 ≤ 3.4e-8；分治能量的差分对本征分解能量的差分差 ≤ 2.7e-8；不一致约 3e-8。</li>
+              <li>4 Å：分治的力差 3.6e-5，不一致约 5e-6。1579 K 时类似（不一致 2.6e-5 含截断误差）。</li>
+              <li>T = 0 时改用精确的分数填充（不用 kT = 1e-8 的二分）结果不变，说明二分不带来噪声。</li>
+            </ul></td></tr>
+          <tr><td>P115c</td><td>MD：水 64 个分子，DFTB+ 测试用的 mio-1-1（只在本地用），先用本征分解弛豫（FIRE 到 0.05 eV/Å，O–H 0.970–1.000 Å，分子完整）；NVE，0.5 fs，100 步，300 K 起步，上一步的电荷作 SCC 起点；本征分解、缓冲 4 Å 与 6 Å，分区固定与每步重分</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>做法</th><th>总能量漂移</th><th>最大偏离</th><th>SCC 轮数（平均 / 最多）</th></tr></thead>
+              <tbody>
+                <tr><td>本征分解</td><td>2.8e-4 Ha/ps</td><td>1.65e-3 Ha</td><td>9.9 / 13</td></tr>
+                <tr><td>6 Å，分区固定</td><td>2.7e-4</td><td>1.65e-3</td><td>9.9 / 13</td></tr>
+                <tr><td>6 Å，每步重分</td><td>2.8e-4</td><td>1.65e-3</td><td>9.9 / 13</td></tr>
+                <tr><td>4 Å，分区固定</td><td>1.0e-2</td><td>1.63e-3</td><td>10.0 / 13</td></tr>
+                <tr><td>4 Å，每步重分</td><td>2.3e-2</td><td>1.94e-3</td><td>15.7 / 200</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>最大偏离是 Verlet 积分本身的起伏（本征分解也一样），比较的是漂移。64 个水分子的盒子只有 12.4 Å，6 Å 的子体系已包括大半个盒子，所以 216 个水分子的 MD 另做（P115e）。</li>
+              <li>216 个水分子（P115e）：本征分解 60 步的漂移 9.9e-3 Ha/ps、最大偏离 5.8e-3 Ha（648 个原子，Verlet 的起伏更大）。分治的同一段 MD 在串行原型上每步约 3 分钟，没有跑完；实现后用 4 个进程补做（报告第四节，P120）。</li>
+            </ul></td></tr>
+          <tr><td>P115d</td><td>同样弛豫的 mio 盒子，216 个水分子（18.6 Å）：缓冲 4、5、6、8 Å（核心 4 Å）对本征分解，T = 0；同一盒子上 M7c 的稀疏 NTPoly（P115e）</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>做法</th><th>能量（每个原子）</th><th>电荷</th><th>力</th></tr></thead>
+              <tbody>
+                <tr><td>分治 4 Å</td><td>1.2e-5</td><td>5.2e-3</td><td>8.4e-3</td></tr>
+                <tr><td>分治 5 Å</td><td>1.9e-7</td><td>1.0e-4</td><td>2.0e-4</td></tr>
+                <tr><td>分治 6 Å</td><td>2.3e-8</td><td>1.9e-5</td><td>3.2e-5</td></tr>
+                <tr><td>分治 8 Å</td><td>4.2e-12</td><td>1.3e-7</td><td>5.5e-8</td></tr>
+                <tr><td>稀疏 NTPoly 1e-6</td><td>3.5e-10</td><td>1.1e-7</td><td>8.2e-8</td></tr>
+                <tr><td>稀疏 NTPoly 1e-7</td><td>7.6e-12</td><td>2.9e-9</td><td>2.5e-9</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>SCC 轮数全部与本征分解相同（13 轮）。</li>
+              <li>与 P112 的差别来自盒子：弛豫后的氢键网络把分子耦合得更紧，缓冲区之外的影响更大；而 NTPoly 的截断误差在这个带隙更大的体系上反而更小。</li>
+            </ul></td></tr>
+          <tr><td>P116</td><td>耗时与并行：工作进程常驻子体系（第四节），每个进程 BLAS 单线程；水 1000、1728 个分子，核心 6 Å，缓冲 6 Å，SCC 加力</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子</th><th>方式</th><th>总计</th><th>分治：本征分解</th><th>分治：密度</th><th>传给工作进程</th></tr></thead>
+              <tbody>
+                <tr><td>1000</td><td>主进程，BLAS 1 线程</td><td>258 s</td><td>184 s</td><td>19 s</td><td>—</td></tr>
+                <tr><td>1000</td><td>主进程，BLAS 4 线程</td><td>163 s</td><td>111 s</td><td>9 s</td><td>—</td></tr>
+                <tr><td>1000</td><td>1 个工作进程</td><td>244 s</td><td>182 s</td><td>18 s</td><td>0.7 GiB</td></tr>
+                <tr><td>1000</td><td>2 个</td><td>156 s</td><td>100 s</td><td>12 s</td><td>1.4 GiB</td></tr>
+                <tr><td>1000</td><td>4 个</td><td>119 s</td><td>61 s</td><td>11 s</td><td>2.8 GiB</td></tr>
+                <tr><td>1000</td><td>4 个线程（P116b）</td><td>224 s</td><td>167 s</td><td>—</td><td>—</td></tr>
+                <tr><td>1728</td><td>4 个工作进程</td><td>232 s</td><td>95 s</td><td>22 s</td><td>4.9 GiB</td></tr>
+                <tr><td>1728</td><td>主进程，BLAS 4 线程</td><td>324 s</td><td>200 s</td><td>22 s</td><td>—</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>对照（M7c）：1000 个水分子本征分解 404 s（求解 336 s），稀疏路径 1e-6 为 219 s（156 s）；1728 个时 411 s（271 s），本征分解估计约 1800 s。</li>
+              <li>核心 4 Å、缓冲 6 Å（511 个子体系，平均 334 个轨道）：1000 个水分子 4 个进程 121 s，与核心 6 Å 相同，误差也相同。</li>
+              <li>传给工作进程的主要是每轮的 H 与 S 的图样数值（每个进程一份）。S 每个几何只需传一次，本机可用共享内存，这部分还能省。</li>
+              <li>1728 个水分子的 232 s 里，邻居对与 γ 的建立约 90 s、力约 25 s，分治本身 117 s：建立成了大头（P118）。</li>
+            </ul></td></tr>
+          <tr><td>P116b</td><td>同一 SCC 的五种跑法：主进程串行、2 与 4 个线程、2 与 4 个工作进程；所有 BLAS 单线程（216 个水分子）</td><td>
+            <ul>
+              <li>五种跑法的能量、电荷与力逐位相同。P116 里 “不逐位相同” 来自主进程自己的 BLAS 线程数（Ewald 的矩阵乘法），与分治无关。</li>
+              <li>图样上每个元最多来自两个子体系（它的两个原子各自所在的核心），两数相加与次序无关，所以按进程累加的结果与进程数无关。</li>
+              <li>子体系小时（平均 137 个轨道）线程反而更慢：4 个线程的本征分解 6.5 s，串行 5.4 s；4 个进程 2.4 s，快 2.2 倍。</li>
+            </ul></td></tr>
+          <tr><td>P117</td><td>MPI：草稿环境 MPICH 4.3.2 与 mpi4py 4.1.2，<code>mpiexec -n 1–3</code>，0 号进程跑 SCC</td><td>27 个水分子，1、2、3 个进程的能量、电荷与力逐位相同；能量也与 conda 环境里本机进程的结果逐位相同。</td></tr>
+          <tr><td>P118</td><td>建立阶段：邻居对、Coulomb（Ewald）的时间与峰值内存，Ewald 的参数</td><td>
+            <div class="table-wrap"><table>
+              <thead><tr><th>水分子 / 原子</th><th>邻居对</th><th>Coulomb</th><th>α / 实空间截断</th><th>实空间对 / G 矢量</th><th>对表 / γ</th><th>峰值</th></tr></thead>
+              <tbody>
+                <tr><td>216 / 648</td><td>1.9 s</td><td>1.8 s</td><td>0.148 / 35.5 Bohr</td><td>1.8M / 2800</td><td>123 / 3 MiB</td><td>0.58 GiB</td></tr>
+                <tr><td>512 / 1536</td><td>6.0 s</td><td>7.9 s</td><td>0.128 / 41.0 Bohr</td><td>6.5M / 4336</td><td>449 / 18 MiB</td><td>1.72 GiB</td></tr>
+                <tr><td>1000 / 3000</td><td>11.5 s</td><td>24.7 s</td><td>0.115 / 45.8 Bohr</td><td>17.9M / 6030</td><td>1.20 GiB / 69 MiB</td><td>4.21 GiB</td></tr>
+                <tr><td>1728 / 5184</td><td>28.1 s</td><td>60.2 s</td><td>0.105 / 50.2 Bohr</td><td>40.8M / 7880</td><td>2.74 GiB / 205 MiB</td><td>9.33 GiB</td></tr>
+              </tbody>
+            </table></div>
+            <ul>
+              <li>α 取 DFTB+ 的 √π (N/V²)<sup>1/6</sup>，实空间截断随 N<sup>1/6</sup> 增长，对数随 N<sup>1.5</sup>。对表（i、j、像、矢量、距离）一直存着供力使用，是 γ 的 14 倍；建立时的临时数组再多出约 2.4 倍。</li>
+            </ul></td></tr>
+        </tbody>
+      </table></div>
+      <p>文献：Yang 与 Lee（J. Chem. Phys. 103, 5674, 1995）的分治密度矩阵；Nishizawa、Nishimura、Kobayashi、Irle、Nakai（J. Comput. Chem. 37, 1983, 2016）的 DC-DFTB-K（这里的 K 是 K 计算机，不是 k 点），以及 Nishimura 与 Nakai 的周期 DC-DFTB（J. Comput. Chem. 2018，复制晶胞）与 DCDFTBMD（J. Comput. Chem. 40, 1538, 2019）。把子体系取成全局 H(k) 的主子矩阵是 pydftb 的做法：它在缓冲覆盖全部原子时精确，k 点也一样。</p>
+    </section>
+
+    <section id="method">
+      <h2>三、方法</h2>
+      <ul>
+        <li><strong>分区</strong>：
+          <ul>
+            <li>单位：成键的片段（共价半径判定，含周期像），每个片段整个属于一个核心、整个进出缓冲区。片段大于 <code>max_unit</code>（默认 64 个原子，例如共价晶体、金属）时退回按原子。</li>
+            <li>核心：沿三个晶格矢量把晶胞（分子是包围盒）分成边长约 <code>core</code> 的格子，片段按第一个原子归入格子。</li>
+            <li>缓冲区：到核心里任一原子的距离（含周期像）小于 <code>buffer</code> 的原子所在的片段。子体系 α 的原子集合 A<sub>α</sub> = 核心 ∪ 缓冲区。一个原子的几个像都在范围内时只算一次。</li>
+          </ul></li>
+        <li><strong>子体系的矩阵</strong>：H<sub>α</sub>(k) = H(k)[A<sub>α</sub>, A<sub>α</sub>]，S<sub>α</sub>(k) 同样，取自 M7c 图样上的全局折叠矩阵。周期像之间的耦合已在折叠里，所以 A<sub>α</sub> 等于全部原子时 H<sub>α</sub> 就是 H(k)：精确极限。</li>
+        <li><strong>分区矩阵</strong>：p<sup>α</sup><sub>ij</sub> = (c<sub>i</sub> + c<sub>j</sub>)/2，c<sub>i</sub> = 1 表示轨道 i 在 α 的核心里：核心对核心 1，核心对缓冲 ½，缓冲对缓冲 0。
+          <ul>
+            <li>P<sub>ij</sub> = Σ<sub>α</sub> p<sup>α</sup><sub>ij</sub> g Σ<sub>n</sub> f<sub>n</sub> C<sup>α</sup><sub>in</sub> C<sup>α*</sup><sub>jn</sub>，W 同样乘 ε<sub>n</sub>；只取图样上的元。</li>
+            <li>每个图样元 (i, j) 只来自 i 与 j 所在的两个核心，也就是最多两个子体系。</li>
+            <li>核心权重 w<sub>n</sub> = Σ<sub>i∈核心</sub> Re(C<sub>in</sub><sup>*</sup>(S C)<sub>in</sub>)。全局的 Mulliken 布居之和 = g Σ<sub>α,k,n</sub> w<sub>k</sub> w<sub>n</sub> f<sub>n</sub>，所以电子数按核心权重来数。</li>
+          </ul></li>
+        <li><strong>费米能级</strong>：
+          <ul>
+            <li>所有子体系、k 点（与共用 μ 时的两个自旋通道）的 (ε<sub>n</sub>, w<sub>k</sub> w<sub>n</sub>) 一起排序。</li>
+            <li>T = 0（kT ≤ 1e-8，pydftb 的约定）：从低往高累加权重。累加恰好到电子数（误差 ≤ 1e-7，DFTB+ 的 elecTolMax）时用 DFTB+ 的带隙中点规则；否则跨过电子数的那一级取余数（简并的几态按权重分），μ 就是这一级。精确极限走前者，有限缓冲一般走后者，μ 在带边，电子数精确守恒。</li>
+            <li>T &gt; 0：二分到电子数，熵 TS = g kT Σ w<sub>k</sub> w<sub>n</sub> s(f<sub>n</sub>)。</li>
+            <li>固定费米能级：直接用给定的 μ；每个 k 单独填充：每个 k 各自求 μ。</li>
+          </ul></li>
+        <li><strong>能量、力、应力</strong>：都用图样上的 P 与 W，与 M7c 的稀疏路径相同的代码（能带能量、Mulliken、SCC 与 DFTB3 的项、邻居对上的 dH、dS 系数与位力）。P 不是全局问题的变分解，所以力不是分治能量的严格导数，偏差与分治误差同量级（P115），缓冲越大越小。</li>
+        <li><strong>SCC</strong>：照常混合全局的电荷；分区在 SCC 中不变，每个几何重分一次。</li>
+      </ul>
+    </section>
+
+    <section id="parallel">
+      <h2>四、并行</h2>
+      <ul>
+        <li><strong>工作进程常驻子体系</strong>：每个几何按 m<sup>3</sup>（m 为子体系的轨道数）把子体系分给工作进程，大的先分给负担最轻的。工作进程拿到图样的结构与自己的子体系（原子集合、核心标记），自己建立子矩阵的下标。</li>
+        <li><strong>每个几何</strong>：S 的图样数值传一次。</li>
+        <li><strong>每轮 SCC 两次交换</strong>：
+          <ol>
+            <li>H 的图样数值传给工作进程；工作进程对自己的子体系做本征分解，留下 C，传回 (ε, w)。</li>
+            <li>主进程按子体系的固定次序拼起所有 (ε, w)，求 μ，传给工作进程；工作进程算出 P、W 的贡献，各自累加成 (通道数, nnz) 的数组传回，主进程按进程的固定次序相加。</li>
+          </ol></li>
+        <li><strong>逐位相同</strong>：每个图样元最多两个非零的贡献，加零与两数相加的次序无关，所以结果与进程数、子体系的分配都无关；μ 与熵按子体系的固定次序求。前提是所有子体系的本征分解用同样的 BLAS 线程数：工作进程与主进程内的串行模式都用单线程。主进程自己的计算（Ewald 等）照用原来的线程数。</li>
+        <li><strong>本机</strong>：<code>processes=n</code> 用 <code>multiprocessing</code> 的 fork 启动 n 个工作进程，经管道通信；每个几何重新启动。不用线程：SciPy 的广义本征求解不释放 GIL（P116b）。不支持 fork 的平台退回主进程串行。</li>
+        <li><strong>多机</strong>：<code>processes="mpi"</code>，用 mpi4py：0 号进程跑 pydftb，其余进程在 <code>pydftb.subsystems.serve()</code> 里等命令；数值数组用 <code>Bcast</code> 与 <code>Reduce</code>（缓冲区接口，不经 pickle），(ε, w) 用 <code>gather</code>。启动方式见第六节。</li>
+        <li><strong>内存</strong>：主进程是 O(nnz) 的图样数组与 γ；工作进程是自己子体系的 C（Σ m<sup>2</sup>）。1728 个水分子、核心与缓冲 6 Å 时所有子体系的 C 共约 0.7 GB。</li>
+      </ul>
+    </section>
+
+    <section id="calc">
+      <h2>五、计算器的接入</h2>
+      <ul>
+        <li><code>_setup</code>：求解器有 <code>subsystems = True</code> 时与 M7c 一样建图样（<code>sparse = True</code>），再调用 <code>solver.set_geometry(species, pos, cell, pbc, basis, pattern)</code>：分区、子体系的下标，多进程时启动或通知工作进程。</li>
+        <li><code>_check_subsystems</code>：M7c 的拒绝，加上非 Fermi 的展宽。</li>
+        <li><code>_solve_density</code> 分派到 <code>_solve_subsystems</code>：无自旋、两个自旋通道各自的 μ、<code>relax_total_spin</code> 的共用 μ、固定费米能级、每个 k 单独填充，返回图样上的 P、W，μ 与 TS（同 M7b 的 <code>_solve_fermi_operator</code> 的结构）。</li>
+        <li>其余（布居、能量、力、应力）是 M7c 的稀疏分支，不改。</li>
+        <li><code>solvers.SOLVERS["subsystems"] = Subsystems</code>；<code>solver="subsystems"</code> 用默认参数。</li>
+        <li>ASE：<code>PyDFTB(solver=Subsystems(...))</code> 的求解器对象在各步之间共用，每一步重分区。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>六、pydftb 的接口</h2>
+      <pre><code>from pydftb.subsystems import Subsystems
+DFTB(sk, solver=Subsystems())                              # 核心 6 Å，缓冲 6 Å，按成键片段
+DFTB(sk, solver=Subsystems(buffer=8.0, processes=4))       # 4 个本机工作进程
+DFTB(sk, solver=Subsystems(processes="mpi"))               # 多机：mpiexec -n 64 python -m pydftb.subsystems run.py
+DFTB(sk, solver=Subsystems(buffer=float("inf")))           # 精确极限：等于本征分解（检查用）</code></pre>
+      <ul>
+        <li><code>buffer</code>、<code>core</code>：Å，默认都是 6.0。真实的水 6 Å 时电荷误差约 2e-5 e、力约 3e-5 Ha/Bohr，MD 的能量守恒与本征分解相同；8 Å 时与 M7c 截断 1e-6 的稀疏路径相当（第二节 P115d）。</li>
+        <li><code>units</code>：<code>"auto"</code>（默认：成键片段，片段大于 <code>max_unit</code> 时按原子）、<code>"fragments"</code> 或 <code>"atoms"</code>。</li>
+        <li><code>processes</code>：None（默认，主进程串行，BLAS 单线程）、整数（本机工作进程数）或 <code>"mpi"</code>。</li>
+        <li>MPI 的两种启动：
+          <ul>
+            <li><code>mpiexec -n N python -m pydftb.subsystems script.py</code>：0 号进程运行 <code>script.py</code>，其余进程服务；脚本不用改。</li>
+            <li>脚本开头 <code>if pydftb.subsystems.serve(): sys.exit()</code>：非 0 号进程在这里服务，结束后返回 True。</li>
+          </ul></li>
+        <li>结果：没有本征值与占据数，<code>fermi</code> 是 μ（有限缓冲时在带边）；<code>solver.last_count_error</code>、子体系的个数与大小、各段耗时。</li>
+        <li>可选依赖：<code>pydftb[mpi]</code> 装 mpi4py；没有它时 <code>processes="mpi"</code> 报错并说明。必需的依赖不变（NumPy、SciPy、ASE、threadpoolctl）。</li>
+        <li>建议：缓冲区小于 6 Å 时给一个电子温度（如 300 K），否则 SCC 可能不收敛（第二节 P114）。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>七、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>subsystems.py</code>（新）</td><td>
+            <ul>
+              <li><code>Subsystems</code>：参数、<code>set_geometry</code>、<code>prepare</code>、<code>density</code>，属性 <code>sparse</code>、<code>subsystems</code>、<code>eigenpairs = False</code>；</li>
+              <li>分区：成键片段（<code>neighbor_list</code> 与共价半径）、格子的核心、缓冲区（含周期像的邻居表），子体系在图样上的下标与分区系数；</li>
+              <li>费米能级：带核心权重的 T = 0 填充（带隙中点规则或余数）、T &gt; 0 的二分、熵、固定 μ、每个 k 单独；</li>
+              <li>执行：主进程串行、本机工作进程（fork、管道）、MPI（mpi4py，<code>serve</code> 与 <code>python -m pydftb.subsystems</code>）；同一组函数做子体系的本征分解与密度贡献。</li>
+            </ul></td></tr>
+          <tr><td><code>calculator.py</code></td><td><code>_setup</code> 的几何接口，<code>_check_subsystems</code>，<code>_solve_subsystems</code>，<code>_density_solver</code> 的名字。M7c 的稀疏分支照用。</td></tr>
+          <tr><td><code>solvers.py</code></td><td><code>SOLVERS["subsystems"]</code>。</td></tr>
+          <tr><td>validation</td><td><code>refgen --check --solver subsystems</code>：精确极限（<code>buffer=inf</code>，默认核心，即多个子体系、每个都是整个体系），适用的算例全部过原来的容差，SCC 轮数相同；不适用的打印原因跳过。</td></tr>
+          <tr><td><code>pyproject.toml</code></td><td>可选依赖 <code>mpi = ["mpi4py"]</code>。</td></tr>
+          <tr><td><code>tests/test_subsystems.py</code>（新）</td><td>见第八节。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="validation">
+      <h2>八、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li><strong>精确极限</strong>：分子、Γ 点、k 点、两种共线自旋、T &gt; 0、DFTB3、色散、外场、点电荷、固定费米能级：能量、电荷、力、应力到舍入（≤ 1e-11）等于本征分解，费米能级与 SCC 轮数相同。refgen 的全部适用算例。</li>
+        <li><strong>有限缓冲</strong>：水盒子的误差界（与 P112 一致）；按片段的分区保持分子完整；周期像与斜晶胞的缓冲区。</li>
+        <li><strong>逐位相同</strong>：主进程串行与 1、2 个本机工作进程；MPI（装了 mpi4py 与 mpiexec 时，用子进程跑 <code>mpiexec -n 2</code>，否则跳过）。</li>
+        <li><strong>拒绝</strong>的原文；ASE 的 MD 冒烟测试。</li>
+        <li><strong>大体系</strong>（报告）：水 1000–1728 个分子的耗时与 1、2、4 个进程的加速，对本征分解与 M7c 的稀疏路径。</li>
+        <li><strong>门槛</strong>：golden 两个环境逐位相同（新的 <code>_Setup</code> 字段要加 <code>--allow-new</code>），refgen（NumPy、torch、sparse、foe、subsystems），dynamics，pytest 三个环境（可选库缺失时跳过），PTBP 测试与 G1。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>九、风险与之后</h2>
+      <ul>
+        <li><strong>金属</strong>：几个 Å 的缓冲远远不够（P113：Cu 到 5 Å 时每个原子的能量差仍有 4e-4–7e-4 Ha），分治只用于有带隙的体系；文档写明。</li>
+        <li><strong>同等精度下的速度</strong>：真实的水要 8 Å 才到稀疏路径 1e-6 的精度，单机 4 核上分治估计更慢（第二节），报告里实测。分治的定位是多机与 MD 级的精度，不是取代稀疏路径。</li>
+        <li><strong>小缓冲区与 T = 0</strong>：带隙里的边界态会让 SCC 不收敛；默认 6 Å，文档建议小缓冲区配电子温度。</li>
+        <li><strong>力的一致性</strong>：力不是分治能量的严格导数，MD 的能量守恒取决于缓冲区（P115c）。分区在步与步之间变化时能量有小的跳跃。</li>
+        <li><strong>传输量</strong>：本机每轮把 H 传给每个工作进程。几千个水分子以内不是瓶颈；需要时改共享内存。</li>
+        <li><strong>建立阶段</strong>：Ewald 的实空间对表在 N<sup>1.5</sup> 增长，几千个水分子以上放不下（P118）。紧接 M7d 的一块：实空间部分分块计算、不存对表（力也分块），γ 之外的内存降到 O(N)；小体系保留原来的代码，golden 逐位不变。再往上要不建 γ 的电势（每轮用结构因子），之后再做。</li>
+        <li><strong>之后</strong>：大体系的 Coulomb（上一条）；M7e GPU 自检与跨结构批量。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7c-sparse-linear-scaling.html">← M7c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>
