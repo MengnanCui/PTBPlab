@@ -304,12 +304,19 @@ class _Serial:
         self.s_data = None
 
 
-def _worker_main(conn, subs):
+def _worker_main(conn, subs, inherited=()):
+    # the master's ends of the pipes, copied at the fork: closed, so that a master that dies
+    # without stopping its workers (killed, out of memory) ends their recv() with EOFError
+    for c in inherited:
+        c.close()
     from threadpoolctl import threadpool_limits
     with threadpool_limits(1, user_api="blas"):
         local = _Serial(subs)
         while True:
-            msg = conn.recv()
+            try:
+                msg = conn.recv()
+            except EOFError:
+                break
             if msg[0] == "stop":
                 break
             if msg[0] == "overlap":
@@ -330,7 +337,8 @@ class _Workers:
         self.procs = []
         for subs in groups:
             a, b = ctx.Pipe()
-            p = ctx.Process(target=_worker_main, args=(b, subs), daemon=True)
+            inherited = [a] + [c for _, c in self.procs]
+            p = ctx.Process(target=_worker_main, args=(b, subs, inherited), daemon=True)
             p.start()
             b.close()
             self.procs.append((p, a))

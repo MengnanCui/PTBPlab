@@ -13,6 +13,12 @@ positions (neighbour search, 1/R and Ewald terms) is done per *atom* and then
 broadcast to the sites; only S depends on the site's Hubbard U.  Each pair of
 U values gets its own short-range cut-off, so a soft shell (small U, slowly
 decaying S) does not inflate the work for all other shell pairs.
+
+Large periodic systems (milestone M7d2): when the atom pairs within the cut-offs would exceed
+``PAIR_TABLE_LIMIT``, no pair table is kept (as DFTB+'s dynamic neighbour list does not keep
+one).  gamma and the gradient go over blocks of central atoms, each block's pairs computed when
+needed (the same pairs, in the same order, as the slice of the table), and the reciprocal sums
+over blocks of G vectors.  Below the limit the code and the results are the same as before.
 """
 from __future__ import annotations
 
@@ -22,9 +28,17 @@ from scipy.special import erfc
 from .backend import ops
 from .constants import MIN_HUB_DIFF, MIN_SHORT_GAMMA, TOL_SHORT_GAMMA
 from .corrections import h5_scale
-from .neighbors import neighbor_list
+from .neighbors import neighbor_list, pair_blocks
 
 EWALD_TOL = 1e-12
+# M7d2: periodic systems with more estimated atom pairs within max(short, Ewald) cut-off than
+# PAIR_TABLE_LIMIT keep no pair table (its set-up peaks at ~240 B per pair); blocks of central
+# atoms of about BLOCK_PAIRS pairs, reciprocal sums in blocks of G_CHUNK vectors and ROW_BLOCK
+# rows of gamma
+PAIR_TABLE_LIMIT = 6_000_000
+BLOCK_PAIRS = 2 ** 19
+G_CHUNK = 1024
+ROW_BLOCK = 1024
 # DFTB+ treats U_a, U_b as equal if |U_a - U_b| < MIN_HUB_DIFF; in tau = 3.2 U:
 SAME_TAU = 3.2 * MIN_HUB_DIFF
 # The closed form of S for tau_a != tau_b carries 1/(tau_a^2 - tau_b^2)^n terms that
@@ -199,14 +213,27 @@ class Coulomb:
         else:
             self.rcut_ewald = 0.0
         rc = max(self.rcut_short, self.rcut_ewald)
-        self.nl = neighbor_list(self.pos, self.cell, self.pbc, rc)      # atom pairs
-        self._site_pairs()
+        self._step = None                     # central atoms per block (M7d2): no pair table
+        if self.periodic:
+            pairs = self.natom * self.natom / self.vol * (4.0 / 3.0) * np.pi * rc ** 3
+            if pairs > PAIR_TABLE_LIMIT:
+                self._rc = rc
+                self._step = max(1, int(BLOCK_PAIRS * self.natom / pairs))
+        if self._step is None:
+            self.nl = neighbor_list(self.pos, self.cell, self.pbc, rc)      # atom pairs
+            self._site_pairs()
+        else:
+            self.nl = self.sp_pair = self.sp_a = self.sp_b = self.sp_d = None
         self.gamma = self._matrix()
 
     # ------------------------------------------------------------------
     def _site_pairs(self):
         """Expand atom pairs (i, j, T) to site pairs (a on i, b on j) within their cut-off."""
         i, j, _, _, d = self.nl
+        self.sp_pair, self.sp_a, self.sp_b, self.sp_d = self._site_pairs_of(i, j, d)
+
+    def _site_pairs_of(self, i, j, d):
+        """(atom-pair index, site a, site b, distance) of the site pairs of atom pairs i, j."""
         sa = self.atom_sites[i][:, :, None]              # (np, ms, 1)
         sb = self.atom_sites[j][:, None, :]              # (np, 1, ms)
         valid = (sa >= 0) & (sb >= 0)
@@ -215,38 +242,47 @@ class Coulomb:
         kb = np.where(sb >= 0, ia[np.maximum(sb, 0)], 0)
         within = valid & (d[:, None, None] < self._cut[ka, kb])
         p, x, y = np.nonzero(within)
-        self.sp_pair = p                                   # atom-pair index of each site pair
-        self.sp_a = self.atom_sites[i[p], x]
-        self.sp_b = self.atom_sites[j[p], y]
-        self.sp_d = d[p]
+        return p, self.atom_sites[i[p], x], self.atom_sites[j[p], y], d[p]
 
     def _sp_short(self):
         """S and dS/dr of every site pair, damped where an H-X pair asks for it."""
-        s, ds = _short(self.sp_d, self.tau[self.sp_a], self.tau[self.sp_b])
+        return self._short_of(self.nl[0], self.nl[1], self.sp_pair, self.sp_a, self.sp_b,
+                              self.sp_d)
+
+    def _short_of(self, i, j, sp_pair, sp_a, sp_b, sp_d):
+        """S and dS/dr of the site pairs (sp_pair indexes the atom pairs i, j)."""
+        s, ds = _short(sp_d, self.tau[sp_a], self.tau[sp_b])
         if self.damped.any():
-            i, j = self.nl[0], self.nl[1]
-            m = (self.damped[i] | self.damped[j])[self.sp_pair]
-            u = (self.tau[self.sp_a[m]] + self.tau[self.sp_b[m]]) / 6.4     # (U_a + U_b) / 2
-            r = self.sp_d[m]
+            m = (self.damped[i] | self.damped[j])[sp_pair]
+            u = (self.tau[sp_a[m]] + self.tau[sp_b[m]]) / 6.4     # (U_a + U_b) / 2
+            r = sp_d[m]
             h = np.exp(-u ** self.damp_exp * r * r)
             ds[m] = ds[m] * h - 2.0 * r * u ** self.damp_exp * s[m] * h
             s[m] = s[m] * h
         if self.h5 is not None:                     # DFTB+'s H5 (not with damping; M6f-3)
             is_h, k, radius, r_scaling, w_scaling = self.h5
-            i, j = self.nl[0], self.nl[1]
-            kp = np.where(is_h[i] != is_h[j], k[np.where(is_h[i], j, i)], -1.0)[self.sp_pair]
+            kp = np.where(is_h[i] != is_h[j], k[np.where(is_h[i], j, i)], -1.0)[sp_pair]
             m = kp > 0.0
             if m.any():
-                p = self.sp_pair[m]
-                s[m], ds[m] = h5_scale(s[m], ds[m], self.sp_d[m], kp[m],
+                p = sp_pair[m]
+                s[m], ds[m] = h5_scale(s[m], ds[m], sp_d[m], kp[m],
                                        radius[i[p]] + radius[j[p]], r_scaling, w_scaling)
         return s, ds
+
+    def _blocks(self):
+        """(i, j, vec, d, site pairs) of the atom pairs block by block of central atoms, computed
+        when needed (M7d2; only without the pair table)."""
+        for _, _, i, j, _, vec, d in pair_blocks(self.pos, self.cell, self.pbc, self._rc,
+                                                 self._step):
+            yield i, j, vec, d, self._site_pairs_of(i, j, d)
 
     def _expand(self, mat_atoms):
         """Atom-level (n_atom, n_atom) matrix -> site-level."""
         return mat_atoms[np.ix_(self.site_atom, self.site_atom)]
 
     def _matrix(self):
+        if self._step is not None:
+            return self._matrix_blocks()
         same_atom = self.site_atom[:, None] == self.site_atom[None, :]
         g = np.where(same_atom, _gamma0(self.tau[:, None], self.tau[None, :]), 0.0)
         s, _ = self._sp_short()
@@ -272,6 +308,43 @@ class Coulomb:
         atom_mat[np.diag_indices(self.natom)] -= 2.0 * a / np.sqrt(np.pi)
         return g + self._expand(atom_mat)
 
+    def _matrix_blocks(self):
+        """:meth:`_matrix` without the pair table (M7d2), accumulated in place: gamma itself
+        holds the Ewald terms when every atom has one site, otherwise an atom matrix is expanded
+        row block by row block.  Equal to :meth:`_matrix` to rounding."""
+        n, a = self.natom, self.alpha
+        sites = self.atom_sites
+        pa = np.repeat(sites, sites.shape[1], axis=1).ravel()
+        pb = np.tile(sites, (1, sites.shape[1])).ravel()
+        ok = (pa >= 0) & (pb >= 0)
+        pa, pb = pa[ok], pb[ok]
+        g = np.zeros((self.nsite, self.nsite))
+        g[pa, pb] = _gamma0(self.tau[pa], self.tau[pb])          # sites on one atom
+        one_site = self.nsite == n and np.array_equal(self.site_atom, np.arange(n))
+        atom_mat = g if one_site else np.zeros((n, n))
+        for i, j, _, d, sp in self._blocks():
+            s, _ = self._short_of(i, j, *sp)
+            np.add.at(g, (sp[1], sp[2]), -s)
+            m = d < self.rcut_ewald
+            np.add.at(atom_mat, (i[m], j[m]), erfc(a * d[m]) / d[m])
+        for b in range(0, len(self.gvec), G_CHUNK):
+            phase = self.pos @ self.gvec[b:b + G_CHUNK].T
+            cg, sg = np.cos(phase), np.sin(phase)
+            del phase
+            fac = self.gfac[b:b + G_CHUNK]
+            cgf, sgf = cg * fac, sg * fac
+            for r in range(0, n, ROW_BLOCK):
+                atom_mat[r:r + ROW_BLOCK] += cgf[r:r + ROW_BLOCK] @ cg.T
+                atom_mat[r:r + ROW_BLOCK] += sgf[r:r + ROW_BLOCK] @ sg.T
+            del cg, sg, cgf, sgf
+        atom_mat -= np.pi / (self.vol * a * a)
+        atom_mat[np.diag_indices(n)] -= 2.0 * a / np.sqrt(np.pi)
+        if not one_site:
+            sa = self.site_atom
+            for r in range(0, self.nsite, ROW_BLOCK):
+                g[r:r + ROW_BLOCK] += atom_mat[sa[r:r + ROW_BLOCK]][:, sa]
+        return g
+
     def energy_shift(self, dq):
         v = self.gamma @ dq
         return 0.5 * dq @ v, v
@@ -292,7 +365,6 @@ class Coulomb:
         """
         if virial and not self.periodic:
             raise ValueError("the virial/stress needs a periodic system")
-        i, j, _, vec, d = self.nl
         dq_atom = ops.segment_sum(dq, self.site_atom, self.natom)
         if other is None:
             def prod(x1, y1, x2, y2):
@@ -303,6 +375,9 @@ class Coulomb:
                 return 0.5 * (x1 * y2 + y1 * x2)
             o = np.asarray(other, float)
             o_atom = ops.segment_sum(o, self.site_atom, self.natom)
+        if self._step is not None:
+            return self._gradient_blocks(dq, o, dq_atom, o_atom, prod, virial, other is not None)
+        i, j, _, vec, d = self.nl
         # short range: aggregate site pairs into dE/d(distance) per atom pair
         _, ds = self._sp_short()
         dedr = ops.segment_sum(-prod(dq[self.sp_a], o[self.sp_a], dq[self.sp_b], o[self.sp_b]) * ds,
@@ -350,3 +425,52 @@ class Coulomb:
             grad -= ((qq * fac)[:, :, None] * diff).sum(1)
         g = (dedr / d)[:, None] * vec
         return ops.scatter_add(grad, i, -g), w
+
+    def _gradient_blocks(self, dq, o, dq_atom, o_atom, prod, virial, bilinear):
+        """:meth:`gradient` without the pair table (M7d2): the reciprocal part in blocks of G
+        vectors, then the pair terms block by block of central atoms (each block's pairs
+        recomputed); the forces equal :meth:`gradient`'s to rounding, the virial's pair sum is
+        summed block by block."""
+        a, n, ng = self.alpha, self.natom, len(self.gvec)
+        sc, ss = np.empty(ng), np.empty(ng)
+        sco, sso = (np.empty(ng), np.empty(ng)) if bilinear else (sc, ss)
+        grad = np.zeros((n, 3))
+        for b in range(0, ng, G_CHUNK):
+            gvec, gfac = self.gvec[b:b + G_CHUNK], self.gfac[b:b + G_CHUNK]
+            phase = self.pos @ gvec.T
+            cg, sg = np.cos(phase), np.sin(phase)
+            del phase
+            c1, s1 = cg.T @ dq_atom, sg.T @ dq_atom
+            sc[b:b + G_CHUNK], ss[b:b + G_CHUNK] = c1, s1
+            coef = dq_atom[:, None] * (-sg * c1[None, :] + cg * s1[None, :]) * gfac[None, :]
+            if bilinear:
+                c2, s2 = cg.T @ o_atom, sg.T @ o_atom
+                sco[b:b + G_CHUNK], sso[b:b + G_CHUNK] = c2, s2
+                coef = 0.5 * (dq_atom[:, None] * (-sg * c2[None, :] + cg * s2[None, :]) * gfac[None, :]
+                              + o_atom[:, None] * (-sg * c1[None, :] + cg * s1[None, :])
+                              * gfac[None, :])
+            grad += coef @ gvec
+            del cg, sg, coef
+        w = None
+        for i, j, vec, d, sp in self._blocks():
+            sp_pair, sp_a, sp_b, _ = sp
+            _, ds = self._short_of(i, j, *sp)
+            dedr = ops.segment_sum(-prod(dq[sp_a], o[sp_a], dq[sp_b], o[sp_b]) * ds, sp_pair,
+                                   len(i))
+            m = d < self.rcut_ewald
+            dg = -erfc(a * d[m]) / d[m] ** 2 - 2 * a / np.sqrt(np.pi) * np.exp(-(a * d[m]) ** 2) / d[m]
+            dedr[m] += prod(dq_atom[i[m]], o_atom[i[m]], dq_atom[j[m]], o_atom[j[m]]) * dg
+            if virial:
+                wb = 0.5 * np.einsum("p,pa,pb->ab", dedr / d, vec, vec)
+                w = wb if w is None else w + wb
+            np.add.at(grad, i, -(dedr / d)[:, None] * vec)
+        if virial:
+            c = 0.5 * self.gfac * (sc * sco + ss * sso)
+            g2 = (self.gvec * self.gvec).sum(1)
+            w = np.zeros((3, 3)) if w is None else w
+            w -= c.sum() * np.eye(3)
+            w += 2.0 * np.einsum("g,ga,gb->ab", c * (1.0 / (4 * a * a) + 1.0 / g2), self.gvec, self.gvec)
+            q = dq_atom.sum()
+            qo = o_atom.sum() if bilinear else q
+            w += np.pi * q * qo / (2.0 * self.vol * a * a) * np.eye(3)
+        return grad, w

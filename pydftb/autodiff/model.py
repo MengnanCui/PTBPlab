@@ -13,7 +13,7 @@ import math
 import numpy as np
 import torch
 
-from ..coulomb import _gamma0, _short
+from ..coulomb import PAIR_TABLE_LIMIT, _gamma0, _short
 from ..hamiltonian import pair_values
 from ..thirdorder import dgamma_du, dgamma_du_onsite
 
@@ -107,6 +107,11 @@ def _damping(coul, i, j, sp_pair, sp_a, sp_b, tau, d_sp):
 
 def gamma_matrix(coul, pos, cell, tau):
     """The site gamma matrix of :class:`pydftb.coulomb.Coulomb` (same topology)."""
+    if coul.nl is None:
+        raise NotImplementedError(
+            "autodiff needs the Coulomb pair table, which large periodic systems do not keep "
+            f"(more than coulomb.PAIR_TABLE_LIMIT = {PAIR_TABLE_LIMIT} atom pairs within the "
+            "cut-offs; milestone M7d2)")
     sa = coul.site_atom
     same_atom = torch.as_tensor(sa[:, None] == sa[None, :], device=pos.device)
     g = torch.where(same_atom, _gamma0(tau[:, None], tau[None, :]),

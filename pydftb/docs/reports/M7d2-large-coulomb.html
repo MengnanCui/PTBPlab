@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7d2 大体系的 Coulomb 报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M7d2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7d2 · 完成报告</p>
+    <h1>大体系（五）：分块的 Coulomb</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-01</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M7d2-large-coulomb.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">周期体系的 Coulomb（Ewald）在大体系上不再存原子对表。估计的实空间原子对超过 600 万（约 500 个水分子）时，<code>Coulomb</code> 按中心原子分块：每块现算自己的原子对（新的 <code>neighbors.pair_blocks</code>），把 γ、力与位力的贡献加上去就丢掉；倒空间的和按 G 分块，γ 原地累加。DFTB+ 也是这样做的（它的 <code>TDynNeighList</code> 不存对表）。小体系照原来的代码走，逐位不变；分块的结果对原路径到舍入。没有新的用户选项。顺带修了 M7d 的一个问题：主进程被杀之后，工作进程不会自己退出。</p>
+    <ul>
+      <li><strong>精度</strong>：强制分块对原路径，6 个冻结的周期算例（Γ 点与 k 点、f 壳层、DFTB3、H 阻尼、H5、点电荷）加上 CuO 链上的两个壳层分辨变体（一个带 DFTB3），SCC 轮数全部相同，能量差 ≤ 3.6e-14 Ha，电荷 ≤ 7.6e-14 e，力 ≤ 1.7e-14 Ha/Bohr，应力 ≤ 3.0e-17（P128）。实空间部分逐位相同，块的大小不改变任何一位。1728 个水分子的 SCC 加力对原来的 Coulomb：能量差 9.1e-13 Ha，电荷 2.5e-12 e，力 2.8e-13 Ha/Bohr。</li>
+      <li><strong>内存与时间</strong>（1728 个水分子，SCC 加力，<code>Subsystems(processes=4)</code>）：主进程峰值从 9.74 GiB 降到 2.06 GiB，建立 Coulomb 从 60 s 降到 23 s，全程从 216 s 降到 172 s。</li>
+      <li><strong>阈值附近</strong>（只算 Coulomb，建立加一次带位力的力，P126c）：216 个水分子时原路径快（1.4 s 对 1.9 s），343 个时相当（3.6 s 对 3.8 s），512 个时分块快 11%（6.5 s 对 7.2 s），1000 个时快 33%（18.0 s 对 26.7 s）。分块的峰值一直是 0.14–0.20 GiB，原路径是 0.33、0.65、1.18、3.22 GiB。阈值 600 万对落在 512 个水分子附近。</li>
+      <li><strong>更大的体系</strong>：4913 个水分子（14739 个原子）用 M7c 的稀疏路径 SCC 加力 1281 s，主进程峰值 5.73 GiB，在这台机器给作业的 13.36 GiB 之内；原来的代码单是对表就要约 13 GiB，建立时约 45 GiB。4096 个水分子用分治、4 个进程 558 s，整台机器 12.6 GiB。</li>
+      <li><strong>还放不下的</strong>：4913 个水分子用分治（4 个进程）仍超出 13.36 GiB，原因在 M7d：子体系在图样上的索引（1.99 GiB）经 fork 在每个工作进程里留着整份（共用的页），工作进程还各有本征矢与图样数组的副本（第五节）。γ 本身（N²，4913 个水分子 1.62 GiB）与 SK 原子对的整张邻居表（建立时临时多出 3.86 GiB）也还在。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">9.74 → 2.06</span><span class="lbl">1728 个水分子主进程的峰值（GiB）</span></li>
+      <li><span class="num">≤ 3.6e-14</span><span class="lbl">分块对原路径的能量差（Ha，8 个周期算例）</span></li>
+      <li><span class="num">1281 s</span><span class="lbl">4913 个水分子（14739 个原子）SCC 加力，稀疏路径，峰值 5.73 GiB</span></li>
+      <li><span class="num">0</span><span class="lbl">旧计算路径改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#accuracy">三、对原路径的精度</a></li>
+      <li><a href="#speed">四、速度与内存</a></li>
+      <li><a href="#large">五、五千个水分子</a></li>
+      <li><a href="#tests">六、测试与门槛</a></li>
+      <li><a href="#deviations">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>neighbors.py</code></td><td><code>neighbor_list</code> 拆成 <code>_image_tree</code>（像的范围与全部像的 k-d 树）与 <code>_central_pairs</code>（一段中心原子的稀疏距离查询、<code>pair_vectors</code>、去掉零距离、按 (i, j, 像) 排序），只是搬代码，结果逐位不变。新的 <code>pair_blocks(pos, cell, pbc, cutoff, step)</code> 每次给出一段中心原子 [lo, hi) 的 (lo, hi, i, j, 像, 矢量, 距离)，像的 k-d 树只建一次；拼起来就是 <code>neighbor_list</code>。</td></tr>
+            <tr><td><code>coulomb.py</code></td><td>
+              <ul>
+                <li>模块常数 <code>PAIR_TABLE_LIMIT = 6_000_000</code>、<code>BLOCK_PAIRS = 2**19</code>、<code>G_CHUNK = 1024</code>、<code>ROW_BLOCK = 1024</code>。</li>
+                <li><code>__init__</code>：周期体系用 N²·(4/3)π·r<sub>c</sub><sup>3</sup>/V 估计实空间的原子对（r<sub>c</sub> 是短程与 Ewald 截断的较大者），超过阈值时记下 <code>_step</code>（每块的中心原子数，使每块约 <code>BLOCK_PAIRS</code> 对），<code>nl</code> 与 <code>sp_*</code> 设为 None；否则照旧。</li>
+                <li>位点展开与 S（含 H 阻尼与 H5）改为对给定数组的函数 <code>_site_pairs_of</code>、<code>_short_of</code>，原来的 <code>_site_pairs</code>、<code>_sp_short</code> 包一层，逐位不变；<code>_blocks()</code> 逐块给出原子对与它们的位点对。</li>
+                <li><code>_matrix_blocks()</code>：同一原子的 γ<sub>0</sub> 只放在同一原子的元上；每块 <code>np.add.at</code> 加上 −S 与 erfc(αd)/d；倒空间每 <code>G_CHUNK</code> 个 G、每 <code>ROW_BLOCK</code> 行一次 GEMM，原地加；每个原子一个位点时 Ewald 部分直接加进 γ，只有一个 N × N 数组，壳层分辨时先加进原子级的矩阵，再按行块展开到位点。</li>
+                <li><code>_gradient_blocks()</code>：倒空间按 G 分块，<code>grad = zeros; grad += …</code> 的次序照旧；再逐块算 dedr（短程与 Ewald 在同一个数组里）并 <code>np.add.at(grad, i, …)</code>；位力的对的部分从第一块起累加（不从零开始，对称晶胞里不翻出 −0.0），最后加 G 的各项。</li>
+              </ul></td></tr>
+            <tr><td><code>thirdorder.py</code></td><td><code>c.nl</code> 为 None 时，按 min(r<sub>c</sub>, 表中最大的截断) 逐块取对，按原来的条件过滤再拼起来，存为自己的 <code>nl</code>（与过滤整表的结果逐位相同）。</td></tr>
+            <tr><td><code>autodiff/model.py</code></td><td><code>gamma_matrix</code> 遇到分块的 Coulomb 时抛出 <code>NotImplementedError</code>，说明对数超过了 <code>coulomb.PAIR_TABLE_LIMIT</code>。</td></tr>
+            <tr><td><code>perfmodel.py</code></td><td>pydftb 的内存估计里，周期体系的 Coulomb 原子对与位点对两项在阈值处封顶（分子总存表，不封顶；PTBP 用它安排进程）。</td></tr>
+            <tr><td><code>subsystems.py</code></td><td>fork 出来的工作进程先关掉继承来的主进程那一端的管道，<code>recv()</code> 遇到 EOFError 就退出。以前主进程被杀（P124 里 4913 个水分子超出内存）之后，工作进程收不到 EOF，一直留着。</td></tr>
+            <tr><td>测试</td><td>新文件 <code>tests/test_coulomb_chunks.py</code>（21 项，第六节）；<code>tests/test_subsystems.py</code> 多一项（工作进程随主进程退出）。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+      <ul>
+        <li><strong>不用做什么</strong>：周期体系的实空间原子对估计超过 600 万时自动分块，结果与原路径到舍入相同（第三节）。分子与小晶胞照原来的代码走。</li>
+        <li><strong>模块常数</strong>（写法同 <code>hybrid.IMAGE_CHUNK</code>）：<code>pydftb.coulomb.PAIR_TABLE_LIMIT</code>、<code>BLOCK_PAIRS</code>、<code>G_CHUNK</code>、<code>ROW_BLOCK</code>。测试用 monkeypatch 把阈值设为 0、把块设小来强制分块；设为 <code>float("inf")</code> 就总存表。</li>
+        <li><strong>分块时</strong>：<code>Coulomb.nl</code> 与 <code>sp_pair</code>、<code>sp_a</code>、<code>sp_b</code>、<code>sp_d</code> 是 None，不会给出一张不完整的表；γ、<code>gradient</code>（力、位力、双线性的 <code>other</code>）照常。</li>
+        <li><strong>能用的</strong>：Coulomb 与求解器无关，所有求解器都能用（测过本征分解、分治与稀疏路径）；Γ 点与 k 点、DFTB3（ThirdOrder 自己逐块取对）、H 阻尼、H5、壳层分辨、点电荷、应力、ASE 的 MD（都在第三节的核对里）；torch 后端的前向计算也照常，它的 γ 与力本来就由 NumPy 的 Coulomb 算。</li>
+        <li><strong>报错的</strong>：autodiff（<code>pydftb.autodiff</code>，PTBP 的梯度）要整个 Ewald 范围的对表，遇到分块的 Coulomb 抛出 <code>NotImplementedError</code>；600 万对以下照旧。</li>
+      </ul>
+    </section>
+
+    <section id="accuracy">
+      <h2>三、对原路径的精度</h2>
+      <p>同一个算例跑两遍：原路径，以及强制分块（<code>PAIR_TABLE_LIMIT = 0</code>）。“小块”是测试用的设置（每块 2<sup>11</sup> 对、每块 64 个 G、GEMM 每块 5 行，每块 1–3 个中心原子），“默认块”是 <code>coulomb.py</code> 的常数（这些小晶胞是一块，倒空间仍按 G 分块）。表中是最大差（P128，Ha、e、Ha/Bohr；应力是原子单位）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>算例</th><th>内容</th><th>SCC 轮数</th><th>能量（小块 / 默认块）</th><th>电荷</th><th>力</th><th>应力</th></tr></thead>
+        <tbody>
+          <tr><td>water_box_gamma</td><td>Γ 点，24 个原子</td><td>相同（19）</td><td>3.6e-14 / 1.1e-14</td><td>2.6e-14 / 3.6e-14</td><td>6.8e-15 / 7.2e-15</td><td>1.3e-17 / 5.2e-18</td></tr>
+          <tr><td>cuo_chain_k422</td><td>k 点</td><td>相同（16）</td><td>3.6e-15 / 1.8e-15</td><td>2.0e-14 / 1.8e-14</td><td>2.5e-15 / 1.6e-15</td><td>7.6e-18 / 2.2e-18</td></tr>
+          <tr><td>gdo_rocksalt_k444</td><td>k 点，f 壳层</td><td>相同（7）</td><td>6.2e-15 / 8.9e-16</td><td>1.2e-14 / 1.3e-14</td><td>3.5e-17 / 8.7e-17</td><td>7.6e-18 / 1.6e-17</td></tr>
+          <tr><td>water_box_dftb3</td><td>DFTB3，H 阻尼</td><td>相同（18）</td><td>3.6e-15 / 1.4e-14</td><td>1.2e-14 / 7.1e-15</td><td>1.3e-15 / 1.1e-15</td><td>3.0e-18 / 2.8e-18</td></tr>
+          <tr><td>water_box_h5</td><td>H5</td><td>相同（18）</td><td>1.1e-14 / 1.8e-14</td><td>1.4e-14 / 2.3e-14</td><td>1.2e-15 / 1.4e-15</td><td>1.5e-18 / 2.8e-18</td></tr>
+          <tr><td>water_box_pc</td><td>点电荷</td><td>相同（19）</td><td>1.1e-14 / 3.6e-15</td><td>6.6e-14 / 5.0e-14</td><td>1.7e-14 / 1.0e-14</td><td>—</td></tr>
+          <tr><td>cuo_chain_k422，壳层分辨</td><td>每个原子几个位点，Cu 的 4p 截断 96 Bohr</td><td>相同（26）</td><td>1.4e-14 / 1.2e-14</td><td>7.6e-14 / 6.0e-14</td><td>1.3e-14 / 6.2e-15</td><td>3.0e-17 / 3.0e-17</td></tr>
+          <tr><td>cuo_chain_dftb3_k422，壳层分辨</td><td>加上逐壳层的 DFTB3</td><td>相同（26）</td><td>1.1e-14 / 8.9e-15</td><td>7.1e-14 / 4.4e-14</td><td>7.9e-15 / 5.4e-15</td><td>1.9e-18 / 1.6e-17</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>壳层分辨</strong>：冻结的周期算例里没有壳层分辨的 SCC（壳层分辨的参考都是分子，分子总走原路径），所以在 CuO 链上打开 <code>shell_resolved</code>，只比较两条路径。</li>
+        <li><strong>逐位相同的部分</strong>：<code>pair_blocks</code> 拼起来与 <code>neighbor_list</code> 的五个数组逐位相同（斜晶胞、晶胞外的原子，块为 1、7 个原子与全部）；按块累加的实空间 γ 与力与整表的逐位相同（P122）；分块路径的一块与多块逐位相同；建在分块 Coulomb 上的 ThirdOrder 的对表与 Γ<sub>3</sub> 逐位相同。</li>
+        <li><strong>到舍入的部分</strong>：倒空间按 G 分块、GEMM 按行分块改变求和次序，γ 的相对差约 1e-15、力约 1e-18 Ha/Bohr；位力的对的部分按块求和，相对差约 5e-14（P122）。</li>
+        <li><strong>大体系</strong>：1728 个水分子（SCC 加力，<code>Subsystems</code> 4 个进程，P126）对原来的 Coulomb（P119）能量差 9.1e-13 Ha，电荷 2.5e-12 e，力 2.8e-13 Ha/Bohr，SCC 轮数相同（16）；与 P124 的原型（每块 64 个原子，实现是 66 个）逐位相同。</li>
+        <li><strong>测试里的其他核对</strong>：40 个原子的斜晶胞（每三个原子有一个两位点的原子，部分原子 H 阻尼）上 γ ≤ 1e-13、梯度与位力（有无 <code>other</code>）≤ 1e-12，都是相对差；ASE 的两步速度 Verlet，位置差 ≤ 1e-12 Å；torch 后端的前向计算（water_box_gamma、water_box_dftb3）≤ 1e-11。</li>
+      </ul>
+    </section>
+
+    <section id="speed">
+      <h2>四、速度与内存</h2>
+      <p>本机 4 核，作业的内存上限 13.36 GiB（cgroup），M7c 的水盒子（约 1 g/cm³，ptbp_hcocu，每个原子一个位点）。</p>
+      <p><strong>阈值附近</strong>（P126c）：只建 Coulomb 并算一次带位力的 <code>gradient</code>（随机电荷），每个配置一个新进程，三次取最短；峰值是 tracemalloc 的（NumPy 的数组，不含 cKDTree 的 C++ 缓冲）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>水分子 / 原子</th><th>实空间对</th><th>原路径：建立 + 力</th><th>峰值（建立 / 力）</th><th>分块：建立 + 力</th><th>峰值</th><th>每块中心原子</th></tr></thead>
+        <tbody>
+          <tr><td>216 / 648</td><td>1.8M</td><td>1.05 + 0.36 = 1.41 s</td><td>0.33 / 0.17 GiB</td><td>0.86 + 1.01 = 1.87 s</td><td>0.14 / 0.15 GiB</td><td>188</td></tr>
+          <tr><td>343 / 1029</td><td>3.6M</td><td>2.89 + 0.71 = 3.60 s</td><td>0.65 / 0.33 GiB</td><td>1.83 + 1.97 = 3.80 s</td><td>0.14 / 0.14 GiB</td><td>149</td></tr>
+          <tr><td>512 / 1536</td><td>6.5M</td><td>5.22 + 2.02 = 7.24 s</td><td>1.18 / 0.61 GiB</td><td>2.98 + 3.49 = 6.47 s</td><td>0.15 / 0.14 GiB</td><td>122</td></tr>
+          <tr><td>1000 / 3000</td><td>17.9M</td><td>19.4 + 7.3 = 26.7 s</td><td>3.22 / 1.65 GiB</td><td>8.4 + 9.5 = 18.0 s</td><td>0.20 / 0.14 GiB</td><td>87</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>分块的建立总是更快（没有整表的排序与复制，每块的查询更小），力更慢（要重算一遍原子对）。两者加起来在 343 个水分子附近持平，512 个以上分块更快。</li>
+        <li>分块的峰值几乎不随大小变：γ 本身（1000 个水分子 72 MB）加上一块的临时数组。</li>
+        <li>阈值 600 万对：再往下分块只省几百 MB，却让 autodiff 不能用；往上原路径的峰值随 N<sup>1.5</sup> 增长（1728 个水分子建立时 9.3 GiB）。</li>
+        <li>同一配置在这台机器上的运行时间可以差约 40%：512 个水分子的分块在 P126 里一次 6.8 s、一次 9.1 s，P126c 的三次是 6.5–6.8 s。表里取三次中最短的。</li>
+      </ul>
+      <p><strong>整个计算</strong>（SCC 加力，scc_tol 1e-7，Γ 点，DFTB2；分治的缓冲与核心都是 6 Å）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>水分子 / 原子</th><th>Coulomb、求解器</th><th>总计</th><th>SK 原子对</th><th>建立 Coulomb</th><th>求解（16 轮）</th><th>力</th><th>主进程峰值</th><th>整台机器</th></tr></thead>
+        <tbody>
+          <tr><td>1728 / 5184</td><td>原来，分治 4 个进程（P119）</td><td>216 s</td><td>23 s</td><td>60 s</td><td>107 s</td><td>22 s</td><td>9.74 GiB</td><td>—</td></tr>
+          <tr><td>1728 / 5184</td><td>分块，分治 4 个进程（P126）</td><td>172 s</td><td>24 s</td><td>23 s</td><td>99 s</td><td>22 s</td><td>2.06 GiB</td><td>5.14 GiB</td></tr>
+          <tr><td>2744 / 8232</td><td>分块（原型），分治 4 个进程（P124）</td><td>321 s</td><td>44 s</td><td>53 s</td><td>172 s</td><td>41 s</td><td>3.50 GiB</td><td>8.29 GiB</td></tr>
+          <tr><td>4096 / 12288</td><td>分块（原型），分治 4 个进程（P124）</td><td>558 s</td><td>75 s</td><td>111 s</td><td>273 s</td><td>82 s</td><td>5.64 GiB</td><td>12.6 GiB</td></tr>
+          <tr><td>4913 / 14739</td><td>分块，稀疏路径 1e-6（P126）</td><td>1281 s</td><td>89 s</td><td>154 s</td><td>913 s</td><td>101 s</td><td>5.73 GiB</td><td>5.38 GiB</td></tr>
+          <tr><td>4913 / 14739</td><td>分块（原型），分治 4 个进程（P124）</td><td colspan="7">超出 13.36 GiB，被系统杀掉（第五节）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>原型（P124）与实现在 1728 个水分子时结果逐位相同，所以 2744 与 4096 个水分子没有用实现重跑；原型那次 1728 个水分子是 189 s，实现 172 s，差别来自机器的起伏：没有改动的 SK 原子对一段也差 19%（29 s 对 24 s）。</li>
+        <li>建立 Coulomb 约随 N<sup>1.7</sup> 增长：实空间的对随 N<sup>1.5</sup>，倒空间的 GEMM（N²·nG，nG ∝ N<sup>0.5</sup>）随 N<sup>2.5</sup>。4913 个水分子时 154 s，占全程的 12%。</li>
+        <li>稀疏路径每轮每个水分子 11.6 ms（M7c 在 1000 与 1728 个水分子时 9.8 ms）。“整台机器”是 MemTotal − MemAvailable 比开始时多出的最大值，没有工作进程时可以比主进程的 VmHWM 小（开始时的缓存）。</li>
+        <li>分治的工作进程（1728 个水分子，每 2 s 读一次 smaps_rollup）：每个私有 0.50–0.57 GiB，主进程私有 1.08 GiB；五个进程的 PSS 合计 4.50 GiB。</li>
+      </ul>
+    </section>
+
+    <section id="large">
+      <h2>五、五千个水分子</h2>
+      <p>计划的目标是本机跑完约 5000 个水分子的 SCC 加力。4913 个水分子（17<sup>3</sup>，14739 个原子，29478 个轨道）：</p>
+      <ul>
+        <li><strong>稀疏路径（M7c，截断 1e-6）</strong>：1281 s，16 轮，主进程峰值 5.73 GiB（P126）。每块 39 个中心原子，实空间约 1.95 亿对：原来的代码单是对表就要约 13 GiB，建立时约 45 GiB。</li>
+        <li><strong>分治（M7d，4 个进程）</strong>：超出 13.36 GiB，被系统杀掉（P124，原型）。当时主进程常驻 5.96 GiB，四个工作进程的常驻内存各约 5.7 GiB，其中大部分是从主进程继承、共用的页。</li>
+      </ul>
+      <p>分治的内存去了哪里（P125、P127、P127b，都用分块的 Coulomb）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>水分子</th><th>建立之后的主进程</th><th>其中：SK 原子对 / γ / 稀疏结构</th><th>子体系在图样上的索引</th><th>全部子体系的本征矢</th><th>一个图样数组（nnz × 8 B）</th></tr></thead>
+        <tbody>
+          <tr><td>1728</td><td>1.90 GiB</td><td>0.49 / 0.20 / 0.30 GiB</td><td>0.66 GiB（216 个子体系）</td><td>0.64 GiB</td><td>0.036 GiB</td></tr>
+          <tr><td>4913</td><td>6.02 GiB</td><td>1.38 / 1.62 / 0.85 GiB</td><td>1.99 GiB（729 个子体系）</td><td>1.92 GiB</td><td>0.10 GiB</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>子体系的索引（每个图样元的行、列 int32 与位置 int64，核心部分再存一份）在主进程里为全部子体系建好，再 fork 工作进程。每个工作进程的调用栈里都留着这整份（共用的页，没有复制），所以主进程放掉自己的引用之后，这 1.99 GiB 仍在内存里；SK 原子对与稀疏结构也是这样共用的。</li>
+        <li>工作进程各自存它那些子体系的本征矢（从本征分解留到密度），以及 S、H、P、W 在图样上的副本；1728 个水分子时每个私有 0.50–0.57 GiB。主进程自己还有 γ、建立 Coulomb 的临时数组与 SCC 的数组。</li>
+        <li>这些都是 M7d 的结构，不是 Coulomb 的；第八节有办法。</li>
+      </ul>
+      <p><strong>顺带修的</strong>：OOM 之后四个工作进程没有退出（父进程变成 1 号进程），要手工杀掉。原因是 fork 的工作进程继承了主进程那一端的管道，主进程死了它们也收不到 EOF。现在工作进程启动时关掉这些端，<code>recv()</code> 遇到 EOFError 就退出；测试 <code>test_workers_exit_with_the_master</code> 用 SIGKILL 杀掉一个起了三个工作进程的子进程，三个工作进程都在 30 s 内退出。</p>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <p><code>tests/test_coulomb_chunks.py</code>（21 项）：</p>
+      <ul>
+        <li>块的查询：<code>pair_blocks</code> 拼起来等于 <code>neighbor_list</code>（斜晶胞、晶胞外的原子，块为 1、7、1000 个原子）。</li>
+        <li>γ、梯度与位力：40 个原子的斜晶胞（两位点的原子、H 阻尼）强制分块对存表，有无 <code>other</code>；一块与多块逐位相同；分子不分块。</li>
+        <li>ThirdOrder：建在分块 Coulomb 上的对表与 Γ<sub>3</sub> 逐位相同。</li>
+        <li>整个计算：第三节的 8 个算例（并断言分块路径确实运行了）；ASE 的两步速度 Verlet（三个几何都走分块）；torch 后端的 water_box_gamma 与 water_box_dftb3。</li>
+        <li>内存守卫：216 个水分子的 tracemalloc 峰值，存表时大于 100 MB，分块时小于 3 倍的 γ 加 40 MB。</li>
+        <li>autodiff 的拒绝；perfmodel 的封顶（周期体系封顶；分子与 DFTB+ 不封顶）。</li>
+      </ul>
+      <p><code>tests/test_subsystems.py</code> 多一项 <code>test_workers_exit_with_the_master</code>（第五节）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M7d 的文档提交 <code>6b45c0b</code> 逐字节比较</td><td>conda 1589 个计算、706593 个字段，最小环境 1523 个计算、691675 个字段，都逐位相同。分块的状态是下划线开头的 <code>_step</code>、<code>_rc</code>，没有新的公有字段，不用 <code>--allow-new</code>；字段数与 M7d 相同</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>517 个算例全部通过；torch 78 个通过，439 个按设计跳过；34 条动力学参考全部通过；每个算例的偏差与 M7d 相同（除计时外逐字相同）</td></tr>
+          <tr><td>其他求解器的参考</td><td><code>--solver subsystems</code>、<code>sparse</code>、<code>sparse-csr</code>、<code>foe</code></td><td>144（373 个跳过）、7、7、103 个通过，与 M7d 相同</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1878 个通过 / 440 个跳过（比 M7d 多 22 个通过：新文件 21 项与 <code>test_subsystems.py</code> 的 1 项）；最小环境 1616 / 581（新文件里 3 项要 torch，跳过）；torch 1832 / 486</td></tr>
+          <tr><td>MPI 环境</td><td>草稿环境（MPICH 4.3.2、mpi4py 4.1.2）里的 <code>test_subsystems.py</code> 与 <code>test_coulomb_chunks.py</code></td><td>43 个通过，4 个跳过（torch）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda）</td><td>286 个通过，7 个已知的 TUI 界面测试失败（与 M7d 是同样的 7 个）；单独运行，机器上没有别的计算</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>代码检查：<code>ruff</code> 对改动的 8 个文件的告警数与 M7d 相同（15 条，都是原有的）。</p>
+    </section>
+
+    <section id="deviations">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>阈值</strong>：设计写 “由 P124 定，约 4M–8M 对”。定为 600 万对，依据是 P126c：两条路径的时间在 343–512 个水分子之间交叉，原路径在 512 个水分子（6.5M 对）建立时的峰值约 1.2 GiB。</li>
+        <li><strong>壳层分辨的测试</strong>：设计列了 cu4co_shell_resolved 与 cu4co_dftb3_shell，但它们是分子，总走原路径，什么也测不到（P128 第一遍两者的差都是 0）。改为在周期的 CuO 链上打开 <code>shell_resolved</code>（另一个加上逐壳层的 DFTB3），并在测试里断言分块路径确实运行了。</li>
+        <li><strong>torch 后端</strong>：设计写 “torch 后端照旧走原来的整块对表”。实际上 <code>Coulomb</code> 总是 NumPy 的对象，torch 后端的前向计算只取它的 γ 与力，所以大体系上同样分块，结果到舍入相同（测试 <code>test_torch_backend_on_blocks</code>）；只有 autodiff 要对表而拒绝。</li>
+        <li><strong>perfmodel</strong>：设计只写了 Coulomb 原子对一项封顶。分块时位点对也不存，所以位点对一项按同样的比例封顶；分子总存表，不封顶。</li>
+        <li><strong>工作进程的退出</strong>：设计里没有。P124 的 OOM 之后发现，修复并加了测试（第五节）。</li>
+        <li><strong>块的大小</strong>：原型按固定的 64 个中心原子分块，实现按每块约 2<sup>19</sup> 对定（1728 个水分子时 66 个原子），两者在 1728 个水分子上逐位相同。</li>
+        <li><strong>内存的量法</strong>：VmHWM 在分配器复用前面释放的页时量不出分块路径的小峰值（P126 的 512 个水分子量出 0.007 GiB），阈值附近的比较改用 tracemalloc（P126c），它看不到 cKDTree 的 C++ 缓冲，大体系仍用 VmHWM 与整台机器的采样。</li>
+        <li>其余按设计：块的查询、逐位相同的条件、带符号的零、G 分块、ThirdOrder、autodiff 的拒绝、模块常数、没有新的用户选项。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>M7e：GPU 自检与跨结构批量</strong>（路线图的下一块）。GPU 自检要在有 GPU 的机器上运行 <code>pydftb gpu-check --dtype both --json gpu_check.json</code>，再把 JSON 发回来。</li>
+        <li><strong>分治的内存</strong>（M7d 的后续，可以做成一小块）：子体系的索引改用 int32 的位置、核心部分用掩码，约省一半；每个工作进程只建自己那些子体系的索引（MPI 的进程已经这样）；工作进程只收发自己用到的图样元。目标是 4913 个水分子在 4 个进程下放得下，要实测。</li>
+        <li><strong>SK 原子对分块</strong>：<code>build_pairs</code> 仍建整张邻居表，4913 个水分子时建立阶段临时多出 3.86 GiB，是现在最大的临时峰值。</li>
+        <li><strong>不建 γ</strong>：γ 本身是 N²（4913 个水分子 1.62 GiB，一万个 6.7 GiB）。再往上要每轮 SCC 用结构因子算倒空间的电势、按块算实空间的电势，力也一样；这改变 SCC 的每一轮。ThirdOrder 的 Γ<sub>3</sub>、LJ 与 Slater–Kirkwood 色散的 N × N 参数矩阵、点电荷与 ESP 的 cos/sin 也是 N 的平方。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26、B28、B29：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M7d2-large-coulomb.html">← M7d2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

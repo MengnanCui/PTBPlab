@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 
 from pydftb.constants import BOHR       # Angstrom per Bohr, as the calculator uses it
-from pydftb.coulomb import EWALD_TOL
+from pydftb.coulomb import EWALD_TOL, PAIR_TABLE_LIMIT
 from pydftb.coulomb import short_cutoff as _gamma_cutoff
 
 SK_CUTOFF = 14.38 + 1.0          # Bohr: 719 points x 0.02 Bohr (hotcent/PTBP) + DFTB+'s tail
@@ -257,11 +257,17 @@ class CostModel:
         return self.dftbplus_time(s, threads, n_scc)
 
     def memory(self, engine: str, s: Shape) -> float:
-        """Peak memory a calculation adds to its process, bytes."""
+        """Peak memory a calculation adds to its process, bytes.  pydftb keeps no Coulomb pair
+        table for a periodic system above coulomb.PAIR_TABLE_LIMIT atom pairs (M7d2): its atom-
+        and site-pair terms stop growing there (molecules always keep the table)."""
         c = PYDFTB_MEMORY if engine == "pydftb" else DFTBPLUS_MEMORY
         matrix = s.nk * float(s.norb) ** 2 * (8 if s.gamma else 16)
-        mb = (c["m0"] + c["sk_pairs"] * s.sk_pairs + c["site_pairs"] * s.site_pairs
-              + c["coulomb_pairs"] * s.coulomb_pairs + c["matrix bytes"] * matrix)
+        coulomb_pairs, site_pairs = s.coulomb_pairs, s.site_pairs
+        if engine == "pydftb" and s.periodic and coulomb_pairs > PAIR_TABLE_LIMIT:
+            site_pairs *= PAIR_TABLE_LIMIT / coulomb_pairs      # those of a table at the limit
+            coulomb_pairs = float(PAIR_TABLE_LIMIT)
+        mb = (c["m0"] + c["sk_pairs"] * s.sk_pairs + c["site_pairs"] * site_pairs
+              + c["coulomb_pairs"] * coulomb_pairs + c["matrix bytes"] * matrix)
         return mb * 2 ** 20
 
 

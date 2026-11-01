@@ -61,8 +61,26 @@ def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
     """All ordered pairs (i, j, shift) with |r_j + shift.cell - r_i| < cutoff.
 
     Self-pairs (i == j, shift == 0) are excluded.  Returns
-    ``i, j, shifts (int, (n,3)), vec (n,3), dist (n,)``.
+    ``i, j, shifts (int, (n,3)), vec (n,3), dist (n,)``, sorted by i, j and the image.
     """
+    shifts, tree_img = _image_tree(pos, cell, pbc, cutoff)
+    return _central_pairs(pos, cell, shifts, tree_img, cutoff, cKDTree(pos))
+
+
+def pair_blocks(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float, step: int):
+    """:func:`neighbor_list` block by block of ``step`` central atoms, without the whole list
+    (milestone M7d2): yields ``lo, hi, i, j, shifts, vec, dist`` for the central atoms lo..hi-1,
+    the same pairs in the same order as that slice of neighbor_list; one k-d tree of the
+    images serves all blocks."""
+    shifts, tree_img = _image_tree(pos, cell, pbc, cutoff)
+    for lo in range(0, len(pos), step):
+        hi = min(lo + step, len(pos))
+        yield (lo, hi) + _central_pairs(pos, cell, shifts, tree_img, cutoff, cKDTree(pos[lo:hi]),
+                                        lo)
+
+
+def _image_tree(pos, cell, pbc, cutoff):
+    """The image shifts neighbor_list searches and the k-d tree of all atoms in all of them."""
     natom = len(pos)
     pbc = np.zeros(3, bool) if cell is None else np.asarray(pbc, bool)
     nimg = image_range(cell, pbc, cutoff)
@@ -81,10 +99,16 @@ def neighbor_list(pos: np.ndarray, cell: np.ndarray | None, pbc, cutoff: float):
         tvec = np.zeros((1, 3))
         shifts = np.zeros((1, 3), dtype=int)
     img_pos = (pos[None, :, :] + tvec[:, None, :]).reshape(-1, 3)
-    tree_img = cKDTree(img_pos)
-    tree_c = cKDTree(pos)
+    return shifts, cKDTree(img_pos)
+
+
+def _central_pairs(pos, cell, shifts, tree_img, cutoff, tree_c, lo=0):
+    """The sorted pairs of the central atoms in ``tree_c`` (atoms lo, lo + 1, ...)."""
+    natom = len(pos)
     sdm = tree_c.sparse_distance_matrix(tree_img, cutoff, output_type="coo_matrix")
     i = sdm.row.astype(np.int64)
+    if lo:
+        i += lo
     flat = sdm.col.astype(np.int64)
     j = flat % natom
     s = flat // natom

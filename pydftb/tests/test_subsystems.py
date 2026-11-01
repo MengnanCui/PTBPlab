@@ -8,8 +8,10 @@ import dataclasses
 import importlib.util
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -179,6 +181,39 @@ def test_processes_give_the_same_bits(sk_water):
     for r in out[1:]:
         assert r.energy == out[0].energy and np.array_equal(r.charges, out[0].charges)
         assert np.array_equal(r.forces, out[0].forces) and np.array_equal(r.stress, out[0].stress)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork") or not os.path.isdir("/proc"), reason="needs fork and /proc")
+def test_workers_exit_with_the_master(tmp_path):
+    """A master killed without stopping its workers (out of memory, SIGKILL): the workers see
+    their pipes close and exit instead of waiting for ever (M7d2)."""
+    script = ("import os, signal\n"
+              "from pydftb.subsystems import _Workers\n"
+              "w = _Workers([[], [], []])\n"
+              "print(' '.join(str(p.pid) for p, _ in w.procs), flush=True)\n"
+              "os.kill(os.getpid(), signal.SIGKILL)\n")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([os.path.dirname(os.path.dirname(dc.__file__))]
+                                                      + sys.path))
+    with open(tmp_path / "pids.txt", "w") as fh:
+        subprocess.run([sys.executable, "-c", script], stdout=fh, env=env, timeout=120,
+                       check=False)                  # the script kills itself
+    pids = [int(x) for x in (tmp_path / "pids.txt").read_text().split()]
+    assert len(pids) == 3
+
+    def alive(pid):
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                return fh.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+        except FileNotFoundError:
+            return False
+
+    deadline = time.monotonic() + 30.0
+    while any(alive(p) for p in pids) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    left = [p for p in pids if alive(p)]
+    for p in left:                                   # do not leave them behind
+        os.kill(p, signal.SIGKILL)
+    assert not left
 
 
 MPI_SCRIPT = """

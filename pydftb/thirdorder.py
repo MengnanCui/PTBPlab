@@ -23,6 +23,7 @@ import numpy as np
 from .backend import ops
 from .constants import MIN_HUB_DIFF
 from .coulomb import NEAR_TAU, Coulomb, _short_near, short_cutoff
+from .neighbors import pair_blocks
 
 
 # ---- DFTB+ thirdorder.F90 helper functions (tau = 3.2 U, r > 0) ----------
@@ -176,9 +177,18 @@ class ThirdOrder:
             np.minimum.at(umin, self.site_atom, u)
             uniq, inv = np.unique(umin, return_inverse=True)
             table = np.array([[short_cutoff(3.2 * b, 3.2 * a) for b in uniq] for a in uniq])
-            i, j, shift, vec, d = c.nl
-            keep = d < table[inv[i], inv[j]]
-            self.nl = (i[keep], j[keep], shift[keep], vec[keep], d[keep])
+            if c.nl is not None:
+                i, j, shift, vec, d = c.nl
+                keep = d < table[inv[i], inv[j]]
+                self.nl = (i[keep], j[keep], shift[keep], vec[keep], d[keep])
+            else:                   # Coulomb without the pair table (M7d2): the same pairs
+                parts = []
+                for _, _, i, j, shift, vec, d in pair_blocks(c.pos, c.cell, c.pbc,
+                                                             min(c._rc, float(table.max())),
+                                                             c._step):
+                    keep = d < table[inv[i], inv[j]]
+                    parts.append((i[keep], j[keep], shift[keep], vec[keep], d[keep]))
+                self.nl = tuple(np.concatenate([p[k] for p in parts]) for k in range(5))
             i, j, d = self.nl[0], self.nl[1], self.nl[4]
             sa = sites[i][:, :, None]
             sb = sites[j][:, None, :]

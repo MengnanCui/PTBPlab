@@ -962,8 +962,8 @@ waters (77 s against 79 s) and at 1000 waters needs 156 s for the density matric
 linearly with N (9.8 ms per water at 1000 and 1728 waters), and 1728 waters (10368 orbitals)
 take 411 s, where the eigensolver would need about 1800 s (one diagonalisation takes 101 s).
 Below a few hundred waters it is slower than the dense path.  Outside the solver
-the neighbour lists and the Ewald setup remain (O(N^1.5-2), with a memory peak of 9.3 GiB at
-1728 waters).  Details and timings:
+the neighbour lists and the Ewald setup remain (O(N^1.5-2)); since M7d2 the Ewald setup keeps
+no pair table for large cells (below).  Details and timings:
 [`docs/reports/M7c-sparse-linear-scaling.html`](docs/reports/M7c-sparse-linear-scaling.html).
 
 ### Divide and conquer over processes and machines (`Subsystems`)
@@ -1015,9 +1015,36 @@ every case, so the results are bitwise the same for any number of processes or r
 four processes, against 404 s for the eigensolver and 219 s for the sparse path at 1e-6; the
 solver time per SCC iteration grows linearly (3.9 ms per water at 1000 and 1728 waters, the
 sparse path 9.8 ms), and 1728 waters take 216 s (the sparse path 411 s).  With buffers of 8 A
-1000 waters take 287 s, 1.3 times the sparse path.  Outside the solver the Ewald setup remains
-the limit, as for the sparse path.  Details and timings:
+1000 waters take 287 s, 1.3 times the sparse path.  With the Coulomb in blocks (M7d2, below)
+1728 waters take 172 s and the main process peaks at 2.1 GiB; at about 5000 waters four
+workers do not fit in 13 GiB (the subsystems' pattern indices, 2 GiB, stay with every worker
+through the fork, and each worker has its own copies of the pattern arrays), where the sparse
+path does.  Details and timings:
 [`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html).
+
+### Large periodic systems: the Coulomb in blocks
+
+pydftb's Ewald sum used to keep every atom pair within the real-space cut-off (indices, image,
+vector and distance: 72 B a pair, about 240 B while it was built): 41 million pairs and a 9.3
+GiB peak at 1728 waters, growing as N^1.5.  Since milestone M7d2 a periodic system whose
+estimated pairs exceed `coulomb.PAIR_TABLE_LIMIT` (6 million, about 500 waters) keeps no table,
+as DFTB+'s dynamic neighbour list keeps none: gamma, the forces and the virial go over blocks of
+central atoms (`neighbors.pair_blocks`, about 2^19 pairs a block), each block's pairs computed
+when needed, and the reciprocal sums over blocks of 1024 G vectors, accumulated in place (one N
+x N array when every atom has one site).  There is nothing to set, and smaller systems and
+molecules run the old code bit for bit.  The real-space terms of a block are the table's slice,
+in the same order, so they agree bit for bit for any block size; the blocked G sums and the
+block-wise virial agree to rounding: six frozen periodic cases (Gamma and k-points, f shells,
+DFTB3, H damping, H5, point charges) and shell-resolved charges on a CuO chain give the same SCC
+iterations and energies within 3.6e-14 Ha.  The set-up is faster and the forces slower (the
+pairs are recomputed); together they break even near 400 waters.  At 1728 waters (SCC with
+forces, `Subsystems` with four processes) the main process peaks at 2.06 GiB instead of 9.74
+GiB and the run takes 172 s instead of 216 s; 4913 waters (14739 atoms) take 1281 s on the
+sparse path with a 5.73 GiB peak, where the old table alone would have needed 13 GiB.  The
+torch backend's forward calculation uses the same NumPy Coulomb; the autodiff (`pydftb.autodiff`)
+needs the whole table and refuses such a Coulomb.  gamma itself (N^2, 1.6 GiB at 4913 waters)
+and the SK pair list remain.  Details:
+[`docs/reports/M7d2-large-coulomb.html`](docs/reports/M7d2-large-coulomb.html).
 
 ### Cost model
 
@@ -1039,7 +1066,9 @@ and PTBP's Cu dataset): median error 12 % for the time (DFTB+ 7 %), 2 % for pydf
 memory.  With shell-resolved charges the Coulomb sum reaches as far as the smallest Hubbard
 U requires (96 Bohr for U = 0.08 Ha, the 4p shell of Cu): a periodic cell of 64 Cu atoms
 has 3 million atom pairs within it and pydftb needs about 2.2 GB (DFTB+ 0.3 GB); see
-[`docs/reports/M3c-recommender.html`](docs/reports/M3c-recommender.html).
+[`docs/reports/M3c-recommender.html`](docs/reports/M3c-recommender.html).  Above
+`coulomb.PAIR_TABLE_LIMIT` pairs a periodic system keeps no pair table (M7d2), and the model's
+Coulomb terms stop growing there.
 
 ### DFTB+ configuration advisor
 
