@@ -41,6 +41,7 @@ def main(argv=None):
     ap.add_argument("--timestep", type=float, default=1.0, help="fs")
     ap.add_argument("--temperature", type=float, default=600.0, help="K")
     ap.add_argument("--out", default="adaptive_md.json")
+    ap.add_argument("--traj", default=None, help="write every 10th step (extxyz)")
     args = ap.parse_args(argv)
     model = fitted_model(args.fit_json, args.model)
     skdir = f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu"
@@ -85,6 +86,13 @@ def main(argv=None):
                      dmin))
 
     md.attach(record, interval=10)
+    if args.traj:
+        from ase.io import write
+
+        def frame():
+            write(args.traj, at, append=True)
+
+        md.attach(frame, interval=10)
     md.run(args.steps)
     a = np.array(rows)
     etot = a[:, 3]
