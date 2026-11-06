@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7d3 分治的内存设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7d3</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7d3 · 设计文档</p>
+    <h1>大体系（六）：分治与 SK 原子对的内存</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-06</dd></div>
+      <div><dt>提交</dt><dd><code>（待定）</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M7d3-dc-memory.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M7d2 之后，4913 个水分子用分治（4 个进程）仍超出 13.36 GiB 的作业上限。M7d2 报告第八节列了原因：子体系在图样上的索引在主进程里为全部子体系建好再 fork，每个工作进程的调用栈都留着整份；工作进程各自存 S、H、P、W 在整个图样上的副本；SK 原子对建立时临时多出 3.86 GiB。M7d3 只改内存的组织，不改任何数值：结果对 M7d2 逐位相同，没有新的用户选项。</p>
+    <ul>
+      <li><strong>子体系的索引</strong>：每个图样元 40 字节（行、列 int32，位置 int64，核心部分再存一份行、列、位置与 float64 的分区权重）改为 9 字节：子体系块里的平铺位置 <code>lin = r m + c</code> 与图样位置 <code>g</code>，放得下时都用 int32；p &gt; 0 的元排在前面（不再复制），分区权重只留一个布尔数组（p = 1 或 1/2）。</li>
+      <li><strong>谁建索引</strong>：主进程只做划分，把每个工作进程的（核心、子体系原子）与图样交给它，工作进程在 fork 之后自己建；主进程不再有全部子体系的索引，工作进程也不再继承别人的。MPI 的进程本来就这样。</li>
+      <li><strong>收发多少</strong>：工作进程只收发自己的子体系用到的图样元（<code>used</code>，建好索引后发回一次）：S、H 只发这些元，P、W 只回这些元，主进程 <code>rho[ik, used] += part</code>。为了让 <code>used</code> 小，工作进程拿连续的一段核心（格子的次序，空间上相邻），各段的代价 m<sup>3</sup> 大致相等；子体系少于每个进程 8 个时照旧“最大的先给最空的”。</li>
+      <li><strong>SK 原子对</strong>：探针发现 M7d2 报告把建立时的临时峰值归错了：邻居表本身很小（1728 个水分子 0.22 GiB），大头是 <code>SKTable.evaluate</code> 为整组原子对取出的样条系数 <code>coef[ii]</code>（每对 8 × 20 个 float64，约 1.3 kB，每个文件一次），加上复数步长的复数块与最后的 <code>concatenate</code>。<code>build_pairs</code> 改为先算出元的总数、分配最终的数组，再按块（至多 2<sup>14</sup> 对、2<sup>18</sup> 个元）填进去。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">40 → 9</span><span class="lbl">子体系索引每个图样元的字节数</span></li>
+      <li><span class="num">0.94 → 0.06</span><span class="lbl">1728 个水分子 <code>build_pairs</code>（带导数）的临时峰值（GiB）</span></li>
+      <li><span class="num">0</span><span class="lbl">改变的位（分治的结果、SK 原子对的每个数组）</span></li>
+      <li><span class="num">0</span><span class="lbl">新的用户选项</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围</a></li>
+      <li><a href="#probe">二、探针</a></li>
+      <li><a href="#method">三、方法</a></li>
+      <li><a href="#bits">四、为什么逐位相同</a></li>
+      <li><a href="#validation">五、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">六、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围</h2>
+      <ul>
+        <li><strong>做</strong>：
+          <ul>
+            <li><code>subsystems.py</code>：紧凑的索引、工作进程自己建索引、只收发用到的图样元、连续的分配；MPI 与 fork 的工作进程同一套协议；</li>
+            <li><code>hamiltonian.build_pairs</code>：按原子对分块，直接写进最终的数组；</li>
+            <li>工作进程建索引出错时，主进程报出它的错误（原来出错在主进程里）。</li>
+          </ul></li>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>不建 γ（N × N，4913 个水分子 1.62 GiB）：要每轮 SCC 用结构因子算电势，改变 SCC 的每一轮，单独做；</li>
+            <li>工作进程里的本征矢（从本征分解留到密度，4913 个水分子合计约 1.9 GiB）：是算法要的，只换存法不省；</li>
+            <li><code>PairBlocks</code> 的字段类型（行、列、对的编号仍是 int64）：它们是别的模块用的公有字段；</li>
+            <li><code>perfmodel</code> 的重新拟合：它的 <code>sk_pairs</code> 一项在小体系上拟合，那里省下的 <code>concatenate</code> 副本占比很小，估计只是偏保守。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、探针</h2>
+      <ul>
+        <li><strong>量法</strong>：这台机器是 macOS（32 GB）。RSS 把 fork 共用的页算进每个进程，整台机器的“已用”受内存压缩影响，都不可靠。改用每个进程的物理占用（<code>proc_pid_rusage</code> 的 <code>ri_phys_footprint</code>，与“活动监视器”的“内存”相同）：fork 继承、没有改写的页只算在父进程上，子进程只算自己复制或新分配的页（探针：父进程 1 GiB，子进程 fork 后 0.002 GiB，改写 0.25 GiB 后 0.25 GiB）。所以各进程之和就是真实的总量。每 0.5 s 采样一次，另记每个进程的终生峰值。</li>
+        <li><strong>SK 原子对</strong>（tracemalloc，带导数，ptbp_hcocu 的 H s、O sp，截断 15.36 Bohr）：
+          <ul>
+            <li>邻居表本身：512 个水分子保留 0.024、峰值 0.065 GiB；1728 个保留 0.080、峰值 0.219 GiB。</li>
+            <li>整个 <code>build_pairs</code>：1728 个水分子保留 0.478 GiB，原来峰值 1.417 GiB（多出 0.94），只按元数分块（每块 2<sup>18</sup> 个元）峰值 1.136 GiB：H–H 每对一个元，一块仍有 26 万对，样条系数照样大。再按对数封顶（2<sup>14</sup> 对）后 0.538 GiB（多出 0.06），时间 20.7 → 14.6 s。</li>
+          </ul></li>
+        <li><strong>单对的块</strong>：只含一对的块让复数步长的导数在最后一位不同（≤ 2.8e-17）。一对时 numpy 的堆叠 matmul（<code>sk_block</code> 里的 <code>D<sub>a</sub> M D<sub>b</sub><sup>T</sup></code>）走另一条路；两对以上的任何块都逐位相同（逐个试了每块 2–64 对与各种余数）。所以块至少两对，一组只有一对时整组一块（与原来相同）。</li>
+      </ul>
+    </section>
+
+    <section id="method">
+      <h2>三、方法</h2>
+      <ul>
+        <li><strong>索引</strong>（<code>_index</code>）：从图样的位置矩阵取子体系的主子块（COO），算 <code>keep = core[r] | core[c]</code>，稳定排序把 keep 的元放前面（<code>nk</code> 个），存 <code>lin</code>、<code>g</code>、<code>nk</code>、<code>both = core[r] &amp; core[c]</code>（前 nk 个）。稠密块：<code>a.reshape(-1)[lin] = data[g]</code>；密度：<code>rho[g[:nk]] += p · d.reshape(-1)[lin[:nk]]</code>，<code>p = where(both, 1, 0.5)</code>。</li>
+        <li><strong>工作进程</strong>（<code>_Workers</code>、<code>serve</code>）：参数是自己的（核心、子体系原子）列表与图样（indptr、indices、n、offsets、norb_atom，主进程本来就有）。启动后建索引、求 <code>used</code>（全部 g 的并集，排好序），把 g 改写成 <code>used</code> 里的下标，发回 <code>("used", used)</code>；出错发回 <code>("error", …)</code>，主进程关掉全部工作进程再抛出。<code>set_overlap</code> 与 <code>eig</code> 给每个进程发 <code>s[used]</code>、<code>h[used]</code>，MPI 用 scatter 代替 bcast。</li>
+        <li><strong>分配</strong>（<code>_assign</code>）：子体系数不少于 <code>CONTIGUOUS_MIN</code>（8）× 进程数时，按代价 m<sup>3</sup> 的累加和切成进程数段；否则照 M7d。核心按格子的键排序，所以一段是几层相邻的格子。</li>
+        <li><strong>SK 原子对</strong>：先按元素对分组（与原来相同的组与次序），算出总元数，分配 rows、cols、pair_of、h、s 与 dh、ds；每组按块取 <code>vec[sel]</code>，块的结果写进 <code>[e0:e1]</code> 的视图；dh、ds 的视图按原来的形状 (对, a, b, 3) 写。</li>
+      </ul>
+    </section>
+
+    <section id="bits">
+      <h2>四、为什么逐位相同</h2>
+      <ul>
+        <li><strong>索引</strong>：同一个子体系的元集合相同，每个元的值相同（p 是 0.5 · (1 + 1) = 1 或 0.5 · (1 + 0) = 0.5，原来也是这两个数）；花式下标的 <code>+=</code> 在一个子体系里不重复，次序无关。</li>
+        <li><strong>分配与只收发用到的元</strong>：每个图样元最多两份贡献（它两个原子所在的核心），浮点加法可交换，(0 + a) + b = (0 + b) + a；没有贡献的进程原来加的是 +0，而所有部分和都从 +0 起加，不会是 −0，x + (+0) = x。所以分配怎么变、少加多少个 +0，都不改变任何一位。</li>
+        <li><strong>SK 原子对</strong>：每个值只由它自己那一对算出（样条、转动、<code>sk_block</code> 都是逐对的），块只改变一次算多少对；唯一的例外是一对的块（第二节）。</li>
+      </ul>
+    </section>
+
+    <section id="validation">
+      <h2>五、验证</h2>
+      <div class="dev">
+      <ul>
+        <li>新的 <code>tests/test_dc_memory.py</code>：紧凑索引对 M7d 的索引（同一元集合、分区权重、稠密块、密度贡献逐位相同）；<code>used</code> 的下标；连续分配（每个子体系一次、一段连续、负载差不超过两个最大的代价）；216 个水分子 4 个进程每个都少于图样的 80%，结果对单进程逐位相同；工作进程出错时报错；<code>build_pairs</code> 在 5 种块大小下对默认逐位相同（水与 Cu，无导数、复数步长、有限差分）；分子与没有原子对的情况。</li>
+        <li><code>test_processes_give_the_same_bits</code> 多一个 4 个进程（27 个子体系，走“最大的先”），1 与 2 个进程走连续分配。<code>test_workers_exit_with_the_master</code> 在没有 /proc 的系统（macOS）上用 <code>os.kill(pid, 0)</code>。</li>
+        <li>门槛：全套 pydftb 测试、<code>refgen --check</code>（eigh 与 <code>--solver subsystems</code>）、<code>golden --base c1a11bd</code>；1728 与 4913 个水分子的 SCC 加力对 M7d2 逐位相同，并量内存与时间。</li>
+      </ul>
+      </div>
+    </section>
+
+    <section id="limits">
+      <h2>六、风险与之后</h2>
+      <ul>
+        <li><strong>连续分配的负载</strong>：代价相近的子体系（水）切得很匀；大小差得多时（界面、团簇）一段可能偏重，最多差一个最大子体系的代价。子体系少时照旧用“最大的先”。</li>
+        <li><strong>fork 的副本</strong>：工作进程仍继承 fork 时主进程的全部页（SK 原子对、图样），只是不改写就不占内存；主进程之后放掉的大数组在工作进程退出前不会还给系统。现在 fork 发生在建立 Coulomb 之前，主进程那时只有 SK 原子对与图样，它们在 SCC 里本来也要留着。</li>
+        <li><strong>之后</strong>：不建 γ 的 SCC 电势；ThirdOrder 的 Γ<sub>3</sub>、色散的参数矩阵等其余 N × N 数组。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a><a href="../reports/M7d3-dc-memory.html">M7d3 报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

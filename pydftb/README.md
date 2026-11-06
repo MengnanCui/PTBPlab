@@ -1075,11 +1075,14 @@ four processes, against 404 s for the eigensolver and 219 s for the sparse path 
 solver time per SCC iteration grows linearly (3.9 ms per water at 1000 and 1728 waters, the
 sparse path 9.8 ms), and 1728 waters take 216 s (the sparse path 411 s).  With buffers of 8 A
 1000 waters take 287 s, 1.3 times the sparse path.  With the Coulomb in blocks (M7d2, below)
-1728 waters take 172 s and the main process peaks at 2.1 GiB; at about 5000 waters four
-workers do not fit in 13 GiB (the subsystems' pattern indices, 2 GiB, stay with every worker
-through the fork, and each worker has its own copies of the pattern arrays), where the sparse
-path does.  Details and timings:
-[`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html).
+1728 waters take 172 s and the main process peaks at 2.1 GiB.  Since milestone M7d3 every
+worker builds the compact indices of its own subsystems (9 bytes per pattern entry instead of
+40) and gets and returns only the pattern entries they use, and the workers take runs of
+neighbouring cores of equal cost; the results are bitwise unchanged.  4913 waters (14739 atoms)
+with four processes then peak at 10.9 GiB for all processes together instead of 15.2 GiB and
+take 857 s instead of 1308 s (macOS, 10 cores).  Details and timings:
+[`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html),
+[`docs/reports/M7d3-dc-memory.html`](docs/reports/M7d3-dc-memory.html).
 
 ### Large periodic systems: the Coulomb in blocks
 
@@ -1102,7 +1105,9 @@ GiB and the run takes 172 s instead of 216 s; 4913 waters (14739 atoms) take 128
 sparse path with a 5.73 GiB peak, where the old table alone would have needed 13 GiB.  The
 torch backend's forward calculation uses the same NumPy Coulomb; the autodiff (`pydftb.autodiff`)
 needs the whole table and refuses such a Coulomb.  gamma itself (N^2, 1.6 GiB at 4913 waters)
-and the SK pair list remain.  Details:
+remains.  The SK pair blocks are built chunk by chunk into their final arrays (M7d3): the
+build's temporary peak, the spline coefficients of whole groups of pairs, fell from 0.94 to
+0.06 GiB at 1728 waters.  Details:
 [`docs/reports/M7d2-large-coulomb.html`](docs/reports/M7d2-large-coulomb.html).
 
 ### Cost model
