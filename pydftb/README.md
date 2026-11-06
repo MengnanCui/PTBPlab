@@ -1152,6 +1152,19 @@ not safe for MD: a Cu13 cluster restructures and atoms evaporate, where the fixe
 the total energy within 2.2 meV over 2 ps; it needs forces and distorted structures.  Details:
 [`docs/reports/M8a-adaptive-params.html`](docs/reports/M8a-adaptive-params.html).
 
+Milestone M8b adds forces to the fit and an angular descriptor.  `Sample(atoms, energy,
+forces=F)` (eV/A) with `fit_adaptive(..., force_weight=w, force_step=1e-4)` adds the residuals
+sqrt(w) (F - F_ref), whose Jacobian comes from central differences in the coefficients
+(`FitResult.force_rmse`).  `AdaptiveParams(..., angular=RBF((0.3, 0.6), 0.15, constant=False))`
+appends a basis in q = sum_BC f_B f_C P3(cos theta_BAC) / (CN^2 + 0.01), which is 0 for
+centrosymmetric environments (fcc, bcc), 5/9 for diamond and 0.62 for graphite
+(`r.adaptive.q`; forces and stress stay exact).  On the 6 ideal Cu phases alone the angular
+terms overfit: the fit falls from 1.4 to 0.5 meV/atom, but the held-out diamond error rises
+from 76 to 224 meV/atom and beta-Sn from 19 to 61, so use them only with distorted structures
+in the data.  `python -m pydftb.bench.cu_dft_dataset` writes such a Cu training set (176
+structures: clusters, surfaces, vacancies, rattled and strained cells) as VASP inputs and Slurm
+array scripts.  Details: [`docs/reports/M8b-forces-angles.html`](docs/reports/M8b-forces-angles.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces
