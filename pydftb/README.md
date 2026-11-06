@@ -1110,6 +1110,48 @@ build's temporary peak, the spline coefficients of whole groups of pairs, fell f
 0.06 GiB at 1728 waters.  Details:
 [`docs/reports/M7d2-large-coulomb.html`](docs/reports/M7d2-large-coulomb.html).
 
+### Environment-adaptive parameters (`adaptive=`)
+
+Milestone M8a lets the parameters of every atom change smoothly with its environment, its
+coordination number CN (M5a's counting function, periodic images included):
+
+```python
+from pydftb.adaptive import AdaptiveParams, RBF, PairRepulsive
+from pydftb.adaptive_fit import Sample, fit_adaptive
+
+z = (0.0,) * 4                                     # constant + 3 Gaussians of CN
+m = AdaptiveParams("Cu", RBF((2.0, 6.0, 10.0), width=2.5),
+                   onsite={"s": z, "d": z},        # eps_A,l + Phi(CN_A) . theta   (Hartree)
+                   hopping={"s": z, "p": z, "d": z},   # H0_mu,nu -> c_mu H0 c_nu, c = exp(p/2)
+                   repulsive=z,                    # V_AB exp((p_A + p_B)/2)
+                   pair_repulsive={"Cu": PairRepulsive(6.05, (0.0,) * 6,       # sum c_n (r_c - r)^n
+                                                       wall=3.78, wall_strength=5.45)})
+r = DFTB(sk, adaptive=[m]).calculate(labels, pos, cell, pbc)   # or PyDFTB(skdir, adaptive=[m])
+r.adaptive.cn, r.adaptive.gradient([m])            # dF/dtheta for every coefficient (Hartree)
+fit = fit_adaptive([m], [Sample(atoms, e_per_atom_ev, kpts=(8, 8, 8)), ...], sk,
+                   options={"temperature": 300.0}, processes=8)
+```
+
+The channels are linear in their coefficients; S is never scaled (it stays positive definite).
+Forces and stress include the parameters' dependence on the geometry (central differences:
+2.4e-9 Ha/Bohr for a Cu metal with k-points at 1000 K, stress 4e-11), and every calculation
+returns the derivatives of the Mermin free energy with respect to every coefficient (relative
+error 1e-9), which `fit_adaptive` uses as its Jacobian (least squares on relative energies per
+atom, ridge, the structures in forked processes).  With zero coefficients the calculation is
+the plain one, bit for bit.  A pair repulsive's `wall` is a fixed core term (wall - r)^3, never
+fitted: put it below the shortest bond of the data.  NumPy engine and dense solvers; not with
+two-component spin, hybrids, +U and onsite corrections, Casida, type switching, analyses, the
+sparse and divide-and-conquer solvers, torch or autodiff.
+
+On PTBP's Cu set (6 phases from the dimer to fcc, CN 1 to 12, 11 volumes each, FHI-aims
+Birch-Murnaghan energies) the relative energies are fitted to 15.6 meV/atom by the same
+channels without environment dependence and to 1.4 meV/atom with it; in a leave-one-phase-out
+cross-validation the error on the unseen phase falls from 117 to 40 meV/atom (better for 5 of
+the 6 phases, not for diamond).  Fitted to these ideal structures alone, the adaptive model is
+not safe for MD: a Cu13 cluster restructures and atoms evaporate, where the fixed model keeps
+the total energy within 2.2 meV over 2 ps; it needs forces and distorted structures.  Details:
+[`docs/reports/M8a-adaptive-params.html`](docs/reports/M8a-adaptive-params.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

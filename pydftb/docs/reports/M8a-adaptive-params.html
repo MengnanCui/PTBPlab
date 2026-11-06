@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8a 随环境变化的参数报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M8a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8a · 完成报告</p>
+    <h1>AI 层（一）：随环境连续变化的参数</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>提交</dt><dd><code>（待定）</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M8a-adaptive-params.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">pydftb 的参数现在可以随每个原子的环境（配位数 CN）连续变化：<code>DFTB(adaptive=AdaptiveParams(...))</code>。on-site 能量、跃迁积分、排斥势都可以随 CN 变化，并有一个可拟合的对排斥势。力与应力精确；每次计算顺带给出自由能对每个系数的导数，所以拟合有解析的 Jacobian。系数为零时与原来的计算逐位相同，golden 在全部 1523 个计算上逐位不变。在 PTBP 的 Cu 集合上（6 个相，CN 1 到 12，各 11 个体积），留一相的交叉验证里，自适应模型对没见过的相的误差是固定参数模型的三分之一。但只用理想结构的能量拟合出来的自适应模型，在 Cu<sub>13</sub> 团簇的 MD 里不稳定，要有力和畸变结构的数据才能用于 MD。</p>
+    <ul>
+      <li><strong>导数</strong>：力对中心差分，水分子（四个通道、两个元素）≤ 2.4e-10 Ha/Bohr；周期金属（Cu，k 点，1000 K，三个原子的 CN 各不相同）≤ 2.4e-9 Ha/Bohr，应力 4e-11；∂F/∂θ 的相对误差约 1e-9。NTPoly、FOE、DFTB3 加 H 阻尼、LJ 色散与共线自旋下也是 ≤ 2e-9。</li>
+      <li><strong>拟合全部 66 个结构</strong>（相对能量的 RMSE）：
+        <ul>
+          <li>原来的表：244 meV/atom；</li>
+          <li>固定模型（12 个参数，不随环境变）：15.6 meV/atom；</li>
+          <li>自适应模型（34 个参数）：1.4 meV/atom。</li>
+        </ul></li>
+      <li><strong>留一相交叉验证</strong>（用 5 个相拟合，预测第 6 个相）：没见过的相的平均误差，固定模型 117 meV/atom，自适应模型 40 meV/atom。6 个相里 5 个改进 1.6–6.4 倍，diamond 没有改进（75 对 76）。</li>
+      <li><strong>MD</strong>（扭曲的 Cu<sub>13</sub>，600 K，NVE，1 fs，2 ps）：
+        <ul>
+          <li>固定模型加上固定的短程墙：总能量范围 2.2 meV，漂移 0.9 meV/ps。</li>
+          <li>自适应模型：力是对的（对差分 1.6e-7 eV/Å），前约 100 fs 能量守恒到 meV；之后团簇重构，势能降 12–22 eV，原子蒸发。原因在数据：训练集里 CN 约 4 的结构键长都 ≥ 2.15 Å，模型把“低配位 → 短而强的键”外推到了数据里没有的组合。</li>
+        </ul></li>
+      <li><strong>两个发现</strong>：
+        <ul>
+          <li>自带的 Cu–Cu 表在 1.5 Å 有一个约 −15 eV 的电子能阱，样条排斥势在 4.96 Bohr 截断，比最近邻还短。两个模型都因此加了固定的核心墙：在 2.0 Å 以内起作用，比数据里最短的键（2.059 Å）短，66 个训练能量逐位不变，不参与拟合。</li>
+          <li><code>dft/dft.xyz</code> 里每个相只存了一个能量（11 个体积相同），真正的 E(V) 参考在 <code>dft/fit.json</code> 的 Birch–Murnaghan 参数里。</li>
+        </ul></li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">117 → 40</span><span class="lbl">留一相交叉验证：没见过的相的平均误差（meV/atom）</span></li>
+      <li><span class="num">15.6 → 1.4</span><span class="lbl">66 个结构的拟合误差（meV/atom），固定 → 自适应</span></li>
+      <li><span class="num">0</span><span class="lbl">不用模型时改变的位（golden，1523 个计算）</span></li>
+      <li><span class="num">不稳定</span><span class="lbl">只用理想结构能量拟合的自适应模型在 Cu<sub>13</sub> MD 中；需要力与畸变结构的数据</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#use">一、怎么用</a></li>
+      <li><a href="#deriv">二、导数与逐位不变</a></li>
+      <li><a href="#fit">三、Cu 的拟合与交叉验证</a></li>
+      <li><a href="#md">四、MD：短程墙与外推</a></li>
+      <li><a href="#tests">五、测试与门槛</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#dev">六、与设计的偏差</a></li>
+      <li><a href="#next">七、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="use">
+      <h2>一、怎么用</h2>
+      <pre><code>from pydftb.adaptive import AdaptiveParams, RBF, PairRepulsive
+from pydftb.adaptive_fit import Sample, fit_adaptive, predict
+
+m = AdaptiveParams("Cu", RBF((2.0, 6.0, 10.0), width=2.5),
+                   onsite={"s": z, "p": z, "d": z}, hopping={"s": z, "p": z, "d": z}, repulsive=z,
+                   pair_repulsive={"Cu": PairRepulsive(3.2 / BOHR, (0.0,) * 6,
+                                                       wall=2.0 / BOHR, wall_strength=A)})
+fit = fit_adaptive([m], samples, sk, options={"temperature": 300.0}, processes=8)
+atoms.calc = PyDFTB(skdir, adaptive=list(fit.models))          # 或 DFTB(sk, adaptive=...)
+r = calc.calculate(...); r.adaptive.cn, r.adaptive.gradient(fit.models)</code></pre>
+      <p>实验脚本：<code>python -m pydftb.bench.adaptive_cu --out adaptive_cu.json</code>（拟合、交叉验证、二聚体曲线），<code>python -m pydftb.bench.adaptive_md adaptive_cu.json --model fixed</code>（力对差分与 NVE）。</p>
+    </section>
+
+    <section id="deriv">
+      <h2>二、导数与逐位不变</h2>
+      <ul>
+        <li><strong>零模型</strong>：系数全为零（且没有墙）时，水分子的能量、力、电荷，Cu 周期体系的能量、力、应力与不用模型的计算逐位相同（测试 <code>test_zero_model_is_the_plain_calculation</code>）。</li>
+        <li><strong>力与应力</strong>：中心差分（步长 1e-5 Bohr，应变 1e-6）：水分子 2.4e-10 Ha/Bohr（|F| 0.23）；Cu 三原子扭曲晶胞（壳层分辨 SCC，3×3×3 k 点，1000 K，CN 6.7–7.1）力 2.4e-9（|F| 0.12），应力 4.1e-11（|σ| 1.6e-3）。</li>
+        <li><strong>∂F/∂θ</strong>：同一个 Cu 晶胞上 31 个系数，对差分最大 3.0e-8，最大值 28.7。</li>
+        <li><strong>其他组合</strong>：NTPoly（TRS2）、FOE（1000 K）、DFTB3 加 H 阻尼、LJ 色散都是 2.0–3.6e-10；共线自旋的 O<sub>2</sub> 三重态 ≤ 2e-9。</li>
+        <li><strong>golden</strong>：对 M7d3 的提交 9203477，1523 个计算、691747 个字段逐位相同。新的字段 <code>DFTBResult.adaptive</code> 与 <code>_Setup.adaptive</code> 只在工作树里有（不用模型时为 None），用 <code>--allow-new adaptive</code>；不加这个选项时报的 5283 处差异都是这个字段。</li>
+      </ul>
+    </section>
+
+    <section id="fit">
+      <h2>三、Cu 的拟合与交叉验证</h2>
+      <p>数据：<code>ptbp_workload</code> 的 66 个结构；参考是 <code>dft/fit.json</code> 里 FHI-aims 的 Birch–Murnaghan 曲线在这些体积上的值。电子部分是 ptbp_hcocu 的 Cu–Cu 表，壳层分辨 SCC，300 K，SCC 收敛到 1e-9，周期相用 PTBP 密度 5 的 k 网格，dimer 只用 Γ 点。对排斥势截断 3.2 Å，6 个系数；岭回归 l2 = 1e-4；每次拟合最多 150 次评估。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>相（CN）</th><th>原来的表</th><th>固定模型：拟合全部</th><th>自适应：拟合全部</th><th>固定：留出时</th><th>自适应：留出时</th></tr></thead>
+        <tbody>
+          <tr><td>dimer（1）</td><td>120</td><td>10.1</td><td>1.2</td><td>177</td><td>47</td></tr>
+          <tr><td>AA-graphite（3）</td><td>303</td><td>7.3</td><td>1.2</td><td>199</td><td>31</td></tr>
+          <tr><td>diamond（4）</td><td>224</td><td>14.8</td><td>1.3</td><td>75</td><td>76</td></tr>
+          <tr><td>β-Sn（6）</td><td>316</td><td>23.2</td><td>2.3</td><td>62</td><td>19</td></tr>
+          <tr><td>bcc（8）</td><td>223</td><td>18.9</td><td>1.0</td><td>61</td><td>38</td></tr>
+          <tr><td>fcc（12）</td><td>225</td><td>13.9</td><td>1.2</td><td>126</td><td>26</td></tr>
+          <tr><td><strong>全部</strong></td><td>244</td><td>15.6</td><td>1.4</td><td>117（平均）</td><td>40（平均）</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li>单位 meV/atom，都是相对能量（每个结构的 F/N 减参考，再减它们的平均）。“留出时”是那个相不参加拟合时的预测误差，偏移量取自训练集。</li>
+        <li>留出时，固定模型的训练误差是 6.6–13.7 meV/atom，自适应模型是 0.3–0.6。</li>
+        <li><strong>diamond 没有改进</strong>：它的 CN（约 4）在 graphite（3）与 β-Sn（6）之间，但它的四面体成键在 CN 上看不出来。单靠 CN 这个描述符不够，要加角度的信息。</li>
+        <li><strong>时间</strong>：一次评估（66 个结构的能量与 34 列 Jacobian）在 10 个进程上约 3.8 s。固定模型的全部拟合用 20 次评估、95 s；自适应用满了 150 次评估、2413 s（这时它的误差已从第 80 次的 1.8 降到 1.4）。整个实验约 6 小时。这台机器当时与另一个会话共用 CPU（10 核的负载 47–61），所以这些时间偏长。</li>
+      </ul>
+    </section>
+
+    <section id="md">
+      <h2>四、MD：短程墙与外推</h2>
+      <p>扭曲的 Cu<sub>13</sub> 二十面体（表面 CN 约 5，中心 11），600 K，速度 Verlet，1 fs，scc_tol 1e-8，每步从上一步的电荷开始。开始前在 3 个原子上比较力与能量的中心差分（步长 1e-4 Å），四种情况都是 1.6–2.6e-7 eV/Å。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>模型</th><th>步数</th><th>总能量的范围</th><th>漂移</th><th>最短距离</th><th>CN 范围</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>固定，没有墙</td><td>400</td><td>0.42 meV</td><td>0.2 meV/ps</td><td>2.02 Å</td><td>2.0–11.9</td><td>稳定（但二聚体曲线在 1.5 Å 有 −14.8 eV 的阱，见下）</td></tr>
+          <tr><td>固定，有墙</td><td>2000</td><td>2.2 meV</td><td>0.9 meV/ps</td><td>1.98 Å</td><td>1.7–11.9</td><td>稳定</td></tr>
+          <tr><td>自适应，没有墙</td><td>400</td><td>7.7 eV</td><td>—</td><td>1.35 Å</td><td>0–12</td><td>约 100 fs 时塌缩</td></tr>
+          <tr><td>自适应，有墙</td><td>2000</td><td>0.69 eV</td><td>−0.17 eV/ps</td><td>1.87 Å</td><td>0–12</td><td>重构，势能降约 12 eV，原子蒸发</td></tr>
+          <tr><td>自适应，有墙，以固定模型为锚（l2 = 1e-3，拟合 1.2 meV/atom）</td><td>2000</td><td>2.0 eV</td><td>0.42 eV/ps</td><td>1.75 Å</td><td>0–11.9</td><td>重构，势能降约 22 eV</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>短程墙</strong>：E(r) − E(3 Å) 的 Cu<sub>2</sub> 二聚体曲线，没有墙时固定模型在 1.5 Å 为 −14.8 eV，自适应 −12.6 eV。数据里最短的键是 2.059 Å，没有东西约束更短的距离。先试过约束对排斥势的系数 ≥ 0，不够：非负的多项式可以很小，压不住 15 eV 的电子能阱。改为固定的核心墙 A (r<sub>w</sub> − r)<sup>3</sup>，r<sub>w</sub> = 2.0 Å，A = 1000 eV/Å<sup>3</sup>：66 个训练能量逐位不变（检查过），拟合与交叉验证都不受影响，二聚体曲线在 2.0 Å 以内单调上升（1.6 Å 时 +52 eV，1.2 Å 时 +562 eV）。</li>
+        <li><strong>自适应模型为什么不稳定</strong>：力是对的（差分），能量在前约 100 fs 守恒到 meV。之后团簇打开，中心原子的 CN 从 11 降到约 6，势能降 12 eV（约 0.9 eV/atom）变成热，最近的原子压在墙上（1.8–1.9 Å）。拟合给低配位的 d 跃迁乘上了 exp(0.55) ≈ 1.7，这对 dimer 到 diamond 的理想结构是对的；但训练集里 CN 约 4 的结构键长都 ≥ 2.15 Å，CN 1 的 dimer 才有 2.06 Å，“低配位、短键、多个邻居”的组合不在数据里。不随环境变的模型做不出这样的外推，所以稳定。</li>
+        <li><strong>以固定模型为锚</strong>：从固定模型的解开始、对它做更强的岭回归，拟合同样好（1.2 meV/atom），MD 反而更差。所以问题不在正则化，在数据：只有 6 个理想相的体积扫描，没有畸变的结构、没有力、没有混合配位的环境。</li>
+        <li><strong>结论</strong>：引擎与拟合可以用；自适应参数的跨相迁移能力有实测的收益；但一个能做 MD 的自适应模型需要力与畸变结构的数据（团簇、表面、拉伸与扰动的晶胞），这正是主动学习（M8c）要做的。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>五、测试与门槛</h2>
+      <div class="dev">
+      <p><code>tests/test_adaptive.py</code>（13 项）：零模型逐位不变（分子与周期体系的能量、力、应力）；分子的力（四个通道、两个元素、有墙）；NTPoly、FOE、DFTB3、LJ 色散与共线自旋下的力；周期金属的力与应力；∂F/∂θ 对差分；PyDFTB；基函数、向量与墙的单元检查；拒绝的组合；拟合从零找回已知模型（RMSE &lt; 1e-6 eV/atom）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>门槛</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb 测试（本机，没有 torch 与 mpi4py）</td><td>1720 个通过 / 588 个跳过 / 2 个失败；失败的是 M7d3 报告里同样的两项 <code>test_kthreads</code>（本机的环境问题）。之后加的 4 项（其他求解器与墙）单独跑：<code>test_adaptive.py</code> 13 个全部通过</td></tr>
+          <tr><td>G0：golden（对 9203477）</td><td>1523 个计算、691747 个字段逐位相同（<code>--allow-new adaptive</code>，新的字段）</td></tr>
+          <tr><td>相关测试</td><td>类型切换、双引擎、ASE：78 个通过，7 个跳过（torch、dftb+）</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>代码检查：ruff 对新文件没有告警。</p>
+      </div>
+    </section>
+
+    <section id="dev">
+      <h2>六、与设计的偏差</h2>
+      <ul>
+        <li><strong>短程墙</strong>：设计里没有。MD 的塌缩之后加入（<code>PairRepulsive(wall=, wall_strength=)</code>，固定、不是系数）；先试过系数 ≥ 0 的约束，不够，已撤掉。</li>
+        <li><strong>MD 的结论</strong>：设计预期自适应模型能做 MD；实测只用这份数据不行（第四节）。固定模型可以。</li>
+        <li><strong>以固定模型为锚的拟合</strong>：设计里没有，是为了检验 MD 的不稳定是否来自正则化而做的，结果否定了这个猜测。</li>
+        <li>其余按设计：四个通道、CN 描述符、RBF 基、变分的 ∂F/∂θ、拒绝的组合、拟合与交叉验证。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>七、下一步</h2>
+      <ul>
+        <li><strong>数据</strong>：Cu 的团簇、表面、空位、扰动与拉伸的晶胞，带力与应力（DFT；电光云 HPC 的 VASP 可以做）。没有这些，自适应模型不能用于 MD。</li>
+        <li><strong>力进入损失</strong>：需要 ∂F/∂θ 对坐标的导数（autodiff 的 implicit 模式，或在 NumPy 里对 ∂E/∂p 求导）。</li>
+        <li><strong>描述符</strong>：按元素的 CN、角度（区分 diamond 与平面配位），之后再换成神经网络的 Φ（M8b）。</li>
+        <li><strong>主动学习（M8c）</strong>：用模型的不确定度（例如几个拟合的差别）在 MD 中挑结构，算 DFT 再加入训练集。这次 Cu<sub>13</sub> 团簇的重构正是该被挑出来的那种结构。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M8a-adaptive-params.html">← M8a 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

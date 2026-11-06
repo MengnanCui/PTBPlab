@@ -80,6 +80,7 @@ IGNORED = ("k_threads",)
 #: pydftb options with no DFTB+ counterpart, and why
 REFUSED = {
     "type_switching": "smooth type switching is pydftb's (M5a); give the fixed type labels",
+    "adaptive": "environment-adaptive parameters are pydftb's (M8a)",
     "backend": "DFTB+ runs its own linear algebra (NumPy-like, float64)",
     "device": "DFTB+ runs on the CPU here",
     "dtype": "DFTB+ computes in float64",

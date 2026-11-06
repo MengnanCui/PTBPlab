@@ -33,6 +33,8 @@ term.  Neither changes the mixed vector.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import time
 import warnings
 from dataclasses import dataclass, field, replace
@@ -66,6 +68,7 @@ from .skf import SKSet, shell_names
 from . import spinorbit as so
 from .thirdorder import ThirdOrder
 from . import typeswitch as _typeswitch                 # M5a
+from . import adaptive as _adaptive                     # M8a
 from .hamiltonian import build_mixed_pairs              # M5a
 
 
@@ -165,6 +168,9 @@ class DFTBResult:
     # M6h: hybrid functionals, the exchange of DeltaP (DFTB+ "Energy Fock"), a part of energy;
     # q_in and q_out are then [populations | the mixed DeltaP (every spin channel's lower triangle)]
     e_fock: float = 0.0
+    # M8a: environment-adaptive parameters, pydftb.adaptive.AdaptiveResult (the coordination
+    # numbers, every atom's parameters, dF/d(the model coefficients))
+    adaptive: object | None = None
 
     @property
     def e_total(self) -> float:
@@ -253,6 +259,7 @@ class _Setup:
     switching: "_typeswitch.TypeMixing | None" = None      # type weights (M5a)
     hybrid: "_hybrid.HybridTerms | None" = None              # hybrid functionals (M6h)
     sparse: _Sparse | None = None           # H0, S on the neighbour pattern (M7c; h0, smat None)
+    adaptive: "_adaptive.AdaptiveTerms | None" = None    # environment-adaptive parameters (M8a)
 
     @property
     def kw_dev(self):
@@ -580,7 +587,8 @@ class DFTB:
                  fixed_fermi_level=None, independent_k_filling: bool = False,
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
-                 dipole_correction=None, analysis=None, type_switching=None, hybrid=None):
+                 dipole_correction=None, analysis=None, type_switching=None, hybrid=None,
+                 adaptive=None):
         noncolinear = isinstance(spin, str) and spin.lower() in ("noncolinear", "noncollinear")
         if isinstance(spin, str) and not noncolinear:
             if spin.lower() not in ("colinear", "collinear"):
@@ -793,6 +801,34 @@ class DFTB:
             self._check_subsystems()
         elif getattr(solver, "sparse", False):                         # M7c
             self._check_sparse()
+        self.adaptive = _adaptive.make_models(adaptive)                # M8a
+        if self.adaptive:
+            self._check_adaptive()
+
+    def _check_adaptive(self):
+        """What the environment-adaptive parameters (M8a) do not support."""
+        why = []
+        if self.backend.is_torch:
+            why.append("the torch backend")
+        if self.pauli:
+            why.append("two-component spin")
+        if self.hybrid is not None:
+            why.append("hybrid functionals")
+        if self.block_terms:
+            why.append("DFTB+U or onsite corrections")
+        if self.casida is not None:
+            why.append("Casida")
+        if self.type_switching is not None:
+            why.append("type switching (M5a)")
+        if self.analysis is not None:
+            why.append("analysis outputs")
+        if getattr(self.solver, "sparse", False):
+            why.append("the sparse and divide-and-conquer solvers")
+        if getattr(self.sk, "selected", False):
+            why.append("selected shells")
+        if why:
+            raise ValueError("environment-adaptive parameters (M8a) do not support "
+                             + ", ".join(why))
 
     def _check_sparse(self):
         """The sparse NTPoly path's conditions (M7c, DFTB+'s ``Sparse = Yes``): the terms that
@@ -1144,6 +1180,8 @@ class DFTB:
             out.append("initial_charges")
         if self.spin and self.initial_spins is not None:
             out.append("collinear initial_spins")
+        if getattr(self, "adaptive", None):                       # M8a
+            out.append("adaptive")
         for name in ("fixed_fermi_level", "hubbard", "reference_occupations",
                      "truncate_sk_range"):
             if getattr(self, name, None) is not None:
@@ -1281,6 +1319,13 @@ class DFTB:
         if self.type_switching is not None:                             # M5a
             res.type_weights = _typeswitch.result_weights(self.type_switching, setup.switching,
                                                           len(setup.species))
+        if setup.adaptive is not None:                                  # M8a
+            # only the density at the pair elements is needed (wdm is None without forces)
+            st_rho = state if state.wdm is not None else dataclasses.replace(state, wdm=state.rho)
+            p_e = self._pair_densities(setup, st_rho)[0]
+            dedp = _adaptive.parameter_derivatives(setup.adaptive, setup.pairs, p_e,
+                                                   self._onsite_density(setup, state))
+            res.adaptive = _adaptive.result(setup.adaptive, dedp)
         rel = gs = None
         if self.casida is not None:
             t1 = time.perf_counter()
@@ -1808,6 +1853,12 @@ class DFTB:
             pb = build_pairs(species, pos, cell, pbc, sk, basis, derivatives=forces,
                              fd_delta=self.fd_delta)
         eps0 = onsite_energies(basis, sk)
+        adaptive = None
+        if self.adaptive:                                # M8a: scaled H0, shifted on-site energies
+            adaptive = _adaptive.setup(self.adaptive, species, pos, cell, pbc, basis, sk,
+                                       self.repulsive, forces)
+            _adaptive.scale_pairs(adaptive, pb)
+            eps0 = eps0 + adaptive.onsite_shift
         site_of_orb, site_atom, hub, q0 = self._sites(basis)
         periodic = cell is not None and np.any(pbc)
         if periodic and self.kpts is not None:
@@ -1917,7 +1968,8 @@ class DFTB:
         return _Setup(list(species), pos, cell, pbc, basis, pb, kpts, kw, gamma_only, h0, smat,
                       site_of_orb, site_atom, q0, nelec, coul, third, spin, disp, eps0, dev,
                       pauli=pauli, block=block, ext=ext, solv=solv, halogenx=halogenx,
-                      dipole_corr=dipole_corr, switching=mix, hybrid=hybrid, sparse=sparse)
+                      dipole_corr=dipole_corr, switching=mix, hybrid=hybrid, sparse=sparse,
+                      adaptive=adaptive)
 
     def _hybrid_terms(self, species, pos, basis: Basis, smat, cell=None,
                       pairs=None) -> "_hybrid.HybridTerms":
@@ -3032,6 +3084,12 @@ class DFTB:
         if st.switching is not None and st.switching.active.any():    # M5a: weights' gradient
             sw = _typeswitch.weight_gradient(st.switching, pb, p_e, coef_s, virial)
             grad = grad + sw[0]
+        ad = None
+        if st.adaptive is not None:                                  # M8a: parameters' gradient
+            dedp = _adaptive.parameter_derivatives(st.adaptive, pb, p_e,
+                                                   self._onsite_density(st, sc))
+            ad = _adaptive.coordinate_gradient(st.adaptive, dedp, virial)
+            grad = grad + ad[0]
         natom = len(st.pos)
         dq, _ = self._charge_and_magnetisation(st, sc.q_out)
         if xl:
@@ -3083,7 +3141,17 @@ class DFTB:
             w = w + st.dipole_corr.virial(dq_atom)
         if sw is not None:                                           # M5a
             w = w + sw[1]
+        if ad is not None:                                           # M8a
+            w = w + ad[1]
         return grad, 0.5 * (w + w.T)
+
+    @staticmethod
+    def _onsite_density(st: _Setup, sc: _SCCState) -> np.ndarray:
+        """D_mu,mu: the real-space density at the on-site diagonal (T = 0), summed over spins
+        and k, the coefficient of the on-site energies in the band energy (M8a)."""
+        nk = len(st.kw)
+        kw = np.tile(st.kw, len(sc.rho) // nk)
+        return np.einsum("k,kii->i", kw, np.asarray(sc.rho)).real
 
     @staticmethod
     def _add_pair_terms(st: _Setup, grad, p_e, coef_s):
@@ -3232,6 +3300,8 @@ class DFTB:
     def _repulsive_energy(self, st: _Setup) -> float:
         if st.switching is not None:                 # M5a: mixed, computed in the setup
             return st.switching.rep.energy
+        if st.adaptive is not None:                  # M8a: scaled and added, in the setup
+            return st.adaptive.rep_energy
         nl, terms = self._repulsive_pairs(st)
         e_tot = 0.0
         for m, rep in terms:
@@ -3244,6 +3314,8 @@ class DFTB:
         if st.switching is not None:                 # M5a: mixed, at fixed weights
             rep = st.switching.rep
             return rep.gradient.copy(), rep.virial.copy()
+        if st.adaptive is not None:                  # M8a: at fixed parameters
+            return st.adaptive.rep_gradient.copy(), st.adaptive.rep_virial.copy()
         grad = np.zeros_like(st.pos)
         w = np.zeros((3, 3))
         nl, terms = self._repulsive_pairs(st)

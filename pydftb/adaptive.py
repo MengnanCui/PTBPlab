@@ -1,0 +1,504 @@
+"""Environment-adaptive parameters: DFTB parameters that change continuously with the
+environment of every atom (milestone M8a).
+
+DFTB+ (and pydftb's type labels) give every atom one fixed parameter set; M5a mixes a few
+discrete sets with coordination-number weights.  Here the parameters themselves are smooth
+functions of a descriptor of each atom's environment, with exact forces and stress, so that
+relaxations, MD and periodic systems work, and with the derivatives of the free energy with
+respect to the model's coefficients for fitting.
+
+Descriptor: the coordination number CN_A = sum_B f(r_AB) (periodic images included), with M5a's
+counting function f = 1 - S((r - r_on) / (r_off - r_on)) between r_on and r_off (S the C2
+smoothstep).  The default window (0.9, 1.3) x (R_A + R_B) (ASE's covalent radii) starts inside
+the first-neighbour shell of close-packed metals, so CN changes with the volume as well as with
+the structure.
+
+Basis: Phi(CN) = [1, exp(-(CN - c_k)^2 / (2 w^2)) for the centres c_k] (:class:`RBF`); with no
+centres only the constant is left, which is the same model without environment dependence.
+
+Channels of an element (every one linear in its coefficients theta, p_A = Phi(CN_A) . theta):
+
+* ``onsite[l]``: a shift of the on-site energies of shell l, eps_A,l + p_A (Hartree);
+* ``hopping[l]``: a scale of the off-site Hamiltonian, H0_mu,nu -> c_mu H0_mu,nu c_nu with
+  c_mu = exp(p_A,l / 2) for the orbitals mu of shell l of atom A (symmetric, and S is not
+  scaled, so it stays positive definite);
+* ``repulsive``: a scale of the pair repulsive, V_AB -> V_AB exp((p_A + p_B) / 2);
+* ``pair_repulsive[B]``: a pair repulsive added between this element and element B,
+  V(r) = sum_n c_n (r_c - r)^n for r < r_c (n = 2, 3, ...; :class:`PairRepulsive`), also scaled
+  by the repulsive channel.
+
+Forces: at fixed parameters the scaled H0 and its derivatives and the scaled repulsive go
+through the usual code; the parameters' dependence on the geometry adds
+sum_A dE/dCN_A dCN_A/dR, with the variational dE/dp at fixed density: the on-site density
+D_mu,mu for the on-site shifts, 1/2 sum_e P_e H_e over the pair elements of the scaled H0 that
+touch the shell for the hopping scales, and the repulsive's own terms.  The same dE/dp give the
+derivatives of the Mermin free energy with respect to every coefficient (:class:`AdaptiveResult`),
+which is what a fit needs.  With zero coefficients the calculation is the plain one, bit for bit.
+
+NumPy engine, dense solvers, no spin, two-component spin, hybrids, Casida, type switching or
+autodiff (refused by :class:`pydftb.calculator.DFTB`).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+
+import numpy as np
+from ase.data import atomic_numbers, covalent_radii
+
+from .constants import BOHR
+from .neighbors import neighbor_list
+from .system import element_of_label
+from .typeswitch import smoothstep
+
+DEFAULT_WINDOW = (0.9, 1.3)       # (r_on, r_off) / (R_cov,A + R_cov,B)
+SHELL_LETTERS = "spdf"
+
+
+# ---- basis --------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class RBF:
+    """Phi(CN) = [1 (if ``constant``), exp(-(CN - c)^2 / (2 width^2)) for c in ``centres``]."""
+    centres: tuple = ()
+    width: float = 1.5
+    constant: bool = True
+
+    def __post_init__(self):
+        object.__setattr__(self, "centres", tuple(float(c) for c in self.centres))
+        if not self.width > 0.0:
+            raise ValueError("RBF width must be > 0")
+        if not self.constant and not self.centres:
+            raise ValueError("an RBF basis needs the constant or at least one centre")
+
+    @property
+    def size(self) -> int:
+        return int(self.constant) + len(self.centres)
+
+    def __call__(self, cn):
+        """Phi (n, size) and dPhi/dCN (n, size)."""
+        cn = np.asarray(cn, float)[:, None]
+        c = np.asarray(self.centres)[None, :]
+        g = np.exp(-0.5 * ((cn - c) / self.width) ** 2)
+        dg = -g * (cn - c) / self.width ** 2
+        if self.constant:
+            n = len(cn)
+            return (np.hstack([np.ones((n, 1)), g]), np.hstack([np.zeros((n, 1)), dg]))
+        return g, dg
+
+
+@dataclass(frozen=True)
+class PairRepulsive:
+    """V(r) = sum_n coefficients[n - 2] (cutoff - r)^n for r < cutoff (Bohr, Hartree),
+    n = 2, 3, ...; zero and smooth at the cut-off.  Optionally a fixed core wall
+    ``wall_strength`` (wall - r)^3 for r < ``wall`` (not a coefficient, never fitted): put below
+    the shortest bond of the fitting data, it changes none of their energies and keeps the
+    pair repulsive at short distances where the data say nothing (M8a: without it a fitted
+    Cu13 cluster collapsed to 1.4 A in MD)."""
+    cutoff: float
+    coefficients: tuple = (0.0, 0.0, 0.0, 0.0)
+    wall: float = 0.0
+    wall_strength: float = 0.0
+
+    def __post_init__(self):
+        object.__setattr__(self, "coefficients", tuple(float(c) for c in self.coefficients))
+        if not self.cutoff > 0.0:
+            raise ValueError("PairRepulsive cutoff must be > 0 (Bohr)")
+        if self.wall < 0.0 or self.wall_strength < 0.0 or self.wall > self.cutoff:
+            raise ValueError("PairRepulsive needs 0 <= wall <= cutoff and wall_strength >= 0")
+
+    def powers(self, r):
+        """(cutoff - r)^n for n = 2, 3, ... (len(r), n_coef) and d/dr, zero beyond the cut-off."""
+        x = np.clip(self.cutoff - np.asarray(r, float), 0.0, None)[:, None]
+        n = np.arange(2, 2 + len(self.coefficients))[None, :]
+        return x ** n, -n * x ** (n - 1)
+
+    def core(self, r):
+        """The fixed wall and its derivative (zero for r >= wall)."""
+        x = np.clip(self.wall - np.asarray(r, float), 0.0, None)
+        return self.wall_strength * x ** 3, -3.0 * self.wall_strength * x ** 2
+
+    def __call__(self, r):
+        p, dp = self.powers(r)
+        c = np.asarray(self.coefficients)
+        w, dw = self.core(r)
+        return p @ c + w, dp @ c + dw
+
+
+# ---- the model of one element -----------------------------------------------------------------------
+@dataclass(frozen=True)
+class AdaptiveParams:
+    """Environment-adaptive parameters of the atoms of ``element``.
+
+    basis     : :class:`RBF` of the coordination number.
+    onsite    : {shell letter: coefficients} on-site shifts (Hartree).
+    hopping   : {shell letter: coefficients} log scales of the off-site H0 of that shell.
+    repulsive : coefficients of the log scale of the pair repulsive (None: no scaling).
+    pair_repulsive : {neighbour element: :class:`PairRepulsive`} pair repulsives added.
+    window    : (r_on, r_off) of the counting function: Bohr, or factors of R_A + R_B with
+                ``window_scaled`` (default: DEFAULT_WINDOW, scaled).
+    neighbours: the elements counted in CN (None: all).
+
+    Coefficients have ``basis.size`` values; missing channels are zero.
+    """
+    element: str
+    basis: RBF = field(default_factory=RBF)
+    onsite: dict = field(default_factory=dict)
+    hopping: dict = field(default_factory=dict)
+    repulsive: tuple | None = None
+    pair_repulsive: dict = field(default_factory=dict)
+    window: tuple = DEFAULT_WINDOW
+    window_scaled: bool = True
+    neighbours: tuple | None = None
+
+    def __post_init__(self):
+        n = self.basis.size
+        for name in ("onsite", "hopping"):
+            d = {}
+            for shell, coef in dict(getattr(self, name)).items():
+                if shell not in SHELL_LETTERS:
+                    raise ValueError(f"{name}: shells are letters s, p, d, f, not {shell!r}")
+                coef = tuple(float(c) for c in np.ravel(coef))
+                if len(coef) != n:
+                    raise ValueError(f"{name}[{shell!r}] needs {n} coefficients (the basis size)")
+                d[shell] = coef
+            object.__setattr__(self, name, d)
+        if self.repulsive is not None:
+            coef = tuple(float(c) for c in np.ravel(self.repulsive))
+            if len(coef) != n:
+                raise ValueError(f"repulsive needs {n} coefficients (the basis size)")
+            object.__setattr__(self, "repulsive", coef)
+        pr = {}
+        for el, rep in dict(self.pair_repulsive).items():
+            if not isinstance(rep, PairRepulsive):
+                rep = PairRepulsive(**rep) if isinstance(rep, dict) else PairRepulsive(*rep)
+            pr[str(el)] = rep
+        object.__setattr__(self, "pair_repulsive", pr)
+        r_on, r_off = (float(x) for x in self.window)
+        if not 0.0 < r_on < r_off:
+            raise ValueError("window needs 0 < r_on < r_off")
+        object.__setattr__(self, "window", (r_on, r_off))
+        if self.neighbours is not None:
+            object.__setattr__(self, "neighbours", tuple(self.neighbours))
+
+    # -- the coefficients as one vector (fitting) ----------------------------------------------
+    def parameter_names(self) -> list[str]:
+        """Names of the entries of :meth:`vector`, in order."""
+        n = self.basis.size
+        out = [f"{self.element}.onsite.{s}[{k}]" for s in sorted(self.onsite) for k in range(n)]
+        out += [f"{self.element}.hopping.{s}[{k}]" for s in sorted(self.hopping) for k in range(n)]
+        if self.repulsive is not None:
+            out += [f"{self.element}.repulsive[{k}]" for k in range(n)]
+        for el in sorted(self.pair_repulsive):
+            out += [f"{self.element}-{el}.pair[{k}]"
+                    for k in range(len(self.pair_repulsive[el].coefficients))]
+        return out
+
+    def vector(self) -> np.ndarray:
+        parts = [self.onsite[s] for s in sorted(self.onsite)]
+        parts += [self.hopping[s] for s in sorted(self.hopping)]
+        if self.repulsive is not None:
+            parts.append(self.repulsive)
+        parts += [self.pair_repulsive[el].coefficients for el in sorted(self.pair_repulsive)]
+        return np.concatenate([np.asarray(p, float) for p in parts]) if parts else np.zeros(0)
+
+    def with_vector(self, x) -> AdaptiveParams:
+        x = np.asarray(x, float)
+        if len(x) != len(self.vector()):
+            raise ValueError(f"needs {len(self.vector())} values, not {len(x)}")
+        n, k = self.basis.size, 0
+        onsite, hopping = {}, {}
+        for s in sorted(self.onsite):
+            onsite[s], k = tuple(x[k:k + n]), k + n
+        for s in sorted(self.hopping):
+            hopping[s], k = tuple(x[k:k + n]), k + n
+        rep = None
+        if self.repulsive is not None:
+            rep, k = tuple(x[k:k + n]), k + n
+        pair = {}
+        for el in sorted(self.pair_repulsive):
+            r = self.pair_repulsive[el]
+            m = len(r.coefficients)
+            pair[el], k = replace(r, coefficients=tuple(x[k:k + m])), k + m   # wall kept
+        return replace(self, onsite=onsite, hopping=hopping, repulsive=rep, pair_repulsive=pair)
+
+    # -- descriptor -------------------------------------------------------------------------------
+    def windows(self, elements) -> dict:
+        """(r_on, r_off) in Bohr for every neighbour element counted."""
+        out = {}
+        ra = covalent_radii[atomic_numbers[self.element]] / BOHR
+        for el in set(elements):
+            if self.neighbours is not None and el not in self.neighbours:
+                continue
+            if self.window_scaled:
+                rb = covalent_radii[atomic_numbers[el]] / BOHR
+                out[el] = (self.window[0] * (ra + rb), self.window[1] * (ra + rb))
+            else:
+                out[el] = self.window
+        return out
+
+    def coordination_numbers(self, elements, pos, cell=None, pbc=None):
+        """CN of every atom of the element (0 for the others) and its gradient pairs
+        (i, j, vec, f'(r)/r), i the atom whose CN it is."""
+        elements = list(elements)
+        natom = len(elements)
+        win = self.windows(elements)
+        empty = (np.zeros(0, int), np.zeros(0, int), np.zeros((0, 3)), np.zeros(0))
+        if not win or self.element not in elements:
+            return np.zeros(natom), empty
+        rc = max(w[1] for w in win.values())
+        periodic = cell is not None and pbc is not None and np.any(pbc)
+        i, j, _, vec, d = neighbor_list(np.asarray(pos, float), cell if periodic else None,
+                                        pbc if periodic else None, rc)
+        el = np.array(elements)
+        r_on = np.array([win.get(e, (0.0, 0.0))[0] for e in el])
+        r_off = np.array([win.get(e, (0.0, 0.0))[1] for e in el])
+        keep = (el[i] == self.element) & (d < r_off[j])
+        i, j, vec, d = i[keep], j[keep], vec[keep], d[keep]
+        span = r_off[j] - r_on[j]
+        s, ds = smoothstep((d - r_on[j]) / span)
+        cn = np.bincount(i, 1.0 - s, minlength=natom)
+        return cn, (i, j, vec, -ds / span / d)
+
+
+def make_models(spec) -> tuple:
+    """A tuple of AdaptiveParams, one per element, from one or a list of them."""
+    if spec is None:
+        return ()
+    models = (spec,) if isinstance(spec, AdaptiveParams) else tuple(spec)
+    for m in models:
+        if not isinstance(m, AdaptiveParams):
+            raise TypeError("adaptive takes AdaptiveParams (or a list of them)")
+    els = [m.element for m in models]
+    if len(set(els)) != len(els):
+        raise ValueError("one AdaptiveParams per element")
+    return models
+
+
+# ---- the terms of one geometry ---------------------------------------------------------------------
+@dataclass
+class AdaptiveTerms:
+    """What the calculator keeps of the models for one geometry."""
+    models: tuple
+    elements: list
+    cn: np.ndarray                      # (n_atom,)
+    cn_pairs: tuple                     # (i, j, vec, f'(r)/r) of all models' atoms
+    phi: dict                           # element -> (atoms, Phi, dPhi)
+    onsite: dict                        # (element, shell) -> p per atom of the element
+    hopping: dict
+    rep_scale: np.ndarray               # (n_atom,) p of the repulsive channel (0: none)
+    orb_scale: np.ndarray               # c_mu (n_orb,)
+    onsite_shift: np.ndarray            # (n_orb,)
+    shell_of: dict                      # (element, shell) -> list of orbital index arrays per atom
+    rep_energy: float = 0.0
+    rep_gradient: np.ndarray | None = None
+    rep_virial: np.ndarray | None = None
+    rep_dedp: np.ndarray | None = None              # dE_rep/dp_repulsive per atom
+    rep_dedc: dict | None = None                    # (element, neighbour) -> dE/dc_n
+
+
+def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bool):
+    """The coordination numbers, the parameters of every atom, the orbital scales and on-site
+    shifts, and the (scaled and added) repulsive with its gradient."""
+    elements = [element_of_label(s) for s in species]
+    natom = len(elements)
+    pos = np.asarray(pos, float)
+    cn = np.zeros(natom)
+    pi, pj, pv, pf = [], [], [], []
+    phi, onsite, hopping = {}, {}, {}
+    rep_scale = np.zeros(natom)
+    orb_scale = np.ones(basis.norb)
+    onsite_shift = np.zeros(basis.norb)
+    shell_of = {}
+    for m in models:
+        c, (i, j, v, f) = m.coordination_numbers(elements, pos, cell, pbc)
+        atoms = np.array([a for a in range(natom) if elements[a] == m.element], int)
+        cn[atoms] = c[atoms]
+        pi.append(i), pj.append(j), pv.append(v), pf.append(f)
+        ph, dph = m.basis(cn[atoms])
+        phi[m.element] = (atoms, ph, dph)
+        for chan, store in (("onsite", onsite), ("hopping", hopping)):
+            for shell, coef in getattr(m, chan).items():
+                store[(m.element, shell)] = ph @ np.asarray(coef)
+        if m.repulsive is not None:
+            rep_scale[atoms] = ph @ np.asarray(m.repulsive)
+        for shell in set(m.onsite) | set(m.hopping):
+            l = SHELL_LETTERS.index(shell)
+            orbs = []
+            for a in atoms:
+                o0 = basis.offsets[a]
+                sel = [o0 + k for k, ll in enumerate(_orbital_l(basis, a)) if ll == l]
+                if not sel:
+                    raise ValueError(f"{m.element} has no {shell} shell in this basis")
+                orbs.append(np.array(sel, int))
+            shell_of[(m.element, shell)] = orbs
+            for a_idx, o in enumerate(orbs):
+                if shell in m.onsite:
+                    onsite_shift[o] += onsite[(m.element, shell)][a_idx]
+                if shell in m.hopping:
+                    orb_scale[o] = np.exp(0.5 * hopping[(m.element, shell)][a_idx])
+    cat = lambda xs, shape: np.concatenate(xs) if xs else np.zeros(shape)
+    cn_pairs = (cat(pi, 0).astype(int), cat(pj, 0).astype(int), cat(pv, (0, 3)), cat(pf, 0))
+    terms = AdaptiveTerms(models, elements, cn, cn_pairs, phi, onsite, hopping, rep_scale,
+                          orb_scale, onsite_shift, shell_of)
+    _repulsive(terms, species, pos, cell, pbc, sk, mode, derivatives)
+    return terms
+
+
+def _orbital_l(basis, a):
+    """The angular momentum of every orbital of atom a."""
+    out = []
+    for l in basis.shells[a]:
+        out += [l] * (2 * l + 1)
+    return out
+
+
+def scale_pairs(terms: AdaptiveTerms, pb):
+    """H0 (and dH0) of the pair blocks scaled by c_row c_col, in place (exactly 1: unchanged)."""
+    c = terms.orb_scale[pb.rows] * terms.orb_scale[pb.cols]
+    pb.h *= c
+    if pb.dh is not None:
+        pb.dh *= c[:, None]
+
+
+def _repulsive(terms, species, pos, cell, pbc, sk, mode, grad):
+    """E_rep = 1/2 sum over ordered pairs (V^SK + V^model)(r) exp((p_i + p_j)/2), its gradient
+    at fixed parameters, virial, dE/dp per atom and dE/dc of the pair repulsives."""
+    natom = len(species)
+    labels = sorted(set(species))
+    elements = terms.elements
+    added = {}                         # ordered (element a, element b) -> (owner key, PairRepulsive)
+    for m in terms.models:
+        for el, rep in m.pair_repulsive.items():
+            key = (m.element, el)
+            for pair in {key, (el, m.element)}:
+                if pair in added:
+                    raise ValueError(f"the pair repulsive {m.element}-{el} is given twice")
+                added[pair] = (key, rep)
+    rc = max([r.cutoff for a in labels for b in labels
+              if (r := sk.repulsive(a, b, mode)) is not None]
+             + [r.cutoff for _, r in added.values()], default=0.0)
+    terms.rep_gradient = np.zeros((natom, 3)) if grad else None
+    terms.rep_virial = np.zeros((3, 3)) if grad else None
+    terms.rep_dedp = np.zeros(natom)
+    terms.rep_dedc = {}
+    if rc == 0.0:
+        return
+    periodic = cell is not None and pbc is not None and np.any(pbc)
+    i, j, _, vec, d = neighbor_list(pos, cell if periodic else None, pbc if periodic else None, rc)
+    spec = np.array(species)
+    el = np.array(elements)
+    s = np.exp(0.5 * (terms.rep_scale[i] + terms.rep_scale[j]))
+    e_tot = 0.0
+    for a in labels:                              # the SK repulsive, label by label
+        for b in labels:
+            rep = sk.repulsive(a, b, mode)
+            m = (spec[i] == a) & (spec[j] == b)
+            if rep is None or not m.any():
+                continue
+            v, dv = rep(d[m])
+            e_tot += _add_pair_term(terms, i[m], j[m], vec[m], d[m], s[m], v, dv, grad)
+    for (ea, eb), (key, rep) in sorted(added.items()):   # the model's pair repulsives
+        m = (el[i] == ea) & (el[j] == eb) & (d < rep.cutoff)
+        if not m.any():
+            continue
+        p, dp = rep.powers(d[m])
+        c = np.asarray(rep.coefficients)
+        w, dw = rep.core(d[m])
+        e_tot += _add_pair_term(terms, i[m], j[m], vec[m], d[m], s[m], p @ c + w, dp @ c + dw,
+                                grad)
+        terms.rep_dedc[key] = terms.rep_dedc.get(key, 0.0) + 0.5 * (s[m][:, None] * p).sum(0)
+    terms.rep_energy = e_tot
+
+
+def _add_pair_term(terms, i, j, vec, d, s, v, dv, grad):
+    """Adds 1/2 sum s V over these ordered pairs: energy (returned), gradient and virial at
+    fixed parameters, dE/dp."""
+    vs = v * s
+    np.add.at(terms.rep_dedp, i, 0.25 * vs)
+    np.add.at(terms.rep_dedp, j, 0.25 * vs)
+    if grad:
+        g = (0.5 * s * dv / d)[:, None] * vec
+        np.add.at(terms.rep_gradient, i, -g)
+        np.add.at(terms.rep_gradient, j, g)
+        terms.rep_virial += g.T @ vec
+    return 0.5 * vs.sum()
+
+
+# ---- dE/dp, forces and the derivatives of the coefficients ------------------------------------------
+def parameter_derivatives(terms: AdaptiveTerms, pb, p_e, d_onsite) -> dict:
+    """dE/dp per channel: {("onsite"|"hopping", element, shell): (n_atom_el,),
+    ("repulsive", element): (n_atom_el,)} at fixed density (``p_e`` the density at the pair
+    elements, ``d_onsite`` the on-site density D_mu,mu)."""
+    out = {}
+    if terms.hopping:
+        he = p_e * pb.h                           # scaled H0: d(c_r c_c H0)/dp = 1/2 (...) H
+        per_orb = np.bincount(pb.rows, he, minlength=len(terms.orb_scale)) + \
+            np.bincount(pb.cols, he, minlength=len(terms.orb_scale))
+    for (el, shell), orbs in terms.shell_of.items():
+        if (el, shell) in terms.onsite:
+            out[("onsite", el, shell)] = np.array([d_onsite[o].sum() for o in orbs])
+        if (el, shell) in terms.hopping:
+            out[("hopping", el, shell)] = np.array([0.5 * per_orb[o].sum() for o in orbs])
+    for m in terms.models:
+        if m.repulsive is not None:
+            atoms = terms.phi[m.element][0]
+            out[("repulsive", m.element)] = terms.rep_dedp[atoms]
+    return out
+
+
+def coordinate_gradient(terms: AdaptiveTerms, dedp: dict, virial: bool):
+    """The part of dE/dR and of the virial from the parameters' dependence on CN."""
+    natom = len(terms.cn)
+    dedcn = np.zeros(natom)
+    for m in terms.models:
+        atoms, _, dph = terms.phi[m.element]
+        for key, coef in _channels(m):
+            d = dedp.get(key)
+            if d is not None:
+                dedcn[atoms] += d * (dph @ np.asarray(coef))
+    i, j, vec, fr = terms.cn_pairs
+    g = (dedcn[i] * fr)[:, None] * vec
+    grad = np.zeros((natom, 3))
+    np.add.at(grad, j, g)
+    np.add.at(grad, i, -g)
+    return grad, (g.T @ vec if virial else None)
+
+
+def _channels(m: AdaptiveParams):
+    for s in sorted(m.onsite):
+        yield ("onsite", m.element, s), m.onsite[s]
+    for s in sorted(m.hopping):
+        yield ("hopping", m.element, s), m.hopping[s]
+    if m.repulsive is not None:
+        yield ("repulsive", m.element), m.repulsive
+
+
+@dataclass
+class AdaptiveResult:
+    """``DFTBResult.adaptive``: the coordination numbers, the parameters of every atom and the
+    derivatives of the free energy with respect to every model coefficient (at fixed density,
+    i.e. exact for the Mermin free energy), in the order of ``AdaptiveParams.vector``."""
+    cn: np.ndarray
+    parameters: dict                    # channel key -> p per atom of the element
+    gradients: dict                     # element -> dF/d vector (same order as vector())
+
+    def gradient(self, models) -> np.ndarray:
+        """dF/d(the concatenated vectors of ``models``)."""
+        return np.concatenate([self.gradients[m.element] for m in models])
+
+
+def result(terms: AdaptiveTerms, dedp: dict) -> AdaptiveResult:
+    grads, params = {}, {}
+    for m in terms.models:
+        atoms, ph, _ = terms.phi[m.element]
+        parts = []
+        for key, _ in _channels(m):
+            d = dedp.get(key)
+            parts.append(ph.T @ d if d is not None else np.zeros(m.basis.size))
+            params[key] = (terms.onsite.get(key[1:]) if key[0] == "onsite"
+                           else terms.hopping.get(key[1:]) if key[0] == "hopping"
+                           else terms.rep_scale[atoms])
+        for el in sorted(m.pair_repulsive):
+            parts.append(np.asarray(terms.rep_dedc.get((m.element, el),
+                                                       np.zeros(len(m.pair_repulsive[el].coefficients)))))
+        grads[m.element] = np.concatenate(parts) if parts else np.zeros(0)
+    return AdaptiveResult(terms.cn.copy(), params, grads)
