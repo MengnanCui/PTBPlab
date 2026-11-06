@@ -67,10 +67,14 @@ def models(kind: str):
                                hopping={"s": z, "p": z, "d": z},
                                pair_repulsive={"Cu": PairRepulsive(PAIR_CUTOFF, (0.0,) * N_PAIR, WALL, WALL_STRENGTH)})]
     b = RBF((2.0, 6.0, 10.0), width=2.5)
-    z = (0.0,) * b.size
+    # M8b: "angular" adds the l = 3 bond-angle descriptor (0 for fcc, bcc; 5/9 diamond)
+    ang = RBF((0.3, 0.6), width=0.15, constant=False) if kind == "angular" else None
+    z = (0.0,) * (b.size + (ang.size if ang else 0))
     return [AdaptiveParams("Cu", b, onsite={"s": z, "p": z, "d": z},
                            hopping={"s": z, "p": z, "d": z}, repulsive=z,
-                           pair_repulsive={"Cu": PairRepulsive(PAIR_CUTOFF, (0.0,) * N_PAIR, WALL, WALL_STRENGTH)})]
+                           pair_repulsive={"Cu": PairRepulsive(PAIR_CUTOFF, (0.0,) * N_PAIR,
+                                                               WALL, WALL_STRENGTH)},
+                           angular=ang)]
 
 
 def dimer_curve(models, sk, r=None):
@@ -104,7 +108,8 @@ def main(argv=None):
     ap.add_argument("--l2", type=float, default=1e-4)
     ap.add_argument("--max-evaluations", type=int, default=150)
     ap.add_argument("--no-cv", action="store_true")
-    ap.add_argument("--kinds", default="fixed,adaptive")
+    ap.add_argument("--kinds", default="fixed,adaptive", help="of fixed, adaptive, angular")
+    ap.add_argument("--cv-phases", default=None, help="only these folds (comma separated)")
     args = ap.parse_args(argv)
     sk = ParamSet(os.path.join(REPO, "pydftb", "tests", "data", "skf", "ptbp_hcocu"),
                   max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
@@ -140,7 +145,8 @@ def main(argv=None):
             json.dump(report, fh, indent=1)
         if not args.no_cv:
             cv = {}
-            for ph in PHASE_KEYS:
+            folds = args.cv_phases.split(",") if args.cv_phases else list(PHASE_KEYS)
+            for ph in folds:
                 train = [s for s in data if not s.name.startswith(ph + " ")]
                 test = [s for s in data if s.name.startswith(ph + " ")]
                 r = fit_adaptive(models(kind), train, sk, OPTIONS, l2=args.l2,

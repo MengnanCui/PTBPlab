@@ -52,12 +52,17 @@ def _cu3():
     return at[:3]
 
 
-def _cu_model():
+def _cu_model(angular=False):
+    """Three CN basis functions; with ``angular`` two more of the angular descriptor (M8b)."""
+    ang = RBF((0.02, 0.05), 0.02, constant=False) if angular else None
+    x = (0.04, -0.03) if angular else ()
     return AdaptiveParams(
         "Cu", RBF((4.0, 8.0), 2.0),
-        onsite={"s": (0.01, -0.02, 0.01), "d": (-0.01, 0.02, 0.005)},
-        hopping={"s": (0.05, -0.1, 0.04), "p": (0.02, 0.03, -0.05), "d": (0.03, -0.02, 0.06)},
-        repulsive=(0.1, -0.1, 0.05), pair_repulsive={"Cu": PairRepulsive(6.0, (0.01, -0.002))})
+        onsite={"s": (0.01, -0.02, 0.01) + x, "d": (-0.01, 0.02, 0.005) + x},
+        hopping={"s": (0.05, -0.1, 0.04) + x, "p": (0.02, 0.03, -0.05) + x,
+                 "d": (0.03, -0.02, 0.06) + x},
+        repulsive=(0.1, -0.1, 0.05) + x, pair_repulsive={"Cu": PairRepulsive(6.0, (0.01, -0.002))},
+        angular=ang)
 
 
 def _fd(f, x, h):
@@ -126,8 +131,9 @@ def test_forces_with_collinear_spin(params):
     assert np.abs(r.forces - fd).max() < 2e-9
 
 
-@pytest.fixture(scope="module")
-def cu_case():
+@pytest.fixture(scope="module", params=[False, True], ids=["cn", "cn+angular"])
+def cu_case(request):
+    angular = request.param
     at = _cu3()
     sk = ParamSet(SK, max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
     lab, pos, cell = at.get_chemical_symbols(), at.positions / BOHR, at.cell.array / BOHR
@@ -139,13 +145,16 @@ def cu_case():
     def free(m, p=pos, c=cell):
         return calc(m).calculate(lab, p, c, np.ones(3, bool), forces=False).free_energy
 
-    r = calc(_cu_model()).calculate(lab, pos, cell, np.ones(3, bool), forces=True, stress=True)
-    return lab, pos, cell, free, r
+    r = calc(_cu_model(angular)).calculate(lab, pos, cell, np.ones(3, bool), forces=True,
+                                           stress=True)
+    return angular, pos, cell, free, r
 
 
 def test_forces_and_stress_of_a_metal(cu_case):
-    _, pos, cell, free, r = cu_case
-    m = _cu_model()
+    angular, pos, cell, free, r = cu_case
+    m = _cu_model(angular)
+    if angular:
+        assert np.all(r.adaptive.q > 0.005)          # a distorted cell: no inversion centre
     fd = -_fd(lambda p: free(m, p), pos, 1e-5)
     assert np.abs(r.forces - fd).max() < 1e-8
     vol = abs(np.linalg.det(cell))
@@ -159,8 +168,8 @@ def test_forces_and_stress_of_a_metal(cu_case):
 
 
 def test_coefficient_derivatives(cu_case):
-    *_, free, r = cu_case
-    m = _cu_model()
+    angular, _, _, free, r = cu_case
+    m = _cu_model(angular)
     x0 = m.vector()
     g = r.adaptive.gradient([m])
     fd = _fd(lambda x: free(m.with_vector(x)), x0, 1e-6)
@@ -207,6 +216,32 @@ def test_basis_and_vectors():
         PairRepulsive(4.0, (1.0,), wall=5.0, wall_strength=1.0)
 
 
+def test_angular_descriptor():
+    """q: about 1 for a dimer, 5/8 for graphite, 5/9 for diamond, 0 with inversion symmetry;
+    its gradient against central differences."""
+    from pydftb.validation import ptbp_workload as pw
+    m = AdaptiveParams("Cu", RBF(()), angular=RBF((0.5,), 0.2, constant=False))
+    want = {"dimer": 0.990, "AA-graphite": 0.624, "diamond": 0.555, "bcc": 0.0, "fcc": 0.0}
+    for s in pw.structures(quick=True, phases=list(want)):
+        if s.eos != 5:
+            continue
+        a = s.atoms
+        _, q, _, _ = m.descriptors(a.get_chemical_symbols(), a.positions / BOHR,
+                                   a.cell.array / BOHR, np.ones(3, bool))
+        assert np.abs(q - want[s.phase]).max() < 2e-3, (s.phase, q)
+    at = _cu3()
+    lab, pos, cell = at.get_chemical_symbols(), at.positions / BOHR, at.cell.array / BOHR
+    _, q, _, (i, j, _, dq) = m.descriptors(lab, pos, cell, np.ones(3, bool))
+    g = np.zeros((3, 3, 3))
+    np.add.at(g, (i, j), dq)
+    np.add.at(g, (i, i), -dq)
+    num = _fd(lambda p: np.array(m.descriptors(lab, p.reshape(3, 3), cell, np.ones(3, bool))[1]
+                                 [0]), pos.ravel(), 1e-6)
+    assert np.abs(num.reshape(3, 3) - g[0]).max() < 1e-8
+    with pytest.raises(ValueError, match="constant"):
+        AdaptiveParams("Cu", angular=RBF((0.5,), 0.2))
+
+
 def test_refusals(params):
     sk = params.skset(["O", "H"])
     m = _models()
@@ -243,3 +278,64 @@ def test_fit_recovers_a_model(params):
     fit = fit_adaptive([start], data, sk, {"scc_tol": 1e-11}, l2=0.0, processes=1,
                        max_evaluations=60)
     assert fit.rmse < 1e-6
+
+
+# ---- forces in the fit (M8b) -------------------------------------------------------------------------
+def _distorted_waters():
+    out = []
+    for k, (d, ang) in enumerate([(0.92, 100), (1.03, 109), (1.10, 115), (0.97, 125)]):
+        w = molecule("H2O")
+        w.set_distance(0, 1, d, fix=0)
+        w.set_angle(1, 0, 2, ang)
+        w.positions[2] += [0.02 * k, -0.01, 0.015]
+        out.append(w)
+    return out
+
+
+def test_force_jacobian_is_the_gradient_of_dF_dtheta(params):
+    """d(forces)/dtheta by central differences in theta equals -grad_R (dF/dtheta), the
+    position derivative of the analytic coefficient derivatives (symmetric second derivatives)."""
+    from pydftb.adaptive_fit import evaluate_all
+    sk = params.skset(["O", "H"])
+    m = AdaptiveParams("O", RBF((1.0,), 0.6), onsite={"p": (0.02, -0.03)},
+                       hopping={"p": (0.05, 0.04)})
+    w = _distorted_waters()[1]
+    s = Sample(w, 0.0, forces=np.zeros((3, 3)))
+    opts = {"scc_tol": 1e-12}
+    x = m.vector()
+    _, _, _, fjac = evaluate_all([m], [s], sk, opts, x, processes=1, step=1e-5)
+    lab = w.get_chemical_symbols()
+    pos = w.positions / BOHR
+
+    def dfdx(p):                                   # dF/dtheta (eV) at positions p (Bohr)
+        r = DFTB(sk, adaptive=[m], **opts).calculate(lab, p, forces=False)
+        return r.adaptive.gradient([m]) * 27.2113845
+
+    ref = np.zeros((9, len(x)))
+    h = 1e-5
+    for a in range(3):
+        for c in range(3):
+            pp, pm = pos.copy(), pos.copy()
+            pp[a, c] += h
+            pm[a, c] -= h
+            ref[3 * a + c] = -(dfdx(pp) - dfdx(pm)) / (2 * h * BOHR)    # eV/A per unit theta
+    assert np.abs(fjac[0] - ref).max() < 1e-5 * max(1.0, np.abs(ref).max())
+
+
+def test_fit_with_forces_recovers_a_model(params):
+    truth = AdaptiveParams("O", RBF((1.0,), 0.6), onsite={"p": (0.02, -0.03)},
+                           hopping={"p": (0.05, 0.04)})
+    sk = params.skset(["O", "H"])
+    data = []
+    for k, w in enumerate(_distorted_waters()):
+        lab = w.get_chemical_symbols()
+        r = DFTB(sk, scc_tol=1e-11, adaptive=truth).calculate(lab, w.positions / BOHR,
+                                                              forces=True)
+        data.append(Sample(w, r.free_energy * 27.2113845 / 3, name=str(k),
+                           forces=r.forces * 27.2113845 / BOHR))
+    assert max(np.abs(s.forces).max() for s in data) > 0.5            # far from equilibrium
+    start = truth.with_vector(np.zeros(4))
+    fit = fit_adaptive([start], data, sk, {"scc_tol": 1e-11}, l2=0.0, processes=1,
+                       max_evaluations=40, force_weight=1.0, force_step=1e-5)
+    assert fit.force_rmse < 1e-5 and fit.rmse < 1e-6
+    assert np.abs(fit.x - truth.vector()).max() < 1e-4

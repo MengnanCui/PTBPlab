@@ -51,6 +51,7 @@ from .system import element_of_label
 from .typeswitch import smoothstep
 
 DEFAULT_WINDOW = (0.9, 1.3)       # (r_on, r_off) / (R_cov,A + R_cov,B)
+ANGULAR_EPS = 1e-2                # q = S / (CN^2 + eps): an isolated atom has q = 0
 SHELL_LETTERS = "spdf"
 
 
@@ -136,8 +137,12 @@ class AdaptiveParams:
     window    : (r_on, r_off) of the counting function: Bohr, or factors of R_A + R_B with
                 ``window_scaled`` (default: DEFAULT_WINDOW, scaled).
     neighbours: the elements counted in CN (None: all).
+    angular   : :class:`RBF` (without the constant) of the angular descriptor
+                q_A = sum_BC f_AB f_AC P3(cos theta_BAC) / (CN_A^2 + eps) (M8b), added to the
+                CN basis; None: CN only.  q is 0 in centrosymmetric environments (fcc, bcc, sc),
+                5/9 in diamond, 5/8 in graphene-like planes, about 1 for a dimer.
 
-    Coefficients have ``basis.size`` values; missing channels are zero.
+    Coefficients have ``size`` = basis.size (+ angular.size) values; missing channels are zero.
     """
     element: str
     basis: RBF = field(default_factory=RBF)
@@ -148,9 +153,26 @@ class AdaptiveParams:
     window: tuple = DEFAULT_WINDOW
     window_scaled: bool = True
     neighbours: tuple | None = None
+    angular: RBF | None = None
+
+    @property
+    def size(self) -> int:
+        return self.basis.size + (self.angular.size if self.angular is not None else 0)
+
+    def features(self, cn, q=None):
+        """Phi (n, size), dPhi/dCN and dPhi/dq (n, size): the CN basis, then the angular one."""
+        ph, dph = self.basis(cn)
+        if self.angular is None:
+            return ph, dph, np.zeros_like(ph)
+        pq, dpq = self.angular(q)
+        z = np.zeros_like(pq)
+        return np.hstack([ph, pq]), np.hstack([dph, z]), np.hstack([np.zeros_like(ph), dpq])
 
     def __post_init__(self):
-        n = self.basis.size
+        if self.angular is not None and self.angular.constant:
+            raise ValueError("the angular basis has no constant (the CN basis has it): "
+                             "RBF(centres, width, constant=False)")
+        n = self.size
         for name in ("onsite", "hopping"):
             d = {}
             for shell, coef in dict(getattr(self, name)).items():
@@ -182,7 +204,7 @@ class AdaptiveParams:
     # -- the coefficients as one vector (fitting) ----------------------------------------------
     def parameter_names(self) -> list[str]:
         """Names of the entries of :meth:`vector`, in order."""
-        n = self.basis.size
+        n = self.size
         out = [f"{self.element}.onsite.{s}[{k}]" for s in sorted(self.onsite) for k in range(n)]
         out += [f"{self.element}.hopping.{s}[{k}]" for s in sorted(self.hopping) for k in range(n)]
         if self.repulsive is not None:
@@ -204,7 +226,7 @@ class AdaptiveParams:
         x = np.asarray(x, float)
         if len(x) != len(self.vector()):
             raise ValueError(f"needs {len(self.vector())} values, not {len(x)}")
-        n, k = self.basis.size, 0
+        n, k = self.size, 0
         onsite, hopping = {}, {}
         for s in sorted(self.onsite):
             onsite[s], k = tuple(x[k:k + n]), k + n
@@ -235,15 +257,12 @@ class AdaptiveParams:
                 out[el] = self.window
         return out
 
-    def coordination_numbers(self, elements, pos, cell=None, pbc=None):
-        """CN of every atom of the element (0 for the others) and its gradient pairs
-        (i, j, vec, f'(r)/r), i the atom whose CN it is."""
-        elements = list(elements)
-        natom = len(elements)
+    def _neighbours(self, elements, pos, cell, pbc):
+        """The counted neighbour entries of the element's atoms: i, j, vec, d, f(r), f'(r)/r."""
         win = self.windows(elements)
-        empty = (np.zeros(0, int), np.zeros(0, int), np.zeros((0, 3)), np.zeros(0))
         if not win or self.element not in elements:
-            return np.zeros(natom), empty
+            z = np.zeros(0)
+            return np.zeros(0, int), np.zeros(0, int), np.zeros((0, 3)), z, z, z
         rc = max(w[1] for w in win.values())
         periodic = cell is not None and pbc is not None and np.any(pbc)
         i, j, _, vec, d = neighbor_list(np.asarray(pos, float), cell if periodic else None,
@@ -255,8 +274,47 @@ class AdaptiveParams:
         i, j, vec, d = i[keep], j[keep], vec[keep], d[keep]
         span = r_off[j] - r_on[j]
         s, ds = smoothstep((d - r_on[j]) / span)
-        cn = np.bincount(i, 1.0 - s, minlength=natom)
-        return cn, (i, j, vec, -ds / span / d)
+        return i, j, vec, d, 1.0 - s, -ds / span / d
+
+    def coordination_numbers(self, elements, pos, cell=None, pbc=None):
+        """CN of every atom of the element (0 for the others) and its gradient pairs
+        (i, j, vec, f'(r)/r), i the atom whose CN it is."""
+        elements = list(elements)
+        i, j, vec, _, f, fr = self._neighbours(elements, pos, cell, pbc)
+        return np.bincount(i, f, minlength=len(elements)), (i, j, vec, fr)
+
+    def descriptors(self, elements, pos, cell=None, pbc=None):
+        """CN and the angular q of every atom of the element (0 for the others), the CN
+        gradient pairs (i, j, vec, f'(r)/r) and the q gradient pairs (i, j, vec, dq_i/dvec)."""
+        elements = list(elements)
+        natom = len(elements)
+        i, j, vec, d, f, fr = self._neighbours(elements, pos, cell, pbc)
+        cn = np.bincount(i, f, minlength=natom)
+        q = np.zeros(natom)
+        dq = np.zeros((len(i), 3))
+        if self.angular is not None:
+            for a in np.unique(i):
+                e = np.flatnonzero(i == a)
+                q[a], dq[e] = _angular(vec[e], d[e], f[e], fr[e], cn[a])
+        return cn, q, (i, j, vec, fr), (i, j, vec, dq)
+
+
+def _angular(vec, d, f, fr, cn):
+    """q = S / (CN^2 + eps) with S = sum_BC f_B f_C P3(u_B . u_C) over one atom's neighbour
+    entries, and dq/dvec_B (n, 3)."""
+    u = vec / d[:, None]
+    c = np.clip(u @ u.T, -1.0, 1.0)
+    p3 = 0.5 * (5.0 * c ** 3 - 3.0 * c)
+    dp3 = 0.5 * (15.0 * c ** 2 - 3.0)
+    s = f @ p3 @ f
+    pf = p3 @ f
+    m = dp3 * f[None, :]
+    ds = 2.0 * (pf * fr)[:, None] * vec + \
+        2.0 * (f / d)[:, None] * (m @ u - ((m * c).sum(1))[:, None] * u)
+    den = cn * cn + ANGULAR_EPS
+    q = s / den
+    dq = ds / den - (2.0 * cn * s / den ** 2) * fr[:, None] * vec
+    return q, dq
 
 
 def make_models(spec) -> tuple:
@@ -281,7 +339,7 @@ class AdaptiveTerms:
     elements: list
     cn: np.ndarray                      # (n_atom,)
     cn_pairs: tuple                     # (i, j, vec, f'(r)/r) of all models' atoms
-    phi: dict                           # element -> (atoms, Phi, dPhi)
+    phi: dict                           # element -> (atoms, Phi, dPhi/dCN, dPhi/dq)
     onsite: dict                        # (element, shell) -> p per atom of the element
     hopping: dict
     rep_scale: np.ndarray               # (n_atom,) p of the repulsive channel (0: none)
@@ -293,6 +351,8 @@ class AdaptiveTerms:
     rep_virial: np.ndarray | None = None
     rep_dedp: np.ndarray | None = None              # dE_rep/dp_repulsive per atom
     rep_dedc: dict | None = None                    # (element, neighbour) -> dE/dc_n
+    q: np.ndarray | None = None                     # the angular descriptor (M8b)
+    q_pairs: tuple | None = None                    # (i, j, vec, dq_i/dvec)
 
 
 def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bool):
@@ -302,19 +362,24 @@ def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bo
     natom = len(elements)
     pos = np.asarray(pos, float)
     cn = np.zeros(natom)
+    q = np.zeros(natom)
     pi, pj, pv, pf = [], [], [], []
+    qi, qj, qv, qd = [], [], [], []
     phi, onsite, hopping = {}, {}, {}
     rep_scale = np.zeros(natom)
     orb_scale = np.ones(basis.norb)
     onsite_shift = np.zeros(basis.norb)
     shell_of = {}
     for m in models:
-        c, (i, j, v, f) = m.coordination_numbers(elements, pos, cell, pbc)
+        c, qa, (i, j, v, f), (_, _, _, dqv) = m.descriptors(elements, pos, cell, pbc)
         atoms = np.array([a for a in range(natom) if elements[a] == m.element], int)
         cn[atoms] = c[atoms]
+        q[atoms] = qa[atoms]
         pi.append(i), pj.append(j), pv.append(v), pf.append(f)
-        ph, dph = m.basis(cn[atoms])
-        phi[m.element] = (atoms, ph, dph)
+        if m.angular is not None:
+            qi.append(i), qj.append(j), qv.append(v), qd.append(dqv)
+        ph, dph, dphq = m.features(cn[atoms], q[atoms])
+        phi[m.element] = (atoms, ph, dph, dphq)
         for chan, store in (("onsite", onsite), ("hopping", hopping)):
             for shell, coef in getattr(m, chan).items():
                 store[(m.element, shell)] = ph @ np.asarray(coef)
@@ -337,8 +402,9 @@ def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bo
                     orb_scale[o] = np.exp(0.5 * hopping[(m.element, shell)][a_idx])
     cat = lambda xs, shape: np.concatenate(xs) if xs else np.zeros(shape)
     cn_pairs = (cat(pi, 0).astype(int), cat(pj, 0).astype(int), cat(pv, (0, 3)), cat(pf, 0))
+    q_pairs = (cat(qi, 0).astype(int), cat(qj, 0).astype(int), cat(qv, (0, 3)), cat(qd, (0, 3)))
     terms = AdaptiveTerms(models, elements, cn, cn_pairs, phi, onsite, hopping, rep_scale,
-                          orb_scale, onsite_shift, shell_of)
+                          orb_scale, onsite_shift, shell_of, q=q, q_pairs=q_pairs)
     _repulsive(terms, species, pos, cell, pbc, sk, mode, derivatives)
     return terms
 
@@ -446,17 +512,25 @@ def parameter_derivatives(terms: AdaptiveTerms, pb, p_e, d_onsite) -> dict:
 
 
 def coordinate_gradient(terms: AdaptiveTerms, dedp: dict, virial: bool):
-    """The part of dE/dR and of the virial from the parameters' dependence on CN."""
+    """The part of dE/dR and of the virial from the parameters' dependence on CN (and on the
+    angular descriptor q)."""
     natom = len(terms.cn)
     dedcn = np.zeros(natom)
+    dedq = np.zeros(natom)
     for m in terms.models:
-        atoms, _, dph = terms.phi[m.element]
+        atoms, _, dph, dphq = terms.phi[m.element]
         for key, coef in _channels(m):
             d = dedp.get(key)
             if d is not None:
                 dedcn[atoms] += d * (dph @ np.asarray(coef))
+                if m.angular is not None:
+                    dedq[atoms] += d * (dphq @ np.asarray(coef))
     i, j, vec, fr = terms.cn_pairs
     g = (dedcn[i] * fr)[:, None] * vec
+    if terms.q_pairs is not None and len(terms.q_pairs[0]):
+        qi, qj, qv, dq = terms.q_pairs
+        i, j, vec = np.concatenate([i, qi]), np.concatenate([j, qj]), np.vstack([vec, qv])
+        g = np.vstack([g, dedq[qi][:, None] * dq])
     grad = np.zeros((natom, 3))
     np.add.at(grad, j, g)
     np.add.at(grad, i, -g)
@@ -480,6 +554,7 @@ class AdaptiveResult:
     cn: np.ndarray
     parameters: dict                    # channel key -> p per atom of the element
     gradients: dict                     # element -> dF/d vector (same order as vector())
+    q: np.ndarray | None = None         # the angular descriptor (M8b; zeros without it)
 
     def gradient(self, models) -> np.ndarray:
         """dF/d(the concatenated vectors of ``models``)."""
@@ -489,11 +564,11 @@ class AdaptiveResult:
 def result(terms: AdaptiveTerms, dedp: dict) -> AdaptiveResult:
     grads, params = {}, {}
     for m in terms.models:
-        atoms, ph, _ = terms.phi[m.element]
+        atoms, ph, *_ = terms.phi[m.element]
         parts = []
         for key, _ in _channels(m):
             d = dedp.get(key)
-            parts.append(ph.T @ d if d is not None else np.zeros(m.basis.size))
+            parts.append(ph.T @ d if d is not None else np.zeros(m.size))
             params[key] = (terms.onsite.get(key[1:]) if key[0] == "onsite"
                            else terms.hopping.get(key[1:]) if key[0] == "hopping"
                            else terms.rep_scale[atoms])
@@ -501,4 +576,5 @@ def result(terms: AdaptiveTerms, dedp: dict) -> AdaptiveResult:
             parts.append(np.asarray(terms.rep_dedc.get((m.element, el),
                                                        np.zeros(len(m.pair_repulsive[el].coefficients)))))
         grads[m.element] = np.concatenate(parts) if parts else np.zeros(0)
-    return AdaptiveResult(terms.cn.copy(), params, grads)
+    return AdaptiveResult(terms.cn.copy(), params, grads,
+                          None if terms.q is None else terms.q.copy())
