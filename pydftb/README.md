@@ -507,6 +507,10 @@ atoms.calc = PyDFTB(skdir, read_charges="charges.bin")      # and atoms.calc.wri
 With collinear spin, `PyDFTB` starts from the atoms' initial magnetic moments when they are
 not all zero.  NumPy engine only.  Details:
 [`docs/reports/M6f1-scc-start-mixers.html`](docs/reports/M6f1-scc-start-mixers.html).
+`r.q_in`, and so the file, `reuse_charges` and `states()`, hold the input populations of the
+last SCC iteration, which built its Hamiltonian, as DFTB+'s `charges.bin`: nothing is mixed
+after the last iteration, also when the SCC stops unconverged at `max_scc` (M6f-1b,
+[`docs/reports/M6f1b-scc-last-iteration.html`](docs/reports/M6f1b-scc-last-iteration.html)).
 
 ### Fixed Fermi levels and overrides of the Hamiltonian block
 

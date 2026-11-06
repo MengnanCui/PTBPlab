@@ -124,8 +124,9 @@ class DFTBResult:
                                          # two-component: (4, n_shell) q, m_x, m_y, m_z
     fermi_spin: tuple | None = None      # (mu_up, mu_down); equal with relax_total_spin
     e_disp: float = 0.0                  # dispersion energy
-    q_in: np.ndarray | None = None       # input populations of the last SCC iteration (the mixed
-                                         # vector; what DFTB+ writes to charges.bin)
+    q_in: np.ndarray | None = None       # input populations of the last SCC iteration, which built
+                                         # its H, also unconverged (in the layout the SCC mixes;
+                                         # what DFTB+ writes to charges.bin, M6f-1b)
     e_ls: float = 0.0                    # spin-orbit energy (DFTB+ "Energy L.S")
     orbital_moments: np.ndarray | None = None   # (n_shell, 3) <L> per shell (spin-orbit)
     e_plus_u: float = 0.0                # DFTB+U energy (DFTB+ "Energy DFTB+U", M6b)
@@ -2515,8 +2516,10 @@ class DFTB:
 
     def _scc(self, st: _Setup, q_init, forces, timings, control: SCCControl | None = None) \
             -> _SCCState:
-        """The SCC loop; ``control`` (XL-BOMD, M6e) sets the iterations and tolerance by
-        DFTB+'s rules: no mixing after the last iteration, no warning when unconverged."""
+        """The SCC loop.  As in DFTB+ (main.F90 getNextInputCharges), the last allowed
+        iteration is not mixed, so ``q_in`` built the final Hamiltonian also when the SCC stops
+        unconverged (M6f-1b; before, only with ``control``).  ``control`` (XL-BOMD, M6e) sets
+        the iterations and tolerance by DFTB+'s rules, with no warning when unconverged."""
         if st.hybrid is not None:                                     # M6h-1
             return self._scc_hybrid(st, q_init, forces, timings)
         b = self.backend
@@ -2595,8 +2598,8 @@ class DFTB:
             if diff < tol and nit >= min_iter:
                 converged = True
                 break
-            if control is not None and nit == max_iter:
-                break                   # DFTB+: no mixing after the last iteration
+            if nit == max_iter:
+                break                   # DFTB+: no mixing after the last iteration (M6f-1b)
             if nit == 1 and first_out:
                 q_in = q_out            # DFTB+: the guessed spin is not mixed in (main.F90)
             else:

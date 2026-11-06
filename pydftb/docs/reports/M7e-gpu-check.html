@@ -214,7 +214,7 @@ pydftb gpu-check --timings ptbp,stacked --workers 8 # 只做这两项计时，�
         <li><strong>请在 NVIDIA GPU 上运行自检</strong>：装这个分支的 pydftb（<code>pip install ./pydftb</code>，加上 CUDA 版的 torch），运行 <code>pydftb gpu-check --dtype both --json gpu_check.json</code>，把 JSON 发回来。整套在 GPU 上估计 20–40 分钟；中途停下也有用（JSON 照写）。</li>
         <li><strong>M7e-2</strong>：按 JSON 决定跨结构批量（同步 SCC）。若留在 CPU 的工作除以 P 已经不小于进程池的时间，先要把 γ（只依赖几何与 U，占阶段的 24%）、原子对、费米能级与力分给 CPU 进程或搬到 GPU 上，再与 GPU 的求解流水线化；堆叠只在每组的收益明显大于 1 时做。</li>
         <li>PTBP 里每次计算的 <code>threadpool_limits</code>（0.6%）可以缓存，单独评估。</li>
-        <li>分治的内存、SK 原子对分块、不建 γ 的 SCC 电势（M7d2 报告第八节）；任务 162（旧 SCC 路径最后一轮不混合）。</li>
+        <li>分治的内存、SK 原子对分块、不建 γ 的 SCC 电势（M7d2 报告第八节）；任务 162（旧 SCC 路径最后一轮不混合）：M6f-1b 已完成（<a href="M6f1b-scc-last-iteration.html">M6f-1b 报告</a>）。</li>
         <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26、B28、B29：需要你同意再提交 issue。</li>
       </ul>
     </section>
