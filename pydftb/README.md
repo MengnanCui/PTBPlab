@@ -1187,17 +1187,34 @@ branches that move work to the CPU give the same bits as the plain path, and und
 **not measured**.  To check a GPU:
 
 ```bash
-pydftb gpu-check --json gpu_check.json      # first GPU, everything
-pydftb gpu-check --device cuda:1 --dtype both --json gpu_check.json
+pydftb gpu-check --dtype both --json gpu_check.json   # first GPU, everything: send this back
+pydftb gpu-check --device cuda:1 --json gpu_check.json
 pydftb gpu-check --quick                    # a subset, a few minutes
+pydftb gpu-check --timings ptbp,stacked     # only these timings (of eigh, cu, ptbp, stacked)
 ```
 
 It recomputes the frozen DFTB+ references on the device and compares them with torch on the
 CPU (float64: within 1e-10), runs calculations twice (bit for bit), compares autodiff
-gradients of both modes with the CPU (1e-9), checks that a process that used CUDA can fork a
-CPU-only worker, and times `eigh` (N = 9-288, batches of 1-2048), Cu cells as PTBP computes
-them, and stacks of several structures.  It exits with status 1 if a check fails; please
-send the JSON back.  See [`docs/reports/M4d-devices.html`](docs/reports/M4d-devices.html).
+gradients of both modes with the CPU (1e-9) and checks that a process that used CUDA can fork
+a CPU-only worker.  The timings follow `--dtype` (float64: float64 and complex128 matrices;
+float32: float32 and complex64; a type the device lacks is skipped):
+
+* `eigh` over N = 9-288 orbitals and batches of 1-2048 matrices, against NumPy;
+* Cu cells as PTBP computes them, NumPy on one thread and with k-point threads;
+* PTBP's Cu DFTB stage (`pydftb.validation.ptbp_workload`: the 66 structures of
+  `dft/dft.xyz`, built without the file) structure by structure on one CPU thread, with k-point
+  threads, in a pool of `--workers` processes and on the device, with the work the device run
+  leaves on the CPU (the torch backend moves only the SCC's linear algebra; for this stage the
+  rest is more than half of the time on one thread) and the bound a pipeline of CPU processes
+  and the device could reach;
+* the whole solve of an SCC iteration (Cholesky factor, eigh, Fermi level, densities,
+  populations) for structures of equal size in one stack against one at a time.
+
+The JSON is rewritten after every section: a section that fails records its error and the
+next one runs, and Ctrl-C keeps what was measured (`"complete": false`).  Exit status: 0 all
+passed, 1 a check failed or a section could not run, 2 interrupted.  Please send the JSON
+back.  See [`docs/reports/M4d-devices.html`](docs/reports/M4d-devices.html) and
+[`docs/reports/M7e-gpu-check.html`](docs/reports/M7e-gpu-check.html).
 
 ## Tests and validation
 

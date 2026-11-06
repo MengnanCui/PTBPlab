@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7e GPU 自检的修复与扩充设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M7e</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7e · 设计</p>
+    <h1>大体系（六）：GPU 自检的修复与扩充</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-06</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="M4d-devices.html">M4d 设计</a> · <a href="../reports/M4d-devices.html">M4d 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">路线图上的 M7e 是“GPU 自检与跨结构批量”。本机没有 GPU，M4d 在 CPU 上量到把 32 个结构的 k 点矩阵堆成一批只快 0.90–1.02 倍，并说要等用户 GPU 上的自检数据再决定跨结构批量。所以 M7e 先做不需要 GPU 的部分：修好 GPU 自检，让它在用户的 NVIDIA GPU 上跑一次，就能回答跨结构批量值不值得做。同步 SCC 的跨结构批量（M7e-2）等这份 JSON 再定。</p>
+    <ul>
+      <li><strong>自检现在的问题</strong>：
+        <ul>
+          <li>JSON 只在全部跑完后才写，任何一项出错就什么都不留。</li>
+          <li>堆叠的计时只算 eigh，而且总用 complex128 的随机矩阵：在 MPS 上会崩，在 CUDA 上也只量到一小部分工作。</li>
+          <li><code>--dtype both</code> 不影响计时。</li>
+          <li>CUDA 在 <code>CUBLAS_WORKSPACE_CONFIG</code> 设好之前就被启动了。</li>
+        </ul></li>
+      <li><strong>决定性的数</strong>（P129，PTBP 的 Cu 数据集 66 个结构，单线程）：
+        <ul>
+          <li>整个 DFTB 阶段 26.2 s。</li>
+          <li>torch 后端只把 SCC 的线性代数放到设备上，留在 CPU 的工作有 14.4 s（55%）：γ（Ewald）6.2 s、费米能级 2.4 s、力 3.2 s、原子对 1.8 s 等。</li>
+          <li>单是这部分，就比 4 个进程的整个阶段（理想情况 26.2 / 4 = 6.6 s）长一倍多。GPU 的数字要连同这部分一起读。</li>
+        </ul></li>
+      <li><strong>共用 SK 集合与后端不做</strong>：每个结构重建 <code>ParamSet</code> 与 <code>SKSet</code> 合计只占阶段的 0.06%，低于计划定的 0.5% 门槛；SKF 的文本已按进程缓存。</li>
+      <li><strong>k 点的时间反演约化</strong>占 0.70%（每个 16³ 网格约 10 ms），高于门槛：把 <code>kpoints.reduce_time_reversal</code> 改成向量化，结果逐位不变。</li>
+      <li><strong>同步效率</strong>（P130）：SCC 每个结构 5–8 轮，按 N 与实/复分组后 Σn / (S·max n) = 0.86–0.90，所以同步 SCC 本身不浪费多少。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">55%</span><span class="lbl">torch 路径里留在 CPU 的工作（P129）</span></li>
+      <li><span class="num">0.06%</span><span class="lbl">共用 SK 集合能省的（不做）</span></li>
+      <li><span class="num">0.86–0.90</span><span class="lbl">同步 SCC 的效率（P130）</span></li>
+      <li><span class="num">1 次</span><span class="lbl">用户在 CUDA 上要跑的自检</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#scope">一、范围</a></li>
+      <li><a href="#probe">二、探针</a></li>
+      <li><a href="#check">三、自检的改动</a></li>
+      <li><a href="#kpoints">四、k 点的约化</a></li>
+      <li><a href="#reading">五、JSON 的读法与 M7e-2 的判据</a></li>
+      <li><a href="#impl">六、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#validation">七、验证</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#limits">八、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="scope">
+      <h2>一、范围</h2>
+      <ul>
+        <li><strong>做</strong>：
+          <ul>
+            <li>GPU 自检总能写出 JSON；计时照 <code>--dtype</code>；记下判断所需的环境。</li>
+            <li>新的工作负载 <code>validation/ptbp_workload.py</code>：不用数据文件造出 PTBP 的 Cu DFTB 阶段。</li>
+            <li>新的计时：PTBP 阶段逐个结构在 GPU 与 CPU（单线程、k 点线程、进程池）上的时间；完整一轮求解在堆叠与逐个时的时间。</li>
+            <li><code>reduce_time_reversal</code> 向量化。</li>
+          </ul></li>
+        <li><strong>不做</strong>：
+          <ul>
+            <li>同步 SCC 的跨结构批量与相应的 API（M7e-2，等 JSON）；</li>
+            <li>共用 SK 集合与后端（P129：0.06%）；</li>
+            <li>省掉 PTBP 用不到的应力：PTBP 把它写进了 <code>dftb_band.xyz</code>，文件会变（P129：0.8%）；</li>
+            <li>把 γ、原子对、费米能级等搬到 GPU 上（M7e-2 的候选，看 JSON）。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="probe">
+      <h2>二、探针</h2>
+      <p>草稿目录 <code>m7e/</code>。P129（<code>p129_stage.py</code>）：</p>
+      <ul>
+        <li>任务：用 PTBP 自己的 <code>make_tasks</code> 处理 <code>dft/dft.xyz</code>（<code>run.py</code> 的 3000 K Boltzmann 权重，k 点密度 5.0，每组 11 个 EOS 点）。</li>
+        <li>SKF：G1 运行目录里的。</li>
+        <li>调用：PTBP 的计算器与 <code>run_structure</code>，BLAS 单线程。</li>
+        <li>计时：包在函数外面的壳，结果原样传过；探针多算的一次无位力梯度从时间里扣掉。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>部分</th><th>NumPy</th><th>torch（CPU）</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>整个阶段</td><td>26.25 s</td><td>27.89 s</td><td>66 个结构，逐个</td></tr>
+          <tr><td>γ（Ewald 与短程）</td><td>6.23 s</td><td>6.45 s</td><td>几何与 U 决定，在 CPU 上</td></tr>
+          <tr><td>原子对与 H0、S</td><td>1.77 s</td><td>2.00 s</td><td>CPU</td></tr>
+          <tr><td>求解（不含费米能级）</td><td>11.34 s</td><td>11.90 s</td><td>torch 时在设备上</td></tr>
+          <tr><td>费米能级（<code>fill</code>）</td><td>2.42 s</td><td>2.48 s</td><td>每轮一次，在 CPU 上</td></tr>
+          <tr><td>SCC 的其余（电势、布居、混合）</td><td>0.82 s</td><td>1.39 s</td><td>CPU</td></tr>
+          <tr><td>力与应力</td><td>3.16 s</td><td>3.19 s</td><td>大部分在 CPU 上</td></tr>
+          <tr><td>引擎之外（ASE、k 点、线程设置）</td><td>0.51 s</td><td>0.48 s</td><td>其中 k 点 0.18 s，<code>threadpool_limits</code> 0.17 s</td></tr>
+          <tr><td>共用 SK 集合能省的</td><td>0.016 s（0.06%）</td><td>0.017 s</td><td>第一个结构读 SKF 0.09 s，之后是缓存</td></tr>
+          <tr><td>应力</td><td>0.21 s（0.8%）</td><td>0.29 s</td><td>PTBP 写进 <code>dftb_band.xyz</code></td></tr>
+          <tr><td>留在 CPU 的工作</td><td>14.39 s（55%）</td><td>15.51 s（56%）</td><td>Σ(total − diag) + fill</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>按相：beta-Sn 13.2 s（11 个结构，每个约 1100 个 k 点，N = 18）、fcc 5.0 s 与 bcc 4.5 s（约 1400 个 k 点，N = 9），三个只用 Γ 点的相共 3.5 s，其中大部分是 γ 与力。</li>
+        <li>P130：SCC 轮数 5–8；N = 9 复数（22 个结构）效率 0.896，N = 18 复数（11 个）0.875，N = 18 实数 Γ 点（33 个）0.860。</li>
+        <li>P131（新自检在 <code>--device cpu</code> 下的数，GPU 数据的对照）见 <a href="../reports/M7e-gpu-check.html#p131">报告第三节</a>。</li>
+      </ul>
+    </section>
+
+    <section id="check">
+      <h2>三、自检的改动</h2>
+      <ul>
+        <li><strong>总能写出 JSON</strong>：
+          <ul>
+            <li><code>run()</code> 收到 JSON 的路径，每节之后原子地重写（临时文件 + <code>os.replace</code>）。</li>
+            <li>每组检查与每项计时包在 <code>_guard</code> 里：出错时记下错误、traceback 与耗时，接着做下一项；计时的每一行、每个结构也各自 try。</li>
+            <li>显存不够时清缓存后继续。</li>
+            <li>退出码：0 全部通过，1 有检查失败或某一节没能运行，2 中断（Ctrl-C 等，JSON 照写，<code>"complete": false</code>）。</li>
+          </ul></li>
+        <li><strong>次序</strong>：<code>devices.prepare</code> 在 <code>capabilities</code> 之前，让 <code>CUBLAS_WORKSPACE_CONFIG</code> 在 CUDA 启动前设好。</li>
+        <li><strong>精度</strong>：计时照 <code>--dtype</code>：float64 对应 float64 与 complex128，float32 对应 float32 与 complex64；设备没有的类型记为跳过，在 MPS 上不再崩。</li>
+        <li><strong>JSON 多记</strong>（版本号 2）：
+          <ul>
+            <li>pydftb 的版本与安装路径；提交号只在 git 顶层包含这个文件时记（装好的 wheel 不再取外层仓库的提交号）。</li>
+            <li>scipy、ase、threadpoolctl 看到的 BLAS，可用的核数。</li>
+            <li>torch 的线性代数库、float32 矩阵乘法的精度、确定性开关。</li>
+            <li>GPU 的空闲显存与驱动版本。</li>
+            <li>每节的耗时与显存峰值，命令行。</li>
+          </ul></li>
+        <li><strong>工作负载</strong> <code>ptbp_workload.py</code>：
+          <ul>
+            <li>结构：PTBP 的 6 个 Cu 相（dimer、AA-graphite、diamond、beta-Sn、bcc、fcc），中心晶胞与分数坐标取自 <code>dft.xyz</code>，11 个 EOS 体积 V/V<sub>0</sub> = 0.80 + 0.04 i，晶胞按体积的立方根缩放（与数据集差 ≤ 1e-14 Å，分数坐标差 ≤ 3e-9）。</li>
+            <li>k 网格：PTBP 的规则。Boltzmann 权重 &lt; 0.1 的三个相只用 Γ 点，其余是 <code>int(5·2π|b<sub>i</sub>|)</code>。</li>
+            <li>计算器：PTBP 的 <code>_pydftb_calculator</code> 的参数（T = 0 的 Fermi、壳层分辨、SCC 1e-5、0.01 Bohr 的差分力、多项式排斥、时间反演），SK 集合用包里的 <code>ptbp_hcocu</code> 的 Cu-Cu。</li>
+            <li><code>--quick</code> 用第 0、5、10 个 EOS 点（18 个结构）。</li>
+          </ul></li>
+        <li><strong>PTBP 阶段的计时</strong> <code>time_ptbp_stage</code>：
+          <ul>
+            <li>方式：NumPy 单线程；NumPy 加 k 点线程；spawn 的进程池（<code>--workers</code>，默认可用核数，每个一线程，先大后小，先预热）；设备上每种精度一次（torch 一线程，先预热一个结构）。</li>
+            <li>每个结构记：耗时、引擎自己的分项（build、gamma、diag、forces）、SCC 轮数、是否收敛、<code>fill</code> 的时间、对 NumPy 单线程的 |dE| 与 |dF|。</li>
+            <li>汇总：每个结构的平均时间；GPU 对进程池、对“单线程 / P”的比；GPU 运行里留在 CPU 的工作；P 个进程先大后小的排程模拟；流水线的上限 max(CPU 工作 / P, GPU 求解)。</li>
+          </ul></li>
+        <li><strong>完整一轮求解的堆叠</strong> <code>time_stacked_solve</code>，取代 <code>time_stacked</code>（保留只计 eigh 的一列，便于与 M4d 对照）：
+          <ul>
+            <li>输入：工作负载里真实的 H<sub>0</sub>、S（<code>DFTB._setup</code>），放到设备上。</li>
+            <li>分组：Γ 点 N = 18（实数，33 个结构）、beta-Sn N = 18（复数，11 个）、bcc 与 fcc N = 9（复数，22 个）；另有 Cu 晶胞 N = 9–288 的扫描，每种 8 个 EOS 副本。</li>
+            <li>逐个：每个结构 <code>TorchSolver.prepare</code>、求解与布居。</li>
+            <li>堆叠：一次 prepare、一次 eig、一次拷回主机，每个结构各自求费米能级，一次密度，布居用一次块权重的矩阵乘法。</li>
+            <li>分别计 prepare、一轮、带能量加权密度的最后一次求解、单独的 eigh、<code>fill</code>；给出收益与两者的最大 |Δε|、|Δμ|、|Δq|。</li>
+            <li>有显存守卫，在 <code>deterministic</code> 下运行。</li>
+          </ul></li>
+        <li><strong>命令行</strong>：<code>--timings eigh,cu,ptbp,stacked</code>（默认全部）与 <code>--workers</code>；最后几行给出结论：GPU 每个结构对 CPU 进程池、留在 CPU 的份额、堆叠的收益。</li>
+      </ul>
+    </section>
+
+    <section id="kpoints">
+      <h2>四、k 点的约化</h2>
+      <ul>
+        <li><code>reduce_time_reversal</code> 现在对每个 k 点在 Python 里建元组、查字典，16³ 的网格约 10 ms，一个 BO 步 0.18 s（0.70%）。</li>
+        <li>向量化：
+          <ul>
+            <li>每对 {k, −k} 的代表取字典序较小的一个，用第一个不同分量比较；</li>
+            <li><code>np.unique(..., axis=0)</code> 分组，按第一次出现的位置排序（即原来的次序）；</li>
+            <li>权重从零起按下标次序 <code>np.add.at</code> 累加，与原来的逐个相加是同一串浮点运算。</li>
+          </ul>
+          结果逐位相同，测试对比新旧实现与随机网格、偏移网格、带权重的输入。</li>
+      </ul>
+    </section>
+
+    <section id="reading">
+      <h2>五、JSON 的读法与 M7e-2 的判据</h2>
+      <ul>
+        <li><strong>先看留在 CPU 的工作</strong>：设一个 BO 步的 DFTB 阶段，GPU 串行时为 T<sub>gpu</sub>，P 个 CPU 进程时为 T<sub>pool</sub>。若 GPU 运行里留在 CPU 的工作本身就 ≥ T<sub>pool</sub>，单把求解放到 GPU 上（包括堆叠）不会比现在快。这时 M7e-2 要同时把这部分分给 CPU 进程，与 GPU 的求解做流水线，上限是 max(CPU 工作 / P, GPU 求解)。</li>
+        <li><strong>再看堆叠的收益</strong>：完整一轮求解在 GPU 上堆叠对逐个的比，按组看。明显大于 1（例如 ≥ 3 倍），而且流水线的上限比 T<sub>pool</sub> 小，才值得做同步 SCC。</li>
+        <li><strong>精度</strong>：float32 的结果对 NumPy 的 |dE|、|dF| 和收敛情况，决定 GPU 上能不能用 float32（M4a：T ≈ 0 的金属不宜用 float32 算力）。</li>
+        <li><strong>其他</strong>：确定性开关下的速度、显存峰值、冷启动的时间单独记录。</li>
+      </ul>
+    </section>
+
+    <section id="impl">
+      <h2>六、实现 <span class="dev-mark">开发细节</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>validation/gpu_check.py</code></td><td><code>_guard</code>、分节写出 JSON、退出码、<code>prepare</code> 的次序、计时照 <code>--dtype</code>、环境；<code>time_ptbp_stage</code>、<code>time_stacked_solve</code>；<code>--timings</code>、<code>--workers</code>；结论。</td></tr>
+          <tr><td><code>validation/ptbp_workload.py</code>（新）</td><td>Cu 的 6 个相、EOS 体积、PTBP 的 k 网格与计算器参数、包里的 SK 集合；<code>--quick</code> 的子集。</td></tr>
+          <tr><td><code>kpoints.py</code></td><td><code>reduce_time_reversal</code> 向量化，逐位不变。</td></tr>
+          <tr><td><code>tests/test_gpu_check.py</code>（新）</td><td>见第七节。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="validation">
+      <h2>七、验证 <span class="dev-mark">开发细节</span></h2>
+      <ul>
+        <li>自检（没有 torch 时跳过）：
+          <ul>
+            <li>计时出错、检查出错与中断时 JSON 照样写出，退出码正确；</li>
+            <li><code>--dtype both</code> 两种精度都有行；</li>
+            <li>没有 float64 的设备（仿 MPS）不建 float64 与 complex128 的张量；</li>
+            <li>没有 git 时照常；</li>
+            <li>2 个结构、1 个进程的小阶段对 NumPy ≤ 1e-8；</li>
+            <li>堆叠对逐个 ≤ 1e-12（实数与复数的分组）。</li>
+          </ul></li>
+        <li>工作负载：66 个结构、预期的网格与 N；PTBP 的测试里与 <code>dft.xyz</code> 的晶胞和坐标差 ≤ 1e-8 Å，k 网格与 PTBP 的 <code>kpoint_grid</code> 相同。</li>
+        <li><code>reduce_time_reversal</code>：新旧实现逐位相同。</li>
+        <li>门槛：
+          <ul>
+            <li>golden 两个环境逐位相同（对照 44ee7e5）；refgen（NumPy、torch、subsystems、sparse、sparse-csr、foe）；dynamics；pytest 三个环境与 MPI 环境；PTBP 测试与 G1。</li>
+            <li><code>pydftb gpu-check --device cpu --dtype both</code> 完整与 <code>--quick</code> 各一次，另从 wheel 装进仓库外的干净 venv 再跑一次。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>八、风险与之后</h2>
+      <ul>
+        <li><strong>GPU 计时</strong>：要显式同步与预热，冷启动单独记；确定性算法较慢；cuSOLVER 按批量大小选算法，堆叠与逐个的末位会不同，所以记下偏差。</li>
+        <li><strong>float32</strong>：T = 0 时费米能级的搜索可能失败，力可能差到 3e-2 eV/Å；逐个结构记录，不算检查失败。</li>
+        <li><strong>进程池</strong>：启动时间不计；核很多时排程由最大的结构决定；每个结构的时间都记下，可以按任意核数重算。</li>
+        <li><strong>SK 集合</strong>：包里的 SK 集合与每个 BO 步的表不同，所以也记下每轮的时间。</li>
+        <li><strong>之后</strong>：
+          <ul>
+            <li>M7e-2：按 JSON 决定同步 SCC 的跨结构批量，并看要不要把 γ（只依赖几何与 U，占阶段的 24%）、原子对、费米能级与力一起处理。</li>
+            <li>PTBP 里每次计算的 <code>threadpool_limits</code>（0.6%）可以缓存，但要处理之后才加载的库，单独评估。</li>
+          </ul></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7d2-large-coulomb.html">← M7d2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

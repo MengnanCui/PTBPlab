@@ -12,23 +12,33 @@ def monkhorst_pack(n, gamma_centered: bool = False):
 
 
 def reduce_time_reversal(kpts, weights, decimals: int = 8):
-    """Merge k and -k (H(-k) = H(k)^*  => identical eigenvalues)."""
+    """Merge k and -k (H(-k) = H(k)^*  => identical eigenvalues): the first k of every pair
+    {k, -k} in the input order, with the weights of the pair summed in the input order.
+
+    Vectorised (milestone M7e): the same points, order and sums, bit for bit, as the loop of
+    before, which took about 10 ms for a 16^3 grid."""
     k = np.asarray(kpts, float)
     w = np.asarray(weights, float)
-    # canonical representative of the pair {k, -k}, folded into [0, 1)
+    if len(k) == 0:
+        return k[[]], np.array([])
+    # canonical representative of the pair {k, -k}, folded into [0, 1): the lexicographically
+    # smaller one (Python's tuple order), compared at the first component where they differ
     a = np.round(np.mod(k, 1.0), decimals) % 1.0
     b = np.round(np.mod(-k, 1.0), decimals) % 1.0
-    canon = [min(tuple(x), tuple(y)) for x, y in zip(a, b)]
-    index, first, weight = {}, [], []
-    for idx, c in enumerate(canon):
-        j = index.get(c)
-        if j is None:
-            index[c] = len(first)
-            first.append(idx)
-            weight.append(w[idx])
-        else:
-            weight[j] += w[idx]
-    return k[first], np.array(weight)
+    differ = a != b
+    col = np.argmax(differ, axis=1)
+    row = np.arange(len(k))
+    canon = np.where((~differ.any(axis=1) | (a[row, col] < b[row, col]))[:, None], a, b)
+    _, first, group = np.unique(canon, axis=0, return_index=True, return_inverse=True)
+    order = np.argsort(first, kind="stable")          # the pairs in order of first occurrence
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    pair = rank[group.reshape(-1)]                    # the pair of every input point
+    weight = w[first[order]].copy()                   # its first point's weight, as the loop
+    rest = np.ones(len(k), bool)
+    rest[first] = False
+    np.add.at(weight, pair[rest], w[rest])            # then the others, in input order
+    return k[first[order]], weight
 
 
 def supercell_folding(n):

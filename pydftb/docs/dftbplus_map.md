@@ -300,3 +300,8 @@
 196. **用 VmHWM 量不出小的峰值**。写 `/proc/self/clear_refs` 把峰值归到当前的 RSS，之后分配器复用前面释放、仍常驻的页，新的分配不增加 RSS：512 个水分子分块的 Coulomb 量出 0.007 GiB，tracemalloc 是 0.15 GiB。小峰值用 tracemalloc 量（它看不到 cKDTree 的 C++ 缓冲），大体系用 VmHWM 与整台机器的采样（M7d2，P126、P126c）。
 197. **fork 的工作进程要关掉继承来的管道端**。工作进程继承了主进程那一端的管道；主进程被 OOM 杀掉之后，工作进程的 `recv()` 等不到 EOF，一直留着（父进程变成 1 号进程），还占着内存。工作进程启动时关掉这些端，`recv()` 遇到 EOFError 就退出（M7d2，P124）。
 198. **fork 的工作进程留着整份子体系索引**。`Subsystems` 在主进程里为全部子体系建好图样上的索引再 fork；每个工作进程的调用栈里都引用着这整份（共用的页，不复制），主进程放掉自己的引用之后也不会释放：4913 个水分子时 1.99 GiB，是分治在这个大小放不下的原因之一（M7d2，P127b）。
+199. **自检的 JSON 只在最后写，出错就什么都不留**。M4d 的 `gpu_check.main` 在 `run()` 返回之后才写 JSON：任何一项计时出错（例如 MPS 上 `time_stacked` 建 complex128 的张量）或 Ctrl-C，前面几十分钟的结果都丢掉。现在每节之后原子地重写，出错的节记下错误与 traceback，接着做下一节，中断时写出 `"complete": false`（M7e）。
+200. **GPU 的时间要连同留在 CPU 的工作一起读**。torch 后端只把 SCC 的线性代数（折叠、Cholesky、本征分解、密度、布居）放到设备上；γ（Ewald）、原子对、费米能级（`fill`，在主机上）、混合器与大部分力仍在 CPU 上。PTBP 的 Cu 阶段（66 个结构）这部分单线程是 14.4 s，占 26.2 s 的 55%，比 4 个进程的整个阶段（理想 6.6 s）还长：单把求解放到 GPU 上（包括堆叠）不会比进程池快。自检在 GPU 运行里报告这部分，以及 CPU 进程与 GPU 流水线的上限 max(CPU 工作 / P, GPU 求解)（M7e，P129）。
+201. **`CUBLAS_WORKSPACE_CONFIG` 要在 CUDA 启动之前设**。cuBLAS 建第一个句柄时读它，之后再设不起作用。M4d 的自检先调 `devices.capabilities()`（`torch.cuda.get_device_name` 等会初始化 CUDA），计算里才调 `devices.prepare()`，太晚了；现在 `run()` 解析设备之后先 `prepare` 再查能力（M7e）。
+202. **spawn 的进程池会重新执行主脚本**。spawn 在每个工作进程里把主模块当作 `__mp_main__` 重新导入：一个没有 `if __name__ == "__main__":` 的脚本调用 `time_ptbp_stage` 时，每个工作进程又跑一遍整个脚本，池子起不来（错误记进 JSON）。`pydftb gpu-check` 与 `python -m` 的入口都有这道保护。池子用 spawn 而不用 fork，是因为调用它的进程可能已经用过 CUDA（M7e）。
+203. **`tempfile.mkstemp` 建的文件只有自己能读**（0600，不看 umask）。原子写 JSON 时用它，报告的权限从 0644 变成 0600；改用 `open()` 在同一目录建临时文件再 `os.replace`，权限与新建的文件一样（M7e）。
