@@ -1,0 +1,102 @@
+|===============================================================================
+|
+|  DFTB+ development version (commit: a23bfb2)
+|
+|  Copyright (C) 2006 - 2025  DFTB+ developers group
+|
+|===============================================================================
+|
+|  When publishing results obtained with DFTB+, please cite the following
+|  reference:
+|
+|    Recent Developments in DFTB+, a Software Package for Efficient Atomistic
+|    Quantum Mechanical Simulations, J. Phys. Chem. A 129, 5373−5390 (2025).
+|    [https://doi.org/10.1021/acs.jpca.5c01146]
+|
+|  You should also cite additional publications crediting the parametrization
+|  data you use. Please consult the documentation of the SK-files for the
+|  references.
+|
+|===============================================================================
+
+Reading input file 'dftb_in.hsd'
+Parser version: 14
+
+--------------------------------------------------------------------------------
+Reading SK-files:
+<SKDIR>/O-O.skf
+<SKDIR>/O-H.skf
+<SKDIR>/H-H.skf
+Done.
+WARNING!
+-> Settings will be read but ignored (compiled without MPI support)
+Path: dftbplusinput/Parallel
+Line: 53-55 (File: dftb_in.hsd)
+
+
+
+Processed input in HSD format written to 'dftb_pin.hsd'
+
+Starting initialization...
+--------------------------------------------------------------------------------
+OpenMP threads:              1
+Chosen random seed:          4180615
+Current stacksize:           8 [Mb] (recommended: unlimited)
+WARNING!
+-> Current stacksize not set to unlimited or hard limit, which might cause
+   random crashes (e.g. segmentation faults). It is advised to unlimit the
+   stacksize by issuing 'ulimit -s unlimited' (Linux) or setting it to the 
+   hard limit by 'ulimit -s hard' (Mac) in advance.
+Mode:                        Static calculation
+Self consistent charges:     Yes
+SCC-tolerance:                 0.100000E-09
+Max. scc iterations:                    500
+Shell resolved Hubbard:      No
+Spin polarisation:           No
+Nr. of up electrons:             4.000000
+Nr. of down electrons:           4.000000
+Periodic boundaries:         No
+Electronic solver:           Relatively robust
+Mixer:                       Broyden mixer
+Mixing parameter:                  0.200000
+Nr. of chrg. vec. in memory:            500
+Max. SCC-cycles:                        500
+Electronic temperature:              0.100000E-07 H      0.272114E-06 eV
+Initial charges:             Set automatically (system chrg:   0.000E+00)
+Included shells:             O:  s, p
+                             H:  s
+Solvation:                   generalized Born model
+Dielectric constant:           8.020000E+01
+Free energy shift:             1.858687E-03 H      5.057744E-02 eV
+Born interaction kernel:     Still
+Born radii integrator:       GBOBC
+SASA model:                  Yes
+Grid points:                   6.900000E+02 total           230 per atom
+CM5 correction:              No
+Hydrogen bond correction:    Yes
+Solvated fields rescaled:    Yes
+Extra options:
+                             Mulliken analysis
+                             Force calculation
+Force type                   original
+
+--------------------------------------------------------------------------------
+
+***  Geometry step: 0
+
+ iSCC Total electronic   Diff electronic      SCC error    
+    1   -0.39452707E+01    0.00000000E+00    0.93314424E+00
+    2   -0.39528782E+01   -0.39452707E+01    0.65998780E+00
+    3   -0.39608408E+01   -0.76075416E-02    0.31594380E-01
+    4   -0.39608477E+01   -0.79626085E-02    0.20330965E-01
+    5   -0.39608493E+01   -0.69085077E-05    0.28201757E-02
+    6   -0.39608494E+01   -0.15085768E-05    0.64937598E-04
+    7   -0.39608494E+01   -0.15728660E-06    0.33221950E-08
+>> Charges saved for restart in charges.bin
+    8   -0.39608494E+01   -0.83320018E-10    0.90683017E-12
+
+Total Energy:                       -3.9217942587 H         -106.7175 eV
+Extrapolated to 0K:                 -3.9217942587 H         -106.7175 eV
+Total Mermin free energy:           -3.9217942587 H         -106.7175 eV
+Force related energy:               -3.9217942587 H         -106.7175 eV
+

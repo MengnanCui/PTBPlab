@@ -81,6 +81,7 @@
 | 色散：Slater-Kirkwood（M2d） | `dispersion.py: SlaterKirkwood` | `dftb/dispslaterkirkw.F90`，`dftbplus/parser.F90:readDispSlaKirk` | `addDispEnergyAndGrad_cluster`, `getDampCutoff_`；`HybridDependentPol` 的邻居计数在 parser 中 | — |
 | 色散：r⁻⁶ 的 Ewald 求和（M2d） | `dispersion.py: ewald_r6` | `dftb/dispcommon.F90` | `addDispEGr_per_atom/_per_species`, `getOptimalEta`, `getMaxRDispersion`, `getMaxGDispersion` | η 和截断照 DFTB+ 选取 |
 | 色散：D3、SimpleDftD3、D4（M2d） | `dispersion.py: DFTD3, SimpleDFTD3, DFTD4`（调用 `dftd3`/`dftd4` 库） | `extlibs/sdftd3.F90`（库），`dftb/simpledftd3.F90`（原生），`dftb/dispdftd4.F90`、`dftd4param.F90`、`encharges.F90`、`coordnumber.F90`（原生） | `TSDFTD3_init`, `addHHRepulsion`, `threeBodyDispersionGradient`, `weightReferences`, `addEwaldContribs` | DFTB+ 的 D4 是原生实现，与参考库有三处不同（第 3 节第 10–12 条） |
+| 第二个引擎：DFTB+ 本身（P2） | `dftbplus_calc.py: DFTBPlus`、`write_input`、`result_of`，`engines.py: make_calculator`、`common_results`，`run.py`（`pydftb run`），`validation/dual.py`（`pydftb dual`） | `dftbplus/parser.F90`（读 `dftb_in.hsd`），`dftbplus/mainio.F90`（写 `detailed.out`、`results.tag`） | `parseHsdInput`、`writeDetailedOut`、`writeResultsTag` | 输入由 `validation/dftbplus.py` 的块拼成，就是写出全部冻结参考的那套；588 个冻结输入与引擎写出的相同（坑 204–210） |
 
 ## 2. 待实现部分对应的 DFTB+ 文件（路线图见 `ROADMAP.md`）
 
@@ -305,3 +306,10 @@
 201. **`CUBLAS_WORKSPACE_CONFIG` 要在 CUDA 启动之前设**。cuBLAS 建第一个句柄时读它，之后再设不起作用。M4d 的自检先调 `devices.capabilities()`（`torch.cuda.get_device_name` 等会初始化 CUDA），计算里才调 `devices.prepare()`，太晚了；现在 `run()` 解析设备之后先 `prepare` 再查能力（M7e）。
 202. **spawn 的进程池会重新执行主脚本**。spawn 在每个工作进程里把主模块当作 `__mp_main__` 重新导入：一个没有 `if __name__ == "__main__":` 的脚本调用 `time_ptbp_stage` 时，每个工作进程又跑一遍整个脚本，池子起不来（错误记进 JSON）。`pydftb gpu-check` 与 `python -m` 的入口都有这道保护。池子用 spawn 而不用 fork，是因为调用它的进程可能已经用过 CUDA（M7e）。
 203. **`tempfile.mkstemp` 建的文件只有自己能读**（0600，不看 umask）。原子写 JSON 时用它，报告的权限从 0644 变成 0600；改用 `open()` 在同一目录建临时文件再 `os.replace`，权限与新建的文件一样（M7e）。
+204. **固定费米能级时，results.tag 的 `mermin_energy` 不是 Mermin 自由能**。DFTB+ 25.1 在那里写的是受力一致的能量 F − Σ N<sub>s</sub> E<sub>f,s</sub>（与 `forcerelated_energy` 相同；Cu4CO 差 9.16 Ha），detailed.out 的 “Total Mermin free energy” 才是 F。DFTB+ 引擎（P2）先读 detailed.out（10 位小数），只在 results.tag 的值与之在打印的位数内一致时才换成全精度值。
+205. **带 ELSI 的 DFTB+ 24.1 只写 `total_energy`**。NTPoly 运行的 results.tag 没有 `mermin_energy`、`extrapolated0_energy`，也没有本征值与占据；25.1 反过来没有 `total_energy`。总能量的全精度值因此或取 `total_energy`，或由 2 E<sub>0</sub> − F 得到（P2）。
+206. **溶剂中缩放电场时，DFTB+ 打印的偶极是乘过 3ε/(2ε+1) 的**。detailed.out 的 “Dipole moment” 与 results.tag 的 `scaled_dipole` 都乘了，`dipole_moments` 没乘，后者与 pydftb 的偶极是同一个量（P2 的 GBSA 水：差 0.36 e·Bohr 正好是这个因子）。
+207. **DFTB+ 会改写它读进来的 charges.bin**。沿用电荷时，上一步写进目录的 charges.bin 在 SCC 结束时被 DFTB+ 覆盖成新的电荷；只读“自己没写过的文件”会每隔一步丢掉电荷、从中性原子重来（P2 的第一版就是这样：MD 每步 SCC 多 4 轮，自旋 LC 的 CH3 走到另一个自旋态，坐标差 0.66 Å）。
+208. **非共线的杂化泛函没有电荷文件**。DFTB+ 25.1 不给它写 charges.bin，ASE 驱动的每一步都只能从初始自旋开始；`ch3_lc_noncolinear_md` 有一步 SCC 发散。DFTB+ 自己的驱动在步与步之间保留 DeltaP，所以 `pydftb run` 在 DFTB+ 引擎上对它用 DFTB+ 自己的驱动（P2）。
+209. **ELSI 版的 NTPoly 同一输入跑几次结果不同**。DFTB+ 24.1（MPICH，一个进程）连跑三次 Cu4CO 的 +U NTPoly，电荷之间差到 4.7e-13。P2 的 4 次全量实跑里，这 9 个算例与冻结参考的电荷差到 4.4e-13、力到 7.7e-14；每轮 SCC 误差的记录一般差 ≤ 3e-12，有一次（water_box_ons_ntpoly）差到 1.9e-8，SCC 轮数相同，最后的电荷与力差 ≤ 1.4e-14。不是输入的问题（P2）。
+210. **有限差分的 Hessian 会放大 DFTB+ 对 H0/S 的差分误差**。SK 网格节点附近（测试用的扰动水，H–H 距离离第 153 个节点 4e-6 Bohr），DFTB+ 的步长 2<sup>−13</sup> Bohr 跨过两段插值多项式，力差到 1e-6 Ha/Bohr，Hessian 的频率因此差 75 cm<sup>−1</sup>（676 对 751）；pydftb 用 `fd_delta=2**-13` 时与 DFTB+ 逐位一致，在普通的几何上两个引擎差不到 0.1 cm<sup>−1</sup>（P2）。

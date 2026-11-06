@@ -1,0 +1,66 @@
+ Fermi distribution function
+
+Calculation with static geometry
+
+
+********************************************************************************
+ iSCC Total electronic   Diff electronic      SCC error    
+    8   -0.39523275E+01   -0.53050941E-09    0.15120349E-10
+********************************************************************************
+
+ Total charge:     0.00000000
+
+ Atomic gross charges (e)
+ Atom           Charge
+    1      -0.51837701
+    2       0.22911119
+    3       0.28926582
+
+Nr. of electrons (up):      8.00000000
+Atom populations (up)
+ Atom       Population
+    1       6.51837701
+    2       0.77088881
+    3       0.71073418
+
+l-shell populations (up)
+ Atom Sh.   l       Population
+    1   1   0       1.90076961
+    1   2   1       4.61760740
+    2   1   0       0.77088881
+    3   1   0       0.71073418
+
+Orbital populations (up)
+ Atom Sh.   l   m       Population  Label
+    1   1   0   0       1.90076961  s
+    1   2   1  -1       1.18066937  p_y
+    1   2   1   0       1.44823824  p_z
+    1   2   1   1       1.98869978  p_x
+    2   1   0   0       0.77088881  s
+    3   1   0   0       0.71073418  s
+
+Fermi level:                        -0.0827160980 H           -2.2508 eV
+Band energy:                        -3.2304301631 H          -87.9045 eV
+Input / Output electrons (q):      8.0000000000      8.0000000000
+
+Energy H0:                          -3.9756767337 H         -108.1837 eV
+Energy SCC:                          0.0233492751 H            0.6354 eV
+Total Electronic energy:            -3.9523274586 H         -107.5483 eV
+Repulsive energy:                    0.0390551540 H            1.0627 eV
+Total energy:                       -3.9132723046 H         -106.4856 eV
+
+Non-constrained calculation
+
+SCC converged
+
+Total Forces
+    1      0.000727079720      0.092137169194      0.080733497297
+    2     -0.000266924692     -0.004869838318     -0.006558513597
+    3     -0.000460155027     -0.087267330876     -0.074174983700
+
+Maximal derivative component:        0.921372E-01 au
+
+Dipole moment:   -0.05509855   -0.05886906   -0.59937257 au
+Dipole moment:   -0.14004656   -0.14963023   -1.52345324 Debye
+
+

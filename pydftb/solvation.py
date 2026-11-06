@@ -23,6 +23,7 @@ numbers.  Per-species parameters are dicts keyed by type label or by element sym
 from __future__ import annotations
 
 import math
+import os
 import warnings
 from dataclasses import dataclass, field, replace
 
@@ -653,11 +654,84 @@ def cm5_correction(pos, labels, numbers, cm5: CM5):
     return c, dc
 
 
+GB_SPEC_KEYS = ("free_energy_shift", "born_scale", "born_offset", "descreening", "kernel", "alpb",
+                "alpha", "state", "temperature", "hbond")
+GB_SPEC_REQUIRED = ("solvent", "free_energy_shift", "born_scale", "born_offset", "descreening")
+SASA_SPEC_KEYS = ("probe_radius", "surface_tension", "radii", "radii_table", "smoothing",
+                  "tolerance", "angular_grid", "offset")
+
+
+def _spec_error(why: str) -> ValueError:
+    return ValueError(f"solvation: {why} (or give a pydftb.solvation.GeneralizedBorn or SASA "
+                      "object)")
+
+
+def _check_spec(d, allowed, required, what: str) -> None:
+    if not isinstance(d, dict):
+        raise _spec_error(f"{what} must be a dict, not {type(d).__name__}")
+    unknown = sorted(set(d) - set(allowed))
+    if unknown:
+        raise _spec_error(f"unknown keys {unknown} in {what}")
+    missing = [k for k in required if k not in d]
+    if missing:
+        raise _spec_error(f"{what} needs {', '.join(missing)}")
+
+
+def solvation_from_spec(spec: dict, data_dir: str | None = None):
+    """The model of a solvation spec, DFTB+'s ``Solvation`` input in pydftb's names (P2; the
+    validation cases' form): {"model": "sasa", SASA's fields} or a Generalised Born model
+    {"model": "gb", "solvent" (name or {"epsilon", "molecular_mass", "density"}),
+    "free_energy_shift", "born_scale", "born_offset", "descreening", "kernel", "alpb", "alpha",
+    "state", "temperature", "hbond", "sasa": {...}, "cm5": {...}} or {"model": "gb",
+    "param_file": path (relative to ``data_dir``), overrides}; atomic units, as the objects.
+    A wrong model, a missing parameter or an unknown key is a ValueError."""
+    def sasa(d, what, extra=()):
+        _check_spec(d, SASA_SPEC_KEYS + extra, ("probe_radius", "surface_tension"), what)
+        return SASA(**{k: d[k] for k in SASA_SPEC_KEYS if k in d})
+
+    if not isinstance(spec, dict):
+        raise _spec_error(f"the spec must be a dict, not {type(spec).__name__}")
+    model = spec.get("model")
+    if model == "sasa":
+        return sasa(spec, "the SASA spec", ("model",))
+    if model != "gb":
+        raise _spec_error(f"the spec's model must be 'gb' (Generalised Born) or 'sasa', not "
+                          f"{model!r}")
+    _check_spec(spec, ("model", "solvent", "sasa", "cm5", "param_file") + GB_SPEC_KEYS, (),
+                "the Generalised Born spec")
+    missing = [k for k in GB_SPEC_REQUIRED if k not in spec]
+    if missing and "param_file" not in spec:
+        raise _spec_error(f"the Generalised Born spec needs {', '.join(missing)}, or a "
+                          "param_file")
+    opts = {k: spec[k] for k in GB_SPEC_KEYS if k in spec}
+    if "solvent" in spec:
+        sol = spec["solvent"]
+        if not isinstance(sol, str):
+            _check_spec(sol, ("epsilon", "molecular_mass", "density"), ("epsilon",), "the solvent")
+            sol = Solvent(**sol)
+        opts["solvent"] = sol
+    if "sasa" in spec:
+        opts["sasa"] = sasa(spec["sasa"], "the spec's sasa")
+    if spec.get("cm5") is not None:
+        _check_spec(spec["cm5"], ("alpha", "radii", "cutoff", "double_count"), (), "the spec's cm5")
+        opts["cm5"] = CM5(**spec["cm5"])
+    if "param_file" in spec:
+        path = spec["param_file"]
+        if data_dir is not None:
+            path = os.path.join(data_dir, path)
+        return GeneralizedBorn.from_param_file(path, **opts)
+    return GeneralizedBorn(**opts)
+
+
 def make_solvation(spec):
-    """A solvation model from a GeneralizedBorn / SASA object, or None."""
+    """A solvation model from a GeneralizedBorn / SASA object, a solvation spec dict
+    (:func:`solvation_from_spec`, P2), or None."""
     if spec is None or isinstance(spec, (GeneralizedBorn, SASA)):
         return spec
-    raise ValueError("solvation must be a pydftb.solvation.GeneralizedBorn or SASA object")
+    if isinstance(spec, dict):
+        return solvation_from_spec(spec)
+    raise ValueError("solvation must be a pydftb.solvation.GeneralizedBorn or SASA object, or "
+                     "a solvation spec dict")
 
 
 def check_rescaling(model, field, rescale: bool):

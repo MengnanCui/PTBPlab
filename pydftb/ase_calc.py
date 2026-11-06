@@ -97,6 +97,62 @@ def _analysis_au(spec):
     return replace(a, esp=esp)
 
 
+def kpoints_of(atoms, spec, time_reversal=None, two_component: bool = False):
+    """The k-points (fractional (n_k, 3), weights summing to 1) of a ``kpts`` option for
+    ``atoms``, or None (no periodicity or no ``kpts``: the Gamma point).  Grids are
+    Monkhorst-Pack (``{"gamma": True}``: Gamma-centred), reduced by k -> -k unless
+    ``time_reversal`` is False (None: not for two-component calculations); band paths (ASE
+    ``BandPath``, ``{"path": ...}``) and DFTB+'s ``{"klines": [(n, k), ...]}`` are the path's
+    points with equal weights, never reduced (P2: shared with the DFTB+ engine)."""
+    if not atoms.pbc.any() or spec is None:
+        return None
+    if hasattr(spec, "special_points") or (isinstance(spec, dict) and "path" in spec):
+        path = spec if hasattr(spec, "special_points") else atoms.cell.bandpath(
+            spec["path"], npoints=spec.get("npoints"), density=spec.get("density"))
+        k = np.asarray(path.kpts, float)
+        return k, np.full(len(k), 1.0 / len(k))
+    if isinstance(spec, dict) and "klines" in spec:
+        from .bands import klines
+        k = klines(spec["klines"])[0]
+        return k, np.full(len(k), 1.0 / len(k))
+    if isinstance(spec, dict) and ("size" in spec or "density" in spec):   # ASE's dict
+        grid = spec.get("size")
+        if grid is None:
+            grid = kptdensity2monkhorstpack(atoms, spec["density"], even=spec.get("even"))
+        k, w = monkhorst_pack(tuple(int(n) for n in grid),
+                              gamma_centered=bool(spec.get("gamma", False)))
+    elif isinstance(spec, dict):
+        k, w = np.atleast_2d(spec["kpts"]), np.asarray(spec.get("weights", np.ones(len(spec["kpts"]))))
+    else:
+        grid = kptdensity2monkhorstpack(atoms, spec, even=False) if np.isscalar(spec) else spec
+        k, w = monkhorst_pack(tuple(int(n) for n in grid))
+    reduce = not two_component if time_reversal is None else time_reversal
+    if reduce:
+        k, w = reduce_time_reversal(k, w)
+    return k, w / w.sum()
+
+
+def _electric_field(spec):
+    """``electric_field`` as (E_x, E_y, E_z) V/Angstrom: the vector, or DFTB+'s
+    {"strength": V/Angstrom, "direction": (3,)} (P2)."""
+    if isinstance(spec, dict):
+        unknown = set(spec) - {"strength", "direction"}
+        if unknown or "strength" not in spec or "direction" not in spec:
+            raise ValueError("electric_field as a dict needs 'strength' (V/A) and 'direction'")
+        d = np.asarray(spec["direction"], float)
+        return float(spec["strength"]) * d / np.linalg.norm(d)
+    return spec
+
+
+def region_weights(states: States, regions) -> dict:
+    """DFTB+'s ProjectStates region files for these states (P2): {file name (DFTB+'s naming):
+    (n_spin, n_k, n_state) weights}; ``states`` need their projections."""
+    from .validation.dftbplus import region_files
+    shells = [list(states.basis.shells[int(r["atoms"][0])]) for r in regions]
+    return {name: states.weights(regions[i]["atoms"], ish, m)
+            for name, i, ish, m in region_files(regions, shells)}
+
+
 @contextlib.contextmanager
 def _as_calculation_failed():
     """A linear-algebra failure of the engine as ASE's ``CalculationFailed``, the error
@@ -199,6 +255,7 @@ class PyDFTB(Calculator):
     """
     implemented_properties = ["energy", "free_energy", "forces", "charges", "stress",
                               "magmom", "magmoms", "dipole", "energies"]
+    engine = "pydftb"                                 # P2: pydftb.engines
 
     def __init__(self, skdir, max_l=None, kpts=None, time_reversal: bool | None = None,
                  smearing=None, temperature: float | None = None, scc: bool = True,
@@ -240,6 +297,9 @@ class PyDFTB(Calculator):
             # M7b: one solver for all the steps, whose chemical potential carries over
             from .fermi_operator import FermiOperator
             solver = FermiOperator()
+        if isinstance(solver, dict):                  # P2: DFTB+'s NTPoly block as a dict
+            from .solvers import solver_from_spec
+            solver = solver_from_spec(solver)
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,
@@ -267,7 +327,7 @@ class PyDFTB(Calculator):
                 type_switching if isinstance(type_switching, (list, tuple)) else [type_switching])
             self.engine_opts["type_switching"] = self.type_switching
         self.read_charges = read_charges              # DFTB+ charge file for the first run (M6f)
-        self.electric_field = electric_field          # V/Angstrom (M6c)
+        self.electric_field = _electric_field(electric_field)   # V/Angstrom (M6c; P2: or a dict)
         self.point_charges = point_charges            # Angstrom, e
         self.site_potentials = site_potentials        # eV
         self.pcpot = None
@@ -300,28 +360,7 @@ class PyDFTB(Calculator):
 
     def _kpoints(self, atoms, spec=None):
         spec = self.kpts_spec if spec is None else spec
-        if not atoms.pbc.any() or spec is None:
-            return None
-        if hasattr(spec, "special_points") or (isinstance(spec, dict) and "path" in spec):
-            path = spec if hasattr(spec, "special_points") else atoms.cell.bandpath(
-                spec["path"], npoints=spec.get("npoints"), density=spec.get("density"))
-            k = np.asarray(path.kpts, float)
-            return k, np.full(len(k), 1.0 / len(k))
-        if isinstance(spec, dict) and ("size" in spec or "density" in spec):   # ASE's dict
-            grid = spec.get("size")
-            if grid is None:
-                grid = kptdensity2monkhorstpack(atoms, spec["density"], even=spec.get("even"))
-            k, w = monkhorst_pack(tuple(int(n) for n in grid),
-                                  gamma_centered=bool(spec.get("gamma", False)))
-        elif isinstance(spec, dict):
-            k, w = np.atleast_2d(spec["kpts"]), np.asarray(spec.get("weights", np.ones(len(spec["kpts"]))))
-        else:
-            grid = kptdensity2monkhorstpack(atoms, spec, even=False) if np.isscalar(spec) else spec
-            k, w = monkhorst_pack(tuple(int(n) for n in grid))
-        reduce = not self.two_component if self.time_reversal is None else self.time_reversal
-        if reduce:
-            k, w = reduce_time_reversal(k, w)
-        return k, w / w.sum()
+        return kpoints_of(atoms, spec, self.time_reversal, self.two_component)
 
     def _engine(self, atoms):
         """pydftb.DFTB for these atoms, its type labels and SK set."""
@@ -548,13 +587,16 @@ class PyDFTB(Calculator):
 
     # ---- band structure, DOS, PDOS at the SCC charges (pydftb.bands) -------
     def states(self, kpts=None, projections: bool = False, atoms=None,
-               chunk: int | None = None) -> States:
+               chunk: int | None = None, regions=None) -> States:
         """Eigenstates at the charges of the SCC run for ``atoms`` (run first if needed), as
         DFTB+'s band-structure run (``ReadInitialCharges``, one iteration).
 
         ``kpts``: None (the SCC k-points) or any form the constructor accepts (grid, density,
-        explicit dict, ASE ``BandPath`` or path dict).  Returns :class:`pydftb.bands.States`
-        (Hartree; ``dos()``/``pdos()`` in eV).
+        explicit dict, ASE ``BandPath`` or path dict, DFTB+'s ``{"klines": [(n, k), ...]}``).
+        ``regions`` (P2): DFTB+'s ``ProjectStates`` regions ([{"label", "atoms" (0-based),
+        "shell_resolved", "orbital_resolved"}, ...]); their weights, as DFTB+'s region files,
+        are in ``region_weights`` {file name: (n_spin, n_k, n_state)}.  Returns
+        :class:`pydftb.bands.States` (Hartree; ``dos()``/``pdos()`` in eV).
         """
         atoms = self.atoms if atoms is None else atoms
         if atoms is None:
@@ -569,13 +611,60 @@ class PyDFTB(Calculator):
         run = lambda: eigenstates(                                     # noqa: E731
             calc, labels, a.positions / BOHR, a.cell.array / BOHR if periodic else None,
             a.pbc if periodic else None, r.q_in,
-            kpts=None if kpts is None else self._kpoints(a, kpts), projections=projections,
+            kpts=None if kpts is None else self._kpoints(a, kpts),
+            projections=projections or bool(regions),
             scc_fermi=r.fermi_spin if r.fermi_spin is not None else r.fermi, chunk=chunk)
+        if self.threads is None:
+            st = run()
+        else:
+            from threadpoolctl import threadpool_limits
+            with threadpool_limits(self.threads):
+                st = run()
+        if regions:
+            st.region_weights = region_weights(st, regions)
+        return st
+
+    def second_derivatives(self, atoms=None, delta: float = 1e-4, derivative_atoms=None,
+                           moved_atoms=None, dipole: bool = True,
+                           polarisability: bool | None = None):
+        """DFTB+'s ``Driver = SecondDerivatives`` by :func:`pydftb.vibrations.second_derivatives`
+        on this calculator's engine (``delta`` in Bohr; atoms 0-based; P2, as
+        :meth:`pydftb.dftbplus_calc.DFTBPlus.second_derivatives`); ``polarisability`` True: also
+        its derivatives, with the polarisability as the only analysis (None: when the analysis
+        has it).  Normal modes: :func:`pydftb.vibrations.normal_modes` with :meth:`masses`."""
+        from .vibrations import second_derivatives
+        atoms = self.atoms if atoms is None else atoms
+        if atoms is None:
+            raise ValueError("no atoms: attach the calculator or pass atoms")
+        a = atoms.copy()
+        periodic = bool(a.pbc.any())
+        saved = self.engine_opts["analysis"]
+        if polarisability is not None:
+            self.engine_opts["analysis"] = (_analysis_au({"polarisability": True})
+                                            if polarisability else None)
+        try:
+            calc, labels, _ = self._engine(a)
+        finally:
+            self.engine_opts["analysis"] = saved
+        def run():
+            return second_derivatives(
+                calc, labels, a.positions / BOHR, a.cell.array / BOHR if periodic else None,
+                a.pbc if periodic else None, atoms=derivative_atoms, moved_atoms=moved_atoms,
+                delta=delta, dipole=dipole)
         if self.threads is None:
             return run()
         from threadpoolctl import threadpool_limits
         with threadpool_limits(self.threads):
             return run()
+
+    def masses(self, labels=None, atoms=None) -> np.ndarray:
+        """Masses (amu) of the type labels (default: of ``atoms``, else the last calculation's)
+        from their homonuclear SK files, as DFTB+ (P2)."""
+        if labels is None:
+            atoms = self.atoms if atoms is None else atoms
+            labels = self.labels or atoms.get_chemical_symbols()
+        sk = self.params.skset(list(labels))
+        return np.array([float(sk.mass[lab]) for lab in labels])
 
     def band_structure(self, path=None, npoints=None, atoms=None):
         """ASE ``BandStructure`` (eV, zero = SCC Fermi level of spin up).

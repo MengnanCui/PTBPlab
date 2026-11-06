@@ -1,0 +1,88 @@
+|===============================================================================
+|
+|  DFTB+ release 24.1
+|
+|  Copyright (C) 2006 - 2024  DFTB+ developers group
+|
+|===============================================================================
+|
+|  When publishing results obtained with DFTB+, please cite the following
+|  reference:
+|
+|  * DFTB+, a software package for efficient approximate density functional
+|    theory based atomistic simulations, J. Chem. Phys. 152, 124101 (2020).
+|    [doi: 10.1063/1.5143190]
+|
+|  You should also cite additional publications crediting the parametrization
+|  data you use. Please consult the documentation of the SK-files for the
+|  references.
+|
+|===============================================================================
+
+Reading input file 'dftb_in.hsd'
+Parser version: 14
+
+--------------------------------------------------------------------------------
+Reading SK-files:
+<SKDIR>/O-O.skf
+<SKDIR>/O-H.skf
+<SKDIR>/H-H.skf
+Done.
+
+
+Processed input in HSD format written to 'dftb_pin.hsd'
+
+Starting initialization...
+--------------------------------------------------------------------------------
+ELSI library version :       2.9.1
+MPI processes:               1
+OpenMP threads:              1
+BLACS orbital grid size:     1 x 1
+BLACS atom grid size:        1 x 1
+Chosen random seed:          4180821
+Current stacksize:           8 [Mb] (recommended: unlimited)
+WARNING!
+-> Current stacksize not set to unlimited or hard limit, which might cause
+   random crashes (e.g. segmentation faults). It is advised to unlimit the
+   stacksize by issuing 'ulimit -s unlimited' (Linux) or setting it to the 
+   hard limit by 'ulimit -s hard' (Mac) in advance.
+Mode:                        Static calculation
+Self consistent charges:     Yes
+SCC-tolerance:                 0.100000E-09
+Max. scc iterations:                    500
+Shell resolved Hubbard:      No
+Spin polarisation:           No
+Nr. of up electrons:             4.000000
+Nr. of down electrons:           4.000000
+Periodic boundaries:         No
+Electronic solver:           ELSI solver NTPoly Sparse
+Mixer:                       Broyden mixer
+Mixing parameter:                  0.200000
+Maximal SCC-cycles:                     500
+Nr. of chrg. vec. in memory:            500
+Electronic temperature:              0.100000E-07 H      0.272114E-06 eV
+Initial charges:             Set automatically (system chrg:   0.000E+00)
+Included shells:             O:  s, p
+                             H:  s
+Extra options:
+                             Mulliken analysis
+                             Force calculation
+Force type                   original
+
+--------------------------------------------------------------------------------
+
+***  Geometry step: 0
+
+ iSCC Total electronic   Diff electronic      SCC error    
+    1    0.00000000E+00    0.00000000E+00    0.93314422E+00
+    2   -0.39188571E+01   -0.39188571E+01    0.60596673E+00
+    3   -0.39378956E+01   -0.19038537E-01    0.44081055E-01
+    4   -0.39522534E+01   -0.14357736E-01    0.53244780E-01
+    5   -0.39522159E+01    0.37457673E-04    0.45550581E-02
+    6   -0.39523265E+01   -0.11061801E-03    0.10988578E-03
+    7   -0.39523275E+01   -0.92509429E-06    0.13104167E-06
+    8   -0.39523275E+01   -0.53050941E-09    0.15120349E-10
+>> Charges saved for restart in charges.bin
+
+Total Energy:                       -3.9132723046 H         -106.4856 eV
+

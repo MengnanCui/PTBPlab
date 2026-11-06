@@ -670,31 +670,12 @@ def _switch_labels(spec):
 
 
 def solvation_model(spec):
-    """The pydftb model (:mod:`pydftb.solvation`) of a case's solvation spec."""
-    from .. import solvation as sv
+    """The pydftb model (:mod:`pydftb.solvation`) of a case's solvation spec (its parameter
+    files are in ``tests/data``)."""
+    from ..solvation import solvation_from_spec
     if spec is None:
         return None
-
-    def sasa(d):
-        keys = ("probe_radius", "surface_tension", "radii", "radii_table", "smoothing",
-                "tolerance", "angular_grid", "offset")
-        return sv.SASA(**{k: d[k] for k in keys if k in d})
-
-    if spec["model"] == "sasa":
-        return sasa(spec)
-    opts = {k: spec[k] for k in ("free_energy_shift", "born_scale", "born_offset", "descreening",
-                                 "kernel", "alpb", "alpha", "state", "temperature", "hbond")
-            if k in spec}
-    if "solvent" in spec:
-        sol = spec["solvent"]
-        opts["solvent"] = sol if isinstance(sol, str) else sv.Solvent(**sol)
-    if "sasa" in spec:
-        opts["sasa"] = sasa(spec["sasa"])
-    if spec.get("cm5") is not None:
-        opts["cm5"] = sv.CM5(**spec["cm5"])
-    if "param_file" in spec:
-        return sv.GeneralizedBorn.from_param_file(os.path.join(DATA, spec["param_file"]), **opts)
-    return sv.GeneralizedBorn(**opts)
+    return solvation_from_spec(spec, DATA)
 
 
 CASES = [

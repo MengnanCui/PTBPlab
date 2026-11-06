@@ -24,18 +24,22 @@ python -m pytest --pyargs pydftb.tests   # the offline tests, from any folder (n
 
 Extras: `torch` (the PyTorch backend, GPUs and `pydftb.autodiff`; GPU builds from
 pytorch.org) and `dispersion` (the D3/D4 libraries; on conda-forge `dftd3-python` and
-`dftd4-python`).  DFTB+ is only needed to regenerate the references or to compare live.
+`dftd4-python`).  DFTB+ is only needed to regenerate the references, to compare live, or to
+run the DFTB+ engine (`--engine dftbplus`, below; DFTB+ 24.1 or later, e.g.
+`conda install -c conda-forge dftbplus`).
 PTBP depends on pydftb: `pip install ./pydftb .` installs both.  A checkout also works
 without installing, as before (`PYTHONPATH=.` at the repository root).
 
 | Command | What it does |
 |---|---|
+| `pydftb run STRUCTURE --skdir DIR` | a calculation (energy, relax, md, bands, dos, hessian) on `--engine pydftb` or `dftbplus` |
 | `pydftb advisor RUN_DIR` | checks a DFTB+ input and run for known pitfalls |
 | `pydftb refgen --check` | pydftb against the frozen DFTB+ references (`--live`, `--regenerate` need dftb+) |
 | `pydftb dynamics --check` | optimisations and MD against DFTB+'s drivers |
 | `pydftb gpu-check` | the GPU self-check (needs torch) |
 | `pydftb gradcheck --check` | `pydftb.autodiff` against finite differences (needs torch) |
 | `pydftb golden --base COMMIT` | the NumPy path bitwise unchanged since COMMIT (in a git checkout) |
+| `pydftb dual --inputs` | the DFTB+ engine's input for every frozen case (`--pydftb`, `--live`, `--drivers`: the engines' results) |
 
 `pydftb COMMAND --help` lists a command's options, and `python -m pydftb COMMAND` is the same
 command.  The module forms keep working (`python -m pydftb.validation.refgen --check`,
@@ -61,6 +65,61 @@ Periodic systems take a Monkhorst-Pack grid, e.g. `pydftb.SCC(system, params, kp
 ASE users can call `pydftb.ase_calc.PyDFTB` instead; it works in eV and Angstrom.  When the
 engine fails where DFTB+ would stop (a non-positive-definite overlap, e.g. very diffuse
 basis functions), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
+
+### Two engines: pydftb or DFTB+
+
+Every calculation can run on pydftb or on DFTB+ with the same options; only the engine
+changes.  `pydftb.engines.make_calculator` gives `PyDFTB` or `pydftb.dftbplus_calc.DFTBPlus`,
+an ASE calculator that writes DFTB+'s input from `PyDFTB`'s options (same names, units and
+defaults), runs DFTB+ and returns the same results (`results` in ASE units, `raw` a
+`DFTBResult` in atomic units, `common_results(calc)` the fields both give):
+
+```python
+from pydftb.engines import make_calculator, common_results
+for engine in ("pydftb", "dftbplus"):
+    calc = make_calculator("skf/", engine, kpts=(4, 4, 4), smearing=("fermi", 300.0),
+                           dftbplus={"binary": "/opt/dftb+/bin/dftb+"})
+    print(engine, common_results(calc, atoms)["energy"])        # eV
+```
+
+The command does the same, also for relaxations, MD, band structures, DOS and Hessians:
+
+```bash
+pydftb run cu.cif --skdir skf/ --engine dftbplus --kpts 6 6 6 --temperature 1000
+pydftb run h2o.xyz --skdir skf/ --engine pydftb --task relax --fmax 0.01 --json out.json
+pydftb run h2o.xyz --skdir skf/ --engine dftbplus --task md --steps 200 --native
+pydftb run cu.cif --skdir skf/ --task bands --path GXWLGK --options opts.json
+```
+
+`--options` is a JSON file of calculator options: the common ones at the top level, one
+engine's own in a `"pydftb"` or `"dftbplus"` section (`{"scc_tol": 1e-8, "pydftb":
+{"k_threads": 4}, "dftbplus": {"binary": "..."}}`); `--set KEY=VALUE` adds one (JSON value).
+An option one engine lacks, given with the common ones, stops with a message that names the
+section it belongs in.  `--json` writes the same fields for both engines.
+
+- DFTB+ is given the numbers pydftb uses: the options are converted with pydftb's own unit
+  conversions, k-point grids are pydftb's reduced points (a Gamma-centred grid of a periodic
+  hybrid is DFTB+'s `SupercellFolding`), and pydftb's defaults are written out (SCC tolerance
+  1e-6, 200 iterations, `EwaldTolerance` 1e-12; `ewald_tolerance=None` keeps DFTB+'s 1e-9).
+- The input is assembled from the blocks that wrote every frozen DFTB+ reference:
+  `pydftb dual --inputs` checks all 588 frozen inputs (single points, band runs,
+  SecondDerivatives runs, DFTB+'s drivers) against what the engine writes.
+- What differs: DFTB+ differentiates H0 and S numerically (pydftb's `fd_delta=2**-13` does the
+  same; its default is exact), which near an SK grid node changes forces by up to 1e-6
+  Ha/Bohr and finite-difference Hessians much more; an unconverged SCC stops DFTB+
+  (`CalculationFailed`; `dftbplus={"convergent_scc_only": False}` goes on) where pydftb
+  warns.  pydftb-only options (type switching, the torch backend, FOE, subsystems,
+  autodiff) are refused by the DFTB+ engine, and so is what DFTB+'s input cannot say in a
+  solvation spec: SASA radii, and a CM5 other than DFTB+'s, which counts every atom pair
+  twice (give `"cm5": {"double_count": True}` for the same model on both engines); a wrong
+  or incomplete spec is the same `ValueError` on both.  `regions`, `binary`,
+  `extra_hamiltonian` and the other `extra_*` HSD text are the DFTB+ engine's own.
+- Optimisations and MD go through ASE on either engine; the DFTB+ engine reuses DFTB+'s
+  `charges.bin` from step to step (`ReadInitialCharges`), as DFTB+'s own drivers keep the
+  charges, so each step takes the same SCC iterations.  `--native` uses DFTB+'s own
+  GeometryOptimisation or VelocityVerlet instead (one DFTB+ run); XL-BOMD and non-collinear
+  hybrids (DFTB+ writes no charge file for them) always do.  Each DFTB+ run costs about
+  20 ms more than the work itself.
 
 ### Several parameter sets for one element
 
@@ -1229,4 +1288,8 @@ pydftb refgen --check --backend torch     # the same on the torch backend
 pydftb golden --base COMMIT               # NumPy path bitwise unchanged since COMMIT (checkout)
 pydftb gradcheck --check                  # pydftb.autodiff vs finite differences
 pydftb gpu-check --device cpu --quick     # the GPU self-check, on the CPU
+pydftb dual --inputs                      # the DFTB+ engine's inputs vs every frozen one
+pydftb dual --pydftb --workers 4          # the pydftb engine through make_calculator
+pydftb dual --live --workers 4            # needs dftb+: the DFTB+ engine live, both engines
+pydftb dual --drivers --workers 4         # needs dftb+: optimisations and MD on DFTB+
 ```

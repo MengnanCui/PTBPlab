@@ -1,6 +1,9 @@
 """Run DFTB+ on the same input as pydftb (reference generation and timing).
 
-Only needed for validation; pydftb itself never calls DFTB+.
+The input blocks and the output parsers here wrote and read every frozen DFTB+ reference; the
+DFTB+ engine (:mod:`pydftb.dftbplus_calc`, P2) assembles its input from the same blocks and
+reads its outputs with :func:`parse_run`, so the two cannot drift apart
+(``pydftb dual --inputs`` checks the engine's inputs against every frozen one).
 
 Notes on matching DFTB+ exactly:
 * ``ParserVersion = 14`` is always written.  For older parser versions DFTB+
@@ -1251,76 +1254,96 @@ def run(labels, pos_ang, cell_ang=None, skdir=".", max_l=None, kpts=None, scc=Tr
         wall = time.perf_counter() - t0
         if p.returncode != 0:
             raise RuntimeError(p.stdout[-3000:] + p.stderr[-3000:])
-        with open(os.path.join(workdir, "detailed.out")) as fh:
-            det = fh.read()
-        tag = parse_results_tag(os.path.join(workdir, "results.tag"))
-        res = {"wall": wall, "hsd": hsd, "stdout": p.stdout, "dir": workdir}
-        for key, name in [("energy", "Total energy"), ("free_energy", "Total Mermin free energy"),
-                          ("e_zero", "Extrapolated to 0"), ("e_rep", "Repulsive energy"),
-                          ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
-                          ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
-                          ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
-                          ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite"),
-                          ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy"),
-                          ("e_halogen", "Halogen correction energy"),
-                          ("e_fock", "Energy Fock")]:
-            m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
-            if m:
-                res[key] = float(m.group(1))
-        if "ts" in res:
-            res["ts"] = -res["ts"]          # detailed.out prints -TS
-        res["fermi"] = float(np.atleast_1d(tag["fermi_level"])[0])
-        res["fermi_levels"] = np.atleast_1d(tag["fermi_level"]).astype(float)
-        res["eigenvalues"] = tag.get("eigenvalues")
-        res["filling"] = tag.get("filling")
-        res["forces"] = tag.get("forces")
-        if "stress" in tag:
-            res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
-        res["charges_net"] = tag["gross_atomic_charges"]
-        if "gross_atomic_spins" in tag:
-            res["spins"] = tag["gross_atomic_spins"]       # (n_atom,) or (3, n_atom)
-        if "orbital_charges" in tag:      # (n_spin, n_atom, max orbitals): electrons per
-            res["orbital_charges"] = tag["orbital_charges"]   # orbital; collinear: up, down
-        if "forces_ext_charges" in tag:   # M6c
-            res["point_charge_forces"] = tag["forces_ext_charges"]
-        m = re.search(r"^Dipole moment:\s+(\S+)\s+(\S+)\s+(\S+)\s+au", det, re.M)
-        if m:
-            res["dipole"] = np.array([float(x) for x in m.groups()])
-        if "dipole_moments" in tag:       # full precision (M6g-3b: finite-field references)
-            res["dipole_tag"] = np.asarray(tag["dipole_moments"], float).ravel()
-        res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
-        if autotest or extra_top:
-            res.update(parse_casida(workdir, det))
-        res["mermin_tag"] = tag.get("mermin_energy")
-        res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
-        if "forcerelated_energy" in tag:      # M6f: E_Mermin - sum_s N_s E_f,s (fixed E_f)
-            res["e_force_related"] = float(np.atleast_1d(tag["forcerelated_energy"])[0])
-        if "number_of_electrons" in tag:      # per spin channel with collinear spin
-            res["number_of_electrons"] = np.atleast_1d(tag["number_of_electrons"]).astype(float)
-        if analysis:                          # M6f-4a
-            res["analysis"] = parse_analysis(workdir, det, analysis, p.stdout)
-        ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", p.stdout, re.M)
-        res["version"] = ver.group(1) if ver else "unknown"
-        # one line each (\s would also match the newlines of Casida's Stratmann progress table)
-        iters = re.findall(r"^[ \t]+(\d+)[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]*$",
-                           p.stdout, re.M)
-        res["n_scc"] = int(iters[-1]) if iters else (1 if not scc else None)
-        res["scc_errors"] = [float(x) for x in re.findall(
-            r"^[ \t]+\d+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+([-\d.E+]+)[ \t]*$", p.stdout, re.M)]
-        if driver:
-            res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", p.stdout))
-            res["converged_geometry"] = "Geometry converged" in p.stdout
-            end = os.path.join(workdir, "geo_end.gen")     # not with SecondDerivatives (M6g-2)
-            res["final_geometry"] = read_gen(end) if os.path.exists(end) else None
-            res["scc_iterations"] = [int(x) for x in re.findall(
-                r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*\n\s*\n", p.stdout, re.M)]
-            if os.path.exists(os.path.join(workdir, "md.out")):
-                res["md"] = parse_md_out(os.path.join(workdir, "md.out"))
-                res["trajectory"] = parse_xyz_frames(os.path.join(workdir, "geo_end.xyz"))
+        res = {"wall": wall, "hsd": hsd}
+        res.update(parse_run(workdir, p.stdout, scc, analysis, autotest, bool(extra_top),
+                             bool(driver)))
         return res
     finally:
         if own_dir and not keep:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def parse_run(workdir, stdout: str, scc: bool = True, analysis=None, autotest: bool = False,
+              casida: bool = False, driver: bool = False) -> dict:
+    """The outputs of a DFTB+ run in ``workdir`` (what :func:`run` returns besides the wall
+    time and the input): energies from ``detailed.out`` (10 decimals), the rest from
+    ``results.tag`` (full precision); ``mermin_tag``, ``extrapolated0_tag`` and ``total_tag``
+    are results.tag's energies; the Casida outputs with ``autotest`` or ``casida``, the
+    analysis of ``analysis``, the geometry steps of a ``driver`` run."""
+    res = {"stdout": stdout, "dir": workdir}
+    with open(os.path.join(workdir, "detailed.out")) as fh:
+        det = fh.read()
+    tag = parse_results_tag(os.path.join(workdir, "results.tag"))
+    for key, name in [("energy", "Total energy"), ("free_energy", "Total Mermin free energy"),
+                      ("e_zero", "Extrapolated to 0"), ("e_rep", "Repulsive energy"),
+                      ("e_scc", "Energy SCC"), ("e_band", "Energy H0"), ("ts", "-TS"),
+                      ("e_disp", "Dispersion energy"), ("e_spin", "Energy SPIN"),
+                      ("e_ls", "Energy L.S"), ("e_3rd", "Energy 3rd"),
+                      ("e_plus_u", "Energy DFTB+U"), ("e_onsite", "Energy onsite"),
+                      ("e_ext", "Energy ext. field"), ("e_solv", "Solvation energy"),
+                      ("e_halogen", "Halogen correction energy"),
+                      ("e_fock", "Energy Fock")]:
+        m = re.search(rf"^{re.escape(name)}:\s+(\S+)\s+H", det, re.M)
+        if m:
+            res[key] = float(m.group(1))
+    if "ts" in res:
+        res["ts"] = -res["ts"]          # detailed.out prints -TS
+    res["fermi"] = float(np.atleast_1d(tag["fermi_level"])[0])
+    res["fermi_levels"] = np.atleast_1d(tag["fermi_level"]).astype(float)
+    res["eigenvalues"] = tag.get("eigenvalues")
+    res["filling"] = tag.get("filling")
+    res["forces"] = tag.get("forces")
+    if "stress" in tag:
+        res["stress"] = tag["stress"]          # Hartree/Bohr^3, DFTB+ convention
+    res["charges_net"] = tag["gross_atomic_charges"]
+    if "gross_atomic_spins" in tag:
+        res["spins"] = tag["gross_atomic_spins"]       # (n_atom,) or (3, n_atom)
+    if "orbital_charges" in tag:      # (n_spin, n_atom, max orbitals): electrons per
+        res["orbital_charges"] = tag["orbital_charges"]   # orbital; collinear: up, down
+    if "forces_ext_charges" in tag:   # M6c
+        res["point_charge_forces"] = tag["forces_ext_charges"]
+    m = re.search(r"^Dipole moment:\s+(\S+)\s+(\S+)\s+(\S+)\s+au", det, re.M)
+    if m:
+        res["dipole"] = np.array([float(x) for x in m.groups()])
+    if "dipole_moments" in tag:       # full precision (M6g-3b: finite-field references)
+        res["dipole_tag"] = np.asarray(tag["dipole_moments"], float).ravel()
+    res.update({f"angular_{k}": v for k, v in parse_angular_momenta(det).items()})
+    if autotest or casida:
+        res.update(parse_casida(workdir, det))
+    res["mermin_tag"] = tag.get("mermin_energy")
+    res["total_tag"] = tag.get("total_energy")            # P2: the ELSI build (24.1) has only it
+    res["extrapolated0_tag"] = tag.get("extrapolated0_energy")
+    if "forcerelated_energy" in tag:      # M6f: E_Mermin - sum_s N_s E_f,s (fixed E_f)
+        res["e_force_related"] = float(np.atleast_1d(tag["forcerelated_energy"])[0])
+    if "number_of_electrons" in tag:      # per spin channel with collinear spin
+        res["number_of_electrons"] = np.atleast_1d(tag["number_of_electrons"]).astype(float)
+    if analysis:                          # M6f-4a
+        res["analysis"] = parse_analysis(workdir, det, analysis, stdout)
+    ver = re.search(r"\|\s+(DFTB\+[^|]*?)\s*$", stdout, re.M)
+    res["version"] = ver.group(1) if ver else "unknown"
+    # one line each (\s would also match the newlines of Casida's Stratmann progress table)
+    iters = re.findall(r"^[ \t]+(\d+)[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]*$",
+                       stdout, re.M)
+    res["n_scc"] = int(iters[-1]) if iters else (1 if not scc else None)
+    res["scc_errors"] = [float(x) for x in re.findall(
+        r"^[ \t]+\d+[ \t]+[-\d.E+]+[ \t]+[-\d.E+]+[ \t]+([-\d.E+]+)[ \t]*$", stdout, re.M)]
+    if driver:
+        res["geometry_steps"] = len(re.findall(r"Geometry step: \d+", stdout))
+        res["converged_geometry"] = "Geometry converged" in stdout
+        end = os.path.join(workdir, "geo_end.gen")     # not with SecondDerivatives (M6g-2)
+        res["final_geometry"] = read_gen(end) if os.path.exists(end) else None
+        res["scc_iterations"] = [int(x) for x in re.findall(
+            r"^\s+(\d+)\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s*\n\s*\n", stdout, re.M)]
+        if os.path.exists(os.path.join(workdir, "md.out")):
+            res["md"] = parse_md_out(os.path.join(workdir, "md.out"))
+            res["trajectory"] = parse_xyz_frames(os.path.join(workdir, "geo_end.xyz"))
+    return res
+
+
+def strip_initial_spins(text: str) -> str:
+    """The HSD text without its ``InitialSpins`` blocks: DFTB+ does not read initial spins when
+    it reads charges (``ReadInitialCharges``) and stops at the unread block."""
+    return re.sub(r"^( *)InitialSpins (= )?\{\n(?:.*\n)*?\1\}\n", "", text, flags=re.M)
 
 
 def run_restart(labels, pos1_ang, pos2_ang, cell_ang=None, text: bool = False,
@@ -1348,7 +1371,7 @@ def run_restart(labels, pos1_ang, pos2_ang, cell_ang=None, text: bool = False,
             blob = fh.read()
         with open(os.path.join(dirs[1], fname), "wb") as fh:
             fh.write(blob)
-        ham2 = re.sub(r"^( *)InitialSpins (= )?\{\n(?:.*\n)*?\1\}\n", "", extra_ham, flags=re.M)
+        ham2 = strip_initial_spins(extra_ham)
         r2 = run(labels, pos2_ang, cell_ang, workdir=dirs[1], extra_ham=ham2, read_charges=True,
                  extra_options="  ReadChargesAsText = Yes\n" if text else "", **kw)
         r2["charges_file"] = base64.b64encode(blob).decode()

@@ -216,6 +216,20 @@ SOLVERS = {"eigh": EighSolver, "batched": BatchedSolver, "sp2": SP2Solver,
            "elpa": EighSolver, "ntpoly": NTPoly,
            "foe": FermiOperator,                                   # M7b
            "subsystems": Subsystems}                               # M7d
+
+
+def solver_from_spec(spec):
+    """A ``solver`` of DFTB+'s Solver block in the engine-neutral form (P2): a name stays a name,
+    ``{"name": "ntpoly", "method", "tolerance", "truncation"}`` becomes an :class:`NTPoly`."""
+    if not isinstance(spec, dict):
+        return spec
+    name = str(spec.get("name", "")).lower()
+    if name != "ntpoly":
+        raise ValueError(f"solver dict: only {{'name': 'ntpoly', ...}} (DFTB+'s NTPoly block), "
+                         f"not {spec!r}")
+    return NTPoly(**{k: v for k, v in spec.items() if k != "name"})
+
+
 # DFTB+ solvers that pydftb does not provide, and why (M7a)
 UNSUPPORTED_SOLVERS = {
     "omm": "DFTB+'s OMM (libOMM through ELSI) is not implemented: in DFTB+ 24.1 its densities, "

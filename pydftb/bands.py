@@ -75,6 +75,7 @@ class States:
     basis: Basis
     projections: np.ndarray | None = None   # (n_spin, n_k, n_orb, n_state) Re[c* (S c)]
                                             # (two-component: summed over both spins)
+    region_weights: dict | None = None      # P2: {DFTB+ region file: (n_spin, n_k, n_state)}
 
     @property
     def nspin(self) -> int:

@@ -1,0 +1,125 @@
+|===============================================================================
+|
+|  DFTB+ development version (commit: a23bfb2)
+|
+|  Copyright (C) 2006 - 2025  DFTB+ developers group
+|
+|===============================================================================
+|
+|  When publishing results obtained with DFTB+, please cite the following
+|  reference:
+|
+|    Recent Developments in DFTB+, a Software Package for Efficient Atomistic
+|    Quantum Mechanical Simulations, J. Phys. Chem. A 129, 5373−5390 (2025).
+|    [https://doi.org/10.1021/acs.jpca.5c01146]
+|
+|  You should also cite additional publications crediting the parametrization
+|  data you use. Please consult the documentation of the SK-files for the
+|  references.
+|
+|===============================================================================
+
+Reading input file 'dftb_in.hsd'
+Parser version: 14
+
+--------------------------------------------------------------------------------
+Reading SK-files:
+<SKDIR>/Cu-Cu.skf
+<SKDIR>/Cu-C.skf
+<SKDIR>/Cu-O.skf
+<SKDIR>/C-C.skf
+<SKDIR>/C-O.skf
+<SKDIR>/O-O.skf
+Done.
+WARNING!
+-> Settings will be read but ignored (compiled without MPI support)
+Path: dftbplusinput/Parallel
+Line: 38-40 (File: dftb_in.hsd)
+
+
+
+Processed input in HSD format written to 'dftb_pin.hsd'
+
+Starting initialization...
+--------------------------------------------------------------------------------
+OpenMP threads:              1
+Chosen random seed:          4180510
+Current stacksize:           8 [Mb] (recommended: unlimited)
+WARNING!
+-> Current stacksize not set to unlimited or hard limit, which might cause
+   random crashes (e.g. segmentation faults). It is advised to unlimit the
+   stacksize by issuing 'ulimit -s unlimited' (Linux) or setting it to the 
+   hard limit by 'ulimit -s hard' (Mac) in advance.
+Mode:                        Static calculation
+Self consistent charges:     Yes
+SCC-tolerance:                 0.100000E-08
+Max. scc iterations:                    500
+Shell resolved Hubbard:      No
+Spin polarisation:           No
+Periodic boundaries:         No
+Electronic solver:           Relatively robust
+Mixer:                       Broyden mixer
+Mixing parameter:                  0.200000
+Nr. of chrg. vec. in memory:            500
+Max. SCC-cycles:                        500
+Electronic temperature:              0.950045E-03 H      0.258520E-01 eV
+Initial charges:             Set automatically (system chrg:   0.000E+00)
+Included shells:            Cu:  s, p, d
+                             C:  s, p
+                             O:  s, p
+Extra options:
+                             Mulliken analysis
+                             Force calculation
+Force type                   original
+
+--------------------------------------------------------------------------------
+
+***  Geometry step: 0
+
+ iSCC Total electronic   Diff electronic      SCC error    
+    1   -0.13245826E+02    0.00000000E+00    0.59361295E+00
+    2   -0.12524532E+02   -0.13245826E+02    0.58710168E+00
+    3   -0.13127063E+02    0.72129415E+00    0.69884588E+00
+    4   -0.12565367E+02   -0.60253111E+00    0.59720960E+00
+    5   -0.13129387E+02    0.56169580E+00    0.63704174E+00
+    6   -0.12545544E+02   -0.56401962E+00    0.64072819E+00
+    7   -0.12546838E+02    0.58384323E+00    0.63100838E+00
+    8   -0.13133446E+02   -0.12941274E-02    0.60201398E+00
+    9   -0.12817575E+02   -0.58660781E+00    0.46154799E+00
+   10   -0.13161282E+02    0.31587069E+00    0.56101377E+00
+   11   -0.12612987E+02   -0.34370686E+00    0.58032616E+00
+   12   -0.13171503E+02    0.54829463E+00    0.54348611E+00
+   13   -0.12750559E+02   -0.55851597E+00    0.49757705E+00
+   14   -0.13218894E+02    0.42094383E+00    0.45532811E+00
+   15   -0.12855089E+02   -0.46833465E+00    0.42185420E+00
+   16   -0.13241116E+02    0.36380517E+00    0.40483916E+00
+   17   -0.12958412E+02   -0.38602682E+00    0.33640300E+00
+   18   -0.13259502E+02    0.28270393E+00    0.34794860E+00
+   19   -0.13022400E+02   -0.30109000E+00    0.27510231E+00
+>> Charges saved for restart in charges.bin
+   20   -0.13272843E+02    0.23710211E+00    0.27410777E+00
+   21   -0.13096952E+02   -0.25044377E+00    0.19460532E+00
+   22   -0.13274755E+02    0.17589143E+00    0.19685603E+00
+   23   -0.13149343E+02   -0.17780284E+00    0.12716689E+00
+   24   -0.13264570E+02    0.12541156E+00    0.12072181E+00
+   25   -0.13189228E+02   -0.11522660E+00    0.65942753E-01
+   26   -0.13247187E+02    0.75341607E-01    0.58063148E-01
+   27   -0.13210905E+02   -0.57958992E-01    0.26591162E-01
+   28   -0.13232552E+02    0.36282091E-01    0.19744913E-01
+   29   -0.13220212E+02   -0.21646691E-01    0.77288579E-02
+   30   -0.13225906E+02    0.12339444E-01    0.45447557E-02
+   31   -0.13223109E+02   -0.56939249E-02    0.15561954E-02
+   32   -0.13224064E+02    0.27971636E-02    0.50966592E-03
+   33   -0.13223854E+02   -0.95440062E-03    0.56134267E-04
+   34   -0.13223834E+02    0.20915394E-03    0.12266915E-04
+   35   -0.13223828E+02    0.20339841E-04    0.21641359E-06
+   36   -0.13223828E+02    0.57727897E-05    0.26054057E-08
+   37   -0.13223828E+02   -0.98540745E-07    0.95311812E-08
+>> Charges saved for restart in charges.bin
+   38   -0.13223828E+02   -0.55800378E-08    0.11073276E-09
+
+Total Energy:                      -13.0068181961 H         -353.9335 eV
+Extrapolated to 0K:                -13.0081339518 H         -353.9693 eV
+Total Mermin free energy:          -13.0094497076 H         -354.0051 eV
+Force related energy:               -5.4448753771 H         -148.1626 eV
+

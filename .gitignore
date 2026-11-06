@@ -31,6 +31,8 @@ result.pkl
 !pydftb/tests/data/advisor/*/dftb_in.hsd
 !pydftb/tests/data/advisor/*/dftb_pin.hsd
 !pydftb/tests/data/advisor/*/geo_end.gen
+# ... and the stored DFTB+ outputs of the DFTB+ engine's tests (pydftb P2)
+!pydftb/tests/data/dftbplus_outputs/*/detailed.out
 
 # OS
 .DS_Store

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>P2 双引擎报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / P2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">P2 · 完成报告</p>
+    <h1>双引擎：每个功能都能用 pydftb 或 DFTB+ 计算</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-06</dd></div>
+      <div><dt>提交</dt><dd>—</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/P2-dual-engine.html">设计文档</a> · <a href="P1-packaging.html">P1 报告</a>（<code>pydftb</code> 命令）</dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">两边都有的功能现在都能用 pydftb 或 DFTB+ 计算，只换一个参数：Python 里是 <code>make_calculator(skdir, engine="pydftb"|"dftbplus", **options)</code>，命令行是 <code>pydftb run --engine pydftb|dftbplus</code>。选项就是 <code>PyDFTB</code> 的名字、单位与默认值。新的 ASE 计算器 <code>DFTBPlus</code> 用写出全部冻结参考的那套块写 DFTB+ 的输入，运行 DFTB+，把结果换成与 <code>PyDFTB</code> 相同的字段。新命令 <code>pydftb dual</code> 用 517 个冻结单点与 34 个动力学参考逐个核对了输入、实跑的输出、两个引擎之间的差，以及 ASE 驱动的优化与 MD，全部在算例的容差内。PTBP 自己的 <code>--engine</code> 没有动，旧的 pydftb 路径逐位不变。</p>
+    <ul>
+      <li><strong>一个开关</strong>：两个引擎用同一组选项。只有一个引擎有的选项放在 <code>pydftb={...}</code> 或 <code>dftbplus={...}</code> 里（选项文件里是同名的两节），所以换引擎时选项不用改。放错地方的选项报 <code>EngineOptionError</code>，说明原因和该放的那一节。DFTB+ 引擎拒绝只有 pydftb 才有的功能：类型切换、torch 后端与 float32、FOE 与子体系求解器、溶剂化的模型对象、CM5 的自定义参数、<code>repulsive="none"</code>；XL-BOMD 只在 DFTB+ 自己的 MD 驱动里。<code>k_threads</code> 只影响 pydftb 的速度，DFTB+ 引擎接受并忽略。</li>
+      <li><strong>输入</strong>（V1，不需要 dftb+）：588 个冻结输入，DFTB+ 读到的内容与新引擎写出的全部相同。其中 517 个单点（511 个逐字节相同，6 个只差末位，是固定费米能级与归一化 k 点权重的一次换算），13 个能带运行，24 个二阶导数运行，34 个 DFTB+ 自己驱动的优化与 MD。几何文件逐字节相同。这项核对也是一个 pytest 测试。</li>
+      <li><strong>DFTB+ 引擎实跑</strong>（V3）：517 个算例全部跑通，502 个解析出的输出与冻结参考逐位相同。其余 15 个分两类：上面那 6 个输入差末位的算例，差 ≤ 4.0e-11（cu4co_pol_fixef 每轮 SCC 误差的记录；电荷 ≤ 1.9e-13）；9 个 ELSI 版 NTPoly 的算例，电荷差到 4.4e-13，这是 DFTB+ 自己每次运行就不同（坑 209）。</li>
+      <li><strong>两个引擎互相比较</strong>（V4）：同一个算例、同一组选项，<code>PyDFTB</code> 对 <code>DFTBPlus</code>，517 个全部在算例的容差内。
+        <ul>
+          <li>能量差的中位数是 7.5e-15 Ha，504 个 &lt; 1e-9 Ha。最大是 2.2e-7 Ha（water_box_dftb3，那个冻结算例用 DFTB+ 自己的 Ewald 容差 1e-9），占容差的 22%。</li>
+          <li>离容差最近的两项都是 69%：一是力（h2o_nonscc），因为 DFTB+ 用差分求 H0、S 的导数；二是非共线 CAM 的磁矩。</li>
+        </ul></li>
+      <li><strong>pydftb 经统一选项</strong>（V2）：<code>make_calculator(engine="pydftb")</code> 对 refgen 直接调 <code>DFTB</code> 的路径，517 个里 501 个逐位相同。其余 16 个差 ≤ 1.1e-12，来自单位换算的末位；能量差 ≤ 3.6e-14 Ha。</li>
+      <li><strong>优化与 MD</strong>（V5）：34 个动力学参考全部在容差内。
+        <ul>
+          <li>26 个用 ASE 的 BFGS 与速度 Verlet 驱动 DFTB+ 引擎，每步沿用上一步的 charges.bin：优化 ΔE ≤ 5.0e-11 Ha、Δr ≤ 2.1e-6 Å；MD ΔE ≤ 5.7e-8 Ha、Δr ≤ 6.8e-8 Å。</li>
+          <li>7 个 XL-BOMD 与 1 个非共线的杂化泛函用 DFTB+ 自己的驱动，结果与冻结参考逐位相同。</li>
+        </ul></li>
+      <li><strong>核对中找到并修好的</strong>：
+        <ul>
+          <li>DFTB+ 会改写它读进来的 charges.bin。第一版沿用电荷时因此每隔一步丢掉电荷（坑 207），自旋 LC 的 CH<sub>3</sub> 的 MD 走到了另一个自旋态。</li>
+          <li>SelectedShells 时，自定义的参考占据要按 DFTB+ 的壳名对上，否则 5 个算例的中性布居差 1 e。</li>
+          <li>第一轮门槛发现一处回归：溶剂化收了规格字典之后，不完整的字典从模型的构造函数里抛出 TypeError，2 个原有测试要的是带说明的 ValueError。现在缺参数、模型名不对、有未知的键时，两个引擎都给出同样的 ValueError。</li>
+          <li>溶剂化规格里 DFTB+ 的输入写不出的部分（SASA 的半径、DFTB+ 之外的 CM5），原来 DFTB+ 引擎会悄悄忽略，两个引擎于是算的不是同一个模型。现在 DFTB+ 引擎拒绝它们，并说明怎样写才两边相同（坑 50：DFTB+ 的 CM5 每对原子算两次）。</li>
+          <li>另记下 DFTB+ 输出的三处坑（坑 204–206）。</li>
+        </ul></li>
+      <li><strong>时间</strong>（P136）：
+        <ul>
+          <li>每次调用 DFTB+ 有约 20 ms 的固定开销。</li>
+          <li>508 个算例，每个算例的中位数：DFTB+ 引擎 78 ms，pydftb 42 ms。</li>
+          <li>水的 MD：经 ASE 调用 41 次 DFTB+ 共 2.0 s，DFTB+ 自己的驱动 0.3 s。</li>
+        </ul></li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">588 / 588</span><span class="lbl">DFTB+ 输入与冻结的相同（V1）</span></li>
+      <li><span class="num">517 / 517</span><span class="lbl">两个引擎之差在算例的容差内（V4）</span></li>
+      <li><span class="num">34 / 34</span><span class="lbl">优化与 MD 在动力学的容差内（V5）</span></li>
+      <li><span class="num">≈ 20 ms</span><span class="lbl">每次调用 DFTB+ 的固定开销（P136）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#done">一、做了什么</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#usage">二、怎么用</a></li>
+      <li><a href="#verify">三、核对（V1–V5）</a></li>
+      <li><a href="#timing">四、时间（P136）</a></li>
+      <li><a href="#tests">五、测试与门槛</a></li>
+      <li><a href="#deviations">六、与设计的偏差</a></li>
+      <li><a href="#next">七、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <details class="dev" id="done">
+      <summary><span class="tag">开发细节</span><span class="title">一、做了什么</span></summary>
+      <div class="body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>位置</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>dftbplus_calc.py</code>（新）</td><td>
+              <ul>
+                <li><strong><code>DFTBPlus</code></strong>：ASE 计算器，<code>implemented_properties</code> 与 <code>PyDFTB</code> 相同，<code>engine = "dftbplus"</code>。选项的默认值从 <code>PyDFTB.__init__</code> 的签名取（<code>OPTION_DEFAULTS</code>），引擎自己的选项见 <code>DFTBPLUS_DEFAULTS</code>：<code>binary</code>、<code>ewald_tolerance</code>（1e-12；None 用 DFTB+ 的 1e-9）、<code>convergent_scc_only</code>、<code>regions</code>、<code>workdir</code>、<code>keep_files</code>、<code>extra_hamiltonian</code>、<code>extra_analysis</code>、<code>extra_options</code>、<code>extra_top</code>。</li>
+                <li><strong>输入</strong>：<code>write_input(atoms, skdir, options, properties)</code> 给出 <code>Input</code>，内含 HSD、<code>geo.gen</code>、要写进目录的文件与 k 点。HSD 由 <code>validation/dftbplus.py</code> 的块拼成；单位用 pydftb 自己的换算（<code>_fermi_au</code>、<code>_hybrid_au</code>、<code>_truncation_au</code> 等）；k 点由 <code>kpoints_of</code> 给出，与 <code>PyDFTB</code> 用的相同（周期的杂化泛函写 <code>SupercellFolding</code>）。<code>.skf.gz</code> 解压到缓存目录一次，写临时文件再 <code>os.replace</code>。</li>
+                <li><strong>运行与取值</strong>：<code>run_input</code> 按 <code>threads</code> 设 <code>OMP_NUM_THREADS</code> 运行 DFTB+，用 <code>parse_run</code> 读输出，每次都把 DFTB+ 改写过的 charges.bin 读回来（坑 207）。非零退出时抛出 <code>CalculationFailed</code>，带 DFTB+ 的错误信息。<code>result_of</code> 把输出换成 <code>DFTBResult</code>，<code>energies</code> 只在 results.tag 的值与 detailed.out 在 1e-9 内一致时取全精度值（坑 204、205）。布居 = 中性原子的布居 − DFTB+ 的电荷：<code>neutral_populations</code> 用 <code>ParamSet</code> 的占据，自定义的参考占据按 DFTB+ 的壳名对上（<code>skf.shell_names</code>）。</li>
+                <li><strong>第二次运行</strong>：<code>band_input</code>、<code>states(kpts, regions, atoms)</code> 与 <code>band_structure</code> 读 SCC 的 charges.bin，<code>MaxSCCIterations = 1</code>，不打印力；<code>hessian_input</code> 与 <code>second_derivatives</code> 用 SecondDerivatives 驱动，Born 电荷取 <code>reshape(-1, 3, 3).transpose(0, 2, 1)</code>。</li>
+                <li><strong>DFTB+ 自己的驱动</strong>：<code>relax</code>（GeometryOptimisation，可带晶胞与各向同性）与 <code>md</code>（VelocityVerlet，可带 Xlbomd 与 ForceEvaluation），一次运行走完整条轨迹。</li>
+                <li><strong>其他</strong>：<code>write_charges</code>；<code>masses(labels, atoms)</code> 取 SK 文件的质量，与 <code>PyDFTB</code> 相同；<code>get_eigenvalues</code>、<code>get_fermi_level(s)</code>、<code>get_ibz_k_points</code> 等 ASE 的取值方法。</li>
+              </ul></td></tr>
+            <tr><td><code>engines.py</code>（新）</td><td><code>make_calculator(skdir, engine, pydftb=None, dftbplus=None, **options)</code>；<code>OPTIONS</code> 列出每个选项在两个引擎上的支持与说明，由两张默认值表生成；<code>check_options</code> 对未知的名字抛 TypeError，对放错节的抛 <code>EngineOptionError</code>，并指出该放哪一节；<code>engine_name</code>（<code>dftb+</code>、<code>dftb</code> 是 <code>dftbplus</code> 的别名）。<code>common_results(calc, atoms, properties)</code> 给出两个引擎都有的结果，ASE 单位，平铺成能写进 JSON 的字典，并先算最费的属性，所以只算一次；<code>compare_results</code> 给出两份结果之间的最大差。</td></tr>
+            <tr><td><code>run.py</code>（新）与 <code>cli.py</code></td><td><code>pydftb run</code>：6 个任务（第二节），选项文件与 <code>--set</code>，<code>--json</code> 的字段两个引擎相同。<code>cli.py</code> 加了 <code>run</code> 与 <code>dual</code> 两个命令。</td></tr>
+            <tr><td><code>validation/dual.py</code>（新）</td><td><code>case_options</code> 把冻结算例翻译成引擎中立的选项；<code>hsd_diff</code> 按 DFTB+ 的读法比较两份 HSD：块内的子节点不论次序（同名的按次序），数字相对差 ≤ 1e-12，SK 文件按文件名比较。V1–V5 的四个开关：<code>--inputs</code>、<code>--pydftb</code>、<code>--live</code>、<code>--drivers</code>；另有 <code>--workers</code>、<code>--json</code>。</td></tr>
+            <tr><td><code>validation/dftbplus.py</code></td><td><code>parse_run()</code> 从 <code>run()</code> 里拆出来，代码不变，另记 <code>total_tag</code>；<code>strip_initial_spins()</code> 由 <code>run_restart</code> 与引擎共用；说明里加了一段。</td></tr>
+            <tr><td><code>ase_calc.py</code></td><td>
+              <ul>
+                <li><code>kpoints_of()</code>：k 点规格 → 点与权重，由 <code>PyDFTB._kpoints</code> 与 DFTB+ 引擎共用，多了 <code>{"klines": ...}</code>。</li>
+                <li>新写法：<code>electric_field</code> 收 <code>{"strength", "direction"}</code>；<code>solver</code> 收 NTPoly 的字典；<code>solvation</code> 收规格字典。</li>
+                <li>方法：<code>states(..., regions=None)</code> 给出 PDOS 区域的权重；新的 <code>second_derivatives(atoms, delta, derivative_atoms, moved_atoms, dipole, polarisability)</code>；<code>masses(labels, atoms)</code>；<code>engine = "pydftb"</code>。</li>
+                <li>旧写法的结果逐位不变（测试与 golden）。</li>
+              </ul></td></tr>
+            <tr><td><code>bands.py</code>、<code>solvation.py</code>、<code>solvers.py</code>、<code>validation/cases.py</code></td><td><code>States.region_weights</code>（新的公有字段）；<code>solvation_from_spec</code>（从 <code>cases.solvation_model</code> 搬来，原处改为调用它；模型名不对、缺参数、有未知的键时给出 ValueError）；<code>solver_from_spec</code>。DFTB+ 引擎的 <code>_solvation</code> 先做同样的检查，参数文件写成绝对路径，再拒绝 DFTB+ 的输入写不出的半径与 CM5 参数。</td></tr>
+            <tr><td>测试</td><td><code>tests/test_dual_engine.py</code>（新，63 项，其中 6 项要 dftb+），<code>tests/test_response.py</code> 多了一项（完整的溶剂化规格走到响应的拒绝）；存下的 4 组 DFTB+ 输出 <code>tests/data/dftbplus_outputs/</code>（84 KB，路径换成 <code>&lt;SKDIR&gt;/</code>）。见第五节。</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <section id="usage">
+      <h2>二、怎么用</h2>
+      <pre><code>from pydftb.engines import make_calculator, common_results
+for engine in ("pydftb", "dftbplus"):
+    calc = make_calculator("skf/", engine, kpts=(4, 4, 4), smearing=("fermi", 300.0),
+                           dftbplus={"binary": "/opt/dftb+/bin/dftb+"})
+    print(engine, common_results(calc, atoms)["energy"])       # eV，两个引擎的字段相同</code></pre>
+      <pre><code>pydftb run cu.cif --skdir skf/ --engine dftbplus --kpts 6 6 6 --temperature 1000 --json cu.json
+pydftb run h2o.xyz --skdir skf/ --task relax --fmax 0.01 --output h2o_opt.xyz
+pydftb run h2o.xyz --skdir skf/ --engine dftbplus --task md --steps 200 --native
+pydftb run cu.cif --skdir skf/ --task bands --path GXWLGK --options opts.json
+pydftb run cu.cif --skdir skf/ --kpts 6 6 6 --task dos --regions regions.json
+pydftb run h2o.xyz --skdir skf/ --task hessian --project
+pydftb dual --inputs                     # 588 个冻结输入，不需要 dftb+</code></pre>
+      <ul>
+        <li><strong>选项</strong>：<code>PyDFTB</code> 的名字与单位（长度 Å，能量 eV，电场 V/Å，温度 K；模型参数用原子单位）。<code>pydftb.engines.OPTIONS</code> 列出每个选项在哪个引擎上可用。
+          <ul>
+            <li><code>--options</code> 是 JSON 文件：共同的选项在顶层，一个引擎自己的放在 <code>"pydftb"</code> 或 <code>"dftbplus"</code> 一节，例如 <code>{"scc_tol": 1e-8, "pydftb": {"k_threads": 4}, "dftbplus": {"binary": "..."}}</code>。</li>
+            <li><code>--set KEY=VALUE</code> 加一个选项，值按 JSON 读，读不成的当字符串；<code>pydftb.KEY</code>、<code>dftbplus.KEY</code> 放进对应的一节。</li>
+            <li>常用的有自己的参数：<code>--kpts</code>、<code>--temperature</code>（电子温度，Fermi）、<code>--scc-tol</code>、<code>--charge</code>、<code>--threads</code>、<code>--binary</code>。</li>
+          </ul></li>
+        <li><strong>任务</strong>：
+          <ul>
+            <li><code>energy</code>：能量、力，周期体系还有应力（<code>--no-stress</code> 不算），以及电荷、偶极、磁矩、本征值等。</li>
+            <li><code>relax</code>：ASE 的 BFGS、FIRE 或 LBFGS（<code>--optimizer</code>）；<code>--cell</code> 连晶胞一起优化（<code>FrechetCellFilter</code>），<code>--isotropic</code> 只均匀缩放；<code>--output</code> 写出最终结构。</li>
+            <li><code>md</code>：速度 Verlet，初速度按 <code>--md-temperature</code>（默认 300 K）与 <code>--seed</code> 取 Maxwell-Boltzmann 分布，再去掉平动（分子还去掉转动）；<code>--output</code> 写出轨迹，结果里有总能量的漂移。</li>
+            <li><code>bands</code>：沿 <code>--path</code> 的能带，默认取 ASE 给这个晶胞的路径。</li>
+            <li><code>dos</code>：态密度，展宽 <code>--width</code>（eV）；<code>--regions</code> 是 PDOS 区域的 JSON 文件，写法与 DFTB+ 的 ProjectStates 相同（<code>label</code>、从 0 起的 <code>atoms</code>、<code>shell_resolved</code>、<code>orbital_resolved</code>）。</li>
+            <li><code>hessian</code>：二阶导数（步长 <code>--delta</code>，Bohr）与简正模式，<code>--project</code> 去掉平动与转动。没给 SCC 容差时用 1e-10：力的差分会把 SCC 的误差放大约 10<sup>4</sup> 倍。</li>
+          </ul></li>
+        <li><strong>沿用电荷</strong>：两个引擎上的 <code>relax</code> 与 <code>md</code> 都沿用上一步的电荷。DFTB+ 引擎写回上一次的 charges.bin，加 <code>ReadInitialCharges</code>，与 DFTB+ 自己的驱动一样，每步的 SCC 轮数也相同（V5）。</li>
+        <li><strong><code>--native</code></strong>（只有 DFTB+ 引擎）：用 DFTB+ 自己的 GeometryOptimisation 或 VelocityVerlet，一次运行走完。XL-BOMD 与非共线的杂化泛函总是这样跑：前者是 DFTB+ MD 驱动的选项，后者 DFTB+ 不写电荷文件（坑 208）。</li>
+        <li><strong>输出</strong>：屏幕上是摘要；<code>--json</code> 写出引擎、任务、用到的选项、pydftb 的版本、DFTB+ 的版本与运行次数、耗时和结果，两个引擎的字段相同。选项放错时以 2 退出，并打印 <code>EngineOptionError</code> 的说明。</li>
+        <li><strong>两个引擎不同的地方</strong>：
+          <ul>
+            <li>DFTB+ 用差分求 H0、S 的导数，步长 2<sup>−13</sup> Bohr；pydftb 默认用解析导数，<code>fd_delta=2**-13</code> 时也照 DFTB+ 差分。在 SK 网格节点附近，两者的力差到 1e-6 Ha/Bohr，有限差分的 Hessian 差得更多（坑 210）。</li>
+            <li>SCC 不收敛时 DFTB+ 停下，抛出 <code>CalculationFailed</code>（<code>dftbplus={"convergent_scc_only": False}</code> 时照常算下去）；pydftb 只给警告。</li>
+            <li>DFTB+ 拒绝的组合（例如 k 点上的杂化泛函不给力）原样作为 <code>CalculationFailed</code> 抛出；杂化泛函时 DFTB+ 引擎不给应力（<code>PropertyNotImplementedError</code>）。</li>
+            <li>溶剂化：两个引擎都收规格字典，pydftb 另收模型对象。DFTB+ 的 GB 里的 CM5 把每对原子算两次（坑 50），所以要两边相同就写 <code>"cm5": {"double_count": True}</code>；别的 CM5 参数与 SASA 的半径，DFTB+ 引擎拒绝。</li>
+          </ul></li>
+      </ul>
+    </section>
+
+    <section id="verify">
+      <h2>三、核对（V1–V5）</h2>
+      <p>每个冻结算例由 <code>case_options</code> 翻译成引擎中立的选项，再交给 <code>make_calculator</code>。DFTB+ 用的版本与冻结参考相同：大多数是 conda 的 25.1（自称 <code>development version (commit: a23bfb2)</code>），18 个用开发版（041e723），10 个用带 ELSI 的 24.1。下面的数是门槛里的那一次（<code>--workers 2</code>）。</p>
+      <p><strong>V1 <code>pydftb dual --inputs</code></strong>（约 14 s，不需要 dftb+）：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>运行</th><th>个数</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>单点</td><td>517</td><td>DFTB+ 读到的全部相同；511 个逐字节相同（SK 路径除外）。6 个只差末位：两个固定费米能级的 eV → Ha，四个 <code>cu8_distorted_k355</code> 归一化后的 k 点权重（<code>PyDFTB</code> 也这样归一化）</td></tr>
+          <tr><td>能带的第二次运行</td><td>13</td><td>相同；只有 <code>PrintForces</code> 不同：冻结的能带运行打印了用不到的力，引擎写 No</td></tr>
+          <tr><td>SecondDerivatives</td><td>24</td><td>相同（Delta 只在不等于 1e-4 时写；要极化率导数时，分析里只有 Polarisability）</td></tr>
+          <tr><td>DFTB+ 自己的驱动</td><td>34</td><td>相同（12 个优化，22 个 MD，其中 7 个 XL-BOMD）</td></tr>
+          <tr><td>几何文件</td><td>517</td><td>逐字节相同</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>V2 <code>pydftb dual --pydftb</code></strong>：<code>make_calculator(engine="pydftb")</code> 对 refgen 直接调 <code>DFTB</code> 的 <code>run_pydftb</code>（refgen 的 <code>--check</code> 已把后者与冻结参考对照），比较全部字段。</p>
+      <ul>
+        <li>517 个里 501 个逐位相同，0 个差超过 1e-11，没有出错。</li>
+        <li>其余 16 个的差来自输入的单位换算：
+          <ul>
+            <li>固定费米能级的 eV（cu4co_pol_fixef 1.1e-12，o2_triplet_fixed_ef_1000K 2.3e-13）；</li>
+            <li>电场方向的归一化（cuo_chain_field_k411 2.3e-13）；</li>
+            <li>归一化的 k 点权重（4 个 cu8_distorted_k355，≤ 1.5e-13）；</li>
+            <li>9 个 Casida 算例的激发能与激发态力，≤ 2e-14：DFTB+ 的 Arpack 译成 pydftb 的 <code>"arpack"</code> 求解器，refgen 用的是默认的求解器（17 个用 Arpack 的算例里，其余 8 个逐位相同）。</li>
+          </ul></li>
+        <li>两条路径的总时间（每个算例之和，2 个工作进程）：refgen 106.2 s，引擎 100.3 s。</li>
+      </ul>
+      <p><strong>V3 <code>pydftb dual --live</code></strong>：DFTB+ 引擎实跑每个算例，输出用冻结参考的同一个解析器读，逐项比较。517 个全部跑通，502 个逐位相同，SCC 轮数 517 个都相同。</p>
+      <ul>
+        <li>输入差末位的 6 个：4 个 cu8 的电荷差 ≤ 1.2e-13，o2_triplet_fixed_ef_1000K ≤ 2.0e-14；cu4co_pol_fixef 的电荷差 1.9e-13，SCC 每轮误差的记录差 4.0e-11，极化率 1.7e-11。</li>
+        <li>9 个 ELSI 版 NTPoly：4 次全量实跑（探针、实现阶段与两轮门槛）里，电荷差 ≤ 4.4e-13、力 ≤ 7.7e-14，都在 cu4co_plusu_ntpoly；每轮 SCC 误差的记录一般 ≤ 3e-12，但第一轮门槛里 water_box_ons_ntpoly 差到 1.9e-8，SCC 轮数相同，电荷与力差 ≤ 1.4e-14。同一个输入连跑三次，DFTB+ 自己的电荷之间就差 4.7e-13（坑 209）。</li>
+        <li>没有输出的分析：DFTB+ 拒绝的坐标导数，冻结的运行里本来就是空的，算作相同。</li>
+      </ul>
+      <p><strong>V4（在 <code>--live</code> 里）</strong>：同一个算例，<code>PyDFTB</code> 也用翻译出的选项算一遍，与 DFTB+ 引擎的结果比较，容差用算例自己的。refgen 用 DFTB+ 的差分代替解析值的字段（<code>forces_fd</code>、<code>stress_fd</code>）不比。电场下 DFTB+ 的应力没有对称化，比较前先对称化。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>量</th><th>算例</th><th>最大差</th><th>占容差最多</th><th>中位数</th></tr></thead>
+        <tbody>
+          <tr><td>能量</td><td>517</td><td>2.2e-7 Ha（water_box_dftb3）</td><td>22%（同一个算例）</td><td>7.5e-15 Ha</td></tr>
+          <tr><td>自由能</td><td>517</td><td>2.2e-7 Ha（water_box_dftb3）</td><td>22%</td><td>6.2e-15 Ha</td></tr>
+          <tr><td>电荷</td><td>517</td><td>3.0e-7 e（water_box_dftb3）</td><td>30%</td><td>1.2e-14 e</td></tr>
+          <tr><td>力</td><td>490</td><td>2.8e-6 Ha/Bohr（h2o_anion_pol_300K，容差 5e-6）</td><td>69%（h2o_nonscc）</td><td>8.9e-9 Ha/Bohr</td></tr>
+          <tr><td>应力</td><td>72</td><td>1.2e-8 Ha/Bohr<sup>3</sup>（li_bcc_k666_node）</td><td>60%（同一个算例）</td><td>2.0e-10 Ha/Bohr<sup>3</sup></td></tr>
+          <tr><td>磁矩</td><td>130</td><td>6.9e-3（o2_cam_noncolinear_90）</td><td>69%（同一个算例）</td><td>4.7e-14</td></tr>
+          <tr><td>偶极</td><td>358</td><td>2.4e-10 e·Bohr（cu4co_300K_fixed_ef）</td><td>1%</td><td>1.0e-14 e·Bohr</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>能量：504 个 &lt; 1e-9 Ha，404 个 &lt; 1e-12 Ha。大于 1e-9 的 13 个都是周期算例（8 个水盒子、5 个 CuO 链），它们的冻结参考用 DFTB+ 默认的 Ewald 容差 1e-9，而 pydftb 用 1e-12（坑 65）。DFTB+ 引擎的默认是 1e-12，这里为了与冻结参考对照才照算例的设置写（<code>ewald_tolerance=None</code>）。</li>
+        <li>力：DFTB+ 差分 H0、S（步长 2<sup>−13</sup> Bohr），pydftb 用解析导数，差的中位数是 8.9e-9 Ha/Bohr。在 SK 网格节点附近差到 1e-6，h2o_nonscc 占容差的 69%。</li>
+        <li>磁矩：非共线 CAM 的 O<sub>2</sub>（两个自旋从 90° 开始，最后平行）差 6.9e-3。没有自旋轨道耦合时任何方向都是解，最后的方向取决于 SCC 走的路径，而两个代码的路径不同：DFTB+ 混合后的布居只取每对原子自旋块的左下块。所以这个算例的冻结参考对 pydftb 的容差本来就是 1e-2。</li>
+      </ul>
+      <p><strong>V5 <code>pydftb dual --drivers</code></strong>：34 个动力学参考，与冻结的 DFTB+ 自己驱动的结果比较，容差用动力学的（优化：能量 1e-9 Ha、坐标 1e-4 Å；MD 见各算例）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>驱动</th><th>算例</th><th>最大 ΔE（Ha）</th><th>最大 Δr（Å）</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>ASE 的 BFGS（晶胞用 <code>FrechetCellFilter</code>）</td><td>12 个优化，其中 2 个连晶胞</td><td>5.0e-11</td><td>2.1e-6</td><td>晶胞参数差 ≤ 5.2e-8 Å；共 212 次 DFTB+ 运行</td></tr>
+          <tr><td>ASE 的速度 Verlet</td><td>14 个 MD（20–40 步）</td><td>5.7e-8</td><td>6.8e-8</td><td>最多占容差的 75%；每步的 SCC 轮数 11 个逐步相同，2 个差 1 轮，onsite 的 h2o_ons_md 差 3 轮；共 494 次运行</td></tr>
+          <tr><td>DFTB+ 自己的 VelocityVerlet</td><td>7 个 XL-BOMD，1 个非共线的杂化泛函</td><td>0</td><td>0</td><td>每个一次运行，与冻结参考逐位相同</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>onsite 修正的 MD 每步多到 3 轮：DFTB+ 自己的驱动每个几何步的第一轮不加 onsite 势，从文件读电荷时第一轮就加（M6b 的坑）。优化的步数与 SCC 轮数本来就不同（ASE 的 BFGS 对 DFTB+ 的优化器），只比终点。</li>
+        <li>修好的沿用电荷（坑 207）之前，<code>ch3_lc_spin_md</code> 的坐标差 0.66 Å，MD 每步多 4–11 轮。修好之后与其他算例一样；<code>test_reused_charges_start_from_the_last_run</code> 连续 3 步检查。</li>
+      </ul>
+    </section>
+
+    <section id="timing">
+      <h2>四、时间（P136）</h2>
+      <p>本机：4 核的 Xeon（2.1 GHz），DFTB+ 一个 OpenMP 线程，pydftb 的 BLAS 一线程。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>情形</th><th>DFTB+ 引擎</th><th>pydftb</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>H<sub>2</sub> 非 SCC</td><td>22 ms（DFTB+ 进程 15 ms）</td><td>3 ms</td><td>进程启动与读写文件是固定开销</td></tr>
+          <tr><td>水的 MD，40 步（41 次计算）</td><td>经 ASE 2.0 s；DFTB+ 自己的驱动 0.3 s</td><td>经 ASE 0.3 s</td><td>小分子的长 MD 用 <code>--native</code></td></tr>
+          <tr><td>508 个算例，每个算例</td><td>中位数 78 ms</td><td>中位数 42 ms</td><td>比值的中位数 3.8（四分位 2.47–6.08）</td></tr>
+          <tr><td>k 点上 NeighbourBased 的杂化泛函</td><td>最慢 607 s</td><td>7 s</td><td>Threshold 写 1e-100（pydftb 建完整的算符），DFTB+ 逐对筛选</td></tr>
+          <tr><td>V3 全部 517 个</td><td>1208 s（每个算例之和，2 个工作进程；中位数 66 ms）</td><td>—</td><td>大部分花在上一行的几个算例</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="tests">
+      <h2>五、测试与门槛</h2>
+      <p><code>tests/test_dual_engine.py</code>（新，63 项）。57 项不需要 dftb+：</p>
+      <ul>
+        <li>V1 全部 588 个输入；HSD 的比较规则；写出的默认值（SCC 容差、轮数、Ewald 容差）；周期体系的 k 点与 Ewald；周期杂化泛函的 SupercellFolding（含 Γ 点的恒等折叠）。</li>
+        <li>拒绝的 7 种只有 pydftb 才有的选项；溶剂化：模型对象拒绝，规格字典照收，错误的规格在两个引擎上是同样的 ValueError，DFTB+ 写不出的半径与 CM5 参数由 DFTB+ 引擎拒绝，相对的参数文件写成绝对路径；未知的选项；差分步长；单位换算；读电荷时去掉 InitialSpins；自旋极化时 Casida 不写 Symmetry。</li>
+        <li>4 组存下的 DFTB+ 输出换成 pydftb 的结果：能量 ≤ 5.1e-11 Ha，力与电荷 ≤ 1e-12。另有固定费米能级的 tag、ELSI 版只有 <code>total_energy</code>、溶剂中的偶极三处坑，以及 <code>energies()</code> 的取值规则。</li>
+        <li><code>OPTIONS</code> 覆盖两个引擎的全部选项；<code>check_options</code> 的说明；<code>make_calculator</code> 的分节；pydftb 引擎的 <code>common_results</code>。</li>
+        <li><code>PyDFTB</code> 的新写法：电场字典、溶剂化规格、NTPoly 字典，与旧写法逐位相同；<code>kpoints_of</code> 与原来的规则逐位相同（6 种规格 × 3 种时间反演与二分量的组合）；Klines；<code>states(regions)</code> 与 <code>second_derivatives</code>。</li>
+        <li><code>pydftb run</code>：选项文件、<code>--set</code>、六个任务，以及在 DFTB+ 引擎上拒绝 pydftb 才有的选项（退出码 2）。</li>
+      </ul>
+      <p>6 项要 dftb+（没有时跳过）：</p>
+      <ul>
+        <li>水与 Cu 上两个引擎一致（<code>fd_delta=2**-13</code>：能量 &lt; 1e-9、力 &lt; 1e-8、电荷 &lt; 1e-10、应力 &lt; 1e-10）。</li>
+        <li>沿用电荷连续 3 步。</li>
+        <li>能带、PDOS 区域与 Hessian 在两个引擎上相同。</li>
+        <li>DFTB+ 自己的驱动、SCC 不收敛时的 <code>CalculationFailed</code>，以及写出与读入电荷。</li>
+        <li><code>dual --live</code> 4 个算例与 <code>--drivers</code> 2 个算例。</li>
+        <li><code>pydftb run</code> 在 DFTB+ 引擎上。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>G0：golden</td><td>与 M7e 的文档提交 <code>179e63e</code> 逐字节比较，<code>--allow-new region_weights</code></td><td>conda 1589 个计算、706593 个字段，最小环境 1523 个计算、691675 个字段，都逐位相同（个数与 M7e 时相同）</td></tr>
+          <tr><td>参考</td><td><code>pydftb refgen --check</code>（NumPy、torch），<code>pydftb dynamics --check</code></td><td>517 个算例全部通过；torch 78 个通过，439 个按设计跳过；34 条动力学参考全部通过；每个算例的偏差与 M7e 逐字相同（计时除外）</td></tr>
+          <tr><td>其他求解器的参考</td><td><code>--solver subsystems</code>、<code>sparse</code>、<code>sparse-csr</code>、<code>foe</code></td><td>144（373 个跳过）、7、7、103 个通过，偏差与 M7e 逐字相同</td></tr>
+          <tr><td>pydftb 测试</td><td>conda、最小环境、最小环境 + torch</td><td>conda 1981 个通过 / 440 个跳过，比 M7e 多 68 个：新的 63 项、<code>test_response.py</code> 的 1 项，以及 <code>test_cli.py</code> 对两个新命令的 4 项；最小环境 1708 / 581；torch 1935 / 486</td></tr>
+          <tr><td>MPI 环境</td><td><code>test_subsystems.py</code>、<code>test_coulomb_chunks.py</code>、<code>test_kpoints.py</code>、<code>test_ptbp_workload.py</code>、<code>test_dual_engine.py</code></td><td>130 个通过，4 个跳过（torch）</td></tr>
+          <tr><td>双引擎</td><td><code>pydftb dual --inputs</code>、<code>--pydftb</code>、<code>--live</code>、<code>--drivers</code>（后三项 <code>--workers 2</code>）</td><td>588 / 588；501 个逐位相同，其余 ≤ 1.1e-12；517 个跑通、502 个逐位相同，两个引擎之差 517 个都在容差内；34 / 34（第三节）</td></tr>
+          <tr><td>PTBP 测试</td><td><code>pytest tests</code>（conda），单独运行</td><td>289 个通过，7 个已知的 TUI 界面测试失败（与 M7e 是同样的 7 个）。第二轮门槛里多出 1 个失败（<code>test_parallel_backend.py::test_no_processes_survive_the_parent</code> 的 SIGINT 一项）：那一轮是在没有作业控制的子 shell 里后台启动的，bash 让这样启动的命令忽略 SIGINT（SigIgn 0x6），测试的驱动进程继承了这个设置，收不到 Ctrl-C。改为直接后台启动后重跑，结果如上；PTBP 的代码没有改。</td></tr>
+          <tr><td>PTBP 结果</td><td><code>ptbp parity --compare-serial</code>，发表点，单独运行</td><td>损失 0.9198547924，与以前相同；<code>--ncores 1</code> 与 auto 的损失和 5 个文件逐位相同</td></tr>
+        </tbody>
+      </table></div>
+      <p>代码检查：<code>ruff</code> 对新的 5 个文件没有告警；改动的 8 个文件里告警的种类与条数都与 179e63e 相同，都在原有的代码里（如 <code>ase_calc.py</code> 8 条、<code>solvation.py</code> 5 条带引号的注解）。</p>
+    </section>
+
+    <section id="deviations">
+      <h2>六、与设计的偏差</h2>
+      <ul>
+        <li><strong>V2 没有改 refgen</strong>：设计写“refgen 的 <code>compare</code> 接受外部给的运行，再对冻结参考比较”。实现改为与 refgen 自己的 <code>run_pydftb</code> 逐位比较：后者已由 <code>refgen --check</code> 对照冻结参考，逐位相同就足够，<code>validation/refgen.py</code> 没有改。</li>
+        <li><strong><code>--cross</code> 并进了 <code>--live</code></strong>：两个引擎在同一个工作进程里先后算同一个算例，DFTB+ 只跑一遍。</li>
+        <li><strong>V5 只驱动 DFTB+ 引擎</strong>：设计写“ASE 驱动两个引擎”。pydftb 经 ASE 的优化与 MD 已由 <code>pydftb dynamics --check</code> 对同一批冻结参考核对（门槛之一），所以 <code>--drivers</code> 只跑 DFTB+ 引擎。除 XL-BOMD 外，非共线的杂化泛函也用 DFTB+ 自己的驱动（坑 208）。</li>
+        <li><strong>选项名</strong>：设计的 <code>directory</code> 改叫 <code>workdir</code>，因为 ASE 的 <code>Calculator</code> 已有 <code>directory</code>。</li>
+        <li><strong><code>pydftb run</code> 的参数</strong>：
+          <ul>
+            <li><code>--temperature</code> 只是电子温度；MD 的初始温度另用 <code>--md-temperature</code>。</li>
+            <li>多了 <code>--optimizer</code>、<code>--isotropic</code>、<code>--no-stress</code>、<code>--npoints</code>、<code>--width</code>、<code>--regions</code>、<code>--delta</code>、<code>--project</code>、<code>--output</code>。</li>
+            <li><code>--steps</code> 的默认值：优化 1000，MD 100。</li>
+            <li><code>hessian</code> 任务没给 SCC 容差时用 1e-10（<code>HESSIAN_SCC_TOL</code>）。</li>
+          </ul></li>
+        <li><strong>新参数 <code>polarisability</code></strong>：两个引擎的 <code>second_derivatives</code> 都有。DFTB+ 只在这时把分析换成 Polarisability，冻结的 24 个 SecondDerivatives 输入里也有这种情形。</li>
+        <li><strong>能带运行写 <code>PrintForces = No</code></strong>：冻结的能带运行打印了用不到的力，V1 对这一项放行。</li>
+        <li><strong>分析里 CM5 的自定义参数</strong>（<code>analysis={"cm5": {...}}</code>）：没有对照 DFTB+ 验证过，DFTB+ 引擎只收 <code>cm5=True</code>。</li>
+        <li><strong>golden 加 <code>--allow-new region_weights</code></strong>：<code>bands.States</code> 多了一个公有字段，旧字段逐位相同。</li>
+        <li><strong>核对中改的两处</strong>：每次运行后都读回 charges.bin（坑 207），以及按 DFTB+ 的壳名对上自定义的参考占据。都在实现阶段由 V3、V5 发现，修好之后才跑门槛。</li>
+        <li><strong>第一轮门槛之后改的</strong>：三个环境的 pytest 各有同样 2 个原有测试失败（<code>test_response.py::test_refused</code> 的溶剂化一项、<code>test_solvation.py::test_ase_and_errors</code>）：不完整的溶剂化字典从构造函数里抛出 TypeError，测试要的是 ValueError。<code>solvation_from_spec</code> 加了检查；DFTB+ 引擎用同一个检查，并拒绝它写不出的部分（坑 50 的 CM5 与 SASA 的半径），相对的参数文件改写成绝对路径（DFTB+ 在自己的目录里运行）。新测试 <code>test_solvation_spec_errors</code>，<code>test_refused</code> 多一项完整的规格。之后全部门槛重跑一遍，第五节的数是第二轮的（PTBP 测试是其后单独重跑的那一次，见第五节）；第一轮其余各项的结果与第二轮相同。</li>
+        <li>其余按设计：统一的选项与新增的写法、DFTB+ 引擎的输入与第二次运行、取值规则、<code>common_results</code>、<code>pydftb run</code> 的六个任务、V1、V3 的比较规则。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>七、下一步</h2>
+      <ul>
+        <li><strong>PTBP 改用 <code>pydftb.engines</code></strong>：PTBP 现在自己在 ASE 的 <code>Dftb</code> 与 <code>PyDFTB</code> 之间切换（M1）。改用新的入口可以让 PTBP 的 DFTB+ 路径也用 pydftb 的单位与默认值，但要保证它的结果逐字节不变，单独评估。</li>
+        <li><strong>M7e-2</strong>：等你在 NVIDIA GPU 上运行 <code>pydftb gpu-check --dtype both --json gpu_check.json</code> 的 JSON。</li>
+        <li>DFTB+ 的版本：核对只在 25.1、开发版与带 ELSI 的 24.1 上做。用户的 DFTB+ 若是别的版本，<code>pydftb dual --inputs</code>（不需要 dftb+）与 <code>--live</code> 可以在那台机器上重跑一遍。</li>
+        <li>任务 162（旧 SCC 路径最后一轮不混合）；分治的内存。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26、B28、B29，以及这一块的坑 204（固定费米能级时 results.tag 的 <code>mermin_energy</code>）、207 与 208：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/P2-dual-engine.html">← P2 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

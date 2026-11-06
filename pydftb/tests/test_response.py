@@ -196,6 +196,9 @@ def test_default_path_unchanged():
 @pytest.mark.parametrize("kw, what", [
     ({"smearing": ("mp", 300.0, 1)}, "Fermi filling"),
     ({"solvation": {"model": "gbsa", "solvent": "water"}}, "solvation"),
+    ({"solvation": {"model": "gb", "solvent": "water", "free_energy_shift": 0.0,
+                    "born_scale": 1.5, "born_offset": 0.0, "descreening": "unity"}},
+     "no implicit solvation"),
     ({"third_order": "onsite", "hubbard_derivs": {"O": [-0.1575], "H": [-0.1857]}},
      "full third order"),
 ])

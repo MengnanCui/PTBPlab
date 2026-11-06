@@ -1,11 +1,13 @@
 """The ``pydftb`` command: pydftb's tools behind one entry point (P1).
 
+    pydftb run STRUCTURE --skdir DIR  a calculation on either engine: --engine pydftb|dftbplus
     pydftb advisor RUN_DIR            check a DFTB+ input and run for known pitfalls
     pydftb refgen --check             pydftb against the frozen DFTB+ references
     pydftb dynamics --check           optimisations and MD against DFTB+'s drivers
     pydftb golden --base COMMIT       NumPy path bitwise unchanged since COMMIT (git checkout)
     pydftb gpu-check --quick          GPU self-check (needs torch)
     pydftb gradcheck --check          pydftb.autodiff against finite differences (needs torch)
+    pydftb dual --inputs              the DFTB+ engine's inputs against every frozen one (P2)
 
 ``pydftb COMMAND ARGS...`` imports the tool only then and hands ARGS unchanged to its
 ``main(argv)``; ``pydftb COMMAND --help`` shows the tool's own options.  ``python -m pydftb``
@@ -22,6 +24,8 @@ from . import __version__
 
 #: command -> (module with ``main(argv=None, prog=None)``, summary for ``pydftb --help``)
 COMMANDS = {
+    "run": ("pydftb.run",
+            "a calculation (energy, relax, md, bands, dos, hessian) on pydftb or DFTB+"),
     "advisor": ("pydftb.advisor.__main__",
                 "check a DFTB+ input and run for known pitfalls"),
     "refgen": ("pydftb.validation.refgen",
@@ -34,6 +38,8 @@ COMMANDS = {
                   "GPU self-check: correctness and timings (needs torch)"),
     "gradcheck": ("pydftb.validation.gradcheck",
                   "autodiff vs finite differences (needs torch)"),
+    "dual": ("pydftb.validation.dual",
+             "both engines vs the frozen references: --inputs, --pydftb, --live, --drivers"),
 }
 ALIASES = {"gpu_check": "gpu-check"}
 
