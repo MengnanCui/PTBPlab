@@ -58,10 +58,17 @@ SHELL_LETTERS = "spdf"
 # ---- basis --------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RBF:
-    """Phi(CN) = [1 (if ``constant``), exp(-(CN - c)^2 / (2 width^2)) for c in ``centres``]."""
+    """Phi(CN) = [1 (if ``constant``), exp(-(CN - c)^2 / (2 width^2)) for c in ``centres``].
+
+    ``clamp`` (lo, hi[, d]): CN enters through a smooth clamp to [lo, hi], so Phi is constant
+    outside the range of the fitting data instead of extrapolating (M8d: a fit to the VASP Cu
+    set overbound compressed bcc, CN above every training structure).  The clamp is the
+    identity on [lo + d, hi - d], quadratic over 2d at each end (value and slope continuous),
+    constant beyond; d defaults to 0.5."""
     centres: tuple = ()
     width: float = 1.5
     constant: bool = True
+    clamp: tuple | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "centres", tuple(float(c) for c in self.centres))
@@ -69,6 +76,30 @@ class RBF:
             raise ValueError("RBF width must be > 0")
         if not self.constant and not self.centres:
             raise ValueError("an RBF basis needs the constant or at least one centre")
+        if self.clamp is not None:
+            c = tuple(float(v) for v in self.clamp)
+            c = c + (0.5,) if len(c) == 2 else c
+            if len(c) != 3 or not (c[2] > 0.0 and c[0] + 2 * c[2] <= c[1] - 0.0):
+                raise ValueError("RBF clamp is (lo, hi[, d]) with d > 0 and lo + 2d <= hi")
+            object.__setattr__(self, "clamp", c)
+
+    def _clamped(self, x):
+        """The smooth clamp of x and its derivative."""
+        if self.clamp is None:
+            return x, np.ones_like(x)
+        lo, hi, d = self.clamp
+        y, dy = x.copy(), np.ones_like(x)
+        a = x <= lo - d
+        y[a], dy[a] = lo, 0.0
+        b = (x > lo - d) & (x < lo + d)
+        y[b] = lo + (x[b] - (lo - d)) ** 2 / (4 * d)
+        dy[b] = (x[b] - (lo - d)) / (2 * d)
+        a = x >= hi + d
+        y[a], dy[a] = hi, 0.0
+        b = (x > hi - d) & (x < hi + d)
+        y[b] = hi - (hi + d - x[b]) ** 2 / (4 * d)
+        dy[b] = (hi + d - x[b]) / (2 * d)
+        return y, dy
 
     @property
     def size(self) -> int:
@@ -76,10 +107,11 @@ class RBF:
 
     def __call__(self, cn):
         """Phi (n, size) and dPhi/dCN (n, size)."""
-        cn = np.asarray(cn, float)[:, None]
+        cn, dcl = self._clamped(np.asarray(cn, float))
+        cn, dcl = cn[:, None], dcl[:, None]
         c = np.asarray(self.centres)[None, :]
         g = np.exp(-0.5 * ((cn - c) / self.width) ** 2)
-        dg = -g * (cn - c) / self.width ** 2
+        dg = -g * (cn - c) / self.width ** 2 * dcl
         if self.constant:
             n = len(cn)
             return (np.hstack([np.ones((n, 1)), g]), np.hstack([np.zeros((n, 1)), dg]))

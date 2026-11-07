@@ -60,12 +60,16 @@ def load(path: str, groups=None):
     return out
 
 
-def models(kind: str, wall: float):
+def models(kind: str, wall: float, cn_clamp=None):
     """``adaptive_cu.models(kind)`` with the fixed core wall at ``wall`` (Angstrom).  The VASP set
-    has bonds down to 1.7 A (the dimer, the restructured Cu13 frames), inside M8a's 2.0 A wall."""
+    has bonds down to 1.7 A (the dimer, the restructured Cu13 frames), inside M8a's 2.0 A wall.
+    ``cn_clamp`` (lo, hi): the CN basis is constant outside it (``RBF.clamp``)."""
     m = ac.models(kind)[0]
     pr = {k: replace(v, wall=wall / BOHR) for k, v in m.pair_repulsive.items()}
-    return [replace(m, pair_repulsive=pr)]
+    m = replace(m, pair_repulsive=pr)
+    if cn_clamp is not None:
+        m = replace(m, basis=replace(m.basis, clamp=tuple(cn_clamp)))
+    return [m]
 
 
 def init_pair(models, samples, sk, processes, ridge=1e-6):
@@ -164,6 +168,8 @@ def main(argv=None):
     ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
     ap.add_argument("--skf", default=None,
                     help="the SK directory (default ptbp_hcocu; e.g. cu_dimer_repulsive's table)")
+    ap.add_argument("--cn-clamp", type=float, nargs=2, default=None, metavar=("LO", "HI"),
+                    help="the CN basis constant outside [LO, HI] (the training range)")
     ap.add_argument("--x0", default=None,
                     help="start from models[kind].x of this JSON (with --max-evaluations 0: "
                          "only report its errors)")
@@ -189,12 +195,12 @@ def main(argv=None):
     print(f"{len(data)} structures: {len(train)} train, {len(test)} test", flush=True)
     report = {"options": ac.OPTIONS, "data": args.data, "force_weight": args.force_weight,
               "force_groups": args.force_groups,
-              "force_max_atoms": args.force_max_atoms, "skf": args.skf, "wall": args.wall,
+              "force_max_atoms": args.force_max_atoms, "skf": args.skf, "cn_clamp": args.cn_clamp, "wall": args.wall,
               "l2": args.l2, "train": [s.name for s in train], "test": [s.name for s in test],
               "models": {}}
     for kind in args.kinds.split(","):
         t0 = time.perf_counter()
-        mod = models(kind, args.wall)
+        mod = models(kind, args.wall, args.cn_clamp)
         if args.x0:
             with open(args.x0) as fh:
                 x0, init_rmse = np.array(json.load(fh)["models"][kind]["x"]), None

@@ -31,7 +31,7 @@ def fitted_model(path: str, kind: str):
         rep = json.load(fh)
     if "wall" in rep:                    # a cu_dft_fit model: its core wall (A), not M8a's
         from pydftb.bench.cu_dft_fit import models
-        m = models(kind, rep["wall"])[0]
+        m = models(kind, rep["wall"], rep.get("cn_clamp"))[0]
     else:
         m = ac.models(kind)[0]
     return m.with_vector(np.array(rep["models"][kind]["x"]))

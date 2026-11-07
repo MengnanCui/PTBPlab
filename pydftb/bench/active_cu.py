@@ -76,7 +76,7 @@ def main(argv=None):
         data = cf.load(args.data)
         names = set(fit_rep.get("train", []))
         data = [s for s in data if s.name in names] if names else data   # its training set
-        model0 = cf.models(args.kind, fit_rep["wall"])[0]
+        model0 = cf.models(args.kind, fit_rep["wall"], fit_rep.get("cn_clamp"))[0]
     else:
         data = ac.samples()
         model0 = ac.models(args.kind)[0]

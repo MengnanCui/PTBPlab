@@ -378,3 +378,20 @@ def test_a_failed_scc_is_retried_with_gentler_mixing(params):
     assert abs(e - ref) < 1e-8
     with pytest.raises(RuntimeError):
         evaluate_sample([m], s, sk, {"scc_tol": 1e-10, "max_scc": 2, "mixing": 0.2})
+
+
+def test_rbf_clamp():
+    """A clamped basis is the plain one inside the range, constant outside, smooth between."""
+    plain = RBF((2.0, 6.0), 2.0)
+    cl = RBF((2.0, 6.0), 2.0, clamp=(1.0, 8.0))
+    x = np.array([2.0, 4.0, 7.0])
+    assert np.allclose(cl(x)[0], plain(x)[0]) and np.allclose(cl(x)[1], plain(x)[1])
+    out = np.array([-3.0, 0.2, 9.0, 20.0])
+    assert np.allclose(cl(out)[0], plain(np.array([1.0, 1.0, 8.0, 8.0]))[0])   # the bounds
+    assert np.allclose(cl(out)[1], 0.0)
+    xs = np.linspace(0.0, 9.0, 901)                       # value and slope continuous
+    ph, dph = cl(xs)
+    fd = np.gradient(ph, xs, axis=0)
+    assert np.abs(fd[1:-1] - dph[1:-1]).max() < 1e-3
+    with pytest.raises(ValueError):
+        RBF((2.0,), 1.0, clamp=(5.0, 5.5))
