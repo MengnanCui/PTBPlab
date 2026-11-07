@@ -144,6 +144,8 @@ def main(argv=None):
     ap.add_argument("--l2", type=float, default=1e-4)
     ap.add_argument("--max-evaluations", type=int, default=150)
     ap.add_argument("--processes", type=int, default=8)
+    ap.add_argument("--force-max-atoms", type=int, default=None,
+                    help="only structures up to this size carry forces into the fit")
     ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
     ap.add_argument("--no-init", action="store_true",
                     help="start from zero instead of the linear pair-repulsive solution")
@@ -153,14 +155,21 @@ def main(argv=None):
                   shell_resolved=True).skset(["Cu"])
     data = load(args.data, args.groups.split(",") if args.groups else None)
     train, test = split(data, args.test_every)
-    fit_set = train
-    if args.force_groups:
-        keep = args.force_groups.split(",")
-        fit_set = [s if group_of(s) in keep else Sample(s.atoms, s.energy, s.kpts, s.weight,
-                                                         s.name) for s in train]
+    keep = args.force_groups.split(",") if args.force_groups else None
+    nmax = args.force_max_atoms
+
+    def with_f(s):
+        return ((keep is None or group_of(s) in keep)
+                and (nmax is None or len(s.atoms) <= nmax))
+
+    fit_set = [s if with_f(s) else Sample(s.atoms, s.energy, s.kpts, s.weight, s.name)
+               for s in train]
+    print(f"forces in the fit: {sum(s.forces is not None for s in fit_set)} structures",
+          flush=True)
     print(f"{len(data)} structures: {len(train)} train, {len(test)} test", flush=True)
     report = {"options": ac.OPTIONS, "data": args.data, "force_weight": args.force_weight,
-              "force_groups": args.force_groups, "wall": args.wall,
+              "force_groups": args.force_groups,
+              "force_max_atoms": args.force_max_atoms, "wall": args.wall,
               "l2": args.l2, "train": [s.name for s in train], "test": [s.name for s in test],
               "models": {}}
     for kind in args.kinds.split(","):
