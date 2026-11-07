@@ -168,8 +168,9 @@ def main(argv=None):
     ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
     ap.add_argument("--skf", default=None,
                     help="the SK directory (default ptbp_hcocu; e.g. cu_dimer_repulsive's table)")
-    ap.add_argument("--cn-clamp", type=float, nargs=2, default=None, metavar=("LO", "HI"),
-                    help="the CN basis constant outside [LO, HI] (the training range)")
+    ap.add_argument("--cn-clamp", type=float, nargs="+", default=None,
+                    help="LO HI [D]: the CN basis constant outside [LO, HI] (the training "
+                         "range), D the half-width of the smooth transition (RBF.clamp)")
     ap.add_argument("--x0", default=None,
                     help="start from models[kind].x of this JSON (with --max-evaluations 0: "
                          "only report its errors)")
