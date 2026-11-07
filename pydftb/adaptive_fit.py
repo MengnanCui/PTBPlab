@@ -31,6 +31,7 @@ from .adaptive import make_models
 from .constants import BOHR, HARTREE
 
 _WORK = {}                                 # fork-inherited: the samples, sk and options
+SLOW_MIXING, SLOW_MAX_SCC = 0.05, 1000      # the retry of a sample whose SCC did not converge
 
 
 @dataclass
@@ -76,10 +77,21 @@ def evaluate_sample(models, sample: Sample, sk, options: dict, forces: bool = Fa
     opts = dict(options)
     if periodic and sample.kpts is not None:
         opts["kpts"] = make_kpoints(tuple(sample.kpts))
-    calc = DFTB(sk, adaptive=list(models), **opts)
-    r = calc.calculate(at.get_chemical_symbols(), at.positions / BOHR,
-                       at.cell.array / BOHR if periodic else None,
-                       np.ones(3, bool) if periodic else None, forces=forces, stress=False)
+    def run(o):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)       # "SCC not converged ..."
+            return DFTB(sk, adaptive=list(models), **o).calculate(
+                at.get_chemical_symbols(), at.positions / BOHR,
+                at.cell.array / BOHR if periodic else None,
+                np.ones(3, bool) if periodic else None, forces=forces, stress=False)
+    r = run(opts)
+    if not r.converged and "mixing" not in opts:
+        # Broyden at its default mixing gives up on some distorted clusters (the VASP Cu set's
+        # rattled and restructured Cu13) that converge with gentler mixing; the converged
+        # result does not depend on the mixer
+        r = run({**opts, "mixing": SLOW_MIXING, "max_scc": max(SLOW_MAX_SCC,
+                                                                opts.get("max_scc", 0))})
     if not r.converged:
         raise RuntimeError(f"SCC not converged for {sample.name or 'a sample'}")
     n = len(at)

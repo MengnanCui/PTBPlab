@@ -109,8 +109,9 @@ def test_identical_members_and_failures(sk, committee):
     frames = [_water(1.0, 106), _water(1.2, 130)]
     u = committee_predict(same, frames, sk, {"scc_tol": 1e-11}, processes=1)
     assert (u.sigma_e == 0).all() and u.sigma_f.max() < 1e-12      # the mean's rounding
-    bad = committee_predict(same, frames[:1], sk, {"scc_tol": 1e-14, "max_scc": 1},
-                            processes=1)
+    # an explicit mixing: no retry with gentler mixing (adaptive_fit.evaluate_sample)
+    bad = committee_predict(same, frames[:1], sk, {"scc_tol": 1e-14, "max_scc": 1,
+                                                   "mixing": 0.2}, processes=1)
     assert bad.failed.all() and np.isinf(bad.score()).all() and bad.forces == [None]
 
 

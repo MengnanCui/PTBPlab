@@ -364,3 +364,17 @@ def test_fit_rejects_a_step_where_the_scc_fails(params, monkeypatch):
     with pytest.raises(RuntimeError):          # a failure at the start still raises
         af.fit_adaptive([m.with_vector(np.array([0.9]))], samples, None, {}, l2=0.0,
                         max_evaluations=5)
+
+
+def test_a_failed_scc_is_retried_with_gentler_mixing(params):
+    """A sample whose SCC does not converge at the default mixing is retried (gentler mixing,
+    more iterations) before it counts as failed; an explicit mixing turns the retry off."""
+    from pydftb.adaptive_fit import evaluate_sample
+    m = AdaptiveParams("O", RBF(()), onsite={"p": (0.0,)})
+    s = Sample(molecule("H2O"), 0.0, name="water")
+    sk = params.skset(["O", "H"])
+    e, _, _ = evaluate_sample([m], s, sk, {"scc_tol": 1e-10, "max_scc": 2})
+    ref, _, _ = evaluate_sample([m], s, sk, {"scc_tol": 1e-10})
+    assert abs(e - ref) < 1e-8
+    with pytest.raises(RuntimeError):
+        evaluate_sample([m], s, sk, {"scc_tol": 1e-10, "max_scc": 2, "mixing": 0.2})
