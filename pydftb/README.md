@@ -1186,7 +1186,12 @@ fixed core wall below the data (1.6 A).  Fitted to energies only, the adaptive m
 600 K; with forces at weight 0.01 the fit did not converge.  `fit_adaptive` now rejects trial
 steps where an SCC fails, `evaluate_sample` retries a non-converged SCC with gentler mixing, and
 fits on macOS should run with `VECLIB_MAXIMUM_THREADS=1` (forked workers otherwise segfault in
-Accelerate).  Details: [`docs/reports/M8d-cu-dft-fit.html`](docs/reports/M8d-cu-dft-fit.html).
+Accelerate).  Warm-started from the energy fit with `--x0 fit.json --force-weight 0.001`, forces
+improve to 0.91 eV/A at 44.9 meV/atom and the Cu13 MD conserves energy to 1 meV over 2 ps.
+`python -m pydftb.bench.cu_dimer_repulsive cu_m8b.extxyz OUT` writes a copy of ptbp_hcocu whose
+Cu-Cu spline repulsive is fitted to the VASP dimer (`cu_dft_fit --skf OUT`); fitted on top of it
+the training error drops to 22.8 meV/atom but compressed bcc overbinds and the MD loses an atom.
+Details: [`docs/reports/M8d-cu-dft-fit.html`](docs/reports/M8d-cu-dft-fit.html).
 
 ### Cost model
 

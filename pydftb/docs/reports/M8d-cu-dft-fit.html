@@ -18,7 +18,7 @@
     <dl class="meta">
       <div><dt>状态</dt><dd><span class="chip done">数据完成；能量模型 MD 稳定，精度仍不够</span></dd></div>
       <div><dt>日期</dt><dd>2026-11-08</dd></div>
-      <div><dt>提交</dt><dd><code>cd7c697</code>，<code>bd05783</code>，<code>8d2ac39</code>，<code>da62eb7</code>，<code>3ac93a0</code>，<code>6c55ab9</code>，<code>7411e51</code>，<code>aad9521</code>，<code>90474c6</code>，<code>f8f7595</code>，<code>557281e</code>，<code>6195ef3</code></dd></div>
+      <div><dt>提交</dt><dd><code>cd7c697</code>，<code>bd05783</code>，<code>8d2ac39</code>，<code>da62eb7</code>，<code>3ac93a0</code>，<code>6c55ab9</code>，<code>7411e51</code>，<code>aad9521</code>，<code>90474c6</code>，<code>f8f7595</code>，<code>557281e</code>，<code>6195ef3</code>，<code>3ec40e7</code>，<code>7f8dcca</code>，<code>a0ae029</code></dd></div>
       <div><dt>配套</dt><dd><a href="M8b-forces-angles.html">M8b 报告</a>，<a href="M8c-active-learning.html">M8c 报告</a></dd></div>
     </dl>
   </header>
@@ -31,12 +31,13 @@
       <li><strong>只拟合能量</strong>（自适应，34 个参数，23 次评估）：训练 39.6 meV/atom；测试：团簇 65、理想相 43、应变 12、二聚体 57、MD 帧 168 meV/atom。</li>
       <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
       <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：只拟合能量的模型 2 ps 稳定，最短键 ≥ 2.09 Å，漂移 0.10 meV/ps；能量加力的模型 1.5 ps 内一个原子飞出，键压到 1.6 Å。</li>
+      <li><strong>后续（不花机时）</strong>：从只拟合能量的模型出发、力权重 0.001 再拟合：训练 44.9 meV/atom、力 0.91 eV/Å，测试集里重构的 Cu<sub>13</sub> 从 168 降到 75 meV/atom，MD 2 ps 稳定、总能量漂移 0.00 meV/ps，是目前最好的模型。从二聚体曲线拟合的排斥势让训练误差降到 22.8，但外推到压缩的 bcc 时过度结合（−879 meV/atom），MD 中原子飞出。</li>
       <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
       <li><span class="num">39.6</span><span class="lbl">只拟合能量的训练误差，meV/atom（M8a 的理想相：1.4）</span></li>
-      <li><span class="num">65 / 43</span><span class="lbl">测试集：团簇 / 理想相，meV/atom</span></li>
+      <li><span class="num">168 → 75</span><span class="lbl">测试集里重构的 Cu<sub>13</sub>：只拟合能量 → 加小的力权重，meV/atom</span></li>
       <li><span class="num">2 ps</span><span class="lbl">Cu<sub>13</sub> 600 K NVE 稳定（M8a 约 100 fs 就重构）</span></li>
     </ul>
   </section>
@@ -48,6 +49,7 @@
       <li><a href="#fit">三、拟合</a></li>
       <li><a href="#md">四、MD 验证</a></li>
       <li><a href="#al">五、主动学习：第二轮候选</a></li>
+      <li><a href="#more">五（续）、小的力权重与二聚体排斥势</a></li>
       <li><a href="#eng">六、工程问题</a> <span class="dev-mark">开发细节</span></li>
       <li><a href="#next">七、下一步</a></li>
     </ol>
@@ -161,6 +163,41 @@
       </ul>
     </section>
 
+
+    <section id="more">
+      <h2>五（续）、小的力权重与二聚体排斥势</h2>
+      <p>两个不花机时的后续实验，同一份数据、同样的训练与测试划分。</p>
+      <h3>1. 从只拟合能量的模型出发，力权重 0.001</h3>
+      <p><code>cu_dft_fit --x0 fit_energy.json --force-weight 0.001 --force-max-atoms 13</code>，评估预算 30 次（13 步被接受，18 次试探步 SCC 不收敛被拒）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组（测试集）</th><th>只拟合能量</th><th>力权重 0.001</th><th>二聚体排斥势 + 只拟合能量</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>57.0 / 0.30</td><td>74.4 / 0.32</td><td>65.5 / 0.15</td></tr>
+          <tr><td>cluster</td><td>64.7 / 0.31</td><td>61.4 / 0.27</td><td>59.6 / 0.24</td></tr>
+          <tr><td>md</td><td>168 / 3.20</td><td><strong>75.3 / 1.69</strong></td><td>173 / 3.67</td></tr>
+          <tr><td>strain</td><td>12.1</td><td>11.9</td><td>6.0</td></tr>
+          <tr><td>ptbp</td><td>42.7 / 0.27</td><td>56.0 / 0.31</td><td>246 / 0.38（bcc_00：−879）</td></tr>
+          <tr><td>训练：能量 / 力</td><td>39.6 / 1.30</td><td>44.9 / 0.91</td><td>22.8 / —</td></tr>
+          <tr><td><strong>Cu<sub>13</sub> 600 K，2 ps</strong></td><td>稳定，漂移 0.10 meV/ps</td><td><strong>稳定，漂移 0.00 meV/ps，总能量范围 1.1 meV，最短键 ≥ 2.18 Å</strong></td><td>不稳定：一个原子完全飞出（CN 0，最大距离 22.8 Å），总能量范围 331 meV</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">能量 meV/atom / 力 eV/Å。</p>
+      <ul>
+        <li><strong>小的力权重是这一轮最好的模型</strong>：训练集的力 1.30 → 0.91 eV/Å（二聚体 2.53 → 1.27，MD 帧 1.89 → 1.36），能量只从 39.6 涨到 44.9 meV/atom；测试集里重构的 Cu<sub>13</sub> 帧从 168 降到 75 meV/atom、力从 3.2 降到 1.7 eV/Å。理想相的测试误差从 43 涨到 56。</li>
+        <li><strong>MD</strong>：2 ps 稳定，总能量几乎严格守恒，团簇完整。<code>adaptive_md</code> 的有限差分检查报了 184 eV/Å，查明是原子 7 的一个位移点在默认混合下 SCC 没收敛（ASE 计算器没有重试）；混合 0.05 时三个原子的力与差分一致到 1e-7 eV/Å。</li>
+      </ul>
+      <h3>2. 从二聚体曲线拟合有第一壳层排斥的 Cu 排斥势</h3>
+      <p><code>python -m pydftb.bench.cu_dimer_repulsive cu_m8b.extxyz OUT</code>：V<sub>rep</sub>(r) = E<sub>DFT</sub>(r) − E<sub>el</sub>(r) − C，E<sub>el</sub> 是表的电子自由能（不含排斥势），截断 3.5 Å，写成 ptbp_hcocu 副本里 Cu–Cu.skf 的 Spline。表在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_lite_results/fits/skf_dimerrep</code>。</p>
+      <ul>
+        <li><strong>原来的表在短程塌缩</strong>：ptbp_hcocu 有排斥势样条，但只到 2.63 Å 且太弱；Cu<sub>2</sub> 在 1.7 Å 比 3.5 Å 低 34 eV，在 1.4 Å 低 55 eV（DFT：高 1.2 eV）。需要的排斥在 0.4 Å 内升了 35 eV（1.7 Å：35.7 eV，1.9 Å：10.2，2.1 Å：0.49），比单个指数还陡，6 项多项式的对排斥势拟合二聚体时在 2.0 Å 出现假的鼓包、1.5 Å 以下又塌缩。</li>
+        <li><strong>新表的二聚体</strong>与 DFT 一致（1.7 Å：+1.20 eV，1.9 Å：−0.86 eV，相对 3.5 Å），1.4 Å 以下强排斥。裸表的误差：二聚体 5640 → 671、MD 帧 4102 → 2349 meV/atom，但应变 256 → 760、理想相 427 → 568：只从二聚体来的排斥势在 2.5 Å 附近约 0.26 eV，fcc 每个原子 6 个键，体相约高 1.5 eV/atom。这是二聚体排斥势已知的毛病。</li>
+        <li><strong>在它上面只拟合能量</strong>（100 次评估）：训练 22.8 meV/atom（原来 39.6），二聚体的力 2.53 → 0.80、团簇 0.43 → 0.31 eV/Å；但测试集里压得最紧的 bcc（bcc_00）低了 879 meV/atom；其余 12 个理想相里 7 个比原来好，均方根 31.4（原来 38.5）meV/atom。CN 相关的排斥势标度在高 CN 时把排斥压低来抵消体相的多算，外推到最高 CN、最短键时就过度结合。MD 中一个原子飞出。</li>
+        <li><strong>结论</strong>：只从二聚体来的排斥势不能直接当底。要么把体相（与团簇）一起拿来拟合排斥势，要么限制 CN 标度的外推（例如在数据的 CN 范围外取常数）。</li>
+      </ul>
+    </section>
+
     <section id="eng">
       <h2>六、工程问题</h2>
       <ul>
@@ -184,8 +221,8 @@
     <section id="next">
       <h2>七、下一步</h2>
       <ul>
-        <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。要更好，先换底：用带第一壳层排斥的 Cu 表（或从 DFT 二聚体曲线拟合一个），而不是让多项式对排斥势去抵消裸表在 2 Å 以内的塌缩；其次按通道设 x_scale 与锚点尺度。</li>
-        <li><strong>力</strong>：从只拟合能量的模型热启动，用小的力权重（0.001）再拟合，验证力能否在不损失能量的前提下改进。</li>
+        <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。只从二聚体拟合的排斥势不行（第五节续）；下一步把体相与团簇一起拿来拟合排斥势样条，并让 CN 标度在数据范围外取常数；其次按通道设 x_scale 与锚点尺度。</li>
+        <li><strong>力</strong>：力权重 0.001 已验证有效（第五节续）；预算允许时把 30 次评估加到 60–100，并放开 Cu<sub>38</sub>、Cu<sub>55</sub> 的力。</li>
         <li><strong>第二轮 DFT</strong>：round2 的 10 帧约 1.5 元，等用户决定。dg50 的 GPU 4.5 元/卡时、CPU 不收费，76 核的作业放那里便宜约 20%。</li>
         <li><strong>MD 验证</strong>：拿只拟合能量的模型跑更长、更高温、更大的团簇（Cu<sub>38</sub>、Cu<sub>55</sub>），并在 MD 帧上抽几个做 DFT 对照。</li>
       </ul>
