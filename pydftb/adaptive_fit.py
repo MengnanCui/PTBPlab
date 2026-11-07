@@ -97,20 +97,14 @@ def _work(args):
 
 
 def _pool_map(func, jobs, processes):
-    """``Pool.map`` in a fresh fork pool, shut down with close + join (not the context manager's
-    terminate): no handler thread of this pool may still hold a lock when the next pool forks,
-    or the new workers deadlock on it (seen in a long VASP-Cu fit)."""
+    """``map`` over a fresh fork pool of ``processes`` workers.  A worker that dies (a segfault)
+    raises ``BrokenProcessPool`` instead of hanging the fit forever as ``multiprocessing.Pool``
+    does.  On macOS run with ``VECLIB_MAXIMUM_THREADS=1``: Accelerate's threads (GCD) are not
+    fork-safe, and a child forked after the parent used them crashes in the first LAPACK call."""
     import multiprocessing as mp
-    pool = mp.get_context("fork").Pool(processes)
-    try:
-        out = pool.map(func, jobs, chunksize=1)
-        pool.close()
-    except BaseException:
-        pool.terminate()
-        raise
-    finally:
-        pool.join()
-    return out
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(processes, mp_context=mp.get_context("fork")) as ex:
+        return list(ex.map(func, jobs, chunksize=1))
 
 
 def _run(jobs, processes):
