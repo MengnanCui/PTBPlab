@@ -119,6 +119,13 @@ def _pool_map(func, jobs, processes):
         return list(ex.map(func, jobs, chunksize=1))
 
 
+def _work_tolerant(args):
+    try:
+        return _work(args)
+    except (RuntimeError, np.linalg.LinAlgError):
+        return None
+
+
 def _run(jobs, processes):
     if processes > 1 and len(jobs) > 1:
         return _pool_map(_work, jobs, processes)
@@ -146,16 +153,34 @@ def evaluate_all(models, samples, sk, options, x, processes: int = 1, with_force
                 xi = x.copy()
                 xi[i] += sgn * step
                 jobs.append((k, xi, True))
-    out = _run(jobs, processes)
+    if not with_f:
+        out = _run(jobs, processes)
+    else:
+        out = (_pool_map(_work_tolerant, jobs, processes) if processes > 1 and len(jobs) > 1
+               else [_work_tolerant(j) for j in jobs])
+        n_bad = next((k for k in range(len(samples)) if out[k] is None), None)
+        if n_bad is not None:
+            raise RuntimeError(f"SCC not converged for {samples[n_bad].name or 'a sample'}")
     n = len(samples)
     e = np.array([o[0] for o in out[:n]])
     jac = np.array([o[1] for o in out[:n]])
     forces = {k: out[k][2] for k in with_f}
     fjac, pos = {}, n
     for k in with_f:
+        # a displaced point whose SCC does not converge (a fragile cluster): the one-sided
+        # difference with the other side, or a zero column if both fail
         cols = []
+        f0 = out[k][2].ravel()
         for _ in range(len(x)):
-            cols.append((out[pos][2] - out[pos + 1][2]).ravel() / (2 * step))
+            fp, fm = out[pos], out[pos + 1]
+            if fp is not None and fm is not None:
+                cols.append((fp[2] - fm[2]).ravel() / (2 * step))
+            elif fp is not None:
+                cols.append((fp[2].ravel() - f0) / step)
+            elif fm is not None:
+                cols.append((f0 - fm[2].ravel()) / step)
+            else:
+                cols.append(np.zeros_like(f0))
             pos += 2
         fjac[k] = np.array(cols).T
     return e, jac, forces, fjac
