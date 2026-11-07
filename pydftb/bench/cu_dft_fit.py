@@ -162,6 +162,8 @@ def main(argv=None):
     ap.add_argument("--force-max-atoms", type=int, default=None,
                     help="only structures up to this size carry forces into the fit")
     ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
+    ap.add_argument("--skf", default=None,
+                    help="the SK directory (default ptbp_hcocu; e.g. cu_dimer_repulsive's table)")
     ap.add_argument("--x0", default=None,
                     help="start from models[kind].x of this JSON (with --max-evaluations 0: "
                          "only report its errors)")
@@ -169,8 +171,8 @@ def main(argv=None):
                     help="start from zero instead of the linear pair-repulsive solution")
     args = ap.parse_args(argv)
     from pydftb.params import ParamSet
-    sk = ParamSet(f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu", max_l={"Cu": 2},
-                  shell_resolved=True).skset(["Cu"])
+    skdir = args.skf or f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu"
+    sk = ParamSet(skdir, max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
     data = load(args.data, args.groups.split(",") if args.groups else None)
     train, test = split(data, args.test_every)
     keep = args.force_groups.split(",") if args.force_groups else None
@@ -187,7 +189,7 @@ def main(argv=None):
     print(f"{len(data)} structures: {len(train)} train, {len(test)} test", flush=True)
     report = {"options": ac.OPTIONS, "data": args.data, "force_weight": args.force_weight,
               "force_groups": args.force_groups,
-              "force_max_atoms": args.force_max_atoms, "wall": args.wall,
+              "force_max_atoms": args.force_max_atoms, "skf": args.skf, "wall": args.wall,
               "l2": args.l2, "train": [s.name for s in train], "test": [s.name for s in test],
               "models": {}}
     for kind in args.kinds.split(","):

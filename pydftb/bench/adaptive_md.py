@@ -48,7 +48,8 @@ def main(argv=None):
     ap.add_argument("--traj", default=None, help="write every 10th step (extxyz)")
     args = ap.parse_args(argv)
     model = fitted_model(args.fit_json, args.model)
-    skdir = f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu"
+    with open(args.fit_json) as fh:
+        skdir = json.load(fh).get("skf") or f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu"
 
     def calc(**kw):
         return PyDFTB(skdir, max_l={"Cu": 2}, shell_resolved=True, temperature=300.0,
