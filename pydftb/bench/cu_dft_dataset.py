@@ -307,8 +307,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out_dir")
     ap.add_argument("--md-frames", default=None)
+    ap.add_argument("--groups", default=None,
+                    help="only these groups (comma separated), e.g. a reduced first set")
     args = ap.parse_args(argv)
     items = structures(args.md_frames)
+    if args.groups:
+        keep = set(args.groups.split(","))
+        items = [it for it in items if it[0] in keep]
     man = write_set(args.out_dir, items)
     by = {}
     for m in man:
@@ -325,7 +330,8 @@ def main(argv=None):
     with open(os.path.join(args.out_dir, "README.md"), "w") as fh:
         fh.write(README.format(table="\n".join(rows), n=len(man), core_h=core_h,
                                yuan=0.1 * core_h, c0=CORE_H_PER_KPOINT_32, out=args.out_dir,
-                               n19=count[19] - 1, n38=count[38] - 1, n76=count[76] - 1))
+                               n19=max(count[19] - 1, 0), n38=max(count[38] - 1, 0),
+                               n76=max(count[76] - 1, 0)))
     print(f"{len(man)} structures, ~{core_h:.0f} core-hours (~{0.1 * core_h:.0f} yuan) -> "
           f"{args.out_dir}")
     for k, g in by.items():
