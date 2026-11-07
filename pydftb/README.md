@@ -102,7 +102,7 @@ section it belongs in.  `--json` writes the same fields for both engines.
   hybrid is DFTB+'s `SupercellFolding`), and pydftb's defaults are written out (SCC tolerance
   1e-6, 200 iterations, `EwaldTolerance` 1e-12; `ewald_tolerance=None` keeps DFTB+'s 1e-9).
 - The input is assembled from the blocks that wrote every frozen DFTB+ reference:
-  `pydftb dual --inputs` checks all 588 frozen inputs (single points, band runs,
+  `pydftb dual --inputs` checks all 590 frozen inputs (single points, band runs,
   SecondDerivatives runs, DFTB+'s drivers) against what the engine writes.
 - What differs: DFTB+ differentiates H0 and S numerically (pydftb's `fd_delta=2**-13` does the
   same; its default is exact), which near an SK grid node changes forces by up to 1e-6
@@ -879,7 +879,8 @@ block into k-points.  Details: [`docs/reports/M2e-bands.html`](docs/reports/M2e-
 ### Geometry optimisation and MD
 
 `PyDFTB` works with ASE's optimisers, cell filters and integrators.  For optimisations and MD,
-`reuse_charges=True` starts each SCC from the previous step's charges, as DFTB+'s own drivers do:
+`reuse_charges=True` starts each SCC from the previous step's charges, as DFTB+'s own drivers do
+(`DFTBResult.q_in`: the input of its last Hamiltonian, also when that SCC stopped at `max_scc`):
 
 ```python
 from ase.optimize import BFGS

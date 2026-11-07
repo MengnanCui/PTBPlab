@@ -214,7 +214,8 @@ class Case:
     # as DFTB+ 25.1 at k-points (DFTB._dftbp_stale_blocks, B20)
     stale_blocks_compat: bool = False
     # milestone M6h-3b: both codes stop after this many SCC iterations unconverged (DFTB+
-    # ConvergentSCCOnly = No; the untruncated kernel, whose SCC does not settle)
+    # ConvergentSCCOnly = No; the untruncated kernel, whose SCC does not settle; and the
+    # *_scc3_read_charges cases, whose charge file is written by such an SCC)
     fixed_scc: int | None = None
     # milestone M7a: DFTB+'s Solver: "qr", "divideandconquer", "relativelyrobust", "elpa" or
     # {"name": "ntpoly", "method", "tolerance", "truncation"} (pydftb's NTPoly options; the
@@ -1191,6 +1192,15 @@ CASES = [
          filling=("fermi", 500.0), spin={"unpaired_electrons": 2, "spin_constants": W_SPIN},
          read_charges={"text": False}, ewald_tolerance=1e-12, torch=False,
          tol={**TOL_SCC, "stress": 1e-9}, note="periodic with spin"),
+    # both runs stop unconverged after 3 iterations (ConvergentSCCOnly = No): DFTB+ does not mix
+    # after the last iteration, so run 1's file holds the input of its third Hamiltonian
+    Case("h2o_scc3_read_charges", _water, read_charges={"text": False}, fixed_scc=3,
+         torch=False, tol={**TOL_SCC, **TOL_DFTBP_FD},
+         note="run 1's charges.bin: the input of its third Hamiltonian, not mixed again"),
+    Case("oh_radical_scc3_read_charges", _oh, filling=("fermi", 300.0),
+         spin={"unpaired_electrons": 1, "spin_constants": W_SPIN}, read_charges={"text": False},
+         fixed_scc=3, torch=False, tol=TOL_SCC,
+         note="(q, m) records; run 1 takes its first output unmixed, mixes once and stops"),
     # --- occupations and overrides of the Hamiltonian block (milestone M6f-2), NumPy only ---
     # SCC tolerances such that DFTB+'s last two errors lie at least about 2x either side of
     # the threshold (exact numbers of iterations; round-off decides below about 1e-10).
