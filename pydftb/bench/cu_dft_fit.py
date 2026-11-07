@@ -199,7 +199,7 @@ def main(argv=None):
         else:
             x0, init_rmse = (None, None) if args.no_init else init_pair(mod, train, sk,
                                                                          args.processes)
-        if x0 is not None:
+        if init_rmse is not None:
             print(f"{kind}: linear pair-repulsive start, energy rmse {init_rmse * 1000:.1f} "
                   "meV/atom", flush=True)
         if args.max_evaluations > 0:
