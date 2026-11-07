@@ -126,6 +126,7 @@ def main(argv=None):
     base = FitResult(base_models, np.array(fit["x"]), fit["rmse"], np.zeros(len(data)), off)
     com = fit_committee(None, data, sk, opts, n=args.members, seed=12, groups=grp(data),
                         base=base, perturb=args.perturb, processes=args.processes,
+                        perturb_skip=("pair",) if args.data else (),
                         max_evaluations=args.member_evaluations, verbose=True)
     frames = read(args.traj, ":")
     u = committee_predict(com, frames, sk, opts, forces=True, processes=min(args.processes,

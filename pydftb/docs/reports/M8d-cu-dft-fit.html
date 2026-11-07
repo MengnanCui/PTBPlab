@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8d Cu 数据与拟合</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M8d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8d · 完成报告</p>
+    <h1>AI 层（四）：Cu 的 VASP 数据、带力的拟合与 MD 验证</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">数据完成；模型精度不够</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-08</dd></div>
+      <div><dt>提交</dt><dd>@@COMMITS@@</dd></div>
+      <div><dt>配套</dt><dd><a href="M8b-forces-angles.html">M8b 报告</a>，<a href="M8c-active-learning.html">M8c 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M8b 精简版训练集（142 个结构）在电光云 dg83 上全部算完、全部收敛，实际扣费 7.98 元（预算 33 元）。拿这份数据拟合 M8a 的自适应模型：只拟合能量的最好，训练集 39.6 meV/atom，测试集的团簇 65、理想相 43 meV/atom，力的误差 0.3–0.4 eV/Å（团簇、体相），二聚体与重构的 Cu<sub>13</sub> 仍有 2–3 eV/Å。把力加进拟合（权重 0.01）反而更差：30 次评估里只走了 13 步，停在 228 meV/atom。M8a 在 6 个理想相上的 1.4 meV/atom 在这份更难的数据上变成了几十 meV/atom，说明这套模型（ptbp_hcocu 的 Cu–Cu 表加 CN 的修正）对短程与低配位描述不够。@@MDLEAD@@</p>
+    <ul>
+      <li><strong>电光云</strong>：106.4 核时，扣费 7.98 元（dg83 实际 0.075 元/核时）。原来粗估 331 核时：周期体系高估 30–40 倍，Cu<sub>13</sub> 团簇低估约 3 倍。</li>
+      <li><strong>只拟合能量</strong>（自适应，34 个参数，23 次评估）：训练 39.6 meV/atom；测试：团簇 65、理想相 43、应变 12、二聚体 57、MD 帧 168 meV/atom。</li>
+      <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
+      <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：@@MDBULLET@@</li>
+      <li><strong>主动学习</strong>：@@ALBULLET@@</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
+      <li><span class="num">39.6</span><span class="lbl">只拟合能量的训练误差，meV/atom（M8a 的理想相：1.4）</span></li>
+      <li><span class="num">65 / 43</span><span class="lbl">测试集：团簇 / 理想相，meV/atom</span></li>
+      <li><span class="num">@@MDFIG@@</span><span class="lbl">@@MDFIGLBL@@</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#hpc">一、电光云上的计算</a></li>
+      <li><a href="#data">二、数据</a></li>
+      <li><a href="#fit">三、拟合</a></li>
+      <li><a href="#md">四、MD 验证</a></li>
+      <li><a href="#al">五、主动学习：第二轮候选</a></li>
+      <li><a href="#eng">六、工程问题</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#next">七、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="hpc">
+      <h2>一、电光云上的计算</h2>
+      <p>用户批准在电光云上算精简版（不含扰动晶胞和表面），预算上限 33 元。设置与 M8b 设计相同：PBE PAW，ENCUT 450 eV，300 K 的 Fermi 展宽（自由能），周期体系 KSPACING 0.2，团簇与二聚体只用 Γ 点并自旋极化。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>阶段</th><th>内容</th><th>核时</th></tr></thead>
+        <tbody>
+          <tr><td>校准</td><td>β-Sn（19 核）、Cu<sub>13</sub>（38 核）、32 原子空位（76 核）各一个</td><td>3.6</td></tr>
+          <tr><td>第一阶段</td><td>除 Cu<sub>38</sub>、Cu<sub>55</sub> 以外的全部</td><td>67.9</td></tr>
+          <tr><td>第二阶段</td><td>Cu<sub>38</sub>、Cu<sub>55</sub>、一个重算的 Cu<sub>13</sub></td><td>15.5</td></tr>
+          <tr><td>第三阶段</td><td>两个扰动的 Cu<sub>38</sub>、一个扰动的 Cu<sub>55</sub></td><td>19.5</td></tr>
+          <tr><td><strong>合计</strong></td><td>142 个结构，全部收敛</td><td><strong>106.4（7.98 元）</strong></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>预算控制</strong>：校准后按实测重估为约 14 元（加每个作业 60 s 的开销约 20 元），分阶段提交。每一阶段都设了墙钟上限，保证即使全部跑满时间，累计也低于 33 元；每阶段结束后用 sacct 统计实际核时。</li>
+        <li><strong>估计偏差</strong>：粗估按原子数的 2.2 次方放大，周期体系高估 30–40 倍（β-Sn 4.6 → 0.11 核时，空位 58.7 → 1.9 核时）；Cu<sub>13</sub> 低估约 3 倍（自旋极化、SCF 步数多）。</li>
+        <li><strong>dg50</strong>：没有用。按实际费率（GPU 4.5 元/卡时，CPU 不收费），一张卡加 76 核跑 CPU 版 VASP 每小时 4.5 元，比 dg83 的 76 核（5.7 元）便宜约 20%；19 核的小作业仍然是 dg83 便宜（1.4 元）。这批作业里只有 8 个 76 核的和 Cu<sub>13</sub> 能省，最多省约 1–1.5 元。以后大体系的 CPU 作业可以放到 dg50。</li>
+        <li><strong>免费的替代</strong>：Materials Project 的 MPtrj 与 Meta 的 OMat24（CC-BY 4.0）有 Cu 的 PBE 数据，但设置不同（如 ENCUT 520），要对齐能量零点；国家超算中心有试用机时。这次没有用。</li>
+      </ul>
+    </section>
+
+    <section id="data">
+      <h2>二、数据</h2>
+      <p>本地：<code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_lite_results/cu_m8b.extxyz</code>（Mermin 自由能、力，周期体系还有应力）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组</th><th>结构</th><th>原子数</th><th>E/N（eV）</th><th>最大 |F|（eV/Å）</th><th>平均 SCF 步</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>10</td><td>2</td><td>−1.36 … 0.02</td><td>15.6</td><td>27</td></tr>
+          <tr><td>cluster</td><td>29</td><td>3–55</td><td>−2.93 … −1.34</td><td>1.7</td><td>33</td></tr>
+          <tr><td>md</td><td>10</td><td>13</td><td>−2.43 … −1.60</td><td>9.8</td><td>44</td></tr>
+          <tr><td>vacancy</td><td>3</td><td>30–31</td><td>−3.69 … −3.66</td><td>1.1</td><td>19</td></tr>
+          <tr><td>strain</td><td>24</td><td>1</td><td>−3.73 … −3.70</td><td>0</td><td>12</td></tr>
+          <tr><td>ptbp</td><td>66</td><td>1–2</td><td>−3.73 … −1.33</td><td>2.0</td><td>14</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li>fcc 的能量最低点 −3.726 eV/atom；二聚体的最低点在 2.2–2.3 Å（PBE 约 2.22 Å）。</li>
+        <li>md 组是 M8a 那段 Cu<sub>13</sub> 轨迹（模型重构之后）的帧，最短键 1.88 Å，DFT 的力到 9.8 eV/Å。</li>
+      </ul>
+    </section>
+
+    <section id="fit">
+      <h2>三、拟合</h2>
+      <p><code>python -m pydftb.bench.cu_dft_fit cu_m8b.extxyz</code>。每组每 5 个结构留 1 个做测试：116 个训练，26 个测试。一个公共能量偏移。</p>
+      <ul>
+        <li><strong>裸表</strong>：ptbp_hcocu 的 Cu–Cu 表在第一壳层以内没有排斥。在 1.7–1.9 Å 的二聚体和重构的 Cu<sub>13</sub> 上，DFTB 比 DFT 低 4–6 eV/atom，其他组差 0.1–0.4 eV/atom。</li>
+        <li><strong>核心墙</strong>：M8a 把固定的墙放在 2.0 Å（当时数据最短的键 2.06 Å 以下）。新数据有 1.7 Å 的键，墙移到 1.6 Å。</li>
+        <li><strong>线性起点</strong>：对排斥势对系数是线性的，先用最小二乘解出它（其他系数为 0），误差从 1190 降到 327 meV/atom，再做非线性拟合。从零开始时 20 次评估后还有 716 meV/atom。</li>
+      </ul>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组</th><th>只拟合能量：训练</th><th>只拟合能量：测试</th><th>能量加力：训练</th><th>能量加力：测试</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>26.9 / 2.53</td><td>57.0 / 0.30</td><td>182 / 2.22</td><td>137 / 0.30</td></tr>
+          <tr><td>cluster</td><td>67.0 / 0.43</td><td>64.7 / 0.31</td><td>261 / 0.99</td><td>297 / 0.85</td></tr>
+          <tr><td>md</td><td>31.1 / 1.89</td><td>168 / 3.20（1 个 SCC 不收敛）</td><td>460 / 3.89</td><td>726 / 4.57</td></tr>
+          <tr><td>vacancy</td><td>1.6 / 0.11</td><td>—</td><td>43.8 / 0.70</td><td>—</td></tr>
+          <tr><td>strain</td><td>10.5</td><td>12.1</td><td>69.3</td><td>98.8</td></tr>
+          <tr><td>ptbp</td><td>33.2 / 0.31</td><td>42.7 / 0.27</td><td>210 / 1.64</td><td>256 / 0.91</td></tr>
+          <tr><td>全部（训练）</td><td>39.6</td><td></td><td>228 / 2.46</td><td></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">单位：能量 meV/atom / 力 eV/Å。两列都是自适应模型（34 个参数）。固定参数模型（12 个参数，能量加力）8 次评估后停在 379 meV/atom、2.4 eV/Å，没有跑完。</p>
+      <ul>
+        <li><strong>只拟合能量反而力也更好</strong>：除二聚体外，各组的力都比带力拟合的小。带力的拟合没有收敛：30 次评估里有 17 次是被拒绝的试探步（SCC 不收敛），只走了 13 步；力的残差有 891 个分量（116 个能量），权重 0.01 时在终点占代价函数的 90%。</li>
+        <li><strong>与 M8a 比</strong>：M8a 在 6 个理想相上 1.4 meV/atom；这里理想相的测试误差 43 meV/atom。数据从理想相扩展到团簇、短程与畸变以后，这套模型的误差大了一个数量级。</li>
+        <li><strong>没有过拟合</strong>：只拟合能量时，团簇与理想相的测试误差与训练误差相当；md 组的测试误差大，因为它的帧是重构中的结构，彼此差别大。</li>
+      </ul>
+    </section>
+
+    <section id="md">
+      <h2>四、MD 验证</h2>
+      <p><code>python -m pydftb.bench.adaptive_md fit.json --steps 2000</code>：Cu<sub>13</sub> 二十面体加 0.05 Å 的扰动，600 K，NVE，1 fs。</p>
+      @@MDSECTION@@
+    </section>
+
+    <section id="al">
+      <h2>五、主动学习：第二轮候选</h2>
+      @@ALSECTION@@
+    </section>
+
+    <section id="eng">
+      <h2>六、工程问题</h2>
+      <ul>
+        <li><strong>电光云</strong>：
+          <ul>
+            <li>每个用户最多 10 个排队作业，数组的每个任务都算一个，115 个的数组被拒。改成 <code>run_chunk.sh</code>：一个作业顺序算一段结构。</li>
+            <li><code>mpirun</code> 读走了循环的标准输入，每个作业只算了一个结构；加 <code>&lt; /dev/null</code>。</li>
+            <li>一个扰动的 Cu<sub>13</sub> 自旋极化 SCF 来回振荡，到 NELM = 200 也没收敛。加 AMIX 0.2、BMIX 1e-4、AMIX_MAG 0.8、BMIX_MAG 1e-4 与 NCORE 4 后 18 步收敛；Cu<sub>38</sub>、Cu<sub>55</sub> 同样设置，20–34 步收敛。<code>collect.py</code> 现在拒绝没算完或到 NELM 的结果。</li>
+          </ul></li>
+        <li><strong>拟合</strong>（<code>pydftb.adaptive_fit</code>）：
+          <ul>
+            <li>试探步上某个 SCC 不收敛时，不再中断整个拟合：这一步记为代价极大，信赖域缩小。先只算能量判断收敛，再算力的 Jacobian，失败的试探步便宜约 2n<sub>x</sub> 倍。</li>
+            <li>初始信赖域很大：<code>x_scale="jac"</code> 下 Jacobian 的列模从 1.8（d 跃迁）到 2.7e4（排斥势的高次项），开始要被拒 6–8 次。之后可以给定 x_scale。</li>
+            <li>macOS 上 fork 出来的子进程在 Accelerate 的 LAPACK（dsygvd → dispatch_apply）里段错误：父进程用过多线程的 Accelerate（线性起点的 lstsq）以后，GCD 在子进程里不能用。<code>multiprocessing.Pool</code> 遇到死掉的工作进程会永远等下去，看起来像死锁。改用 <code>ProcessPoolExecutor</code>（工作进程死掉时报错），并用 <code>VECLIB_MAXIMUM_THREADS=1</code> 运行。</li>
+          </ul></li>
+        <li><strong>测试</strong>：新增“SCC 失败的试探步被拒绝，起点失败仍报错”；<code>test_adaptive.py</code> 与 <code>test_active.py</code> 共 25 个全部通过。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>七、下一步</h2>
+      <ul>
+        @@NEXT@@
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M8c-active-learning.html">← M8c 报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -75,7 +75,8 @@ def bootstrap_weights(n_samples: int, rng, groups=None) -> np.ndarray:
 def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, groups=None,
                   base=None, l2: float = 1e-4, max_evaluations: int = 30,
                   base_evaluations: int = 150, processes: int | None = None,
-                  perturb: float = 0.0, verbose: bool = False, **fit_kw) -> Committee:
+                  perturb: float = 0.0, perturb_skip: tuple = (), verbose: bool = False,
+                  **fit_kw) -> Committee:
     """A base fit (``base``: a FitResult already made on ``samples``, else fitted here from
     ``models``) and ``n`` members refitted from it to bootstrap resamples of ``samples``
     (``groups``: resample whole groups).  Extra keywords go to every
@@ -85,7 +86,10 @@ def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, 
     base + perturb * N(0, 1) per coefficient (an anchored ensemble, Pearce et al. 2020).
     Without it the ridge pulls every member to the base, so directions no data constrains keep
     the base's values in all members and the committee agrees exactly where it should not
-    (M8c report).  ``perturb`` near sqrt(noise^2 / l2), the prior width the ridge implies."""
+    (M8c report).  ``perturb`` near sqrt(noise^2 / l2), the prior width the ridge implies.
+    ``perturb_skip``: coefficients whose names contain one of these strings are not perturbed
+    (e.g. ``("pair",)``: the pair-repulsive polynomial, whose high powers move short-range
+    energies by eV for a perturbation of 0.003 and break the SCC of short dimers)."""
     rng = np.random.default_rng(seed)
     if base is None:
         base = fit_adaptive(models, samples, sk, options, l2=l2, processes=processes,
@@ -97,6 +101,9 @@ def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, 
             w = bootstrap_weights(len(samples), rng, groups)
         sub = [replace(s, weight=s.weight * c) for s, c in zip(samples, w) if c > 0]
         z = rng.normal(size=len(base.x))
+        if perturb_skip:
+            names = [nm for m in base.models for nm in m.parameter_names()]
+            z[[i for i, nm in enumerate(names) if any(t in nm for t in perturb_skip)]] = 0.0
         scale = perturb
         for attempt in range(4):              # an anchor too far for the SCC: halve it
             x0 = np.asarray(base.x, float) + scale * z if scale else None
