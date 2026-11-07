@@ -40,6 +40,7 @@ class Committee:
     offsets: np.ndarray                    # eV/atom: each member's model - reference
     base_offset: float = 0.0
     draws: tuple = ()                      # the bootstrap counts of every member
+    perturb: tuple = ()                    # the anchor perturbation each member got
 
 
 @dataclass
@@ -74,23 +75,44 @@ def bootstrap_weights(n_samples: int, rng, groups=None) -> np.ndarray:
 def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, groups=None,
                   base=None, l2: float = 1e-4, max_evaluations: int = 30,
                   base_evaluations: int = 150, processes: int | None = None,
-                  verbose: bool = False, **fit_kw) -> Committee:
+                  perturb: float = 0.0, verbose: bool = False, **fit_kw) -> Committee:
     """A base fit (``base``: a FitResult already made on ``samples``, else fitted here from
     ``models``) and ``n`` members refitted from it to bootstrap resamples of ``samples``
     (``groups``: resample whole groups).  Extra keywords go to every
-    :func:`pydftb.adaptive_fit.fit_adaptive`."""
+    :func:`pydftb.adaptive_fit.fit_adaptive`.
+
+    ``perturb``: every member starts from, and its ridge pulls it towards, its own anchor
+    base + perturb * N(0, 1) per coefficient (an anchored ensemble, Pearce et al. 2020).
+    Without it the ridge pulls every member to the base, so directions no data constrains keep
+    the base's values in all members and the committee agrees exactly where it should not
+    (M8c report).  ``perturb`` near sqrt(noise^2 / l2), the prior width the ridge implies."""
     rng = np.random.default_rng(seed)
     if base is None:
         base = fit_adaptive(models, samples, sk, options, l2=l2, processes=processes,
                             max_evaluations=base_evaluations, verbose=verbose, **fit_kw)
-    members, offsets, draws = [], [], []
+    members, offsets, draws, scales = [], [], [], []
     for k in range(n):
         w = bootstrap_weights(len(samples), rng, groups)
         while not w.any():                                     # pragma: no cover (n >= 1)
             w = bootstrap_weights(len(samples), rng, groups)
         sub = [replace(s, weight=s.weight * c) for s, c in zip(samples, w) if c > 0]
-        r = fit_adaptive(base.models, sub, sk, options, l2=l2, processes=processes,
-                         max_evaluations=max_evaluations, verbose=verbose, **fit_kw)
+        z = rng.normal(size=len(base.x))
+        scale = perturb
+        for attempt in range(4):              # an anchor too far for the SCC: halve it
+            x0 = np.asarray(base.x, float) + scale * z if scale else None
+            try:
+                r = fit_adaptive(base.models, sub, sk, options, l2=l2, processes=processes,
+                                 max_evaluations=max_evaluations, x0=x0, verbose=verbose,
+                                 **fit_kw)
+                break
+            except RuntimeError:
+                if not scale or attempt == 3:
+                    raise
+                scale *= 0.5
+                if verbose:
+                    print(f"member {k}: SCC failed, anchor perturbation -> {scale:g}",
+                          flush=True)
+        scales.append(scale)
         if verbose:
             print(f"member {k}: {int((w > 0).sum())} distinct samples, rmse "
                   f"{r.rmse * 1000:.2f} meV/atom", flush=True)
@@ -98,7 +120,7 @@ def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, 
         offsets.append(r.offset)
         draws.append(tuple(int(c) for c in w))
     return Committee(tuple(base.models), tuple(members), np.array(offsets), float(base.offset),
-                     tuple(draws))
+                     tuple(draws), tuple(scales))
 
 
 def _work(job):

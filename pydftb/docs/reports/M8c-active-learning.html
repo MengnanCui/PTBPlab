@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8c 主动学习报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M8c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8c · 完成报告（不依赖新数据的部分）</p>
+    <h1>AI 层（三）：主动学习的框架</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">框架完成，等数据</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>提交</dt><dd><code>1423ad2</code> 与之后的锚点提交</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M8c-active-learning.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">委员会、不确定度、挑结构、写 VASP 输入，整条链都做完并测过了。关键在锚点。所有成员都锚定在基础拟合上时，委员会在没见过的 diamond 上分歧反而最小，校准失败。给每个成员一个随机扰动的锚点（anchored ensemble）以后，diamond 的 σ 是见过的相的约 17 倍，σ 与真实误差的对数相关系数从 0 升到 0.75。σ 仍然低估误差约 9 倍，要用留出数据标定。在 M8a 那段 Cu<sub>13</sub> 轨迹上，σ 随团簇重构上升，挑出的 10 帧都在 200–400 fs 的重构段，已写成 VASP 输入，没有提交。</p>
+    <ul>
+      <li><strong>校准</strong>（不含 diamond 拟合，6 个相上预测，meV/atom）：
+        <ul>
+          <li>按相重抽样、锚定在基础拟合上：diamond σ 18.6，见过的相 0.1–54；对数相关 0.00。失败。</li>
+          <li>按结构重抽样、锚点扰动 0.02：diamond σ 10.4，见过的相 0.2–0.6；对数相关 0.75。diamond 的真实误差 94。</li>
+        </ul></li>
+      <li><strong>筛选</strong>（锚点版，41 帧）：训练集上的 σ<sub>E</sub> 1.8 meV/atom；轨迹开头 22（团簇本来就不在训练集里），重构后 60–93；σ<sub>F</sub> 从 0.13 升到 2–5 eV/Å。挑出的帧是 200、270–330、370、380 fs。</li>
+      <li><strong>VASP 输入</strong>：<code>cu_dft_m8b_active/round1</code>，10 个 Cu<sub>13</sub>，估计 5.3 核时（约 0.5 元）。其中 200、280、320 fs 与 M8b 训练集的 md 组是同一帧，新的有 7 个。</li>
+      <li><strong>测试</strong>：<code>test_active.py</code> 6 个全部通过。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">0.00 → 0.75</span><span class="lbl">σ 与真实误差的对数相关：锚定在基础拟合 → 扰动的锚点</span></li>
+      <li><span class="num">~17×</span><span class="lbl">留出 diamond 的 σ 对见过的相</span></li>
+      <li><span class="num">~9×</span><span class="lbl">σ 对真实误差的低估（diamond：10.4 对 94）</span></li>
+      <li><span class="num">10</span><span class="lbl">从重构的 Cu<sub>13</sub> 轨迹挑出的帧，约 0.5 元，未提交</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#cal">一、校准：委员会能否认出没见过的相</a></li>
+      <li><a href="#screen">二、筛选：Cu<sub>13</sub> 轨迹</a></li>
+      <li><a href="#tests">三、测试</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#dev">四、与设计的偏差</a></li>
+      <li><a href="#next">五、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="cal">
+      <h2>一、校准：委员会能否认出没见过的相</h2>
+      <p>数据与 M8a 相同（ptbp_hcocu 的 Cu–Cu 表，300 K）。基础拟合在 55 个结构（不含 diamond）上，从零开始做 100 次评估；4 个成员各从基础拟合热启动，做 30–40 次评估。8 个进程，与其他会话共用 CPU。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>相</th><th>基础模型的真实误差</th><th>σ：按相重抽样，锚定在基础拟合</th><th>σ：按结构重抽样，锚点扰动 0.02</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>0.6</td><td>30.2</td><td>0.2</td></tr>
+          <tr><td>AA-graphite</td><td>0.8</td><td>0.1</td><td>0.3</td></tr>
+          <tr><td><strong>diamond（留出）</strong></td><td><strong>94.0</strong></td><td>18.6</td><td><strong>10.4</strong></td></tr>
+          <tr><td>β-Sn</td><td>0.9</td><td>29.5</td><td>0.6</td></tr>
+          <tr><td>bcc</td><td>0.5</td><td>49.4</td><td>0.5</td></tr>
+          <tr><td>fcc</td><td>0.6</td><td>53.7</td><td>0.5</td></tr>
+          <tr><td>对数相关</td><td></td><td>0.00</td><td>0.75</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>第一种为什么失败</strong>：岭回归把每个成员拉回基础拟合。diamond 的环境不在任何成员的数据里，所有成员在那些方向上都保持基础拟合的值，于是一致地外推。整相的重抽样又让每个成员缺掉一两个见过的相，分歧都落在了见过的相上。</li>
+        <li><strong>锚点</strong>：扰动 0.1（按 l2 = 1e-4、噪声约 1 meV/atom 推出的先验宽度）对 on-site 来说是 2.7 eV，二聚体的 SCC 不收敛，实验中断了。0.02 时四个成员都一次成功。成员失败时减半重试的逻辑已经加上。</li>
+        <li><strong>σ 偏小</strong>：4 个成员、扰动 0.02 时，diamond 的 σ 只有真实误差的九分之一。用作排序与触发是够的（它把 diamond 与其他相分开了 17 倍）；当作误差棒要先乘一个由留出数据标定的因子。</li>
+      </ul>
+    </section>
+
+    <section id="screen">
+      <h2>二、筛选：Cu<sub>13</sub> 轨迹</h2>
+      <p>委员会围绕 M8a 在全部 66 个结构上的自适应拟合，4 个成员，同样的锚点。轨迹是 M8a 的 NVE（600 K），每 10 fs 一帧，共 41 帧；所有成员在所有帧上 SCC 都收敛。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>最短距离（Å）</th><th>σ<sub>E</sub>（meV/atom）</th><th>σ<sub>F</sub>（eV/Å）</th></tr></thead>
+        <tbody>
+          <tr><td>0 fs</td><td>2.35</td><td>22.5</td><td>0.13</td></tr>
+          <tr><td>100 fs</td><td>2.04</td><td>44.0</td><td>0.72</td></tr>
+          <tr><td>110 fs（开始重构）</td><td>1.94</td><td>42.1</td><td>2.10</td></tr>
+          <tr><td>200 fs</td><td>1.89</td><td>58.5</td><td>5.35</td></tr>
+          <tr><td>300 fs</td><td>1.91</td><td>82.9</td><td>4.48</td></tr>
+          <tr><td>370 fs</td><td>1.90</td><td>92.6</td><td>2.58</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li>训练集上的 σ<sub>E</sub> 是 1.8 meV/atom。轨迹的第一帧已经是 22，因为训练集里没有团簇。M8b 训练集的 cluster 组补的就是这个。</li>
+        <li>σ<sub>F</sub> 在 100–110 fs 跳了 3 倍，正是团簇开始重构、最短距离降到 2 Å 以下的时候。用 σ<sub>F</sub> 当 MD 的停止条件，可以在塌缩之前停下来。</li>
+        <li>第一种委员会（按相重抽样）也把挑出的帧都放在 200–400 fs，但它的训练集 σ 已有 37 meV/atom，基线太高，不能当阈值用。</li>
+        <li>挑出的 10 帧写在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_active/round1</code>，与 M8b 训练集同样的设置（Γ 点、自旋极化、38 核），估计 5.3 核时。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>三、测试</h2>
+      <p><code>pydftb/tests/test_active.py</code> 的 6 个测试全部通过。它们覆盖：bootstrap 的计数；预测等于成员能量减偏移，并行与串行逐位相同，离数据远的结构 σ 大 3 倍以上；成员相同时 σ = 0（力差 &lt; 1e-12）；SCC 失败时分数记为无穷大；指纹的平移与超胞不变性；select 的顺序、阈值与去重；VASP 输入；锚点让数据约束不到的系数分开。<code>pydftb.active</code> 是新模块，原来的计算路径没有改动，M8b 的 golden（1523 个计算逐位相同）照样成立。</p>
+    </section>
+
+    <section id="dev">
+      <h2>四、与设计的偏差</h2>
+      <ul>
+        <li>锚点扰动（<code>perturb=</code>）与失败重试是在第一次校准失败之后加的。</li>
+        <li>没有做在 MD 中按 σ 停下的驱动，留到有数据之后。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>五、下一步</h2>
+      <ul>
+        <li>DFT 数据回来后的完整循环：带力的拟合 → 委员会 → MD → 挑帧 → DFT。</li>
+        <li>按通道设不同的锚点尺度（on-site 的单位是 Hartree，跃迁是对数标度）；用留出数据标定 σ 的比例。</li>
+        <li>MD 中按 σ<sub>F</sub> 停下并挑帧。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M8c-active-learning.html">← M8c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

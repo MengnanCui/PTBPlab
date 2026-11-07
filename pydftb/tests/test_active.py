@@ -153,3 +153,21 @@ def test_write_candidates(tmp_path):
     from ase.io import read
     box = read(os.path.join(d0, "POSCAR"))
     assert box.cell.lengths().min() > 12.0
+
+
+def test_anchored_members_spread_where_no_data_constrains(sk, data, committee):
+    """A Gaussian at CN 6 is zero for every water: anchored at the base, all members keep the
+    base's coefficient there (they agree where nothing is known); with ``perturb`` each keeps
+    its own anchor's."""
+    far = AdaptiveParams("O", RBF((1.5, 6.0), 0.4), onsite={"p": (0.0, 0.0, 0.0)})
+    opts = {"scc_tol": 1e-11}
+    flat = fit_committee([far], data, sk, opts, n=2, seed=3, processes=1, max_evaluations=8,
+                         base_evaluations=15)
+    spread = fit_committee([far], data, sk, opts, n=2, seed=3, processes=1, max_evaluations=8,
+                           base=None, base_evaluations=15, perturb=0.05)
+    b = far.parameter_names().index("O.onsite.p[2]")                   # the CN-6 Gaussian
+    x_base = flat.base[0].vector()
+    for mem in flat.members:
+        assert abs(mem[0].vector()[b] - x_base[b]) < 1e-8
+    v = [mem[0].vector()[b] for mem in spread.members]
+    assert abs(v[0] - v[1]) > 1e-3

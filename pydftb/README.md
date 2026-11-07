@@ -1165,6 +1165,19 @@ in the data.  `python -m pydftb.bench.cu_dft_dataset` writes such a Cu training 
 structures: clusters, surfaces, vacancies, rattled and strained cells) as VASP inputs and Slurm
 array scripts.  Details: [`docs/reports/M8b-forces-angles.html`](docs/reports/M8b-forces-angles.html).
 
+Milestone M8c adds active learning (`pydftb.active`).  `fit_committee(models, samples, sk,
+options, n=4, perturb=0.02, base=fit)` refits members to bootstrap resamples, each anchored
+(its start and its ridge) at the base plus a random perturbation: without the perturbation all
+members keep the base's values where no data constrains them and agree exactly where they
+should not.  `committee_predict(com, frames, sk, options)` gives the spread of the relative
+energies per atom (`sigma_e`) and of the forces (`sigma_f`, the worst atom), `select` picks the
+most uncertain frames that are unlike each other and unlike the training set (fingerprints of
+CN and q), and `write_candidates` writes them as VASP inputs (never submitted).  On Cu with
+diamond held out, the anchored committee's spread on diamond is 17 times that on the seen
+phases (log correlation with the true error 0.75, the spread about 9 times too small); along
+the M8a Cu13 trajectory it rises as the cluster restructures.  Details:
+[`docs/reports/M8c-active-learning.html`](docs/reports/M8c-active-learning.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

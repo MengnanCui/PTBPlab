@@ -54,6 +54,10 @@ def main(argv=None):
     ap.add_argument("--pick", type=int, default=10)
     ap.add_argument("--held-out", default="diamond")
     ap.add_argument("--skip-calibration", action="store_true")
+    ap.add_argument("--groups", choices=("phase", "none"), default="none",
+                    help="bootstrap whole phases or single structures")
+    ap.add_argument("--perturb", type=float, default=0.1,
+                    help="anchor perturbation (0: every member anchored at the base)")
     args = ap.parse_args(argv)
     from pydftb.params import ParamSet
     sk = ParamSet(f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu", max_l={"Cu": 2},
@@ -61,14 +65,18 @@ def main(argv=None):
     opts = ac.OPTIONS
     data = ac.samples()
     phases = [phase_of(s) for s in data]
-    report = {"options": opts, "members": args.members, "groups": "phase"}
+    report = {"options": opts, "members": args.members, "groups": args.groups,
+              "perturb": args.perturb}
+
+    def grp(ss):
+        return [phase_of(s) for s in ss] if args.groups == "phase" else None
 
     # ---- calibration: a committee that has not seen one phase ----------------------------------
     if not args.skip_calibration:
         t0 = time.perf_counter()
         train = [s for s, p in zip(data, phases) if p != args.held_out]
         com = fit_committee(ac.models("adaptive"), train, sk, opts, n=args.members, seed=11,
-                            groups=[phase_of(s) for s in train], processes=args.processes,
+                            groups=grp(train), perturb=args.perturb, processes=args.processes,
                             max_evaluations=args.member_evaluations,
                             base_evaluations=args.base_evaluations, verbose=True)
         u = committee_predict(com, [s.atoms for s in data], sk, opts,
@@ -103,8 +111,8 @@ def main(argv=None):
     off = float(np.mean(e_fit - np.array([s.energy for s in data])))
     base = FitResult(base_models, np.array(fit["x"]), fit["rmse"], np.array(fit["residuals"]),
                      off)
-    com = fit_committee(None, data, sk, opts, n=args.members, seed=12, groups=phases,
-                        base=base, processes=args.processes,
+    com = fit_committee(None, data, sk, opts, n=args.members, seed=12, groups=grp(data),
+                        base=base, perturb=args.perturb, processes=args.processes,
                         max_evaluations=args.member_evaluations, verbose=True)
     frames = read(args.traj, ":")
     u = committee_predict(com, frames, sk, opts, forces=True, processes=min(args.processes,
@@ -122,7 +130,7 @@ def main(argv=None):
         "frames": len(frames), "time_fs": [10 * k for k in range(len(frames))], "dmin": dmin,
         "sigma_e": u.sigma_e.tolist(), "sigma_f": u.sigma_f.tolist(),
         "failed": u.failed.tolist(), "mean_e": u.mean_e.tolist(), "picked": pick,
-        "member_offsets": com.offsets.tolist(), "draws": com.draws,
+        "member_offsets": com.offsets.tolist(), "draws": com.draws, "perturb": com.perturb,
         "seconds": time.perf_counter() - t0,
         "train_sigma_e": None}
     # the spread on the training set itself, for scale
