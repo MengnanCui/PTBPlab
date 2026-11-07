@@ -19,6 +19,7 @@ import argparse
 import json
 import time
 from collections import defaultdict
+from dataclasses import replace
 
 import numpy as np
 from ase.io import read
@@ -26,6 +27,7 @@ from ase.io import read
 from pydftb import adaptive_fit as af
 from pydftb.adaptive_fit import Sample, fit_adaptive
 from pydftb.bench import adaptive_cu as ac
+from pydftb.constants import BOHR
 from pydftb.validation import ptbp_workload as pw
 
 MOLECULAR = ("dimer", "cluster", "md", "active")
@@ -56,6 +58,36 @@ def load(path: str, groups=None):
                           name=f"{g} {at.info.get('name', '')}",
                           forces=None if f is None else np.array(f)))
     return out
+
+
+def models(kind: str, wall: float):
+    """``adaptive_cu.models(kind)`` with the fixed core wall at ``wall`` (Angstrom).  The VASP set
+    has bonds down to 1.7 A (the dimer, the restructured Cu13 frames), inside M8a's 2.0 A wall."""
+    m = ac.models(kind)[0]
+    pr = {k: replace(v, wall=wall / BOHR) for k, v in m.pair_repulsive.items()}
+    return [replace(m, pair_repulsive=pr)]
+
+
+def init_pair(models, samples, sk, processes, ridge=1e-6):
+    """Start vector with the pair-repulsive coefficients solved by linear least squares on the
+    energies (the pair term is linear in them; everything else stays at zero), with a free
+    offset.  The bare table has no repulsion inside the first shell: from zero the nonlinear
+    fit has to build the wall in many small trust-region steps."""
+    x = np.concatenate([m.vector() for m in models])
+    names = [n for m in models for n in m.parameter_names()]
+    cols = [i for i, n in enumerate(names) if ".pair[" in n]
+    e, jac = af.evaluate(models, samples, sk, ac.OPTIONS, x, processes)
+    w = np.sqrt(np.array([s.weight for s in samples], float))
+    a = np.hstack([jac[:, cols], np.ones((len(samples), 1))]) * w[:, None]
+    b = (np.array([s.energy for s in samples]) - e) * w
+    reg = np.sqrt(ridge) * np.eye(a.shape[1])
+    reg[-1, -1] = 0.0                                  # the offset is free
+    c = np.linalg.lstsq(np.vstack([a, reg]), np.concatenate([b, np.zeros(a.shape[1])]),
+                        rcond=None)[0]
+    x = x.copy()
+    x[cols] = c[:-1]
+    r = (a @ c - b) / w
+    return x, float(np.sqrt(np.mean((r - r.mean()) ** 2)))
 
 
 def group_of(s):
@@ -112,6 +144,9 @@ def main(argv=None):
     ap.add_argument("--l2", type=float, default=1e-4)
     ap.add_argument("--max-evaluations", type=int, default=150)
     ap.add_argument("--processes", type=int, default=8)
+    ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
+    ap.add_argument("--no-init", action="store_true",
+                    help="start from zero instead of the linear pair-repulsive solution")
     args = ap.parse_args(argv)
     from pydftb.params import ParamSet
     sk = ParamSet(f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu", max_l={"Cu": 2},
@@ -125,15 +160,21 @@ def main(argv=None):
                                                          s.name) for s in train]
     print(f"{len(data)} structures: {len(train)} train, {len(test)} test", flush=True)
     report = {"options": ac.OPTIONS, "data": args.data, "force_weight": args.force_weight,
-              "force_groups": args.force_groups,
+              "force_groups": args.force_groups, "wall": args.wall,
               "l2": args.l2, "train": [s.name for s in train], "test": [s.name for s in test],
               "models": {}}
     for kind in args.kinds.split(","):
         t0 = time.perf_counter()
-        res = fit_adaptive(ac.models(kind), fit_set, sk, ac.OPTIONS, l2=args.l2,
+        mod = models(kind, args.wall)
+        x0, init_rmse = (None, None) if args.no_init else init_pair(mod, train, sk,
+                                                                     args.processes)
+        if x0 is not None:
+            print(f"{kind}: linear pair-repulsive start, energy rmse {init_rmse * 1000:.1f} "
+                  "meV/atom", flush=True)
+        res = fit_adaptive(mod, fit_set, sk, ac.OPTIONS, l2=args.l2, x0=x0,
                            processes=args.processes, max_evaluations=args.max_evaluations,
                            force_weight=args.force_weight, verbose=True)
-        entry = {"rmse": res.rmse, "force_rmse": res.force_rmse, "x": res.x.tolist(),
+        entry = {"init_rmse": init_rmse, "wall": args.wall, "rmse": res.rmse, "force_rmse": res.force_rmse, "x": res.x.tolist(),
                  "residuals": res.residuals.tolist(), "offset": res.offset,
                  "names": res.models[0].parameter_names(), "n_parameters": len(res.x),
                  "evaluations": res.n_evaluations, "history": res.history}
