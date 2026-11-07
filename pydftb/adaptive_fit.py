@@ -96,11 +96,26 @@ def _work(args):
                                forces)
 
 
+def _pool_map(func, jobs, processes):
+    """``Pool.map`` in a fresh fork pool, shut down with close + join (not the context manager's
+    terminate): no handler thread of this pool may still hold a lock when the next pool forks,
+    or the new workers deadlock on it (seen in a long VASP-Cu fit)."""
+    import multiprocessing as mp
+    pool = mp.get_context("fork").Pool(processes)
+    try:
+        out = pool.map(func, jobs, chunksize=1)
+        pool.close()
+    except BaseException:
+        pool.terminate()
+        raise
+    finally:
+        pool.join()
+    return out
+
+
 def _run(jobs, processes):
     if processes > 1 and len(jobs) > 1:
-        import multiprocessing as mp
-        with mp.get_context("fork").Pool(processes) as pool:
-            return pool.map(_work, jobs, chunksize=1)
+        return _pool_map(_work, jobs, processes)
     return [_work(j) for j in jobs]
 
 

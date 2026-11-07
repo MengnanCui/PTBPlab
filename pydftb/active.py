@@ -151,9 +151,8 @@ def committee_predict(committee: Committee, frames, sk, options=None, kpts=None,
                  options=dict(options or {}), forces=forces)
     try:
         if processes > 1 and len(jobs) > 1:
-            import multiprocessing as mp
-            with mp.get_context("fork").Pool(processes) as pool:
-                out = pool.map(_work, jobs, chunksize=1)
+            from .adaptive_fit import _pool_map
+            out = _pool_map(_work, jobs, processes)
         else:
             out = [_work(j) for j in jobs]
     finally:
