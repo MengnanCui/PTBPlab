@@ -16,7 +16,7 @@
     <p class="eyebrow">M8d · 完成报告</p>
     <h1>AI 层（四）：Cu 的 VASP 数据、带力的拟合与 MD 验证</h1>
     <dl class="meta">
-      <div><dt>状态</dt><dd><span class="chip done">数据完成；模型精度不够</span></dd></div>
+      <div><dt>状态</dt><dd><span class="chip done">数据完成；能量模型 MD 稳定，精度仍不够</span></dd></div>
       <div><dt>日期</dt><dd>2026-11-08</dd></div>
       <div><dt>提交</dt><dd>@@COMMITS@@</dd></div>
       <div><dt>配套</dt><dd><a href="M8b-forces-angles.html">M8b 报告</a>，<a href="M8c-active-learning.html">M8c 报告</a></dd></div>
@@ -25,19 +25,19 @@
 
   <section class="key" aria-labelledby="key-title">
     <h2 id="key-title">关键信息</h2>
-    <p class="lead">M8b 精简版训练集（142 个结构）在电光云 dg83 上全部算完、全部收敛，实际扣费 7.98 元（预算 33 元）。拿这份数据拟合 M8a 的自适应模型：只拟合能量的最好，训练集 39.6 meV/atom，测试集的团簇 65、理想相 43 meV/atom，力的误差 0.3–0.4 eV/Å（团簇、体相），二聚体与重构的 Cu<sub>13</sub> 仍有 2–3 eV/Å。把力加进拟合（权重 0.01）反而更差：30 次评估里只走了 13 步，停在 228 meV/atom。M8a 在 6 个理想相上的 1.4 meV/atom 在这份更难的数据上变成了几十 meV/atom，说明这套模型（ptbp_hcocu 的 Cu–Cu 表加 CN 的修正）对短程与低配位描述不够。@@MDLEAD@@</p>
+    <p class="lead">M8b 精简版训练集（142 个结构）在电光云 dg83 上全部算完、全部收敛，实际扣费 7.98 元（预算 33 元）。拿这份数据拟合 M8a 的自适应模型：只拟合能量的最好，训练集 39.6 meV/atom，测试集的团簇 65、理想相 43 meV/atom，力的误差 0.3–0.4 eV/Å（团簇、体相），二聚体与重构的 Cu<sub>13</sub> 仍有 2–3 eV/Å。把力加进拟合（权重 0.01）反而更差：30 次评估里只走了 13 步，停在 228 meV/atom。M8a 在 6 个理想相上的 1.4 meV/atom 在这份更难的数据上变成了几十 meV/atom，说明这套模型（ptbp_hcocu 的 Cu–Cu 表加 CN 的修正）对短程与低配位描述不够。只拟合能量的模型在 Cu<sub>13</sub> 的 600 K MD 中 2 ps 全程稳定（总能量漂移 0.10 meV/ps，团簇完整），是 M8 里第一个 MD 稳定的自适应模型。</p>
     <ul>
       <li><strong>电光云</strong>：106.4 核时，扣费 7.98 元（dg83 实际 0.075 元/核时）。原来粗估 331 核时：周期体系高估 30–40 倍，Cu<sub>13</sub> 团簇低估约 3 倍。</li>
       <li><strong>只拟合能量</strong>（自适应，34 个参数，23 次评估）：训练 39.6 meV/atom；测试：团簇 65、理想相 43、应变 12、二聚体 57、MD 帧 168 meV/atom。</li>
       <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
-      <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：@@MDBULLET@@</li>
+      <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：只拟合能量的模型 2 ps 稳定，最短键 ≥ 2.09 Å，漂移 0.10 meV/ps；能量加力的模型 1.5 ps 内一个原子飞出，键压到 1.6 Å。</li>
       <li><strong>主动学习</strong>：@@ALBULLET@@</li>
     </ul>
     <ul class="figures">
       <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
       <li><span class="num">39.6</span><span class="lbl">只拟合能量的训练误差，meV/atom（M8a 的理想相：1.4）</span></li>
       <li><span class="num">65 / 43</span><span class="lbl">测试集：团簇 / 理想相，meV/atom</span></li>
-      <li><span class="num">@@MDFIG@@</span><span class="lbl">@@MDFIGLBL@@</span></li>
+      <li><span class="num">2 ps</span><span class="lbl">Cu<sub>13</sub> 600 K NVE 稳定（M8a 约 100 fs 就重构）</span></li>
     </ul>
   </section>
 
@@ -132,7 +132,21 @@
     <section id="md">
       <h2>四、MD 验证</h2>
       <p><code>python -m pydftb.bench.adaptive_md fit.json --steps 2000</code>：Cu<sub>13</sub> 二十面体加 0.05 Å 的扰动，600 K，NVE，1 fs。</p>
-      @@MDSECTION@@
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>模型</th><th>结果</th><th>最短键（Å）</th><th>最大距离（Å）</th><th>总能量</th></tr></thead>
+        <tbody>
+          <tr><td>M8a 自适应（6 个理想相的能量）</td><td>约 100 fs 开始重构，团簇蒸发</td><td>1.9</td><td>—</td><td>—</td></tr>
+          <tr><td>本报告：能量加力</td><td>1480 fs 时本征值求解失败</td><td>1.55–1.7</td><td>增大到 18.8（原子飞出）</td><td>—</td></tr>
+          <tr><td><strong>本报告：只拟合能量</strong></td><td><strong>2 ps 全程稳定</strong></td><td><strong>≥ 2.09</strong></td><td><strong>5.0–5.3</strong></td><td>标准差 0.15 meV，漂移 0.10 meV/ps</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li>只拟合能量的模型是 M8 里第一个在 Cu<sub>13</sub> 的 MD 中稳定的自适应模型。力与有限差分一致到 1.8e-7 eV/Å，总能量守恒（势能的标准差 204 meV）。团簇在 2 ps 内保持完整，最近邻距离 2.45–2.65 Å，CN 在 3.3–12 之间。</li>
+        <li>能量加力的模型虽然训练时看过力，但拟合没有收敛（见第三节）：键被压到 1.6–1.7 Å，一个原子飞出，最后 SCC 的哈密顿量出现病态，本征值求解失败。</li>
+        <li>MD 稳定只说明势能面在这条轨迹上没有塌缩；没有 DFT 的 MD 对照，不能说结构与 DFT 一致。用委员会挑出的帧做第二轮 DFT 才能检验（第五节）。</li>
+      </ul>
     </section>
 
     <section id="al">

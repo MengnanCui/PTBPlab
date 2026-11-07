@@ -60,6 +60,7 @@ def main(argv=None):
                     help="cu_m8b.extxyz: screen around a cu_dft_fit model (fit_json) on the VASP "
                          "set instead of PTBP's phases (implies --skip-calibration)")
     ap.add_argument("--kind", default="adaptive", help="the model of fit_json")
+    ap.add_argument("--group", default="round1", help="the group (subdirectory) of --write")
     ap.add_argument("--perturb", type=float, default=0.1,
                     help="anchor perturbation (0: every member anchored at the base)")
     args = ap.parse_args(argv)
@@ -155,7 +156,7 @@ def main(argv=None):
           f"meV/atom; picked {pick}; {report['screening']['seconds']:.0f} s", flush=True)
     if args.write:
         names = [f"cu13_md_{10 * k:04d}fs" for k in pick]
-        man = write_candidates(args.write, [frames[k] for k in pick], names, group="round1")
+        man = write_candidates(args.write, [frames[k] for k in pick], names, group=args.group)
         report["screening"]["written"] = {"dir": args.write, "structures": len(man),
                                           "core_hours": float(sum(m["core_hours_estimate"]
                                                                   for m in man))}
