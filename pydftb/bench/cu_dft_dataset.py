@@ -237,14 +237,21 @@ for f in $(find . -name POSCAR); do cp "$P" "$(dirname "$f")/POTCAR"; done
 echo "POTCARs: $(find . -name POTCAR | wc -l)"
 """
 
-COLLECT = '''"""Collect the finished jobs into cu_m8b.extxyz (free energy, forces, stress) and report the
+COLLECT = r'''"""Collect the finished jobs into cu_m8b.extxyz (free energy, forces, stress) and report the
 unfinished or unconverged ones.  python collect.py   (needs ase)"""
-import json, os
+import json, os, re
 from ase.io import read, write
 man = json.load(open("manifest.json"))
 good, bad = [], []
 for m in man:
     try:
+        osz = open(os.path.join(m["path"], "OSZICAR")).read()
+        nelm = int(re.search(r"NELM\s*=\s*(\d+)", open(os.path.join(m["path"], "INCAR")).read()).group(1))
+        steps = len(re.findall(r"^(?:DAV|RMM):", osz, re.M))
+        if " F= " not in osz:
+            raise RuntimeError("unfinished")
+        if steps >= nelm:
+            raise RuntimeError(f"SCF not converged ({steps} steps = NELM)")
         at = read(os.path.join(m["path"], "vasprun.xml"), index=-1)
         e = at.get_potential_energy(force_consistent=True)
         at.info.update(group=m["group"], name=m["name"], free_energy=e)
