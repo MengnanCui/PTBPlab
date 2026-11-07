@@ -149,7 +149,9 @@ def fit_adaptive(models, samples, sk, options: dict | None = None, l2: float = 1
     (eV/atom per unit coefficient, squared) pulls the coefficients towards their start.
     ``force_weight`` ((eV/atom)^2 per (eV/A)^2): the weight of the force residuals of the
     samples that have reference forces (M8b; their Jacobian by central differences of
-    ``force_step`` in every coefficient)."""
+    ``force_step`` in every coefficient).  A trial step at which some SCC does not converge is
+    rejected (scored far above the last good point), not fatal; only a failure at the start
+    raises."""
     from scipy.optimize import least_squares
     models = make_models(models)
     options = dict(options or {})
@@ -163,11 +165,24 @@ def fit_adaptive(models, samples, sk, options: dict | None = None, l2: float = 1
     cache, history = {}, []
     t0 = time.perf_counter()
 
+    last = {}
+
     def compute(x):
         key = x.tobytes()
         if key not in cache:
-            e, jac, forces, fjac = evaluate_all(models, samples, sk, options, x, processes,
-                                                with_forces=use_f, step=force_step)
+            try:
+                e, jac, forces, fjac = evaluate_all(models, samples, sk, options, x, processes,
+                                                    with_forces=use_f, step=force_step)
+            except (RuntimeError, np.linalg.LinAlgError) as exc:
+                # a trial step where some SCC does not converge: a residual far above the last
+                # good one, so the trust-region method rejects the step and shrinks its radius
+                if not last:
+                    raise
+                if verbose:
+                    print(f"  trial step rejected: {exc}", flush=True)
+                cache.clear()
+                cache[key] = (last["res"] * 1e3, last["jac"]) + last["rest"]
+                return cache[key]
             d = e - t_ref
             off = wn @ d
             res = [w * (d - off)]
@@ -183,6 +198,7 @@ def fit_adaptive(models, samples, sk, options: dict | None = None, l2: float = 1
             f_rmse = float(np.sqrt(np.mean(np.concatenate(f_err) ** 2))) if f_err else None
             cache.clear()
             cache[key] = (np.concatenate(res), np.vstack(jres), d - off, off, f_rmse)
+            last.update(res=cache[key][0], jac=cache[key][1], rest=cache[key][2:])
             rmse = float(np.sqrt(wn @ (d - off) ** 2))
             history.append((time.perf_counter() - t0, rmse, f_rmse))
             if verbose:

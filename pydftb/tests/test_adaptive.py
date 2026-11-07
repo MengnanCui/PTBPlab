@@ -339,3 +339,28 @@ def test_fit_with_forces_recovers_a_model(params):
                        max_evaluations=40, force_weight=1.0, force_step=1e-5)
     assert fit.force_rmse < 1e-5 and fit.rmse < 1e-6
     assert np.abs(fit.x - truth.vector()).max() < 1e-4
+
+
+def test_fit_rejects_a_step_where_the_scc_fails(params, monkeypatch):
+    """A trial point whose SCC does not converge is a rejected step, not the end of the fit."""
+    import pydftb.adaptive_fit as af
+    m = AdaptiveParams("O", RBF(()), onsite={"p": (0.0,)})
+    calls = {"n": 0, "failed": 0}
+
+    def fake(models, samples, sk, options, x, processes=1, with_forces=True, step=1e-4):
+        calls["n"] += 1
+        if x[0] > 0.6:                       # beyond here the SCC "does not converge"
+            calls["failed"] += 1
+            raise RuntimeError("SCC not converged for a sample")
+        e = np.array([x[0], -x[0]])          # optimum (without the wall) at x = 1
+        return e, np.array([[1.0], [-1.0]]), {}, {}
+
+    monkeypatch.setattr(af, "evaluate_all", fake)
+    samples = [Sample(None, 1.0), Sample(None, -1.0)]
+    r = af.fit_adaptive([m], samples, None, {}, l2=0.0, max_evaluations=30)
+    assert calls["failed"] >= 1
+    assert r.x[0] <= 0.6 and r.x[0] > 0.3
+    calls["n"] = 0
+    with pytest.raises(RuntimeError):          # a failure at the start still raises
+        af.fit_adaptive([m.with_vector(np.array([0.9]))], samples, None, {}, l2=0.0,
+                        max_evaluations=5)
