@@ -1178,6 +1178,16 @@ phases (log correlation with the true error 0.75, the spread about 9 times too s
 the M8a Cu13 trajectory it rises as the cluster restructures.  Details:
 [`docs/reports/M8c-active-learning.html`](docs/reports/M8c-active-learning.html).
 
+Milestone M8d fits the adaptive Cu models to the VASP set (142 single points computed on
+DianGuang Cloud, 7.98 yuan): `python -m pydftb.bench.cu_dft_fit cu_m8b.extxyz [--force-weight w]`
+reads `collect.py`'s extxyz, solves the pair repulsive by linear least squares first and keeps a
+fixed core wall below the data (1.6 A).  Fitted to energies only, the adaptive model reaches
+39.6 meV/atom (test: clusters 65, ideal phases 43 meV/atom) and is stable in a 2 ps Cu13 MD at
+600 K; with forces at weight 0.01 the fit did not converge.  `fit_adaptive` now rejects trial
+steps where an SCC fails, `evaluate_sample` retries a non-converged SCC with gentler mixing, and
+fits on macOS should run with `VECLIB_MAXIMUM_THREADS=1` (forked workers otherwise segfault in
+Accelerate).  Details: [`docs/reports/M8d-cu-dft-fit.html`](docs/reports/M8d-cu-dft-fit.html).
+
 ### Cost model
 
 `pydftb.perfmodel` estimates the time and peak memory of an energy-and-forces

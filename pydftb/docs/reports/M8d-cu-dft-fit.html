@@ -18,7 +18,7 @@
     <dl class="meta">
       <div><dt>状态</dt><dd><span class="chip done">数据完成；能量模型 MD 稳定，精度仍不够</span></dd></div>
       <div><dt>日期</dt><dd>2026-11-08</dd></div>
-      <div><dt>提交</dt><dd>@@COMMITS@@</dd></div>
+      <div><dt>提交</dt><dd><code>cd7c697</code>，<code>bd05783</code>，<code>8d2ac39</code>，<code>da62eb7</code>，<code>3ac93a0</code>，<code>6c55ab9</code>，<code>7411e51</code>，<code>aad9521</code>，<code>90474c6</code>，<code>f8f7595</code>，<code>557281e</code>，<code>6195ef3</code></dd></div>
       <div><dt>配套</dt><dd><a href="M8b-forces-angles.html">M8b 报告</a>，<a href="M8c-active-learning.html">M8c 报告</a></dd></div>
     </dl>
   </header>
@@ -31,7 +31,7 @@
       <li><strong>只拟合能量</strong>（自适应，34 个参数，23 次评估）：训练 39.6 meV/atom；测试：团簇 65、理想相 43、应变 12、二聚体 57、MD 帧 168 meV/atom。</li>
       <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
       <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：只拟合能量的模型 2 ps 稳定，最短键 ≥ 2.09 Å，漂移 0.10 meV/ps；能量加力的模型 1.5 ps 内一个原子飞出，键压到 1.6 Å。</li>
-      <li><strong>主动学习</strong>：@@ALBULLET@@</li>
+      <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
@@ -79,7 +79,7 @@
 
     <section id="data">
       <h2>二、数据</h2>
-      <p>本地：<code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_lite_results/cu_m8b.extxyz</code>（Mermin 自由能、力，周期体系还有应力）。</p>
+      <p>本地：<code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_lite_results/cu_m8b.extxyz</code>（Mermin 自由能、力，周期体系还有应力）。拟合、MD 与筛选的结果（JSON、日志、轨迹）在同一目录的 <code>fits/</code> 下。</p>
       <div class="table-wrap">
       <table>
         <thead><tr><th>组</th><th>结构</th><th>原子数</th><th>E/N（eV）</th><th>最大 |F|（eV/Å）</th><th>平均 SCF 步</th></tr></thead>
@@ -151,7 +151,14 @@
 
     <section id="al">
       <h2>五、主动学习：第二轮候选</h2>
-      @@ALSECTION@@
+      <p><code>python -m pydftb.bench.active_cu fit_energy.json md_adaptive.extxyz --data cu_m8b.extxyz --members 3 --member-evaluations 15 --perturb 0.02 --group round2 --write …</code>：委员会围绕只拟合能量的模型，在它的训练集（116 个结构）上重抽样，只拟合能量；筛的是能量加力模型那段 1.5 ps 的轨迹（149 帧，最短键到 1.6 Å，最后一个原子飞出），正好是这类模型会走到的地方。</p>
+      <ul>
+        <li><strong>锚点</strong>：排斥势的多项式系数（高次项的 Jacobian 列模到 2.7e4）即使扰动 0.0025 也让短二聚体的 SCC 不收敛，所以加了 <code>perturb_skip=("pair",)</code>。其余系数扰动 0.02（on-site 0.54 eV）仍有团簇不收敛，成员 0 减半到 0.01 才成功。</li>
+        <li><strong>成员</strong>：训练误差 140、17.9、26.5 meV/atom（基础模型 39.6）。成员 0 从扰动的锚点出发，15 次评估没有回到基础模型附近；成员 1、2 比基础模型还低，说明基础拟合也没有完全收敛。</li>
+        <li><strong>筛选</strong>：149 帧中 72 帧至少一个成员 SCC 不收敛（已加了更慢的混合重试），训练集上也有不收敛的，所以训练集的 σ 是 nan。收敛的帧上 σ 随重构上升：0 fs 是 10.9 meV/atom、0.91 eV/Å，200 fs 是 16.8、1.56，500 fs 是 101、10.2。</li>
+        <li><strong>挑出的帧</strong>：不收敛的帧分数是无穷大，10 帧都是这类帧，按指纹去重后落在 100–560 fs（最短键 1.68–2.20 Å）。写在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_active/round2</code>，按 Cu<sub>13</sub> 的实测约 20 核时、约 1.5 元，<strong>没有提交</strong>。</li>
+        <li><strong>结论</strong>：这一轮委员会没有标定好：成员在训练集上都不全收敛，σ 只能当“出界”的信号，不能排序。要先解决 SCC 在扰动参数下的稳定性（按通道设锚点尺度、更强的混合），再做下一轮。</li>
+      </ul>
     </section>
 
     <section id="eng">
@@ -169,14 +176,18 @@
             <li>初始信赖域很大：<code>x_scale="jac"</code> 下 Jacobian 的列模从 1.8（d 跃迁）到 2.7e4（排斥势的高次项），开始要被拒 6–8 次。之后可以给定 x_scale。</li>
             <li>macOS 上 fork 出来的子进程在 Accelerate 的 LAPACK（dsygvd → dispatch_apply）里段错误：父进程用过多线程的 Accelerate（线性起点的 lstsq）以后，GCD 在子进程里不能用。<code>multiprocessing.Pool</code> 遇到死掉的工作进程会永远等下去，看起来像死锁。改用 <code>ProcessPoolExecutor</code>（工作进程死掉时报错），并用 <code>VECLIB_MAXIMUM_THREADS=1</code> 运行。</li>
           </ul></li>
-        <li><strong>测试</strong>：新增“SCC 失败的试探步被拒绝，起点失败仍报错”；<code>test_adaptive.py</code> 与 <code>test_active.py</code> 共 25 个全部通过。</li>
+        <li><strong>SCC 的混合</strong>：扰动的与重构的 Cu<sub>13</sub> 上，Broyden 在默认混合下 300 步不收敛，混合 0.05、1000 步就收敛（结果与混合方式无关）。<code>evaluate_sample</code> 现在在不收敛时用这个设置重试一次；显式给了 <code>mixing</code> 时不重试。拟合里被拒的试探步、委员会的锚点失败，有不少是这个原因。</li>
+        <li><strong>测试</strong>：新增“SCC 失败的试探步被拒绝，起点失败仍报错”与“不收敛时用更慢的混合重试，显式 mixing 时不重试”；<code>test_adaptive.py</code> 与 <code>test_active.py</code> 共 26 个全部通过。<code>pydftb.calculator</code> 没有改动，golden 不受影响。</li>
       </ul>
     </section>
 
     <section id="next">
       <h2>七、下一步</h2>
       <ul>
-        @@NEXT@@
+        <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。要更好，先换底：用带第一壳层排斥的 Cu 表（或从 DFT 二聚体曲线拟合一个），而不是让多项式对排斥势去抵消裸表在 2 Å 以内的塌缩；其次按通道设 x_scale 与锚点尺度。</li>
+        <li><strong>力</strong>：从只拟合能量的模型热启动，用小的力权重（0.001）再拟合，验证力能否在不损失能量的前提下改进。</li>
+        <li><strong>第二轮 DFT</strong>：round2 的 10 帧约 1.5 元，等用户决定。dg50 的 GPU 4.5 元/卡时、CPU 不收费，76 核的作业放那里便宜约 20%。</li>
+        <li><strong>MD 验证</strong>：拿只拟合能量的模型跑更长、更高温、更大的团簇（Cu<sub>38</sub>、Cu<sub>55</sub>），并在 MD 帧上抽几个做 DFT 对照。</li>
       </ul>
     </section>
   </main>
