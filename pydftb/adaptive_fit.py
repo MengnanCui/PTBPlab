@@ -171,6 +171,10 @@ def fit_adaptive(models, samples, sk, options: dict | None = None, l2: float = 1
         key = x.tobytes()
         if key not in cache:
             try:
+                if use_f and last:
+                    # a trial step: the energies alone (no force Jacobian, about 2 n_x times
+                    # cheaper) show first whether every SCC converges there
+                    evaluate_all(models, samples, sk, options, x, processes, with_forces=False)
                 e, jac, forces, fjac = evaluate_all(models, samples, sk, options, x, processes,
                                                     with_forces=use_f, step=force_step)
             except (RuntimeError, np.linalg.LinAlgError) as exc:
