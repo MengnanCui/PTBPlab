@@ -56,6 +56,10 @@ def main(argv=None):
     ap.add_argument("--skip-calibration", action="store_true")
     ap.add_argument("--groups", choices=("phase", "none"), default="none",
                     help="bootstrap whole phases or single structures")
+    ap.add_argument("--data", default=None,
+                    help="cu_m8b.extxyz: screen around a cu_dft_fit model (fit_json) on the VASP "
+                         "set instead of PTBP's phases (implies --skip-calibration)")
+    ap.add_argument("--kind", default="adaptive", help="the model of fit_json")
     ap.add_argument("--perturb", type=float, default=0.1,
                     help="anchor perturbation (0: every member anchored at the base)")
     args = ap.parse_args(argv)
@@ -63,10 +67,21 @@ def main(argv=None):
     sk = ParamSet(f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu", max_l={"Cu": 2},
                   shell_resolved=True).skset(["Cu"])
     opts = ac.OPTIONS
-    data = ac.samples()
+    with open(args.fit_json) as fh:
+        fit_rep = json.load(fh)
+    if args.data:
+        from pydftb.bench import cu_dft_fit as cf
+        args.skip_calibration = True
+        data = cf.load(args.data)
+        names = set(fit_rep.get("train", []))
+        data = [s for s in data if s.name in names] if names else data   # its training set
+        model0 = cf.models(args.kind, fit_rep["wall"])[0]
+    else:
+        data = ac.samples()
+        model0 = ac.models(args.kind)[0]
     phases = [phase_of(s) for s in data]
     report = {"options": opts, "members": args.members, "groups": args.groups,
-              "perturb": args.perturb}
+              "perturb": args.perturb, "data": args.data, "kind": args.kind}
 
     def grp(ss):
         return [phase_of(s) for s in ss] if args.groups == "phase" else None
@@ -104,13 +119,11 @@ def main(argv=None):
 
     # ---- screening: the M8a trajectory ---------------------------------------------------------
     t0 = time.perf_counter()
-    with open(args.fit_json) as fh:
-        fit = json.load(fh)["models"]["adaptive"]
-    base_models = (ac.models("adaptive")[0].with_vector(np.array(fit["x"])),)
+    fit = fit_rep["models"][args.kind]
+    base_models = (model0.with_vector(np.array(fit["x"])),)
     e_fit = predict(base_models, data, sk, opts, processes=args.processes)
     off = float(np.mean(e_fit - np.array([s.energy for s in data])))
-    base = FitResult(base_models, np.array(fit["x"]), fit["rmse"], np.array(fit["residuals"]),
-                     off)
+    base = FitResult(base_models, np.array(fit["x"]), fit["rmse"], np.zeros(len(data)), off)
     com = fit_committee(None, data, sk, opts, n=args.members, seed=12, groups=grp(data),
                         base=base, perturb=args.perturb, processes=args.processes,
                         max_evaluations=args.member_evaluations, verbose=True)
