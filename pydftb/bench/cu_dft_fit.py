@@ -103,13 +103,25 @@ def split(data, every: int):
     return train, test
 
 
+def _safe_work(job):
+    try:
+        return af._work(job)
+    except (RuntimeError, np.linalg.LinAlgError):
+        return None                                   # SCC not converged: reported, not fatal
+
+
 def errors(models, data, sk, offset, processes):
-    """Per-sample energy residuals (eV/atom, minus the fit's offset) and force errors (eV/A)."""
+    """Per-sample energy residuals (eV/atom, minus the fit's offset; nan where the SCC does not
+    converge) and force errors (eV/A)."""
     x = np.concatenate([m.vector() for m in models])
     af._WORK.update(models=tuple(models), samples=list(data), sk=sk, options=dict(ac.OPTIONS))
-    out = af._run([(k, x, s.forces is not None) for k, s in enumerate(data)], processes)
-    de = np.array([o[0] for o in out]) - offset - np.array([s.energy for s in data])
-    df = [None if s.forces is None else out[k][2] - s.forces for k, s in enumerate(data)]
+    jobs = [(k, x, s.forces is not None) for k, s in enumerate(data)]
+    out = (af._pool_map(_safe_work, jobs, processes) if processes > 1
+           else [_safe_work(j) for j in jobs])
+    e = np.array([np.nan if o is None else o[0] for o in out])
+    de = e - offset - np.array([s.energy for s in data])
+    df = [None if (s.forces is None or out[k] is None) else out[k][2] - s.forces
+          for k, s in enumerate(data)]
     return de, df
 
 
@@ -118,7 +130,9 @@ def by_group(data, de, df):
     for g in dict.fromkeys(group_of(s) for s in data):
         k = [i for i, s in enumerate(data) if group_of(s) == g]
         fs = [df[i].ravel() for i in k if df[i] is not None]
-        out[g] = {"n": len(k), "energy_rmse": float(np.sqrt(np.mean(de[k] ** 2))),
+        ok = [i for i in k if np.isfinite(de[i])]
+        out[g] = {"n": len(k), "failed": len(k) - len(ok),
+                  "energy_rmse": float(np.sqrt(np.mean(de[ok] ** 2))) if ok else None,
                   "force_rmse": float(np.sqrt(np.mean(np.concatenate(fs) ** 2))) if fs else None}
     return out
 
@@ -126,8 +140,9 @@ def by_group(data, de, df):
 def show(tag, table):
     for g, r in table.items():
         f = "" if r["force_rmse"] is None else f"  forces {r['force_rmse']:6.3f} eV/A"
-        print(f"  {tag:5s} {g:8s} n {r['n']:3d}  energy {r['energy_rmse'] * 1000:7.1f} meV/atom{f}",
-              flush=True)
+        e = "    -" if r["energy_rmse"] is None else f"{r['energy_rmse'] * 1000:7.1f}"
+        bad = f"  ({r['failed']} SCC failed)" if r["failed"] else ""
+        print(f"  {tag:5s} {g:8s} n {r['n']:3d}  energy {e} meV/atom{f}{bad}", flush=True)
 
 
 def main(argv=None):
@@ -147,6 +162,9 @@ def main(argv=None):
     ap.add_argument("--force-max-atoms", type=int, default=None,
                     help="only structures up to this size carry forces into the fit")
     ap.add_argument("--wall", type=float, default=1.6, help="fixed core wall (A), below the data")
+    ap.add_argument("--x0", default=None,
+                    help="start from models[kind].x of this JSON (with --max-evaluations 0: "
+                         "only report its errors)")
     ap.add_argument("--no-init", action="store_true",
                     help="start from zero instead of the linear pair-repulsive solution")
     args = ap.parse_args(argv)
@@ -175,18 +193,29 @@ def main(argv=None):
     for kind in args.kinds.split(","):
         t0 = time.perf_counter()
         mod = models(kind, args.wall)
-        x0, init_rmse = (None, None) if args.no_init else init_pair(mod, train, sk,
-                                                                     args.processes)
+        if args.x0:
+            with open(args.x0) as fh:
+                x0, init_rmse = np.array(json.load(fh)["models"][kind]["x"]), None
+        else:
+            x0, init_rmse = (None, None) if args.no_init else init_pair(mod, train, sk,
+                                                                         args.processes)
         if x0 is not None:
             print(f"{kind}: linear pair-repulsive start, energy rmse {init_rmse * 1000:.1f} "
                   "meV/atom", flush=True)
-        res = fit_adaptive(mod, fit_set, sk, ac.OPTIONS, l2=args.l2, x0=x0,
-                           processes=args.processes, max_evaluations=args.max_evaluations,
-                           force_weight=args.force_weight, verbose=True)
+        if args.max_evaluations > 0:
+            res = fit_adaptive(mod, fit_set, sk, ac.OPTIONS, l2=args.l2, x0=x0,
+                               processes=args.processes, max_evaluations=args.max_evaluations,
+                               force_weight=args.force_weight, verbose=True)
+        else:                                          # report only: one evaluation at x0
+            res = fit_adaptive(mod, fit_set, sk, ac.OPTIONS, l2=0.0, x0=x0,
+                               processes=args.processes, max_evaluations=1)
         entry = {"init_rmse": init_rmse, "wall": args.wall, "rmse": res.rmse, "force_rmse": res.force_rmse, "x": res.x.tolist(),
                  "residuals": res.residuals.tolist(), "offset": res.offset,
                  "names": res.models[0].parameter_names(), "n_parameters": len(res.x),
                  "evaluations": res.n_evaluations, "history": res.history}
+        report["models"][kind] = dict(entry)            # the fit is saved before the errors
+        with open(args.out, "w") as fh:
+            json.dump(report, fh, indent=1)
         de, df = errors(res.models, train, sk, res.offset, args.processes)
         entry["train"] = by_group(train, de, df)
         if test:
