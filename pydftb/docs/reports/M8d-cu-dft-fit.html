@@ -49,7 +49,7 @@
       <li><a href="#fit">三、拟合</a></li>
       <li><a href="#md">四、MD 验证</a></li>
       <li><a href="#al">五、主动学习：第二轮候选</a></li>
-      <li><a href="#more">五（续）、小的力权重与二聚体排斥势</a></li>
+      <li><a href="#more">五（续）、小的力权重与两种排斥势</a></li>
       <li><a href="#eng">六、工程问题</a> <span class="dev-mark">开发细节</span></li>
       <li><a href="#next">七、下一步</a></li>
     </ol>
@@ -165,7 +165,7 @@
 
 
     <section id="more">
-      <h2>五（续）、小的力权重与二聚体排斥势</h2>
+      <h2>五（续）、小的力权重与两种排斥势</h2>
       <p>两个不花机时的后续实验，同一份数据、同样的训练与测试划分。</p>
       <h3>1. 从只拟合能量的模型出发，力权重 0.001</h3>
       <p><code>cu_dft_fit --x0 fit_energy.json --force-weight 0.001 --force-max-atoms 13</code>，评估预算 30 次（13 步被接受，18 次试探步 SCC 不收敛被拒）。</p>
@@ -196,6 +196,28 @@
         <li><strong>在它上面只拟合能量</strong>（100 次评估）：训练 22.8 meV/atom（原来 39.6），二聚体的力 2.53 → 0.80、团簇 0.43 → 0.31 eV/Å；但测试集里压得最紧的 bcc（bcc_00）低了 879 meV/atom；其余 12 个理想相里 7 个比原来好，均方根 31.4（原来 38.5）meV/atom。CN 相关的排斥势标度在高 CN 时把排斥压低来抵消体相的多算，外推到最高 CN、最短键时就过度结合。MD 中一个原子飞出。</li>
         <li><strong>结论</strong>：只从二聚体来的排斥势不能直接当底。要么把体相（与团簇）一起拿来拟合排斥势，要么限制 CN 标度的外推（例如在数据的 CN 范围外取常数）。</li>
       </ul>
+      <h3>3. 二聚体、团簇、体相一起拟合排斥势，CN 标度在数据范围外取常数</h3>
+      <p><code>python -m pydftb.bench.cu_joint_repulsive cu_m8b.extxyz OUT</code>：V<sub>rep</sub>(r) 是 [1.6, 3.5] Å 上的三次 B 样条（14 个节点，截断处值与斜率为零），用全部 116 个训练结构的 (E<sub>DFT</sub> − E<sub>el</sub>)/N 做线性最小二乘，二阶差分罚 1e-3。只用对排斥势时训练误差：二聚体 504、团簇 239、MD 帧 460、空位 43、应变 41、理想相 171 meV/atom。训练集的 CN 范围 0.02–12.77（测试集的 bcc_00 是 13.11）。然后 <code>cu_dft_fit --skf OUT --cn-clamp 0 12.77 0.25 --force-weight 0</code>，100 次评估（3.3 h）。<code>RBF.clamp</code> 把 CN 在 [lo, hi] 外平滑地截成常数（两端各 2d 宽的二次过渡，C<sup>1</sup>）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组（测试集）</th><th>力权重 0.001（原表）</th><th>联合排斥势 + 截断 CN，只拟合能量</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>74.4 / 0.32</td><td>131 / 0.38</td></tr>
+          <tr><td>cluster</td><td>61.4 / 0.27</td><td><strong>28.2</strong> / 0.38</td></tr>
+          <tr><td>md</td><td><strong>75.3 / 1.69</strong></td><td>148 / 2.16</td></tr>
+          <tr><td>strain</td><td>11.9</td><td>8.4</td></tr>
+          <tr><td>ptbp</td><td>56.0 / 0.31</td><td>69.2 / <strong>0.10</strong>（bcc_00：−229）</td></tr>
+          <tr><td>训练：能量 / 力</td><td>44.9 / 0.91</td><td><strong>17.2</strong> / —（二聚体的力 13.9 eV/Å）</td></tr>
+          <tr><td><strong>Cu<sub>13</sub> 600 K，2 ps，1 fs</strong></td><td><strong>稳定，漂移 0.00 meV/ps，最短键 ≥ 2.18 Å</strong></td><td>不稳定：前 1.78 ps 守恒，之后原子掉到 CN ≈ 1、键压到 1.57 Å，总能量范围 1344 meV</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">能量 meV/atom / 力 eV/Å。</p>
+      <ul>
+        <li><strong>训练集好很多，测试集多数更差</strong>：训练误差从 44.9 降到 17.2 meV/atom，团簇测试 61 → 28；但二聚体、MD 帧、理想相的测试都变差。bcc_00 从 −879 收到 −229 meV/atom（截断 CN 起了作用，但没消掉），bcc_10 仍是 +87。这是过拟合：没有力的约束，34 个参数加上 B 样条的排斥势在训练点之间可以随意弯。</li>
+        <li><strong>MD 失败的原因是假的短程势阱</strong>：拟合后的 Cu<sub>2</sub> 曲线在 1.8 Å 有 −1.31 eV 的极小，比 2.2 Å 的真极小（−0.98 eV）还深（原表的模型：1.8 Å 处 +0.23 eV）。排斥势样条本身也不单调（2.3–3.3 Å 之间有 0.05–0.25 eV 的起伏，1.6 Å 处 69 eV）。团簇打开、有原子 CN 降到 1–2 以后，原子对掉进这个阱，再撞上 1.6 Å 附近极陡的墙。力与有限差分一致到 2.6e-7 eV/Å；步长 0.5 fs 时同样在 1.78 ps 后失守（范围 932 meV），所以不是积分步长的问题，是势本身。</li>
+        <li><strong>结论</strong>：在这份数据上，联合排斥势加截断 CN 没有超过“原表 + 力权重 0.001”。能用的模型仍是 <code>fit_f001</code>。要让联合排斥势可用，至少需要：把力（对 V′ 也是线性的）放进排斥势的线性拟合；限制样条单调（非负的一阶差分约束）；短程只用二聚体定值；之后再做力权重 0.001 的精修。</li>
+      </ul>
     </section>
 
     <section id="eng">
@@ -214,14 +236,14 @@
             <li>macOS 上 fork 出来的子进程在 Accelerate 的 LAPACK（dsygvd → dispatch_apply）里段错误：父进程用过多线程的 Accelerate（线性起点的 lstsq）以后，GCD 在子进程里不能用。<code>multiprocessing.Pool</code> 遇到死掉的工作进程会永远等下去，看起来像死锁。改用 <code>ProcessPoolExecutor</code>（工作进程死掉时报错），并用 <code>VECLIB_MAXIMUM_THREADS=1</code> 运行。</li>
           </ul></li>
         <li><strong>SCC 的混合</strong>：扰动的与重构的 Cu<sub>13</sub> 上，Broyden 在默认混合下 300 步不收敛，混合 0.05、1000 步就收敛（结果与混合方式无关）。<code>evaluate_sample</code> 现在在不收敛时用这个设置重试一次；显式给了 <code>mixing</code> 时不重试。拟合里被拒的试探步、委员会的锚点失败，有不少是这个原因。</li>
-        <li><strong>测试</strong>：新增“SCC 失败的试探步被拒绝，起点失败仍报错”与“不收敛时用更慢的混合重试，显式 mixing 时不重试”；<code>test_adaptive.py</code> 与 <code>test_active.py</code> 共 26 个全部通过。<code>pydftb.calculator</code> 没有改动，golden 不受影响。</li>
+        <li><strong>测试</strong>：新增“SCC 失败的试探步被拒绝，起点失败仍报错”与“不收敛时用更慢的混合重试，显式 mixing 时不重试”；另有 <code>RBF.clamp</code> 的测试；<code>test_adaptive.py</code> 与 <code>test_active.py</code> 共 27 个全部通过。<code>pydftb.calculator</code> 没有改动，golden 不受影响。</li>
       </ul>
     </section>
 
     <section id="next">
       <h2>七、下一步</h2>
       <ul>
-        <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。只从二聚体拟合的排斥势不行（第五节续）；下一步把体相与团簇一起拿来拟合排斥势样条，并让 CN 标度在数据范围外取常数；其次按通道设 x_scale 与锚点尺度。</li>
+        <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。只从二聚体拟合的排斥势不行；只用能量联合拟合的排斥势（加截断 CN）训练好、测试差，MD 中出现 1.8 Å 的假势阱（第五节续）。下一步在排斥势的线性拟合里加上力并约束单调，再做力权重 0.001 的精修；其次按通道设 x_scale 与锚点尺度。</li>
         <li><strong>力</strong>：力权重 0.001 已验证有效（第五节续）；预算允许时把 30 次评估加到 60–100，并放开 Cu<sub>38</sub>、Cu<sub>55</sub> 的力。</li>
         <li><strong>第二轮 DFT</strong>：round2 的 10 帧约 1.5 元，等用户决定。dg50 的 GPU 4.5 元/卡时、CPU 不收费，76 核的作业放那里便宜约 20%。</li>
         <li><strong>MD 验证</strong>：拿只拟合能量的模型跑更长、更高温、更大的团簇（Cu<sub>38</sub>、Cu<sub>55</sub>），并在 MD 帧上抽几个做 DFT 对照。</li>
