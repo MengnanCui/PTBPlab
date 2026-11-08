@@ -30,7 +30,7 @@ from pydftb.bench import adaptive_cu as ac
 from pydftb.constants import BOHR
 from pydftb.validation import ptbp_workload as pw
 
-MOLECULAR = ("dimer", "cluster", "md", "active")
+MOLECULAR = ("dimer", "cluster", "md", "active", "round2")
 ZERO_FORCE = 1e-3                 # eV/A
 
 
