@@ -12,7 +12,13 @@ second differences of the spline coefficients.  It is written, with an exponenti
 r_lo, as the Spline block of a copy of ptbp_hcocu (``cu_dimer_repulsive.write_table``), and the
 CN range of the training set is reported for ``cu_dft_fit --cn-clamp``.
 
+With ``--force-weight W`` the structures' DFT forces enter the same linear fit (the repulsive
+force is linear in the spline coefficients; target F_DFT - F_el, each structure's rows scaled by
+W / sqrt(3N)); ``--monotonic`` keeps V_rep non-negative and non-increasing.  Energy alone gives a
+wiggly spline and, after the adaptive fit, a spurious Cu2 well at 1.8 A.
+
     python -m pydftb.bench.cu_joint_repulsive cu_m8b.extxyz OUT_DIR [--smooth 1e-3]
+        [--force-weight 0.1 --monotonic]
 """
 from __future__ import annotations
 
@@ -37,20 +43,22 @@ def pairs(atoms, cutoff):
 
 
 def electronic(samples, sk, processes):
-    """E_el per atom (eV) of every sample: the table without its repulsive."""
+    """E_el per atom (eV) and the electronic forces (eV/A; None where the sample has no DFT
+    forces) of every sample: the table without its repulsive."""
     from pydftb import adaptive_fit as af
     opts = {**ac.OPTIONS, "repulsive": "none"}
     af._WORK.update(models=(), samples=list(samples), sk=sk, options=opts)
     out = af._pool_map(_el_work, list(range(len(samples))), processes)
-    return np.array(out)
+    return np.array([o[0] for o in out]), [o[2] for o in out]
 
 
 def _el_work(k):
     from pydftb import adaptive_fit as af
     w = af._WORK
+    s = w["samples"][k]
     # a zero-coefficient model: the plain table (its 1.6 A wall is zero for all the data)
-    return af.evaluate_sample(cf.models("fixed", 1.6), w["samples"][k], w["sk"],
-                              w["options"])[0]
+    return af.evaluate_sample(cf.models("fixed", 1.6), s, w["sk"], w["options"],
+                              forces=s.forces is not None)
 
 
 def basis(r_lo, cutoff, n_knots):
@@ -62,18 +70,55 @@ def basis(r_lo, cutoff, n_knots):
     return t, n, keep
 
 
+def _unit(t, n, k):
+    coef = np.zeros(n)
+    coef[k] = 1.0
+    return BSpline(t, coef, 3, extrapolate=False)
+
+
 def design(samples, t, n, keep, cutoff):
+    """Energy rows: E_rep / N per basis function."""
     rows = []
     for s in samples:
         d, nat = pairs(s.atoms, cutoff)
         row = np.zeros(len(keep))
         if len(d):
             for c, k in enumerate(keep):
-                coef = np.zeros(n)
-                coef[k] = 1.0
-                row[c] = 0.5 * BSpline(t, coef, 3, extrapolate=False)(d).sum() / nat
-        rows.append(np.nan_to_num(row))
+                row[c] = 0.5 * np.nan_to_num(_unit(t, n, k)(d)).sum() / nat
+        rows.append(row)
     return np.array(rows)
+
+
+def force_design(atoms, t, n, keep, cutoff):
+    """(3N, n_basis): the repulsive force on every atom per basis function,
+    F_i = sum_j V'(r_ij) (r_j - r_i) / r_ij (the neighbour list has each pair both ways)."""
+    from ase.neighborlist import neighbor_list
+    i, d, vec = neighbor_list("idD", atoms, cutoff)
+    out = np.zeros((len(atoms), 3, len(keep)))
+    for c, k in enumerate(keep):
+        dv = np.nan_to_num(_unit(t, n, k).derivative()(d))
+        np.add.at(out[:, :, c], i, (dv / d)[:, None] * vec)
+    return out.reshape(-1, len(keep))
+
+
+def solve(a_e, y_e, a_f, y_f, m, smooth, monotonic):
+    """Least squares for (spline coefficients, constant).  ``monotonic``: the coefficients
+    non-increasing and non-negative (c_k = sum_{j >= k} u_j, u >= 0), which makes V_rep >= 0 and
+    non-increasing (a B-spline's slope is a positive combination of its coefficient
+    differences)."""
+    from scipy.optimize import lsq_linear
+    u = np.triu(np.ones((m, m))) if monotonic else np.eye(m)    # c = u @ p
+    dd = np.diff(np.eye(m), 2, axis=0) @ u
+    rows = [np.hstack([a_e @ u, np.ones((len(y_e), 1))]),
+            np.hstack([np.sqrt(smooth) * dd, np.zeros((m - 2, 1))])]
+    rhs = [y_e, np.zeros(m - 2)]
+    if a_f is not None and len(y_f):
+        rows.insert(1, np.hstack([a_f @ u, np.zeros((len(y_f), 1))]))
+        rhs.insert(1, y_f)
+    lo = np.concatenate([np.zeros(m) if monotonic else np.full(m, -np.inf), [-np.inf]])
+    p = lsq_linear(np.vstack(rows), np.concatenate(rhs), bounds=(lo, np.inf),
+                   lsmr_tol="auto", max_iter=5000).x
+    return u @ p[:-1], p[-1]
 
 
 def main(argv=None):
@@ -84,30 +129,52 @@ def main(argv=None):
     ap.add_argument("--r-lo", type=float, default=1.6, help="A, below the shortest bond")
     ap.add_argument("--knots", type=int, default=14)
     ap.add_argument("--smooth", type=float, default=1e-3, help="second-difference penalty")
+    ap.add_argument("--force-weight", type=float, default=0.0,
+                    help="weight of a structure's force rows (eV/A) relative to its energy row "
+                         "(eV/atom); each structure's rows are scaled by 1/sqrt(3N)")
+    ap.add_argument("--monotonic", action="store_true",
+                    help="V_rep non-negative and non-increasing")
     ap.add_argument("--test-every", type=int, default=5)
     ap.add_argument("--processes", type=int, default=6)
     args = ap.parse_args(argv)
     from pydftb.params import ParamSet
     sk = ParamSet(cdr.SRC, max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
     train, _ = cf.split(cf.load(args.data), args.test_every)       # the test set stays out
-    e_el = electronic(train, sk, args.processes)
+    e_el, f_el = electronic(train, sk, args.processes)
     y = np.array([s.energy for s in train]) - e_el
     t, n, keep = basis(args.r_lo, args.cutoff, args.knots)
     a = design(train, t, n, keep, args.cutoff)
-    a1 = np.hstack([a, np.ones((len(train), 1))])
     m = len(keep)
-    dd = np.diff(np.eye(m), 2, axis=0)
-    reg = np.hstack([np.sqrt(args.smooth) * dd, np.zeros((m - 2, 1))])
-    sol = np.linalg.lstsq(np.vstack([a1, reg]), np.concatenate([y, np.zeros(m - 2)]),
-                          rcond=None)[0]
-    r = a1 @ sol - y
+    a_f, y_f, fidx = None, np.zeros(0), []
+    if args.force_weight > 0:
+        blocks, rhs = [], []
+        for k, s in enumerate(train):
+            if s.forces is None:
+                continue
+            w = args.force_weight / np.sqrt(s.forces.size)
+            blocks.append(w * force_design(s.atoms, t, n, keep, args.cutoff))
+            rhs.append(w * (s.forces - f_el[k]).ravel())
+            fidx.append((k, w, s.forces.size))
+        a_f, y_f = np.vstack(blocks), np.concatenate(rhs)
+    coef_k, const = solve(a, y, a_f, y_f, m, args.smooth, args.monotonic)
+    r = a @ coef_k + const - y
+    if fidx:
+        rf, off = a_f @ coef_k - y_f, 0
+        frms = {}
+        for k, w, sz in fidx:
+            g = cf.group_of(train[k])
+            frms.setdefault(g, []).append(rf[off:off + sz] / w)
+            off += sz
+        print("pair-only fit (train), forces eV/A: " + ", ".join(
+            f"{g} {np.sqrt(np.mean(np.concatenate(v) ** 2)):.2f}" for g, v in frms.items()),
+            flush=True)
     groups = [cf.group_of(s) for s in train]
     by = {g: float(np.sqrt(np.mean(r[[k for k, q in enumerate(groups) if q == g]] ** 2)))
           for g in dict.fromkeys(groups)}
     print("pair-only fit (train), meV/atom: " + ", ".join(f"{g} {v * 1000:.0f}"
                                                            for g, v in by.items()), flush=True)
     coef = np.zeros(n)
-    coef[keep] = sol[:-1]
+    coef[keep] = coef_k
     spl_b = BSpline(t, coef, 3, extrapolate=False)
     grid = np.linspace(args.r_lo, args.cutoff, 120)
     v = np.nan_to_num(spl_b(grid))
@@ -126,6 +193,7 @@ def main(argv=None):
     with open(os.path.join(args.out_dir, "joint_repulsive.json"), "w") as fh:
         json.dump({"grid": grid.tolist(), "v_rep": v.tolist(), "by_group": by,
                    "cn_range": [float(cns.min()), float(cns.max())], "smooth": args.smooth,
+                   "force_weight": args.force_weight, "monotonic": args.monotonic,
                    "knots": args.knots, "r_lo": args.r_lo, "cutoff": args.cutoff}, fh, indent=1)
     print(f"wrote {args.out_dir}", flush=True)
     return 0

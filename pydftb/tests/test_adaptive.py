@@ -395,3 +395,36 @@ def test_rbf_clamp():
     assert np.abs(fd[1:-1] - dph[1:-1]).max() < 1e-3
     with pytest.raises(ValueError):
         RBF((2.0,), 1.0, clamp=(5.0, 5.5))
+
+
+
+
+def test_joint_repulsive_force_rows_match_the_energy_rows():
+    """cu_joint_repulsive: the force design is minus the gradient of the energy design."""
+    from ase import Atoms
+    from pydftb.bench import cu_joint_repulsive as cj
+    rng = np.random.default_rng(3)
+    at = Atoms("Cu4", positions=[[0, 0, 0], [2.3, 0, 0], [0, 2.4, 0.2], [1.2, 1.1, 2.0]])
+    at.positions += rng.normal(0, 0.05, (4, 3))
+    t, n, keep = cj.basis(1.6, 3.5, 8)
+    f = cj.force_design(at, t, n, keep, 3.5)
+    h = 1e-5
+    for a in range(4):
+        for x in range(3):
+            p, q = at.copy(), at.copy()
+            p.positions[a, x] += h
+            q.positions[a, x] -= h
+            de = (cj.design([type("S", (), {"atoms": p})], t, n, keep, 3.5)
+                  - cj.design([type("S", (), {"atoms": q})], t, n, keep, 3.5))[0] * 4 / (2 * h)
+            assert np.allclose(f[3 * a + x], -de, atol=1e-6)
+
+
+def test_joint_repulsive_monotonic_solve():
+    from pydftb.bench import cu_joint_repulsive as cj
+    rng = np.random.default_rng(0)
+    a = rng.random((40, 6))
+    y = a @ np.array([3.0, 1.0, 2.0, 0.5, -0.2, 0.1]) + 0.3       # not monotone
+    c, _ = cj.solve(a, y, None, None, 6, 1e-6, True)
+    assert np.all(np.diff(c) <= 1e-9) and np.all(c >= -1e-9)
+    c2, k = cj.solve(a, y, None, None, 6, 1e-12, False)
+    assert np.allclose(c2, [3.0, 1.0, 2.0, 0.5, -0.2, 0.1], atol=1e-4) and abs(k - 0.3) < 1e-4
