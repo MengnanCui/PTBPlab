@@ -11,11 +11,18 @@ Two experiments on PTBP's Cu set (``pydftb.bench.adaptive_cu``), no new DFT:
 
     python -m pydftb.bench.active_cu adaptive_cu.json cu13_adaptive.extxyz --out active_cu.json \
         [--write cu_dft_m8b_active] [--members 4] [--processes 8]
+
+Around a ``cu_dft_fit`` model on the VASP set, several trajectories pooled (frames named after
+each file), with a Slurm time limit on the written scripts:
+
+    python -m pydftb.bench.active_cu fit.json a.extxyz b.extxyz --data cu_m8b.extxyz \
+        --perturb 0 --stride 2 --group round3 --write DIR --time-limit 01:00:00
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 
 import numpy as np
@@ -44,7 +51,12 @@ def _save(path, report):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("fit_json", help="adaptive_cu.json (the M8a fits)")
-    ap.add_argument("traj", help="the Cu13 trajectory (extxyz) of adaptive_md --traj")
+    ap.add_argument("traj", nargs="+",
+                    help="trajectories (extxyz) of adaptive_md --traj, one frame per 10 fs; with "
+                         "several, the frames are pooled and named after each file")
+    ap.add_argument("--stride", type=int, default=1, help="screen every n-th frame")
+    ap.add_argument("--time-limit", default=None,
+                    help="Slurm --time of the written job scripts (e.g. 01:00:00)")
     ap.add_argument("--out", default="active_cu.json")
     ap.add_argument("--write", default=None, help="write the picked frames as VASP inputs here")
     ap.add_argument("--members", type=int, default=4)
@@ -130,7 +142,14 @@ def main(argv=None):
                         base=base, perturb=args.perturb, processes=args.processes,
                         perturb_skip=("pair",) if args.data else (),
                         max_evaluations=args.member_evaluations, verbose=True)
-    frames = read(args.traj, ":")
+    frames, names, time_fs = [], [], []
+    for path in args.traj:
+        tag = "cu13" if len(args.traj) == 1 else os.path.splitext(os.path.basename(path))[0]
+        for k, at in enumerate(read(path, ":")):
+            if k % args.stride == 0:
+                frames.append(at)
+                time_fs.append(10 * k)
+                names.append(f"{tag}_md_{10 * k:04d}fs")
     u = committee_predict(com, frames, sk, opts, forces=True, processes=min(args.processes,
                                                                             4 * len(frames)))
     dmin = [float(np.min(a.get_all_distances()[np.triu_indices(len(a), 1)])) for a in frames]
@@ -139,11 +158,11 @@ def main(argv=None):
     score = u.score()
     pick = select(score, fp, n=args.pick, reference=ref)
     for k in range(len(frames)):
-        print(f"  frame {k:3d} ({k * 10:4d} fs)  dmin {dmin[k]:.2f} A  sigma_E "
+        print(f"  frame {k:3d} {names[k]:24s}  dmin {dmin[k]:.2f} A  sigma_E "
               f"{u.sigma_e[k] * 1000:8.1f} meV/atom  sigma_F {u.sigma_f[k]:6.2f} eV/A"
               f"{'  failed' if u.failed[k] else ''}{'  PICK' if k in pick else ''}", flush=True)
     report["screening"] = {
-        "frames": len(frames), "time_fs": [10 * k for k in range(len(frames))], "dmin": dmin,
+        "frames": len(frames), "time_fs": time_fs, "names": names, "dmin": dmin,
         "sigma_e": u.sigma_e.tolist(), "sigma_f": u.sigma_f.tolist(),
         "failed": u.failed.tolist(), "mean_e": u.mean_e.tolist(), "picked": pick,
         "member_offsets": com.offsets.tolist(), "draws": com.draws, "perturb": com.perturb,
@@ -156,8 +175,8 @@ def main(argv=None):
     print(f"screening: training-set sigma_E {report['screening']['train_sigma_e'] * 1000:.1f} "
           f"meV/atom; picked {pick}; {report['screening']['seconds']:.0f} s", flush=True)
     if args.write:
-        names = [f"cu13_md_{10 * k:04d}fs" for k in pick]
-        man = write_candidates(args.write, [frames[k] for k in pick], names, group=args.group)
+        man = write_candidates(args.write, [frames[k] for k in pick], [names[k] for k in pick],
+                               group=args.group, time_limit=args.time_limit)
         report["screening"]["written"] = {"dir": args.write, "structures": len(man),
                                           "core_hours": float(sum(m["core_hours_estimate"]
                                                                   for m in man))}

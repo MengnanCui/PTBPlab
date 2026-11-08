@@ -170,7 +170,8 @@ def cores_for(n_atoms):
     return 19 if n_atoms <= 8 else 38 if n_atoms <= 20 else 76
 
 
-def write_set(out_dir, items):
+def write_set(out_dir, items, time_limit=None):
+    """``time_limit``: Slurm ``--time`` of the job scripts (``HH:MM:SS``), none by default."""
     os.makedirs(out_dir, exist_ok=True)
     manifest = []
     groups = {19: [], 38: [], 76: []}
@@ -204,7 +205,10 @@ def write_set(out_dir, items):
         with open(os.path.join(out_dir, f"jobs_{cores}.txt"), "w") as fh:
             fh.write("".join(f"{p} {exe}\n" for p, exe in jobs))
         with open(os.path.join(out_dir, f"run_{cores}.sh"), "w") as fh:
-            fh.write(SLURM.format(cores=cores, n=len(jobs) - 1))
+            script = SLURM.format(cores=cores, n=len(jobs) - 1)
+            if time_limit:
+                script = script.replace("#SBATCH -p dg83\n", f"#SBATCH -p dg83\n#SBATCH -t {time_limit}\n")
+            fh.write(script)
     with open(os.path.join(out_dir, "make_potcar.sh"), "w") as fh:
         fh.write(POTCAR_SH)
     with open(os.path.join(out_dir, "collect.py"), "w") as fh:

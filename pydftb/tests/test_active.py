@@ -154,6 +154,11 @@ def test_write_candidates(tmp_path):
     from ase.io import read
     box = read(os.path.join(d0, "POSCAR"))
     assert box.cell.lengths().min() > 12.0
+    with open(os.path.join(tmp_path, "run_38.sh")) as fh:
+        assert "#SBATCH -t" not in fh.read()
+    write_candidates(str(tmp_path / "t"), [ico], ["cu13_md_0100fs"], time_limit="01:00:00")
+    with open(os.path.join(tmp_path, "t", "run_38.sh")) as fh:
+        assert "#SBATCH -p dg83\n#SBATCH -t 01:00:00\n" in fh.read()
 
 
 def test_anchored_members_spread_where_no_data_constrains(sk, data, committee):

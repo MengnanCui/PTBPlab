@@ -228,7 +228,7 @@ def select(score, fp, n: int, threshold: float = 0.0, reference=None,
     return out
 
 
-def write_candidates(out_dir, frames, names, group: str = "active"):
+def write_candidates(out_dir, frames, names, group: str = "active", time_limit=None):
     """The chosen frames as VASP single points (:func:`pydftb.bench.cu_dft_dataset.write_set`):
     a frame without periodicity is boxed in vacuum, Gamma only and spin-polarised.  Writes only;
     nothing is submitted."""
@@ -239,4 +239,4 @@ def write_candidates(out_dir, frames, names, group: str = "active"):
             items.append((group, name, at.copy(), False, False))
         else:
             items.append((group, name, _boxed(at), True, True))
-    return write_set(out_dir, items)
+    return write_set(out_dir, items, time_limit=time_limit)

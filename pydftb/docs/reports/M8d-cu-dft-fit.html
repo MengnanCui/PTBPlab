@@ -32,7 +32,7 @@
       <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
       <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：只拟合能量的模型 2 ps 稳定，最短键 ≥ 2.09 Å，漂移 0.10 meV/ps；能量加力的模型 1.5 ps 内一个原子飞出，键压到 1.6 Å。</li>
       <li><strong>后续（不花机时）</strong>：从只拟合能量的模型出发、力权重 0.001 再拟合：训练 44.9 meV/atom、力 0.91 eV/Å，测试集里重构的 Cu<sub>13</sub> 从 168 降到 75 meV/atom，MD 2 ps 稳定、总能量漂移 0.00 meV/ps，是目前最好的模型。从二聚体曲线拟合的排斥势让训练误差降到 22.8，但外推到压缩的 bcc 时过度结合（−879 meV/atom），MD 中原子飞出。</li>
-      <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。围绕最好的模型（jfm）重做筛选后（第五节续第 5 小节），149 帧全部收敛，挑出的 10 帧换成 1130–1410 fs 的压缩帧，已替换 round2 的输入。用户提交后 7 帧收敛、3 帧超时，花了 2.95 元（累计约 10.9 元）；加进训练集重新拟合，round2 帧误差减半，但原来的测试集变差（MD 帧 41 → 104 meV/atom），jfm 仍是最好的模型（第五节续第 7 小节）。</li>
+      <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。围绕最好的模型（jfm）重做筛选后（第五节续第 5 小节），149 帧全部收敛，挑出的 10 帧换成 1130–1410 fs 的压缩帧，已替换 round2 的输入。用户提交后 7 帧收敛、3 帧超时，花了 2.95 元（累计约 10.9 元）；加进训练集重新拟合，round2 帧误差减半，但原来的测试集变差（MD 帧 41 → 104 meV/atom），jfm 仍是最好的模型（第五节续第 7 小节）。第三轮在 jfm 自己的高温 MD（Cu<sub>13</sub> 1200/1500 K、Cu<sub>38</sub>/Cu<sub>55</sub> 900 K，全部稳定）上筛：委员会的分歧与训练集同一量级，写了两套输入（round3 1.5–2.6 元、round3_mixed 4.4–4.9 元），没有提交（第 8 小节）。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
@@ -305,6 +305,26 @@
         <li><strong>MD</strong>：Cu<sub>13</sub> 600 K、2 ps，总能量范围 1.0 meV、漂移 0.14 meV/ps，最短键 2.02 Å，最大最近邻 2.65 Å，有限差分 5.7e-7 eV/Å，稳定。</li>
         <li><strong>结论</strong>：<strong>jfm（fit_jfm_f001）仍是最好的模型</strong>。jfm_r2 留作对照（<code>fits/fit_r2_f001.json</code>、<code>fits/skf_jfm_r2</code>）。这 7 帧应当留在数据里，但更合适的用法是降低它们的权重，或者只用来约束排斥势；下一轮候选应当从 jfm 自己的 MD（高温 Cu<sub>13</sub>、Cu<sub>38</sub>、Cu<sub>55</sub>）里挑，而不是能量加力模型的轨迹。</li>
       </ul>
+
+      <h3>8. 第三轮候选：jfm 自己的高温 MD（只写输入，没有提交）</h3>
+      <p>新跑三段 jfm 的 NVE，2 ps：Cu<sub>13</sub> 1500 K（总能量范围 2.2 meV、漂移 0.90 meV/ps，最短键 1.99 Å，CN 低到 1.0，68 s）、Cu<sub>38</sub> 900 K（0.96 meV、−0.32 meV/ps，2.08 Å，677 s）、Cu<sub>55</sub> 900 K（1.22 meV、0.26 meV/ps，2.06 Å，29 min），加上第 6 小节的 Cu<sub>13</sub> 1200 K，四段都稳定。<code>active_cu</code> 现在接受多段轨迹（帧按文件名命名）、<code>--stride</code> 与 <code>--time-limit</code>（写进 Slurm 脚本的 <code>#SBATCH -t</code>）：<code>active_cu fit_jfm_f001.json st_cu13_1200.extxyz r3_cu13_1500.extxyz r3_cu38_900.extxyz r3_cu55_900.extxyz --data cu_m8b.extxyz --members 3 --member-evaluations 8 --perturb 0 --stride 2 --group round3 --time-limit 01:00:00</code>，404 帧，11 min。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>轨迹（每 20 fs 一帧）</th><th>σ<sub>E</sub> 中位 / 最大（meV/atom）</th><th>σ<sub>F</sub> 中位 / 最大（eV/Å）</th><th>SCC 失败</th></tr></thead>
+        <tbody>
+          <tr><td>Cu<sub>13</sub> 1200 K</td><td>8.0 / 23.9</td><td>0.29 / 1.16</td><td>0</td></tr>
+          <tr><td>Cu<sub>13</sub> 1500 K</td><td>6.4 / 14.8</td><td>0.24 / 1.16</td><td>0</td></tr>
+          <tr><td>Cu<sub>38</sub> 900 K</td><td>15.8 / 18.1</td><td>0.26 / 0.34</td><td>0</td></tr>
+          <tr><td>Cu<sub>55</sub> 900 K</td><td>9.4 / 14.0</td><td>0.35 / 0.49</td><td>0</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>委员会看不出 jfm 的 MD 出界</strong>：训练集上的 σ<sub>E</sub> 是 11.7 meV/atom，四段轨迹的中位都在这个量级；round2 的筛选里出界的帧是 74–311 meV/atom、3.6–5.2 eV/Å。这说明 jfm 在自己会走到的地方没有比训练集更不确定，但委员会只量模型之间的分歧，不量偏差（第 4 小节 jfm 在测试 MD 帧上的真实误差 41 meV/atom，比 σ 大）。</li>
+        <li><strong>按分数挑的 10 帧</strong>（<code>cu_dft_m8b_active/round3</code>）：全是 Cu<sub>13</sub>（9 帧来自 1200 K，1 帧 1500 K），因为分数 σ<sub>E</sub> + 0.1·σ<sub>F</sub> 里力的项占主导，小团簇单原子力的分歧更大；其中 0 fs 是加了随机位移的起点，和训练集里的扰动二十面体很像。</li>
+        <li><strong>另一套：按体系分配的 10 帧</strong>（<code>cu_dft_m8b_active/round3_mixed</code>）：每段轨迹按分数取帧，跳过 100 fs 以前、相互隔开 ≥ 200 fs：Cu<sub>13</sub> 1200 K 的 640、900 fs，1500 K 的 1580、1840 fs，Cu<sub>38</sub> 的 560、1520、1720 fs，Cu<sub>55</sub> 的 120、320、1040 fs。这套更适合检验 jfm 在大团簇高温构型上的真实误差（训练集里 Cu<sub>38</sub>、Cu<sub>55</sub> 只有少数几个扰动结构）。</li>
+        <li><strong>时间上限与费用</strong>：两套都写了 <code>#SBATCH -t 01:00:00</code>。按实测（round2 收敛的 Cu<sub>13</sub> 每帧 2–4.9 核时；round1 的 Cu<sub>38</sub> SCF 约 3.5 min、Cu<sub>55</sub> 约 8 min，76 核），NELM = 200 时最慢的 Cu<sub>13</sub>、Cu<sub>55</sub> 也在约 50 min 内结束，1 h 不会截断。按 0.075 元/核时：round3 约 20–34 核时、<strong>1.5–2.6 元</strong>；round3_mixed 约 59–65 核时、<strong>4.4–4.9 元</strong>（Cu<sub>55</sub> 占一半）。每个作业都跑满 1 h 的极端情况分别是 28.5 元与 45.6 元，不会发生，但上限不是费用的保证。round2 被截断的 3 帧重算约 1–2.5 元（<code>sbatch --array=1-3 -t 01:00:00 run_38.sh</code>，在 <code>~/cu_m8b_round2</code>，已算完的会跳过）。<strong>都没有提交</strong>，等用户决定。</li>
+      </ul>
     </section>
 
     <section id="eng">
@@ -332,8 +352,8 @@
       <ul>
         <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。只从二聚体拟合的排斥势不行；只用能量联合拟合的排斥势出现 1.8 Å 的假势阱；加上力与单调约束、再做力权重 0.001 的精修后，测试集 MD 帧 41 meV/atom、0.53 eV/Å，MD 稳定，是目前最好的模型（第五节续第 4 小节）。剩下最大的误差是压缩的 bcc（+113 meV/atom）与二聚体；下一步按通道设 x_scale 与锚点尺度，用这个模型重做委员会与第二轮候选。</li>
         <li><strong>力</strong>：力权重 0.001 已验证有效（第五节续）；预算允许时把 30 次评估加到 60–100，并放开 Cu<sub>38</sub>、Cu<sub>55</sub> 的力。</li>
-        <li><strong>第二轮 DFT</strong>：已完成（第五节续第 7 小节），2.95 元，累计约 10.9 元。被截断的 1360、1400、1410 fs 要重算的话，给 15 分钟、最多约 2 元，等用户决定。</li>
-        <li><strong>第三轮候选</strong>：在 jfm 自己的轨迹上筛（第 6 小节的 Cu<sub>13</sub> 900/1200 K、Cu<sub>38</sub>、Cu<sub>55</sub>），这才是这个模型会走到的地方；round2 的强压缩帧降权后再拟合一次，看能不能只改善排斥势而不伤平衡附近。</li>
+        <li><strong>第二轮 DFT</strong>：已完成（第五节续第 7 小节），2.95 元，累计约 10.9 元。被截断的 1360、1400、1410 fs 重算约 1–2.5 元，等用户决定。</li>
+        <li><strong>第三轮</strong>：输入已写（第五节续第 8 小节），round3（10 帧 Cu<sub>13</sub>，1.5–2.6 元）或 round3_mixed（Cu<sub>13</sub>/Cu<sub>38</sub>/Cu<sub>55</sub>，4.4–4.9 元），等用户决定。委员会认为 jfm 的高温 MD 在分布内，所以这一轮的意义主要是验证（量真实误差），不是补盲区；建议 mixed。另外，round2 的强压缩帧降权后再拟合一次，看能不能只改善排斥势而不伤平衡附近。</li>
         <li><strong>MD 验证</strong>：拿只拟合能量的模型跑更长、更高温、更大的团簇（Cu<sub>38</sub>、Cu<sub>55</sub>），并在 MD 帧上抽几个做 DFT 对照。</li>
       </ul>
     </section>
