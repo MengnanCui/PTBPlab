@@ -65,11 +65,12 @@ def main(argv=None):
                     help="anchor perturbation (0: every member anchored at the base)")
     args = ap.parse_args(argv)
     from pydftb.params import ParamSet
-    sk = ParamSet(f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu", max_l={"Cu": 2},
-                  shell_resolved=True).skset(["Cu"])
     opts = ac.OPTIONS
     with open(args.fit_json) as fh:
         fit_rep = json.load(fh)
+    # a cu_dft_fit model on its own table (cu_dimer_repulsive / cu_joint_repulsive)
+    skdir = fit_rep.get("skf") or f"{ac.REPO}/pydftb/tests/data/skf/ptbp_hcocu"
+    sk = ParamSet(skdir, max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
     if args.data:
         from pydftb.bench import cu_dft_fit as cf
         args.skip_calibration = True

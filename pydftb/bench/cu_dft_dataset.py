@@ -163,6 +163,9 @@ def estimate_core_hours(at, gamma, spin):
     return t * (0.5 if gamma else 1.0) * (2.0 if spin else 1.0)
 
 
+SPIN_MIXING = {"AMIX": 0.2, "BMIX": 0.0001, "AMIX_MAG": 0.8, "BMIX_MAG": 0.0001}
+
+
 def cores_for(n_atoms):
     return 19 if n_atoms <= 8 else 38 if n_atoms <= 20 else 76
 
@@ -177,7 +180,8 @@ def write_set(out_dir, items):
         write(os.path.join(d, "POSCAR"), at, format="vasp", direct=True, sort=True)
         incar = dict(INCAR_COMMON)
         if spin:
-            incar.update(ISPIN=2, MAGMOM=f"{len(at)}*1.0")
+            # without these the spin-polarised SCF of distorted Cu13 sloshes to NELM (M8d round 1)
+            incar.update(ISPIN=2, MAGMOM=f"{len(at)}*1.0", **SPIN_MIXING)
         if len(at) > 30:
             incar["LREAL"] = "Auto"
         if gamma:

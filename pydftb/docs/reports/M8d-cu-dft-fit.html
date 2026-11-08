@@ -32,7 +32,7 @@
       <li><strong>能量加力</strong>（力权重 0.01，13 个原子以内的结构带力）：训练 228 meV/atom，力 2.5 eV/Å；没有收敛。</li>
       <li><strong>MD</strong>（Cu<sub>13</sub>，600 K，NVE）：只拟合能量的模型 2 ps 稳定，最短键 ≥ 2.09 Å，漂移 0.10 meV/ps；能量加力的模型 1.5 ps 内一个原子飞出，键压到 1.6 Å。</li>
       <li><strong>后续（不花机时）</strong>：从只拟合能量的模型出发、力权重 0.001 再拟合：训练 44.9 meV/atom、力 0.91 eV/Å，测试集里重构的 Cu<sub>13</sub> 从 168 降到 75 meV/atom，MD 2 ps 稳定、总能量漂移 0.00 meV/ps，是目前最好的模型。从二聚体曲线拟合的排斥势让训练误差降到 22.8，但外推到压缩的 bcc 时过度结合（−879 meV/atom），MD 中原子飞出。</li>
-      <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。</li>
+      <li><strong>主动学习</strong>：委员会（3 个成员，锚点扰动 0.01，排斥势不扰动）在能量加力模型那段 1.5 ps 的轨迹上，149 帧里 72 帧至少一个成员的 SCC 不收敛，训练集上也有不收敛的；挑出的 10 帧都是这类帧，写成 VASP 输入（约 1.5 元），没有提交。这一轮委员会没有标定好，只能当“模型在这些结构上已经出界”的信号。围绕最好的模型（jfm）重做筛选后（第五节续第 5 小节），149 帧全部收敛，挑出的 10 帧换成 1130–1410 fs 的压缩帧，已替换 round2 的输入，约 2.1 元，仍没有提交。</li>
     </ul>
     <ul class="figures">
       <li><span class="num">7.98 元</span><span class="lbl">142 个 VASP 单点的实际扣费（预算 33 元）</span></li>
@@ -158,7 +158,7 @@
         <li><strong>锚点</strong>：排斥势的多项式系数（高次项的 Jacobian 列模到 2.7e4）即使扰动 0.0025 也让短二聚体的 SCC 不收敛，所以加了 <code>perturb_skip=("pair",)</code>。其余系数扰动 0.02（on-site 0.54 eV）仍有团簇不收敛，成员 0 减半到 0.01 才成功。</li>
         <li><strong>成员</strong>：训练误差 140、17.9、26.5 meV/atom（基础模型 39.6）。成员 0 从扰动的锚点出发，15 次评估没有回到基础模型附近；成员 1、2 比基础模型还低，说明基础拟合也没有完全收敛。</li>
         <li><strong>筛选</strong>：149 帧中 72 帧至少一个成员 SCC 不收敛（已加了更慢的混合重试），训练集上也有不收敛的，所以训练集的 σ 是 nan。收敛的帧上 σ 随重构上升：0 fs 是 10.9 meV/atom、0.91 eV/Å，200 fs 是 16.8、1.56，500 fs 是 101、10.2。</li>
-        <li><strong>挑出的帧</strong>：不收敛的帧分数是无穷大，10 帧都是这类帧，按指纹去重后落在 100–560 fs（最短键 1.68–2.20 Å）。写在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_active/round2</code>，按 Cu<sub>13</sub> 的实测约 20 核时、约 1.5 元，<strong>没有提交</strong>。</li>
+        <li><strong>挑出的帧</strong>：不收敛的帧分数是无穷大，10 帧都是这类帧，按指纹去重后落在 100–560 fs（最短键 1.68–2.20 Å）。写在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_active/round2</code>，按 Cu<sub>13</sub> 的实测约 20 核时、约 1.5 元，<strong>没有提交</strong>。（已被第五节续第 5 小节的新候选替换，旧的移到 <code>round2_prev_fit_energy</code>。）</li>
         <li><strong>结论</strong>：这一轮委员会没有标定好：成员在训练集上都不全收敛，σ 只能当“出界”的信号，不能排序。要先解决 SCC 在扰动参数下的稳定性（按通道设锚点尺度、更强的混合），再做下一轮。</li>
       </ul>
     </section>
@@ -242,6 +242,16 @@
         <li><strong>MD</strong>：两个模型在 600 K 下 2 ps 都稳定，总能量范围约 1 meV，团簇完整（每个原子最近邻 ≤ 2.5 Å）；有限差分检查 2–4e-7 eV/Å。最小 CN 降到 1–2 是表面原子短暂外伸，没有原子离开。</li>
         <li>只拟合能量的那个模型在训练集上二聚体与 MD 帧的力仍有 1.7 eV/Å，测试集 MD 帧的力 2.5 eV/Å；加上力权重 0.001 后都降到 0.4–0.5。所以两步都需要：排斥势要用力定形，自适应参数也要用力精修。</li>
       </ul>
+      <h3>5. 围绕 jfm 模型重做第二轮筛选</h3>
+      <p>同一段 149 帧的轨迹（能量加力模型的 1.5 ps），委员会围绕上一小节最好的模型。先按第五节的设置（锚点扰动 0.02，3 个成员 × 15 次评估）跑：在 jfm 模型上这个扰动把成员 0 的起点推到 5053 meV/atom，二聚体、Cu<sub>55</sub>、空位的 SCC 反复不收敛，3 小时只到第 5 次评估（机器上还有别的拟合，负载约 21），停掉。改成纯 bootstrap 委员会：<code>active_cu fit_jfm_f001.json md_adaptive.extxyz --data cu_m8b.extxyz --members 3 --member-evaluations 8 --perturb 0 --processes 4</code>，每个成员从 jfm 的极小出发，在重抽样的训练集上只拟合能量。34 分钟。顺带修了 <code>active_cu</code>：原来总用 ptbp_hcocu 的表，现在用拟合 JSON 里的 <code>skf</code>。</p>
+      <ul>
+        <li><strong>SCC 不收敛的问题没有了</strong>：149 帧全部收敛（原来 72 帧失败），训练集上也全部收敛，训练集的 σ<sub>E</sub> 是 11.7 meV/atom（原来 nan）。成员训练误差 11.6、18.3、14.6 meV/atom（72–78 个不同结构）。</li>
+        <li><strong>σ 随轨迹出界而上升</strong>：0 fs 14.3 meV/atom、1.16 eV/Å；200–1000 fs 9–24 meV/atom、0.4–1.6 eV/Å；1130 fs 以后 74–311 meV/atom、3.6–5.2 eV/Å（最短键 1.55–1.72 Å，一个原子开始离开）。</li>
+        <li><strong>挑出的 10 帧全部不同</strong>：1130、1230、1260、1310、1320、1350、1360、1390、1400、1410 fs（原来 100–560 fs）。原来的帧是因为 SCC 不收敛分数无穷大才被挑中；现在按 σ 排序，挑的是最压缩、最出界的帧，正是 fit_energy 加力模型 MD 失败的那段。新输入替换了 <code>cu_dft_m8b_active/round2</code>，旧的在 <code>round2_prev_fit_energy</code>。</li>
+        <li><strong>INCAR</strong>：<code>write_set</code> 原来没有写第一轮里修好的自旋混合（AMIX 0.2、BMIX 1e-4、AMIX_MAG 0.8、BMIX_MAG 1e-4），这些压缩的 Cu<sub>13</sub> 很可能又会振荡到 NELM。代码已补上，10 个 INCAR 也已补上（没有加 NCORE 4：38 核不能被 4 整除）。</li>
+        <li><strong>费用</strong>：脚本的估计是原来那 10 帧的 1.41 倍（盒子更大，约 23 × 22 × 26 Å），按原来 Cu<sub>13</sub> 实测的约 20 核时折算，约 28 核时，dg83 0.075 元/核时，约 <strong>2.1 元</strong>。加上已花的 7.98 元共约 10 元，在 33 元以内。<strong>没有提交</strong>，等用户决定。</li>
+        <li><strong>局限</strong>：M8c 的校准表明纯 bootstrap 委员会对没见过的结构会低估 σ，所以这里的 σ 只用来给帧排序，不当误差估计。</li>
+      </ul>
     </section>
 
     <section id="eng">
@@ -269,7 +279,7 @@
       <ul>
         <li><strong>模型</strong>：这套模型在这份数据上的上限大约是几十 meV/atom。只从二聚体拟合的排斥势不行；只用能量联合拟合的排斥势出现 1.8 Å 的假势阱；加上力与单调约束、再做力权重 0.001 的精修后，测试集 MD 帧 41 meV/atom、0.53 eV/Å，MD 稳定，是目前最好的模型（第五节续第 4 小节）。剩下最大的误差是压缩的 bcc（+113 meV/atom）与二聚体；下一步按通道设 x_scale 与锚点尺度，用这个模型重做委员会与第二轮候选。</li>
         <li><strong>力</strong>：力权重 0.001 已验证有效（第五节续）；预算允许时把 30 次评估加到 60–100，并放开 Cu<sub>38</sub>、Cu<sub>55</sub> 的力。</li>
-        <li><strong>第二轮 DFT</strong>：round2 的 10 帧约 1.5 元，等用户决定。dg50 的 GPU 4.5 元/卡时、CPU 不收费，76 核的作业放那里便宜约 20%。</li>
+        <li><strong>第二轮 DFT</strong>：round2 现在是围绕 jfm 模型重新挑的 10 帧（1130–1410 fs，最短键 1.55–1.72 Å），约 28 核时、约 2.1 元（dg83），加上已花的 7.98 元共约 10 元，在 33 元以内；等用户决定。dg50 的 GPU 4.5 元/卡时、CPU 不收费，76 核的作业放那里便宜约 20%。</li>
         <li><strong>MD 验证</strong>：拿只拟合能量的模型跑更长、更高温、更大的团簇（Cu<sub>38</sub>、Cu<sub>55</sub>），并在 MD 帧上抽几个做 DFT 对照。</li>
       </ul>
     </section>
