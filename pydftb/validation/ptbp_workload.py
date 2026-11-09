@@ -59,7 +59,10 @@ ORBITALS = {"Cu": 9}
 # SCC to 1e-5, DFTB+'s 0.01 Bohr finite-difference forces, one BLAS thread, no k threads)
 PTBP_OPTIONS = {"time_reversal": True, "smearing": ("fermi", 0.0), "scc": True, "scc_tol": 1e-5,
                 "max_scc": 1000, "repulsive": "polynomial", "shell_resolved": True,
-                "fd_delta": 0.01, "threads": 1, "k_threads": 1}
+                "fd_delta": 0.01, "threads": 1, "k_threads": 1,
+                # PTBP's engine contract: results also from an unconverged SCC; MaxAngularMomentum
+                # by PTBP's rule (the occupied shells)
+                "max_l": "occupied", "convergent_scc_only": False, "warn_unconverged": False}
 
 
 @dataclass

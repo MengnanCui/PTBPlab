@@ -73,9 +73,14 @@ def _pair_from_filename(path: str) -> tuple[str, str]:
 def max_l_from_skf(path: str) -> int | None:
     """Highest angular momentum with non-zero occupation in a homonuclear SKF.
 
-    Same rule as ASE's ``read_max_angular_momentum`` (which PTBP relies on
-    through ``ase.calculators.dftb``): occupations fd, fp, fs are fields 7-9
-    of line 2 (simple format).  Returns None if all occupations are zero.
+    The rule of ASE's ``read_max_angular_momentum`` (``ase.calculators.dftb``, used by PTBP's
+    DFTB+ path before 2026-11): occupations fd, fp, fs are fields 7-9 of line 2 (simple
+    format).  Returns None if all occupations are zero.  This is pydftb's default (the basis
+    PTBP's parameters are fitted with); shells that are empty in the neutral atom but have
+    integrals in the file (the d of S, I, Sn, the p and d of Cs, the p of Li) are then not used,
+    and :func:`default_max_l` warns once per file.  Whether they should be depends on the
+    parameter set: with PTBP, DMSO's S=O is 1.83 A without the d of S and 1.50 A with it, but
+    the p of Li (never fitted) makes Li2 14.9 eV too stable at 1.2 A.
     """
     with _open_text(path) as fh:
         first = fh.readline()
@@ -90,6 +95,99 @@ def max_l_from_skf(path: str) -> int | None:
             return lmax
         lmax -= 1
     return None
+
+
+# the higher angular momentum of every H (and S) integral column
+_COLUMN_LMAX = np.zeros(N_INTEGRALS, int)
+for (_l1, _l2, _m), _c in SK_COLUMN.items():
+    _COLUMN_LMAX[_c] = max(_l1, _l2)
+
+
+def max_l_available(path: str) -> int | None:
+    """Highest angular momentum the homonuclear SKF has parameters for: the highest l with a
+    non-zero Hamiltonian or overlap integral at any distance, or a non-zero on-site energy.
+
+    This is the "highest shell" of the parameter set, what a DFTB+ user writes in
+    ``MaxAngularMomentum`` when the set has the shell: PTBP gives H s; C, N, O p; S, I, Sn,
+    Cs d; Pb p (its d columns and Ed are all zero).  Returns None for a file without integrals.
+    """
+    f = SKFile.read_cached(path, homo=True)
+    cols = np.asarray(f.columns) % N_INTEGRALS
+    nonzero = np.any(np.asarray(f.table) != 0.0, axis=0)
+    ls = [int(_COLUMN_LMAX[c]) for c, nz in zip(cols, nonzero) if nz]
+    if f.onsite is not None:
+        ls += [l for l in range(4) if f.onsite[l] != 0.0]
+    return max(ls) if ls else None
+
+
+MAX_L_RULES = ("highest", "occupied")
+_L_LETTER = {"s": 0, "p": 1, "d": 2, "f": 3}
+
+
+def parse_max_l(max_l) -> tuple[str, dict]:
+    """``max_l`` as (rule, {label: l}).
+
+    ``max_l`` (DFTB+ ``MaxAngularMomentum``): None or "occupied" (default: the highest shell
+    occupied in the neutral atom, :func:`max_l_from_skf`, the basis PTBP's parameters are
+    fitted with), "highest" (every label's highest parametrised shell, :func:`max_l_available`),
+    or {label: l} with l an int or DFTB+'s letter ("s", "p", "d", "f"); labels missing from the
+    dict use the default rule, or the rule given under the key "default" (e.g.
+    ``{"default": "highest", "Li": "s"}``).
+    """
+    if max_l is None:
+        return "occupied", {}
+    if isinstance(max_l, str):
+        if max_l not in MAX_L_RULES:
+            raise ValueError(f"max_l rule {max_l!r}: choose from {MAX_L_RULES} or give a dict")
+        return max_l, {}
+    out, rule = {}, "occupied"
+    for lab, v in dict(max_l).items():
+        if lab == "default":
+            if v not in MAX_L_RULES:
+                raise ValueError(f"max_l default {v!r}: choose from {MAX_L_RULES}")
+            rule = v
+            continue
+        if isinstance(v, str):
+            if v.lower() not in _L_LETTER:
+                raise ValueError(f"max_l[{lab!r}] = {v!r}: give s, p, d, f or 0-3")
+            v = _L_LETTER[v.lower()]
+        v = int(v)
+        if not 0 <= v <= 3:
+            raise ValueError(f"max_l[{lab!r}] = {v}: give s, p, d, f or 0-3")
+        out[lab] = v
+    return rule, out
+
+
+_WARNED_UNUSED: set = set()
+
+
+class UnusedShellsWarning(UserWarning):
+    """The SKF has integrals for shells above the ones ``max_l`` uses."""
+
+
+def default_max_l(path: str, rule: str = "occupied", warn: bool = True) -> int:
+    """The default l_max of a homonuclear SKF by ``rule`` ("occupied" or "highest").  With
+    "occupied" and ``warn``, a file with integrals for a higher shell gives one
+    :class:`UnusedShellsWarning` per file and process (the shell is not used; say so explicitly
+    with ``max_l``).  Callers pass ``warn=False`` when the rule was chosen explicitly."""
+    lmax = max_l_available(path) if rule == "highest" else max_l_from_skf(path)
+    if lmax is None:
+        what = "no integrals" if rule == "highest" else "no occupied shell"
+        raise ValueError(f"{path}: {what}; pass max_l for this label")
+    if rule == "occupied" and warn:
+        top = max_l_available(path)
+        key = os.path.abspath(path)
+        if top is not None and top > lmax and key not in _WARNED_UNUSED:
+            _WARNED_UNUSED.add(key)
+            lab = _pair_from_filename(path)[0]
+            import warnings
+            warnings.warn(
+                f"{os.path.basename(path)}: max_l uses up to {'spdf'[lmax]} for {lab} (the "
+                f"occupied shells, the basis PTBP fits with); the file also has integrals up to "
+                f"{'spdf'[top]}, which are not used.  To use them: max_l={{'{lab}': "
+                f"'{'spdf'[top]}'}} (or max_l='highest'); to silence this: max_l={{'{lab}': "
+                f"'{'spdf'[lmax]}'}}.", UnusedShellsWarning, stacklevel=3)
+    return lmax
 
 
 def write_typed_copies(src_dir: str, dst_dir: str, base_of: dict[str, str],
@@ -578,8 +676,10 @@ class SKSet:
 
     ``elements`` are the type labels used in file names (normally element
     symbols, but e.g. ``Li@el`` is allowed: then ``Li@el-O.skf`` is read).
-    ``max_l`` maps label -> highest angular momentum; labels missing from it
-    are filled with the ASE/PTBP rule (:func:`max_l_from_skf`).
+    ``max_l`` (DFTB+ ``MaxAngularMomentum``, see :func:`parse_max_l`): labels missing from it
+    get the highest occupied shell (:func:`max_l_from_skf`, PTBP's basis; a warning if the file
+    has integrals for more), or with ``"highest"`` the highest parametrised shell
+    (:func:`max_l_available`).
     ``template`` may end in ``.gz`` for compressed files.
     ``selected_shells`` (milestone M6f-5, DFTB+ ``SelectedShells``): {label: groups}, the shells
     of a label taken from several SK files (see :func:`parse_selected_shells`); such a label's
@@ -588,21 +688,21 @@ class SKSet:
     are both per shell and per l).
     """
 
-    def __init__(self, path: str, elements: list[str], max_l: dict[str, int] | None = None,
+    def __init__(self, path: str, elements: list[str], max_l: dict | str | None = None,
                  template: str = "{a}-{b}.skf", shell_resolved: bool = False,
                  hubbard_from: str = "s", selected_shells=None):
         self.path = path
         self.template = template
         self.elements = list(dict.fromkeys(elements))
-        self.max_l = dict(max_l or {})
+        self.max_l_rule, self.max_l = parse_max_l(max_l)
+        # only the implicit default warns about unused shells (an explicit rule is a choice)
+        implicit = max_l is None or (isinstance(max_l, dict) and "default" not in max_l)
         # M6f-5: {label: [(file label, [l, ...]), ...]} for labels built from several files
         self.groups: dict[str, list] = self._selected_groups(selected_shells)
         for a in self.elements:
             if a not in self.max_l and a not in self.groups:
-                lmax = max_l_from_skf(self.file_name(a, a))
-                if lmax is None:
-                    raise ValueError(f"no occupied shell in {self.file_name(a, a)}; pass max_l")
-                self.max_l[a] = lmax
+                self.max_l[a] = default_max_l(self.file_name(a, a), self.max_l_rule,
+                                              warn=implicit)
         self.files: dict[tuple[str, str], SKFile] = {}
         for a in self.elements:
             for b in self.elements:

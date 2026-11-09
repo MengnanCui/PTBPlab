@@ -1149,7 +1149,7 @@ class GradRequest:
             raise GradientUnavailable(f"no energy gradient for structures {missing[:5]}"
                                       + (f" ({why})" if why else ""))
         t0 = time.perf_counter()
-        inner = refine_sigma(step, res.sigma_hat)
+        inner = refine_sigma(step, res.sigma_hat, bounds=getattr(loss, 'sigma_range', lambda: SIGMA_BOUNDS)())
         self.timings["sigma"] = time.perf_counter() - t0
         res.sigma_star, res.case = inner.sigma, inner.case
         res.note = "; ".join(x for x in [inner.note] + inner.terms.notes if x)
@@ -1194,7 +1194,7 @@ class GradRequest:
             raise GradientUnavailable(f"no energy gradient for structures {missing[:5]}"
                                       + (f" ({why})" if why else ""))
         t0 = time.perf_counter()
-        inner = refine_sigma_typed(step, res.sigma_hat)
+        inner = refine_sigma_typed(step, res.sigma_hat, bounds=getattr(loss, 'sigma_range', lambda: SIGMA_BOUNDS)())
         self.timings["sigma"] = time.perf_counter() - t0
         res.sigma_star, res.case = [float(s) for s in inner.sigma], inner.case
         res.note = "; ".join(x for x in [inner.note] + inner.terms.notes if x)

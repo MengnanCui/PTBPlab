@@ -80,6 +80,7 @@ print("[engine]", _configure_engine(
     pydftb_backend=getattr(ptbp_args, 'pydftb_backend', None),
     pydftb_device=_device,
     pydftb_dtype=getattr(ptbp_args, 'dtype', None),
+    max_l=getattr(ptbp_args, 'max_l', None),
 ))
 # hotcent's confinement scheme (M4e): self-consistent (hotcent 1.x, r0_d confines the density)
 # unless --confinement perturbative; process-wide, so the forked hotcent workers inherit it

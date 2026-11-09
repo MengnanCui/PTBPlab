@@ -51,12 +51,14 @@ _NOTES = {
     "read_charges": "the first calculation starts from this DFTB+ charge file",
     "threads": "pydftb: BLAS (and torch) threads; DFTB+: OMP_NUM_THREADS",
     "casida": "pydftb's solver 'arpack': DFTB+'s Arpack, the others: Stratmann",
+    "convergent_scc_only": "True (default, both engines): an unconverged SCC raises "
+                           "CalculationFailed; False: the last iteration's results",
+    "max_l": "DFTB+ MaxAngularMomentum; default on both engines: the occupied shells "
+             "(PTBP's basis), warning for unused parametrised ones; 'highest': all of them",
 }
 _DFTBPLUS_NOTES = {
     "binary": "the DFTB+ executable (default $DFTBPLUS, then dftb+ on PATH)",
     "ewald_tolerance": "1e-12 (pydftb's); None: DFTB+'s own 1e-9",
-    "convergent_scc_only": "True: DFTB+ stops on an unconverged SCC (CalculationFailed); "
-                           "pydftb warns",
     "regions": "DFTB+'s ProjectStates in this run (the common way: calc.states(regions=...))",
     "workdir": "the work directory (default: a new temporary one per run)",
     "keep_files": "keep the temporary work directories",

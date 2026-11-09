@@ -57,6 +57,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        '--sigma_range', help='Bounds of the inner sigma_rep search (M5c; default 0.1 0.8)',
+        nargs=2, type=float, default=None,
+    )
+    parser.add_argument(
         '--multi_element', help='Fit only these elements (symbols); the other elements keep '
                                 'the (r0_w, r0_d, sigma_rep) PTBP published (M5b)',
         nargs='+',
@@ -270,6 +274,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                                 "DFTB+'s 0.01 Bohr finite differences, 'exact' uses exact derivatives",
         choices=['dftbplus', 'exact'],
         default='dftbplus',
+    )
+    parser.add_argument(
+        '--max_l', help="MaxAngularMomentum of every element, both engines: 'occupied' "
+                        "(default) = the highest shell occupied in the neutral atom, PTBP's "
+                        "basis; 'highest' = every shell the SKF has integrals for",
+        choices=['occupied', 'highest'],
+        default='occupied',
     )
     parser.add_argument(
         '--pydftb_backend', help="pydftb arrays: 'numpy' (default) or 'torch' (PyTorch, on "

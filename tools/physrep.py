@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import atomic_numbers, chemical_symbols, covalent_radii
 from ase.units import Bohr, Hartree
+Hartree_eV = Hartree          # eV per Hartree (calc_Vrep shadows the name Hartree)
 
 from scipy import interpolate
 
@@ -91,10 +92,19 @@ class physrep():
                  filename='',
                  Ecut=1e-8,
                  Cons_zeff=[1.,1.],
-                 numbers=None):
+                 numbers=None,
+                 pair_scale=None,
+                 pair_wall=None):
         """``elements``: atomic numbers; or type labels (M5b, e.g. ``['Cu2', 'Cu']``) with
         ``numbers`` = {label: atomic number}: the potentials and the files ``Cu2-Cu.skf`` are
-        then per pair of labels (evaluate the energies with :class:`switched_physrep`)."""
+        then per pair of labels (evaluate the energies with :class:`switched_physrep`).
+
+        ``pair_scale`` (M5c, default None: unchanged): {(Zi, Zj): sigma} overrides scale_cov of
+        both atoms for that pair only (either order), e.g. {(3, 3): 0.65} gives Li-Li a short-range
+        wall without hardening Li-O.  ``pair_wall`` (M5c, default None): {(Zi, Zj): (E, r_E, r_c[, n])}
+        adds the short-range wall E * ((r_c - r) / (r_c - r_E))**n for r < r_c (E in eV, r in
+        Angstrom; n = 4 by default; zero with zero first derivative at r_c for n > 1), e.g.
+        {(3, 3): (3.0, 1.4, 2.0)}."""
 
         self.elements  = elements
         self.rmin      = rmin
@@ -114,6 +124,12 @@ class physrep():
 
         self.r         = np.linspace(rmin,rmax,npoints)
         self.atsize    = {Zi:(covalent_radii[self.numbers[Zi]]/Bohr)*self.scale_cov[Zi] for Zi in self.elements}
+        self.pair_scale = {}
+        for (Zi, Zj), sc in (pair_scale or {}).items():
+            self.pair_scale[(Zi, Zj)] = self.pair_scale[(Zj, Zi)] = float(sc)
+        self.pair_wall = {}
+        for (Zi, Zj), w in (pair_wall or {}).items():
+            self.pair_wall[(Zi, Zj)] = self.pair_wall[(Zj, Zi)] = tuple(float(v) for v in w)
         
         self.Vreps     = {}
         self.rcuts     = {}
@@ -379,17 +395,29 @@ class physrep():
         k = np.power(k,3/4)
         return k*np.exp(((-a1*a2)/(a1+a2))*Rij**2)
 
+    def pair_sizes(self, Z1, Z2):
+        """The atom sizes of the pair: atsize, or both from pair_scale when it names the pair."""
+        sc = self.pair_scale.get((Z1, Z2))
+        if sc is None:
+            return self.atsize[Z1], self.atsize[Z2]
+        return tuple((covalent_radii[self.numbers[Z]] / Bohr) * sc for Z in (Z1, Z2))
+
     def calc_Vrep(self,Z1,Z2):
         N1, N2      = self.numbers[Z1], self.numbers[Z2]                                          # nuclear charges (M5b: Z1, Z2 may be labels)
         k_mean      = (self.k_xc[Z1]+self.k_xc[Z2])/2.                                            # the place that k_xc used
-        ga_ij       = self.calc_Gamma(self.atsize[Z1],self.atsize[Z2])                            # Gamma_ij
+        a1, a2      = self.pair_sizes(Z1, Z2)
+        ga_ij       = self.calc_Gamma(a1, a2)                                                      # Gamma_ij
         Hartree     = -N1*N2*np.array([self.calc_Hartree(ga_ij,Rij) for Rij in self.r])           # Hartree potential
         Core        =  N1*N2*np.array([1./Rij for Rij in self.r])                                 # static interaction between Atomic Core
-        xc          = -k_mean*N1*N2*np.array([self.calc_Overlap(self.atsize[Z1],self.atsize[Z2],Rij) for Rij in self.r])
+        xc          = -k_mean*N1*N2*np.array([self.calc_Overlap(a1, a2, Rij) for Rij in self.r])
 
         # exchange and correlation interaction
 
         Vrep        = Hartree.reshape(self.npoints,) + Core.reshape(self.npoints,) + xc.reshape(self.npoints,)   # np.ndarray type, 750x1
+        if (Z1, Z2) in self.pair_wall:                                                             # M5c: short-range wall
+            E, rE, rc, *n = self.pair_wall[(Z1, Z2)]          # optional exponent (default 4)
+            x = np.clip((rc / Bohr - self.r) / ((rc - rE) / Bohr), 0.0, None)
+            Vrep = Vrep + (E / Hartree_eV) * x ** (n[0] if n else 4.0)
         Npts        = Vrep.shape[0]     # 750
         iszero      = True
 # mncui

@@ -19,7 +19,7 @@ from ase.calculators.calculator import (CalculationFailed, Calculator,
 
 from .analysis import Analysis
 from .bands import States, eigenstates
-from .calculator import DFTB, SCCControl
+from .calculator import DFTB, SCCControl, SCCNotConvergedError
 from .casida import Casida
 from .constants import BOHR, HARTREE, MIN_TEMP, VOLT_PER_ANGSTROM_AU
 from .dftbplus_io import write_charges
@@ -162,6 +162,8 @@ def _as_calculation_failed():
         yield
     except np.linalg.LinAlgError as err:
         raise CalculationFailed(f"pydftb: {err}") from err
+    except SCCNotConvergedError as err:       # DFTB+ (ConvergentSCCOnly = Yes) stops: ASE
+        raise CalculationFailed(f"pydftb: {err}") from err   # reports CalculationFailed
 
 
 class PyDFTB(Calculator):
@@ -169,8 +171,10 @@ class PyDFTB(Calculator):
     Parameters
     ----------
     skdir : directory with ``A-B.skf`` (or ``.skf.gz``) files.
-    max_l : optional {label: l}; default is the ASE/PTBP rule (highest occupied
-            shell in the homonuclear SKF).
+    max_l : DFTB+ ``MaxAngularMomentum`` ({label: l}, l in 0-3 or "s"/"p"/"d"/"f").  Default:
+            the highest shell occupied in the neutral atom (PTBP's fitting basis), with a
+            warning when the SKF has integrals for more (PTBP's S, I, Sn, Cs, Li, ...);
+            ``"highest"`` uses every parametrised shell; see :class:`pydftb.ParamSet`.
     kpts  : None (Gamma), (n1, n2, n3) Monkhorst-Pack grid, a k-point density
             (float, ASE ``kptdensity2monkhorstpack``), ASE's ``{"size": (n1, n2, n3)}`` or
             ``{"density": d}`` with ``"gamma": True`` for the Gamma-centred grid (DFTB+'s
@@ -197,6 +201,10 @@ class PyDFTB(Calculator):
             calculation starts from neutral atoms, as ASE + DFTB+ (a new process each time).
     labels : optional type labels per atom (several parameter sets per element);
              default: chemical symbols.
+    convergent_scc_only : DFTB+ ``ConvergentSCCOnly`` (default True, as DFTB+): an SCC that does
+            not converge in ``max_scc`` iterations raises ASE's ``CalculationFailed`` (cause:
+            :class:`pydftb.SCCNotConvergedError`), as ``ase.calculators.dftb.Dftb`` when DFTB+
+            stops; False returns the last iteration's results with a warning.
     Other keywords (``scc``, ``scc_tol``, ``max_scc``, ``mixer``, ``mixing``,
     ``solver``, ``shell_resolved``, ``fd_delta``, for DFTB3 ``third_order``,
     ``hubbard_derivs``, ``h_damping``, for collinear spin ``spin``,
@@ -278,7 +286,8 @@ class PyDFTB(Calculator):
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
                  dipole_correction=None, analysis=None, type_switching=None,
-                 selected_shells=None, hybrid=None, **kwargs):
+                 selected_shells=None, hybrid=None, convergent_scc_only: bool = True,
+                 **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved,
                                selected_shells=selected_shells)
@@ -301,6 +310,7 @@ class PyDFTB(Calculator):
             from .solvers import solver_from_spec
             solver = solver_from_spec(solver)
         self.engine_opts = dict(scc=scc, scc_tol=scc_tol, max_scc=max_scc, mixer=mixer,
+                                convergent_scc_only=convergent_scc_only,
                                 mixing=mixing, repulsive=repulsive, solver=solver,
                                 smearing=smearing, fd_delta=fd_delta, third_order=third_order,
                                 hubbard_derivs=hubbard_derivs, h_damping=h_damping, spin=spin,

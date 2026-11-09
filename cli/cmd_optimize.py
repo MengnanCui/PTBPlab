@@ -96,6 +96,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    dest='pydftb_forces',
                    help="pydftb derivatives: 'dftbplus' reproduces DFTB+'s finite "
                         "differences (bit-level parity), 'exact' is exact. Default: %(default)s.")
+    p.add_argument('--max-l', default='occupied', choices=['occupied', 'highest'], dest='max_l',
+                   help="MaxAngularMomentum of every element (both engines): 'occupied' = the "
+                        "highest shell occupied in the neutral atom (PTBP's basis); 'highest' "
+                        "= every shell the SKF has integrals for. Default: %(default)s.")
     p.add_argument('--pydftb-backend', default='numpy', choices=['numpy', 'torch'],
                    dest='pydftb_backend',
                    help="pydftb arrays: numpy, or torch on the CPU or a GPU (--device). "
@@ -113,6 +117,11 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    dest='multi_element',
                    help="Fit only these elements (symbols); the others keep the "
                         "(r0_w, r0_d, sigma_rep) PTBP published.")
+    p.add_argument('--sigma-range', nargs=2, type=float, default=None, metavar=('LO', 'HI'),
+                   dest='sigma_range',
+                   help="Bounds of the inner sigma_rep search (default: 0.1 0.8). physrep's atom "
+                        "size is cov_radius * sigma_rep: at 0.1 the repulsion of Li ends at "
+                        "0.8 A (M5c report).")
     p.add_argument('--shared-parameters', action='store_true', default=None,
                    dest='shared_parameters',
                    help="One (r0_w, r0_d, sigma_rep) for all elements, as before M5b. Default: "
@@ -282,6 +291,7 @@ def run(args: argparse.Namespace) -> int:
         '--smearing_temperature', str(args.smearing_temperature),
         '--mp_order', str(args.mp_order),
         '--pydftb_forces', args.pydftb_forces,
+        '--max_l', getattr(args, 'max_l', 'occupied'),
     ]
     if getattr(args, 'confinement', 'selfconsistent') != 'selfconsistent':   # M4e
         legacy_argv += ['--confinement', args.confinement]
@@ -296,6 +306,8 @@ def run(args: argparse.Namespace) -> int:
         legacy_argv += ['--multi_element', *args.multi_element]
     if getattr(args, 'shared_parameters', None):                    # M5b
         legacy_argv += ['--shared_parameters']
+    if getattr(args, 'sigma_range', None):                          # M5c
+        legacy_argv += ['--sigma_range', *(str(v) for v in args.sigma_range)]
     declarations = _type_declarations(args)
     args.types, args.switch = (declarations or None), None      # ptbp_run.yaml keeps them
     if declarations:

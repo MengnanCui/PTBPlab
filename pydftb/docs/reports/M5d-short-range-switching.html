@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5d 短程数据与切换报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M5d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5d · 完成报告</p>
+    <h1>Li | Li₂O 的后续：短程 DFT、Li–Li 短程墙、加入短程数据的重拟合与带切换的界面</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span>（结论是否定的：排斥势与类型切换都修不好界面，问题在 Li s 基组下 PTBP 的电子部分）</dd></div>
+      <div><dt>日期</dt><dd>2026-11-08</dd></div>
+      <div><dt>代码</dt><dd><code>tools/physrep.py</code> 的 <code>pair_wall</code> 可选指数；<code>examples/07_battery_li_li2o/make_stage4.py</code>、<code>md_interface.py</code> 的弛豫轨迹与权重；<code>utils/hotcent_tangent.py</code> 的 <code>max_l</code>（第七节）</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M5d-switching-landscape.html">M5d 设计文档</a> · <a href="M5c-battery-demo.html">M5c 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M5c 的界面塌缩（DFTB 说塌缩结构低 0.7–3.4 eV/原子，DFT 说高 1.3–1.4 eV/原子）有两个候选原因：排斥势太软、训练集没有短程数据。这次用 43 个短程 DFT 单点把两者都检查了：<strong>都不是主因</strong>。按 DFT 二聚体拟合的 Li–Li 短程墙、把短程数据加进训练集、再加上两种 Li 的切换，界面塌缩结构的能量符号都仍然是反的；弛豫与 MD 中界面仍然塌缩。</p>
+    <ul>
+      <li><strong>短程 DFT</strong>（作业 981219 + 981265）：Li₂、LiO、O₂ 二聚体，压缩到 0.70–0.85 V₀ 的 bcc Li、Li₂O、Li₂O₂。7.9 核时，列表价约 0.79 元，实收约 0.60 元（上限 4 元）。</li>
+      <li><strong>发表的 PTBP（Li s）对 DFT</strong>：只有 Li–Li 在 1.6 Å 以内缺排斥（1.4 Å 少 1.6 eV，1.2 Å 少 2.5 eV）；Li–O 在所有距离少结合 0.5–1.5 eV，O–O 少结合约 0.9 eV。压缩的 Li₂O 缺排斥，但 Li–O 二聚体说相反，是多体效应，按原子对加墙修不了。</li>
+      <li><strong>Li–Li 短程墙 WF2</strong>（1.61 eV @ 1.4 Å，1.6 Å 处为零，二次方）：去掉了 Li₂ 的假势阱，训练集不变；界面塌缩结构仍为 −0.62 / −0.76 eV/原子（DFT +1.29 / +1.44）。弛豫 500 步不收敛，Li–Li 2.31 → 1.59 Å；300 K MD 中继续塌缩，NVE 段温度从 500 K 升到 1600 K（总能守恒到约 0.1 eV，问题在势能面）。</li>
+      <li><strong>加入短程数据的重拟合</strong>：σ_rep 不再落在下界（一套 Li 0.373；两种 Li 中金属 Li 0.50，氧化 Li 仍 0.1）。一套 Li（b30s4）界面 −1.68 / −1.84，两种 Li 加切换（c60s4）−1.87 / −2.04 eV/原子。切换把 Li₂ 二聚体误差减半，但 Li–O 二聚体误差加倍。</li>
+      <li><strong>带切换的界面</strong>（c60s4，第五节）：弛豫在第 77 步停下（SCC 不收敛，pydftb 现在默认停下而不是返回未收敛的结果，两次运行在同一步）。之前能量降了 157 eV，Li–Li 缩到 <strong>0.77 Å</strong>：熔合的都是 Li_ox–Li_ox 对（两端 Li_ox 权重 0.9–1.0）。氧化 Li 的 σ_rep 在下界 0.1，而短程 Li₂ 二聚体在拟合中都是金属 Li 类型，Li_ox–Li_ox 的短程排斥没有任何数据约束。切换本身按设计工作（权重随 O 配位连续变化），但每一对类型都需要自己环境下的短程数据。</li>
+      <li><strong>结论</strong>：Li 只用 s 时，PTBP 的电子部分把致密的 Li–O 排列结合过头；排斥势（σ_rep 或按二聚体拟合的墙）和 r0_w、r0_d、σ_rep 的类型切换都不够。下一步要动电子部分（例如 Li 的 on-site 能、U，或可用的 p 壳层重新拟合），或者把界面类结构放进训练集。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">43</span><span class="lbl">短程 DFT 单点（实收约 0.60 元）</span></li>
+      <li><span class="num">0.1 → 0.373</span><span class="lbl">一套 Li 的 σ_rep：无短程数据 → 有</span></li>
+      <li><span class="num">+1.29 / −1.68</span><span class="lbl">塌缩快照 02 比初始界面高（eV/原子）：DFT / b30s4</span></li>
+      <li><span class="num">250 → 1600 K</span><span class="lbl">WF2 界面 MD 的温度（塌缩放出的势能）</span></li>
+      <li><span class="num">0.77 Å</span><span class="lbl">c60s4 弛豫中 Li_ox–Li_ox 的最近距离</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#dft">一、短程 DFT</a></li>
+      <li><a href="#pairs">二、发表的参数与短程 DFT</a></li>
+      <li><a href="#wall">三、Li–Li 短程墙</a></li>
+      <li><a href="#refit">四、加入短程数据的重拟合</a></li>
+      <li><a href="#iface">五、带切换的界面</a></li>
+      <li><a href="#concl">六、结论与下一步</a></li>
+      <li><a href="#code">七、代码改动</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="dft">
+      <h2>一、短程 DFT</h2>
+      <ul>
+        <li>结构由 <code>examples/07_battery_li_li2o/make_stage4.py</code> 生成：Li₂、LiO、O₂ 二聚体放在 15 × 15.5 × 16 Å 的盒子里（不加自旋、Γ 点、ISYM 0），10–11 个距离；bcc Li、Li₂O、Li₂O₂ 压缩到 0.70 / 0.75 / 0.80 / 0.85 V₀。PBE 设置与 M5c 训练集相同。</li>
+        <li>作业 981219（dg83，16 核）用了 1772 s；<code>cmp_li2o_85</code> 遇到一次 Intel MPI 启动错误，单独重算（作业 981265，4 核 25 s）。合计 7.9 核时，列表价约 0.79 元，按实收价 0.075 元/核时约 0.60 元。</li>
+        <li>数据：<code>data4/train.xyz</code>（43 个结构）；与 M5c 的训练集合并为 111 个结构，用于第四节的重拟合。</li>
+      </ul>
+    </section>
+
+    <section id="pairs">
+      <h2>二、发表的参数（Li s）与短程 DFT</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>原子对</th><th>DFTB 相对 DFT</th><th>需要短程墙？</th></tr></thead>
+        <tbody>
+          <tr><td>Li–Li</td><td>只在 1.6 Å 以内太软：1.4 Å 少 1.6 eV，1.2 Å 少 2.5 eV（即 1.4 Å 附近的假势阱）</td><td>是</td></tr>
+          <tr><td>Li–O</td><td>所有距离少结合 0.5–1.5 eV；1.2 Å 反而太硬</td><td>否：墙只加排斥</td></tr>
+          <tr><td>O–O</td><td>所有距离少结合约 0.9 eV，曲线形状对</td><td>否</td></tr>
+        </tbody>
+      </table></div>
+      <p>压缩的 Li₂O 显示 DFTB 缺排斥，与 Li–O 二聚体（太少结合，不缺排斥）相反：这是多体效应，按原子对的排斥势修不了。</p>
+    </section>
+
+    <section id="wall">
+      <h2>三、Li–Li 短程墙 WF2</h2>
+      <p><code>pair_wall</code> 的形式 E·((r<sub>c</sub> − r)/(r<sub>c</sub> − r<sub>E</sub>))<sup>n</sup>。M5c 的四次墙按 DFT 二聚体拟合时在 1.2 Å 过冲 28 eV，所以加了可选指数 n（默认仍为 4，旧结果不变）。WF2 = 发表的 SKF、σ_Li 0.5016，加 Li–Li 墙 (E, r<sub>E</sub>, r<sub>c</sub>, n) = (1.61 eV, 1.4 Å, 1.6 Å, 2)，力在 r<sub>c</sub> 处连续。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>发表（Li s）</th><th>WF2</th><th>AW6（M5c，手定）</th><th>DFT</th></tr></thead>
+        <tbody>
+          <tr><td>训练集 Ea MAE（eV/原子）</td><td>0.786</td><td>0.786</td><td>—</td><td>—</td></tr>
+          <tr><td>Li₂ 二聚体 MAE（eV/原子）</td><td>—</td><td>0.235</td><td>—</td><td>—</td></tr>
+          <tr><td>塌缩快照 02 / 04 比初始界面高（eV/原子）</td><td>−0.74 / −0.85</td><td>−0.62 / −0.76</td><td>+0.65 / +0.54</td><td>+1.29 / +1.44</td></tr>
+        </tbody>
+      </table></div>
+      <p>AW6（6 eV @ 1.4 Å，到 2.1 Å）能把符号改对，只是因为它比 DFT 二聚体允许的强得多。</p>
+      <h3>界面弛豫与 MD（WF2）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>结构</th><th>最近 Li–Li（Å）</th><th>最近 Li–O（Å）</th><th>最近 O–O（Å）</th><th>2.4 Å 内无 O 的 Li</th></tr></thead>
+        <tbody>
+          <tr><td>初始界面</td><td>2.31</td><td>2.00</td><td>3.27</td><td>32</td></tr>
+          <tr><td>弛豫 500 步后（fmax 仍 1.12 eV/Å，能量降 46.7 eV）</td><td>1.59</td><td>1.71</td><td>2.88</td><td>20</td></tr>
+          <tr><td>NVT 300 步末</td><td>1.53</td><td>1.65</td><td>2.59</td><td>20</td></tr>
+        </tbody>
+      </table></div>
+      <p>Li–Li 停在墙的截断 1.6 Å 附近；金属 Li 进入氧化物。NVT（300 K，Langevin）里势能从 −1783 降到 −1792 eV；之后 200 fs NVE 里势能再降 11 eV，温度从 500 K 升到 1600 K，总能漂移 −3.4 meV/原子/ps（标准差 0.5 meV/原子）。积分是对的，势能面是错的。</p>
+    </section>
+
+    <section id="refit">
+      <h2>四、加入短程数据的重拟合</h2>
+      <p>PTBP <code>optimize --mode reaction --engine pydftb --multi-element Li</code>，训练集 = M5c 的 68 个结构 + 43 个短程结构，Li 仍为 s（<code>max_l</code> 默认，占据壳层），O 固定为发表值。b30s4：一套 Li，30 步；c60s4：Li 与 Li_ox 按 O 配位切换（与 M5c 的 c60 同一窗口），60 步。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>参数</th><th>训练 MAE</th><th>测试 MAE</th><th>短程 MAE</th><th>Li₂ / LiO 二聚体 MAE</th><th>训练力 MAE（eV/Å）</th><th>塌缩 02 / 04</th><th>σ_rep</th></tr></thead>
+        <tbody>
+          <tr><td>发表（Li p）</td><td>0.768</td><td>0.759</td><td>—</td><td>—</td><td>0.323</td><td>−3.23 / −3.55</td><td>—</td></tr>
+          <tr><td>发表（Li s）</td><td>0.786</td><td>0.918</td><td>0.487</td><td>—</td><td>0.209</td><td>−0.74 / −0.85</td><td>0.50</td></tr>
+          <tr><td>b30（M5c，无短程数据）</td><td>0.603</td><td>0.718</td><td>—</td><td>—</td><td>—</td><td>−1.74 / −1.87</td><td>0.1（下界）</td></tr>
+          <tr><td>bs30（M5c，σ ≥ 0.65）</td><td>1.496</td><td>1.785</td><td>—</td><td>—</td><td>0.761</td><td>+2.22 / +2.40</td><td>0.65（下界）</td></tr>
+          <tr><td>c60（M5c，两种 Li）</td><td>0.539</td><td>0.495</td><td>—</td><td>—</td><td>—</td><td>−3.05 / −3.36</td><td>0.1 / 0.1</td></tr>
+          <tr><td><strong>b30s4</strong></td><td>0.662</td><td>0.783</td><td>0.460</td><td>0.790 / 0.308</td><td>0.229</td><td>−1.68 / −1.84</td><td>0.373</td></tr>
+          <tr><td><strong>c60s4</strong></td><td>0.670</td><td>0.773</td><td>0.441</td><td>0.419 / 0.606</td><td>0.302</td><td>−1.87 / −2.04</td><td>0.50 / 0.1</td></tr>
+        </tbody>
+      </table></div>
+      <p>能量单位 eV/原子；塌缩 02 / 04 为两个塌缩快照比初始界面高多少，DFT +1.29 / +1.44。</p>
+      <ul>
+        <li>有了短程数据，一套 Li 的 σ_rep 落在区间内部（0.373），M5c 的“σ_rep 每步落在下界”是缺数据造成的。两种 Li 时，氧化 Li 的 σ_rep 仍在下界。</li>
+        <li>Li₂ 二聚体仍多结合（b30s4 平均偏差 −0.76 eV/原子）：拟合在二聚体与体相之间折中。</li>
+        <li>切换的作用：Li₂ 二聚体误差减半，Li–O 二聚体误差加倍，力误差上升，界面略差。</li>
+      </ul>
+    </section>
+
+    <section id="iface">
+      <h2>五、带切换的界面（c60s4）</h2>
+      <div id="c60s4-iface">
+      <p>同一个初始界面，FIRE 弛豫，切换窗口与拟合时相同（Li 周围 O 数，centre 1.5、width 2.0，O 计数截断 4.03–4.77 Å）。<code>relax_weights.csv</code> 记录每一步每个 Li 的 Li_ox 权重。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>FIRE 步</th><th>能量（eV）</th><th>最近 Li–Li（Å）</th><th>最近 Li–O（Å）</th><th>平均 w(Li_ox)</th><th>w = 0 / 0–1 之间 / w = 1 的 Li 数</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>−1744.4</td><td>2.31</td><td>2.00</td><td>0.487</td><td>32 / 8 / 24</td></tr>
+          <tr><td>20</td><td>−1773.4</td><td>1.42</td><td>1.64</td><td>0.487</td><td>28 / 12 / 24</td></tr>
+          <tr><td>40</td><td>−1885.3</td><td>0.86</td><td>1.64</td><td>0.492</td><td>28 / 20 / 16</td></tr>
+          <tr><td>60</td><td>−1898.9</td><td>0.77</td><td>1.64</td><td>0.511</td><td>28 / 12 / 24</td></tr>
+          <tr><td>76（SCC 不收敛前最后一步）</td><td>−1901.0</td><td>0.76</td><td>1.64</td><td>0.531</td><td>28 / 20 / 16</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>弛豫前 20 步 Li–Li 先缩到 1.42 Å（与一套 Li 时相同的假势阱），之后 Li_ox–Li_ox 对继续缩到 0.77–0.83 Å，能量再降一百多 eV。16 个距离小于 1.5 Å 的 Li–Li 对，两端的 Li_ox 权重都是 0.9–1.0。</li>
+        <li>原因：c60s4 中 Li_ox 的 σ_rep 在下界 0.1（排斥势只到约 0.8 Å），金属 Li 的是 0.50。训练集里的短程 Li₂ 二聚体周围没有 O，权重全在金属 Li 上，Li_ox–Li_ox 的短程排斥没有数据约束，拟合就把它去掉了。</li>
+        <li>第 77 步 SCC 在 500 次迭代内不收敛（max |dq| 0.34）：0.8 Å 的 Li–Li 已经不是物理结构。pydftb 现在默认在这种情况下停下（ASE 中为 <code>CalculationFailed</code>），脚本把最后的结构写到 <code>failed.vasp</code>；以前会静默返回未收敛的能量和力，MD 会在错误的力上继续。</li>
+        <li>切换本身按设计工作：权重随 O 配位连续变化，进出窗口的 Li 数随结构变化（8 → 20 → 12 → 20）。没能跑 MD，所以没有“权重随时间”的 MD 记录；弛豫的逐步记录在 <code>relax_weights.csv</code>。</li>
+        <li>教训：带切换的拟合里，每一对类型（Li–Li、Li–Li_ox、Li_ox–Li_ox、各自与 O）都要有自己环境下的短程数据，否则下界上的 σ_rep 会给出没有排斥的类型对。可做的检查：拟合后对每个类型对算一次二聚体曲线，低于某个距离仍不排斥就报警。</li>
+      </ul>
+    </div>
+    </section>
+
+    <section id="concl">
+      <h2>六、结论与下一步</h2>
+      <ul>
+        <li>排斥势的两条路都试过：σ_rep 加下界（bs30）能把符号改对，但训练误差加倍；按 DFT 二聚体拟合的墙（WF2）和把短程数据加进训练集（b30s4）都不改变符号。</li>
+        <li>r0_w、r0_d、σ_rep 的类型切换（c60s4）也不改变符号，而且在界面弛豫中更糟：Li_ox–Li_ox 没有短程排斥，Li 对熔合到 0.77 Å。切换机制本身工作正常（第五节的权重、M5a 的守恒检验），缺的是每个类型对的短程数据，以及能区分界面 Li 的电子参数。</li>
+        <li>所以 Li s 基组下 PTBP 的电子部分对致密 Li–O 排列结合过头。可选的下一步：(1) 把三个做过 DFT 的界面快照（以及更多）放进训练集；(2) 让类型之间的 on-site 能、U 也可以不同（M5d 设计文档第三节的扩展）；(3) 用 Li p 重新拟合（发表的 Li p 积分从未被拟合，第一版明显不能用）。这三条都需要新的 DFT 或新的代码，先由用户决定。</li>
+      </ul>
+    </section>
+
+    <section id="code">
+      <h2>七、代码改动</h2>
+      <ul>
+        <li><code>tools/physrep.py</code>：<code>pair_wall</code> 的元组可带第四个数 n（默认 4）。</li>
+        <li><code>examples/07_battery_li_li2o/make_stage4.py</code>（新）：短程 DFT 的结构与作业脚本；<code>collect.py</code> 增加对应分组；<code>evaluate.py</code> 增加 <code>--max-l</code>。</li>
+        <li><code>examples/07_battery_li_li2o/md_interface.py</code>：弛豫写 <code>relax.traj</code> 与每步的 Li_ox 权重 <code>relax_weights.csv</code>；计算失败（如 SCC 不收敛，pydftb 现在默认停下）时把最后的结构写到 <code>failed.vasp</code>，退出码 2。</li>
+        <li><code>utils/hotcent_tangent.py</code>：读 SKF 参数时用 engines 的 <code>max_l</code> 设置，c60s4 日志中 100 条“未用壳层”警告因此消失。PTBP 测试 233 通过，4 个失败与改动前相同（本机没有 torch）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M5c-battery-demo.html">← M5c 报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

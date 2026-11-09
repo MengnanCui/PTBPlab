@@ -15,13 +15,13 @@ Design notes, the DFTB+ source map and milestone reports live in
 """
 from .analysis import Analysis
 from .api import SCC, make_kpoints
-from .calculator import DFTB, DFTBResult
+from .calculator import DFTB, DFTBResult, SCCNotConvergedError
 from .hybrid import Hybrid
 from .params import ParamSet
 from .skf import SKFile, SKSet, max_l_from_skf
 from .system import System
 from .typeswitch import TypeSwitch
 
-__all__ = ["SCC", "make_kpoints", "DFTB", "DFTBResult", "ParamSet", "SKFile", "SKSet",
+__all__ = ["SCC", "make_kpoints", "DFTB", "DFTBResult", "SCCNotConvergedError", "ParamSet", "SKFile", "SKSet",
            "max_l_from_skf", "System", "Analysis", "TypeSwitch", "Hybrid"]
 __version__ = "0.1.0.dev0"

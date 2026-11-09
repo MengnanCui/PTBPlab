@@ -60,10 +60,12 @@ class Tangent:
 
 def skf_parameters(skdir: str, labels) -> dict:
     """{kind: {key: array}} of the SKF files in ``skdir`` as pydftb reads them
-    (``ParamSet(..., shell_resolved=True)``, PTBP's setting; the tables are the stored
-    columns, as :class:`pydftb.autodiff.Params` holds them)."""
+    (``ParamSet(..., shell_resolved=True)`` with the engines' ``max_l`` rule, PTBP's setting;
+    the tables are the stored columns, as :class:`pydftb.autodiff.Params` holds them)."""
     from pydftb.params import ParamSet
-    sk = ParamSet(skdir, shell_resolved=True).skset(list(labels))
+    import utils.engines as engines
+    sk = ParamSet(skdir, max_l=engines._SETTINGS["max_l"],
+                  shell_resolved=True).skset(list(labels))
     return {"tables": {k: np.array(f.table, dtype=float) for k, f in sk.files.items()},
             "onsite": {a: np.array(v, dtype=float) for a, v in sk.onsite.items()},
             "hubbard": {a: np.array(v, dtype=float) for a, v in sk.hubbard.items()},

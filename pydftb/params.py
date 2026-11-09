@@ -12,7 +12,7 @@ from __future__ import annotations
 import glob
 import os
 
-from .skf import SKSet, parse_selected_shells
+from .skf import SKSet, parse_max_l, parse_selected_shells
 
 
 class ParamSet:
@@ -20,8 +20,13 @@ class ParamSet:
     Parameters
     ----------
     skdir : directory containing the SKF files.
-    max_l : optional {label: l_max}; missing labels use the ASE/PTBP rule
-            (highest shell with non-zero occupation in the homonuclear SKF).
+    max_l : DFTB+ ``MaxAngularMomentum``: None / "occupied" (default: the highest shell
+            occupied in the neutral atom, the basis PTBP's parameters are fitted with; a
+            warning, once per file, when the SKF has integrals for a higher shell, e.g. the d
+            of S, I, Sn, the p of Li), "highest" (the highest l with non-zero integrals or
+            on-site energy in the homonuclear SKF), or {label: l} with l in 0-3 or "s", "p",
+            "d", "f" (other labels by the default rule, or by the rule under the key
+            "default"); see :func:`pydftb.skf.parse_max_l`.
     template : file-name template; default detects ``{a}-{b}.skf`` or ``.skf.gz``.
     shell_resolved : orbital-resolved SCC (DFTB+ ``ShellResolvedSCC``).
     hubbard_from : non-shell-resolved U source shell ("s" = DFTB+ behaviour).
@@ -33,13 +38,15 @@ class ParamSet:
             :func:`pydftb.skf.parse_selected_shells`.  Not together with ``max_l`` for a label.
     """
 
-    def __init__(self, skdir: str, max_l: dict[str, int] | None = None,
+    def __init__(self, skdir: str, max_l: dict | str | None = None,
                  template: str | None = None, shell_resolved: bool = False,
                  hubbard_from: str = "s", selected_shells=None):
         if not os.path.isdir(skdir):
             raise FileNotFoundError(f"SKF directory not found: {skdir}")
         self.skdir = skdir
-        self.max_l = dict(max_l or {})
+        self.max_l_rule, self.max_l = parse_max_l(max_l)
+        self._rule_given = isinstance(max_l, str) or (isinstance(max_l, dict)
+                                                       and "default" in max_l)
         self.template = template or self._detect_template(skdir)
         self.shell_resolved = shell_resolved
         self.hubbard_from = hubbard_from
@@ -82,7 +89,9 @@ class ParamSet:
                                 raise FileNotFoundError(f"missing Slater-Koster file {path}")
             selected = {a: self.selected_shells[a] for a in key if a in self.selected_shells}
             self._cache[key] = SKSet(self.skdir, list(key),
-                                     {a: self.max_l[a] for a in key if a in self.max_l},
+                                     {**{a: self.max_l[a] for a in key if a in self.max_l},
+                                      **({"default": self.max_l_rule} if self._rule_given
+                                         else {})},
                                      template=self.template, shell_resolved=self.shell_resolved,
                                      hubbard_from=self.hubbard_from,
                                      selected_shells=selected or None)

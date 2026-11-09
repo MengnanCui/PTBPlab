@@ -137,12 +137,34 @@ def test_pydftb_ase_calculator_features():
     assert len(calc2.get_ibz_k_points()) == 2
 
 
-def test_unconverged_scc_warns_but_returns():
+def test_unconverged_scc_stops_by_default():
+    """DFTB+'s default ConvergentSCCOnly = Yes: no results from an unconverged SCC; ASE's
+    CalculationFailed, as ase.calculators.dftb.Dftb when DFTB+ stops."""
+    from ase.calculators.calculator import CalculationFailed
+    from pydftb import SCCNotConvergedError
     w = molecule("H2O")
     w.calc = PyDFTB(SKF_HCOCU, max_scc=2, scc_tol=1e-12)
+    with pytest.raises(CalculationFailed, match="SCC not converged") as info:
+        w.get_potential_energy()
+    err = info.value.__cause__
+    assert isinstance(err, SCCNotConvergedError) and err.n_iter == 2
+    assert np.isfinite(err.result.energy)
+
+
+def test_unconverged_scc_warns_but_returns_when_allowed():
+    w = molecule("H2O")
+    w.calc = PyDFTB(SKF_HCOCU, max_scc=2, scc_tol=1e-12, convergent_scc_only=False)
     with pytest.warns(RuntimeWarning, match="SCC not converged"):
         e = w.get_potential_energy()
     assert np.isfinite(e) and not w.calc.raw.converged
+
+
+def test_converged_scc_is_unchanged_by_the_check():
+    w = molecule("H2O")
+    w.calc = PyDFTB(SKF_HCOCU)
+    e1 = w.get_potential_energy()
+    w.calc = PyDFTB(SKF_HCOCU, convergent_scc_only=False)
+    assert w.get_potential_energy() == e1
 
 
 def test_pydftb_typed_labels(tmp_path):

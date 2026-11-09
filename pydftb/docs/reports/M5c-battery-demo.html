@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5c 固态电池示范报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M5c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5c · 完成报告</p>
+    <h1>固态电池示范：Li | Li₂O 的拟合与界面检验</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span>（结论是否定的：现有的排斥势形式下，三套参数都不能用于界面 MD）</dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>代码</dt><dd>基于 <code>c1a11bd</code>；新增 <code>examples/07_battery_li_li2o/</code>，PTBP 的 <code>optimize --sigma-range</code>（见第六节）</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M5c-battery-demo.html">M5c 设计文档</a> · <a href="M5b-ptbp-types.html">M5b 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">用 VASP（PBE）算了 76 个 Li–O 结构，按 PTBP 的 reaction 损失（绝对原子化能 0.9 + 力 0.1，不改）拟合了 Li 的参数：一套 Li（b）和按 O 配位切换的两种 Li（c）。拟合把训练集的原子化能误差从 0.79 降到 0.54–0.60 eV/原子，但<strong>代价是去掉了排斥势</strong>：σ_rep 每一步都落在下界 0.1，Li 的排斥势只到 0.8 Å。在 80 个原子的 Li | Li₂O 界面上，三套参数（包括发表的那套）都会塌缩：Li–Li 缩到 1.4 Å。DFT 证实塌缩后的结构比初始界面高 1.3–1.4 eV/原子，而 DFTB 说它低 0.7–3.4 eV/原子，<strong>符号是反的</strong>。</p>
+    <ul>
+      <li><strong>根源</strong>：PTBP 的电子部分对 Li₂ 在 1.4 Å 附近有一个假的势阱；发表的 σ_rep（0.50）压不住它，拟合则把 σ_rep 推到下界，让它更深。训练集里没有短于约 2 Å 的 Li–Li 距离，损失看不见这个问题。</li>
+      <li><strong>σ_rep 下界提到 0.65</strong>（新选项 <code>--sigma-range</code>）：Li₂ 的假势阱消失，界面弛豫稳定，塌缩结构的能量符号也对了；但 physrep 同时加强了 Li–O 排斥，Li₂O 少结合 2.2 eV/原子，训练集的力误差升到 0.76 eV/Å。σ_rep 仍落在新下界。</li>
+      <li><strong>两种 Li 的类型切换</strong>（c60）能把绝对误差降得最多，但把 Li₂O 的 EOS 形状和力弄得最差，界面上塌缩得最快。</li>
+      <li><strong>按原子对的排斥势</strong>（第七节，本机）：Li–Li 单独的 σ 会拖坏 Li₂O；只在 2.1 Å 以内起作用的 Li–Li 短程墙（6 eV @ 1.4 Å）不改变训练集，把塌缩结构的符号改对（+0.65 / +0.54，DFT +1.29 / +1.44），界面弛豫不再塌缩，但 Li–Li 停在 1.91 Å，仍偏短；300 K 的 MD 里仍慢慢下滑（Li–Li 1.71、O–O 2.61 Å），只比发表的那套慢、浅。墙的参数是手定的。</li>
+      <li>费用（按费用清单的实收价 0.075 元/核时，即列表价 0.1 × 0.75）：训练用的 DFT 6.55 元、收敛探针 P141 0.14 元（列表价合计 8.92；设计文档估约 2 元，低估了）；界面 DFT 检验实收 4.49 元（按列表价算的上限 6 元，按墙钟时间卡死）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">0.79 → 0.54</span><span class="lbl">训练集原子化能 MAE（eV/原子），(a) → c60</span></li>
+      <li><span class="num">0.1</span><span class="lbl">σ_rep 落在的下界（每次拟合、每一步）</span></li>
+      <li><span class="num">+1.3 / −0.7</span><span class="lbl">塌缩结构比初始界面高多少（eV/原子）：DFT / DFTB (a)</span></li>
+      <li><span class="num">11.18 元</span><span class="lbl">电光云 DFT 实收合计（6.55 + 0.14 + 4.49）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#data">一、DFT 数据与费用</a></li>
+      <li><a href="#fits">二、拟合</a></li>
+      <li><a href="#bulk">三、训练集与测试集</a></li>
+      <li><a href="#iface">四、界面的 DFTB 弛豫与 MD</a></li>
+      <li><a href="#dft">五、界面的 DFT 检验</a></li>
+      <li><a href="#sigma">六、σ_rep 为什么落在下界</a></li>
+      <li><a href="#pair">七、按原子对分开的排斥势</a></li>
+      <li><a href="#issues">八、记下的问题</a></li>
+      <li><a href="#next">九、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="data">
+      <h2>一、DFT 数据与费用</h2>
+      <p>VASP 6.6.0，PBE，PAW Li_sv 与 O，ENCUT 800 eV，PREC Accurate，ISMEAR 0、SIGMA 0.05（取 energy(sigma→0)），KSPACING 0.15 Å⁻¹（KGAMMA），LREAL .FALSE.，EDIFF 1e-7；收敛探针 P141。电光云 dg83，列表价 0.1 元/核时，实收 0.075 元/核时（× 0.75，见用户提供的作业费用清单）。脚本都在 <code>examples/07_battery_li_li2o/</code>（<code>make_stage1.py</code>–<code>make_stage3.py</code>、<code>collect.py</code>）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>组</th><th>内容</th><th>训练</th><th>测试</th></tr></thead>
+        <tbody>
+          <tr><td><code>eos_li_bcc</code>、<code>eos_li_fcc</code>、<code>eos_li2o</code>、<code>eos_li2o2</code></td><td>弛豫后的晶胞，体积 0.88–1.12，各 11 点</td><td>44</td><td>—</td></tr>
+          <tr><td><code>rat_li_bcc16</code>、<code>rat_li2o12</code></td><td>超胞随机位移 σ = 0.05、0.10 Å（种子 1–3 训练，101 测试）</td><td>12</td><td>4</td></tr>
+          <tr><td><code>rat_li16o</code>、<code>rat_li8o3</code></td><td>Li 中八面体间隙的 O；Li₂O 的 O 空位（先弛豫，再随机位移）</td><td>12</td><td>4</td></tr>
+          <tr><td>原子</td><td>Li、O 无自旋（E0，与 DFTB 的参考原子一致）；自旋极化的另存</td><td colspan="2">E0 = −0.01707、−0.05047 eV</td></tr>
+        </tbody>
+      </table></div>
+      <p>训练用的 DFT 按费用清单实收 <strong>6.55 元</strong>（stage1 958338 0.148；958366–958369 0.303 + 2.564 + 0.629 + 0.027；atoms0 958581 0.016；958606 取消 0.481；958607 1.233；958650–958653 0.342 + 0.319 + 0.340 + 0.151），另有收敛探针 P141 的 958293（取消）0.106 与 958331 0.033，共 0.14 元；合计 6.69 元（列表价 8.92 元）。设计文档估的约 2 元偏低：li16o 那组比估计慢得多，中途取消了作业 958606，拆成 958650–958653 四个作业。界面检验见第五节（实收 4.49 元）。</p>
+    </section>
+
+    <section id="fits">
+      <h2>二、拟合</h2>
+      <p>PTBP 的 <code>optimize --mode reaction --engine pydftb --multi-element Li</code>，O 固定为发表的参数，在本机（Mac，与其他会话共享 CPU，所有计时都是共享负载下的）运行，脚本 <code>run_fits.sh</code>。损失按你的意见保持不变：每原子绝对原子化能的误差（权重 0.9）加力的误差（0.1），乘以罚项。类型切换：<code>[{"element":"Li","labels":["Li","Li_ox"],"centre":1.5,"width":2.0,"cutoff":{"O":[4.03,4.77]}}]</code>（按 O 配位数在 1.5 附近切换）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>名称</th><th>参数</th><th>步数</th><th>最佳点（Bohr）</th><th>σ_rep</th><th>损失 μ</th></tr></thead>
+        <tbody>
+          <tr><td>(a)</td><td>发表的 PTBP</td><td>—</td><td>r0_w 4.377，r0_d 11.209</td><td>0.502</td><td>187.56（σ 由内层重新搜索时）</td></tr>
+          <tr><td>b30</td><td>一套 Li</td><td>30</td><td>3.410，10.672</td><td>0.1（下界）</td><td>176.47</td></tr>
+          <tr><td>c30</td><td>Li、Li_ox</td><td>30</td><td>没有离开起点（= (a)）</td><td>0.1（下界）</td><td>187.56</td></tr>
+          <tr><td>c60</td><td>Li、Li_ox</td><td>60</td><td>Li 3.644，10.724；Li_ox 5.470，4.679</td><td>0.1（下界）</td><td><strong>162.46</strong></td></tr>
+          <tr><td>bs30</td><td>一套 Li，<code>--sigma-range 0.65 1.2</code></td><td>30</td><td>4.336，9.888</td><td>0.65（新下界）</td><td>374.50</td></tr>
+          <tr><td>cs60</td><td>Li、Li_ox，<code>--sigma-range 0.65 1.2</code></td><td>60</td><td id="cs60-fit">Li 3.827，10.409；Li_ox 6.477，3.400（r0_d 在下界）</td><td>0.65、0.65（新下界）</td><td>364.43</td></tr>
+        </tbody>
+      </table></div>
+      <p>c30 的 4 维搜索 30 步内没有找到比起点更好的点；c60 找到了。PTBP 在写完结果之后画评估图时崩溃（<code>cli/run.py:401</code>，<code>'Axes' object is not subscriptable</code>），不影响结果，最佳点的 SKF 取自 <code>run/results/opt_*</code>；<code>run_fits.sh</code> 已改为记下退出码，不再让 <code>set -e</code> 吃掉它。</p>
+    </section>
+
+    <section id="bulk">
+      <h2>三、训练集与测试集</h2>
+      <p>用 PTBP 自己的 DFTB 阶段评估（<code>evaluate.py</code>：k 点密度 5.0，T = 0，DFTB 的 E0 是 20 Å 盒子里的孤立原子）。每格是 原子化能 MAE / 扣掉组平均后的 MAE / 力 MAE，单位 eV/原子、eV/Å。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>组</th><th>n</th><th>(a)</th><th>b30</th><th>c60</th><th>bs30</th></tr></thead>
+        <tbody>
+          <tr><td>eos_li_bcc</td><td>11</td><td>0.804 / 0.012 / 0</td><td>0.633 / 0.041 / 0</td><td>0.662 / 0.026 / 0</td><td>0.888 / 0.035 / 0</td></tr>
+          <tr><td>eos_li_fcc</td><td>11</td><td>0.773 / 0.017 / 0</td><td>0.587 / 0.040 / 0</td><td>0.620 / 0.023 / 0</td><td>0.851 / 0.038 / 0</td></tr>
+          <tr><td>eos_li2o</td><td>11</td><td>0.741 / 0.026 / 0</td><td>0.545 / 0.041 / 0</td><td>0.363 / <strong>0.209</strong> / 0</td><td>2.186 / 0.295 / 0</td></tr>
+          <tr><td>eos_li2o2</td><td>11</td><td>0.548 / 0.003 / 0.130</td><td>0.408 / 0.024 / 0.130</td><td>0.645 / 0.022 / 0.052</td><td>1.401 / 0.210 / 0.296</td></tr>
+          <tr><td>rat_li_bcc16</td><td>6</td><td>0.804 / 0.002 / 0.045</td><td>0.632 / 0.006 / 0.088</td><td>0.663 / 0.004 / 0.070</td><td>0.893 / 0.005 / 0.091</td></tr>
+          <tr><td>rat_li2o12</td><td>6</td><td>0.745 / 0.008 / 0.250</td><td>0.518 / 0.022 / 0.308</td><td>0.342 / 0.023 / 0.681</td><td>2.311 / 0.098 / 1.500</td></tr>
+          <tr><td>rat_li16o</td><td>6</td><td>0.963 / 0.010 / 0.284</td><td>0.772 / 0.012 / 0.304</td><td>0.824 / 0.011 / 0.265</td><td>1.320 / 0.044 / 1.066</td></tr>
+          <tr><td>rat_li8o3</td><td>6</td><td>1.141 / 0.023 / 0.564</td><td>0.931 / 0.036 / 0.524</td><td>0.081 / 0.040 / 1.234</td><td>2.660 / 0.098 / 1.710</td></tr>
+          <tr><td><strong>训练 ALL</strong></td><td>68</td><td>0.786 / <strong>0.013</strong> / <strong>0.209</strong></td><td>0.603 / 0.030 / 0.225</td><td><strong>0.539</strong> / 0.052 / 0.352</td><td>1.496 / 0.115 / 0.761</td></tr>
+          <tr><td><strong>测试 ALL</strong></td><td>8</td><td>0.918 / <strong>0.006</strong> / <strong>0.244</strong></td><td>0.718 / 0.014 / 0.273</td><td><strong>0.495</strong> / 0.007 / 0.473</td><td>1.784 / 0.054 / 0.916</td></tr>
+        </tbody>
+      </table></div>
+      <p id="cs60-bulk">cs60（两种 Li，σ ≥ 0.65）：训练集 Ea MAE 1.053、力 MAE 0.798 eV/Å（各组都少结合：Li₂O 1.19、Li₂O₂ 1.59、bcc Li 0.77、rat_li8o3 0.75，rat_li2o12 1.33）；测试集 1.026 / 1.014。比 bs30 的体相好（Li₂O 少结合 1.19 对 2.19 eV/原子），但力误差仍是 (a) 的近 4 倍，含 O 的随机位移结构力 MAE 1.1–1.9 eV/Å。界面三结构：Ea MAE 0.434、力 MAE 1.852；初始界面 Ea −2.364，两个塌缩快照比它高 <strong>+0.305 / +0.234</strong> eV/原子（DFT +1.286 / +1.437），符号对了，但只有 DFT 的约 20%。cs60 的界面弛豫和 MD 没有跑（本机正被两个 MD 占用）。</p>
+      <ul>
+        <li>所有参数都少结合，偏移随组不同（(a)：Li₂O₂ 0.55，Li 金属 0.80，Li₈O₃ 1.14 eV/原子），这正是你说的“不同结合状态下偏移不同”。损失照原样比较绝对值，所以拟合会去追这个偏移。</li>
+        <li>拟合用两种办法追偏移：缩小 r0（更紧的基组，更多结合）和去掉排斥（σ_rep → 0.1）。两者都让晶体想要更小的体积：DFTB 的 EOS 最低点，b30 在 Li bcc、Li fcc、Li₂O、Li₂O₂ 上都在 0.88 V₀（扫描范围的边上），c60 在 Li₂O 上的能量跨度 0.75 eV，DFT 是 0.04 eV。(a) 的 Li₂O 也已经在 0.88 V₀。</li>
+        <li>c60 的 Li_ox 把 Li₈O₃ 的绝对误差压到 0.08，但 Li₂O 超胞的力误差从 0.25 升到 0.68 eV/Å：两种类型让绝对能量和形状在损失里互相交换。</li>
+        <li>有一个测试结构（<code>rat_li8o3</code>）在 T = 0 下 SCC 1000 轮不收敛（|dq| 4e-3），按 PTBP 的做法取最后一轮。</li>
+      </ul>
+    </section>
+
+    <section id="iface">
+      <h2>四、界面的 DFTB 弛豫与 MD</h2>
+      <p>界面：Li₂O(100) √2×√2 R45（2 个惯用晶胞厚，一侧 O 终止、一侧 Li 终止）叠 8 层 bcc Li(100) 2×2，无真空的超晶格，Li₆₄O₁₆，80 个原子，晶胞 6.538 × 6.538 × 24.798 Å；Li 面内压缩 4.7%（<code>make_interface.py</code>）。设计文档写的“约 60 个原子、应变 ≤ 3%”与实际做法不符，以这里为准。DFTB：k 点 4×4×1，电子温度 300 K（Fermi），SCC 容差 1e-6，精确的 SK 导数（<code>md_interface.py</code>）。先 FIRE 弛豫（fmax 0.05 eV/Å），再 300 步 1 fs 的 Langevin NVT（300 K），再 200 步 NVE。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>参数</th><th>弛豫</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>c60（两种 Li）</td><td>54 步后中止</td><td>能量 −1756.5 → −1980.2 eV（−224 eV），fmax 2.8 → 7–19 eV/Å，不收敛：塌缩</td></tr>
+          <tr><td>b30</td><td>236 步后中止</td><td>−1752.7 → −1890.3 eV，fmax 仍有 11 eV/Å：塌缩</td></tr>
+          <tr><td>(a) 发表的</td><td>253 步收敛</td><td>−1736.9 → −1784.8 eV（−48 eV）。Li–Li 最短 2.31 → 1.45 Å，Li–O 2.00 → 1.74 Å，O–O 出现 2.93 Å；MD 中继续塌缩（Li–Li 1.40、O–O 2.13 Å），NVT 末尾 427 K，NVE 里 50 fs 从 427 K 升到 685 K，总能量守恒（−1800.7 eV），所以是势能面在不断给出更低的结构，不是积分的问题</td></tr>
+          <tr><td>bs30（σ ≥ 0.65）</td><td>54 步收敛</td><td id="bs30-md">−1699.1 eV，fmax 0.049 eV/Å，结构稳定。MD：不塌缩，5 个快照的最短距离 Li–Li 2.17–2.20、Li–O 1.96–2.02、O–O 2.93–3.10 Å；Epot 在 NVT 中从 −1699.1 降到 −1701.3 eV、NVE 末 −1701.8 eV（共 −2.7 eV，34 meV/原子），NVE 里 349 → 404 K，说明结构还在缓慢弛豫；NVE 200 fs 总能量漂移 0.030 meV/原子/ps（标准差 0.036 meV/原子），守恒</td></tr>
+        </tbody>
+      </table></div>
+      <p>c60 没有走到 MD，所以没有类型权重随时间的记录（<code>weights.csv</code>）；M5a 的类型切换在 MD 里的表现这次没有测到。</p>
+    </section>
+
+    <section id="dft">
+      <h2>五、界面的 DFT 检验</h2>
+      <p>批准的是“5 个快照、≤ 6 元”（经监控会话转达）。MD 塌缩之后，5 个均匀的快照意义不大，所以改为 4 个结构、同样的目的：初始界面、(a) 弛豫后的界面、MD 的第 2 和第 4 个快照（<code>make_iface_dft.py</code>，KSPACING 0.25 → 4×4×1，ISYM 0，其他同训练数据）。我把“总花费 6 元”理解为这次检验的上限（训练数据在这之前已经花了、另行批准）；作业 966819 的墙钟上限按列表价 76 核 × 0.1 元/核时 × t ≤ 6 元设为 47 分钟，调度器保证不会超；按实收价，这个上限相当于 4.5 元。</p>
+      <p>结果：前三个各用 731–739 s 算完，<code>iface_relaxA</code> 在上限处被停（TIMEOUT 47:13，SCF 没有收敛，不用）。费用按列表价 76 × 47.2 / 60 × 0.1 = 5.98 元；费用清单的实收是 <strong>4.49 元</strong>（× 0.75）。提交没有被拒，也没有报额度不足。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>结构</th><th>DFT Ea</th><th colspan="4">比初始界面高多少（eV/原子）</th></tr>
+          <tr><th></th><th>eV/原子</th><th>DFT</th><th>(a)</th><th>b30</th><th>c60</th></tr></thead>
+        <tbody>
+          <tr><td>初始界面</td><td>−3.445</td><td>0</td><td>0（Ea −2.613）</td><td>0（−2.809）</td><td>0（−2.791）</td></tr>
+          <tr><td>MD 快照 02</td><td>−2.158</td><td><strong>+1.286</strong></td><td>−0.736</td><td>−1.736</td><td>−3.048</td></tr>
+          <tr><td>MD 快照 04</td><td>−2.008</td><td><strong>+1.437</strong></td><td>−0.845</td><td>−1.873</td><td>−3.359</td></tr>
+        </tbody>
+      </table></div>
+      <p>bs30（σ ≥ 0.65）在同样的三个结构上：+2.220、+2.401 eV/原子，符号对了，但高估了约 70%；初始界面的 Ea −1.813（少结合 1.63 eV/原子）。三个结构上的原子化能 MAE / 力 MAE：(a) 1.158 / 0.755，b30 1.899 / 1.320，c60 2.826 / 1.598，bs30 2.264 / 1.412，cs60 0.434 / 1.852。cs60（两种 Li，σ ≥ 0.65）：+0.305、+0.234 eV/原子，符号对了，但偏低约 80%（见第三节）。</p>
+      <p>结论：塌缩是 DFTB 的假象，DFT 认为这些结构高 1.3–1.4 eV/原子。按损失拟合得越多（a → b30 → c60），符号错得越厉害。</p>
+    </section>
+
+    <section id="sigma">
+      <h2>六、σ_rep 为什么落在下界</h2>
+      <ul>
+        <li><strong>physrep 的形式</strong>（<code>tools/physrep.py</code>）：原子大小 = 共价半径 × σ_rep，排斥势的范围随它变。Li 的 σ_rep = 0.1 时，样条在 1.53 Bohr（0.81 Å）就截断了：b30 的 Li–Li 排斥在所有实际距离上都是 0，Li–O 在 1 Å 以外是 0。发表的 (a)（σ 0.50）在 1.4 Å 处 Li–Li 排斥 2.7 eV。</li>
+        <li><strong>损失要它为 0</strong>：所有组都少结合，排斥只会让少结合更多。以 bs30 的起点为例，同一组 r0，σ ≈ 0 时 μ = 187.6，σ = 0.65 时 μ = 380.5。范围 [0.1, 0.8] 是写死的（<code>utils/loss.py</code>），所以每一步都停在 0.1。</li>
+        <li><strong>训练集看不见短程</strong>：随机位移最大 σ = 0.10 Å，最短的 Li–Li 约 2 Å，Li₂ 在 1.4 Å 附近的问题完全在训练集之外。</li>
+        <li><strong>电子部分的假势阱</strong>：(a) 的 Li₂ 二聚体（相对 3.0 Å）：1.4 Å +1.52，1.6 Å +2.02，1.8 Å +1.34 eV，即 1.4 Å 处有一个局部极小；扣掉排斥后，电子部分在 1.6 Å 以内一路往下。</li>
+      </ul>
+      <p>σ_Li 扫描（电子部分不变，只重建排斥，<code>examples/07_battery_li_li2o/sigma_scan.py</code>）：σ ≥ 0.65 时，(a) 和 b30 的 Li₂ 曲线在 2.7 Å 以内单调上升，假势阱消失；b30 + σ 0.65 的 Li₂ 最低点在 2.7 Å（DFT 2.67 Å），LiO 最低点约 2.0 Å。所以给 PTBP 的 <code>optimize</code> 加了 <code>--sigma-range LO HI</code>（经旧参数解析器传到 <code>Loss.sigma_range()</code>，两个内层搜索和梯度路径的 <code>refine_sigma</code> 都用它；默认仍是 0.1 0.8，不改变已有结果；PTBP 测试 224 通过，<code>test_gradient_opt</code> 因本机没有 torch 未跑），用 [0.65, 1.2] 重拟合了 bs30 和 cs60。</p>
+      <p>bs30 的结果说明问题不只是边界：σ 停在新的下界 0.65，损失 374.5（是 b30 的两倍多）；界面稳定、符号对了，但 physrep 同时加强了 Li–O 排斥，Li₂O 的 Ea 少结合 2.2 eV/原子，力误差 0.76 eV/Å。只靠一个 σ_rep 同时管 Li–Li 和 Li–O 的排斥，又只用绝对原子化能去定它，拿不到一套在体相和界面上都可用的参数。</p>
+    </section>
+
+    <section id="pair">
+      <h2>七、按原子对分开的排斥势（本机试验）</h2>
+      <p>为了看体相和界面之间的取舍能不能靠“按原子对”的排斥势解开，给 <code>tools/physrep.py</code> 加了两个可选参数，默认都是空，不传时结果与原来逐位相同（PTBP 测试 224 通过；A0 = 用原参数重建发表的那套，训练集和界面的误差与 (a) 一致到 1e-4）：</p>
+      <ul>
+        <li><code>pair_scale={(Zi, Zj): σ}</code>：这一对原子的排斥势用单独的 σ（两个原子都用它算大小），其他对不变。</li>
+        <li><code>pair_wall={(Zi, Zj): (E, r_E, r_c)}</code>：在 physrep 的排斥势上再加一个短程墙 E·((r_c − r)/(r_c − r_E))⁴，r ≥ r_c 时为 0（eV、Å）。</li>
+      </ul>
+      <p>电子部分不动，只重建 Li–Li 的排斥（<code>examples/07_battery_li_li2o/pair_scan.py</code>）；A = 发表的那套（σ_Li 0.50），B = b30（σ_Li 0.1）。训练集 68 个结构；界面一栏是第五节的三个 DFT 结构。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>参数</th><th>Li–Li 排斥</th><th>训练集 Ea MAE</th><th>力 MAE</th><th>Li₂O 平均 ΔEa</th><th>界面 快照 02 / 04（DFT +1.29 / +1.44）</th></tr></thead>
+        <tbody>
+          <tr><td>(a)</td><td>σ 0.50</td><td>0.786</td><td>0.209</td><td>+0.74</td><td>−0.74 / −0.85</td></tr>
+          <tr><td>A065</td><td>σ_LiLi 0.65</td><td>1.062</td><td>0.251</td><td>+1.35</td><td>+1.99 / +2.18</td></tr>
+          <tr><td>A080</td><td>σ_LiLi 0.80</td><td>2.360</td><td>0.661</td><td>+3.69</td><td>+6.17 / +6.99</td></tr>
+          <tr><td>B065</td><td>b30 + σ_LiLi 0.65</td><td>0.895</td><td>0.304</td><td>+1.19</td><td>+1.85 / +2.06</td></tr>
+          <tr><td>B080</td><td>b30 + σ_LiLi 0.80</td><td>2.193</td><td>0.717</td><td>+3.53</td><td>+6.04 / +6.88</td></tr>
+          <tr><td>AW3</td><td>σ 0.50 + 墙 3 eV @ 1.4 Å，2.0 Å 截断</td><td>0.786</td><td>0.209</td><td>+0.74</td><td>−0.16 / −0.29</td></tr>
+          <tr><td>AW6</td><td>σ 0.50 + 墙 6 eV @ 1.4 Å，2.1 Å 截断</td><td>0.786</td><td>0.208</td><td>+0.74</td><td><strong>+0.65 / +0.54</strong></td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>单独的 σ_LiLi 不行</strong>：physrep 的 σ 同时决定排斥的强度和范围。σ_LiLi 0.65 的排斥伸到 Li₂O 里 2.31 Å 的 Li–Li 近邻，Li₂O 少结合的量从 0.74 升到 1.2–1.35 eV/原子；界面的符号对了，但高估约 50%。它和第六节的 bs30 是同一个取舍，只是轻一些。</li>
+        <li><strong>短程墙不碰训练集</strong>：r_c ≤ 2.1 Å，比训练集里最短的 Li–Li 还短，所以训练集的误差与 (a) 相同（只有 rat_li8o3 的力变了 0.008 eV/Å）。AW6 把两个塌缩结构的符号改对了：+0.65 / +0.54 eV/原子，DFT 是 +1.29 / +1.44，还差一半左右。界面三结构的 Ea MAE 从 1.158 降到 0.364，但力 MAE 从 0.755 升到 1.768：塌缩结构里有很多 Li–Li 落在墙里，DFTB 的力比 DFT 大。</li>
+        <li><strong>AW6 的界面弛豫</strong>：66 步收敛，能量降 10.8 eV（(a) 是 253 步降 48 eV），最短距离 Li–Li 1.91、Li–O 1.81、O–O 3.09 Å，没有塌缩。但 1.91 Å 仍然太短（DFT 的 Li₂ 键长 2.67 Å、bcc Li 近邻 3.0 Å）：原子停在墙的软边上，墙在那里只贡献约 0.04 eV。墙挡住了塌缩，没有把 Li–Li 距离修对。</li>
+        <li id="aw6-md"><strong>AW6 的 300 K MD 还是在慢慢下滑</strong>：5 个快照的最短距离 Li–Li 1.71–1.79、Li–O 1.72–1.75 Å，O–O 从弛豫后的 3.09 缩到 2.61 Å；Epot 从 −1747.6 降到 NVE 中最低 −1752.0 eV（−4.4 eV），NVE 里 305 K 升到最高 484 K。NVE 200 fs 总能量漂移 0.23 meV/原子/ps（标准差 0.04 meV/原子），守恒，所以仍是势能面给出更低的结构。比 (a) 慢得多、浅得多（(a) 的 MD 里 Li–Li 1.40、O–O 2.13 Å，NVE 里升到 685 K），但没有停住：Li–Li 被压进墙里 0.1–0.2 Å，O–O 也在缩，而 O–O 没有墙。对照 bs30（σ ≥ 0.65）的 MD：Li–Li 2.17 Å 以上，O–O 2.93 Å 以上，只有 34 meV/原子的缓慢弛豫。</li>
+      </ul>
+      <p>结论：在不加新 DFT 的前提下，短程墙是目前唯一既不坏体相、又让界面符号正确的办法；它让弛豫不再塌缩，但在 300 K 的 MD 里只是减慢了下滑，没有挡住（Li–O、O–O 这两对也需要短程约束）。此外墙的 E、r_E、r_c 是手定的，不是拟合出来的，训练集里也没有数据能定它们。要把它变成拟合的一部分，还是需要第九节里的短程数据（二聚体曲线、压缩体相、初始界面）。<code>pair_scale</code>、<code>pair_wall</code> 目前只在 <code>physrep</code> 里，没有接到 <code>optimize</code> 的命令行。</p>
+    </section>
+
+    <section id="issues">
+      <h2>八、记下的问题</h2>
+      <ul>
+        <li><strong>内层 σ 搜索的网格精修越界</strong>：<code>brute(..., Ns=11)</code> 默认用无约束的 <code>fmin</code> 精修，返回的 σ ≈ 1e-16（远在 [0.1, 0.8] 之外，日志的 “Search time 1”），之后的 L-BFGS-B 从截到下界的点开始。这次不改变结论（损失本来就在下界最低），但它让内层搜索偏向下界；修法是 <code>finish=None</code> 或在边界内精修，会改变默认行为，所以没改，留作待办。</li>
+        <li>PTBP 画评估图时的崩溃（<code>cli/run.py:401</code>），见第二节。</li>
+        <li>Li₈O₃ 测试结构在 T = 0 下 SCC 不收敛，见第三节。</li>
+        <li>界面的两个塌缩快照在评估时（T = 0）SCC 1000 轮不收敛（|dq| 1.6e-2 – 8.9e-2，各套参数都有），按 PTBP 的做法取最后一轮；第五、七节里这两个结构的 DFTB 能量因此有一定不确定性，但不足以改变符号的结论。</li>
+        <li>hotcent 在集群上的安装被权限规则拦下，没有绕过，拟合都在本机跑。</li>
+        <li>计时都在共享负载的 Mac 上测得（负载 3–60），只作参考。</li>
+        <li>继续做界面检验和 σ 下界的重拟合、只用本机，这两条指示都经监控会话转达。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>九、下一步</h2>
+      <ul>
+        <li><strong>训练集加短程数据</strong>：Li₂、LiO、O₂ 二聚体曲线（1.2–3.5 Å）和压缩到 0.7 V₀ 的体相，以及这次算好的初始界面（80 个原子，DFT 能量和力已有）。需要新的 DFT，按列表价估约 2–4 元（实收约 1.5–3 元），要你批准。</li>
+        <li><strong>排斥势按原子对</strong>：physrep 已经有 <code>pair_scale</code> 和 <code>pair_wall</code>（第七节）。单独的 σ_LiLi 不行；Li–Li 短程墙让弛豫稳定，但 MD 里 Li–O、O–O 也在缩，墙要覆盖这三对，参数要用短程数据（Li₂、LiO、O₂ 二聚体）拟合，再接到 <code>optimize</code>。</li>
+        <li>损失仍按你的意见比较绝对原子化能；ROADMAP 里“按元素拟合的能量偏移”保持为可选项。这次的数据说明，只靠绝对值，拟合会用去掉排斥来换结合能，这一点值得在决定可选项时考虑。</li>
+        <li>内层 σ 搜索的越界精修（第八节）。</li>
+        <li>类型切换在 MD 里的检验（权重随时间、能量守恒），等有一套在界面上稳定的两种 Li 参数之后再做。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7e2-gpu-measurement.html">← M7e-2 报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

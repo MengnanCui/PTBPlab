@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M5d 平滑切换的定位</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M5d</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M5d · 设计文档</p>
+    <h1>同一元素多套参数（四）：平滑切换在已有工作中的位置，以及下一步</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-08</dd></div>
+      <div><dt>配套</dt><dd><a href="M5a-type-switching.html">M5a 设计</a> · <a href="../reports/M5a-type-switching.html">M5a 报告</a> · <a href="../reports/M5c-battery-demo.html">M5c 报告</a> · <a href="../reports/M5d-short-range-switching.html">M5d 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">让同一元素的 SK 参数随局部环境变化，近几年有三条路线：按氧化态分配参数集（FHI 的 DOVE，2026），按环境逐原子预测基组参数（Bremen 的 TBMaLT，2023），以及按配位数调 on-site 能量（GFN-xTB）。<strong>没有找到</strong>一项工作做到 pydftb M5a 做的事：同一元素几套完整的 SK 参数（H0、S、排斥能）按配位数用 C² 光滑的权重混合，能量对原子位置可微，力、应力含权重的导数，并在 MD 中验证了守恒。</p>
+    <ul>
+      <li><strong>最接近的是 DOVE</strong>（Song, Samtsevych, Beiersdorfer, Melson, Scheurer, Reuter, Panosetti，FHI，<a href="https://arxiv.org/abs/2605.19977">arXiv 2605.19977</a>）：它解决“每个环境该用什么参数”，而且算例里正好有 Li 金属、嵌入 Li 与界面 Li；界面 Li 的参数取两套参数的平均。它没有给出对位置可微的切换，也没有力和 MD（Li 嵌入只在 NEB 结构上做单点）。</li>
+      <li><strong>两者互补</strong>：DOVE 定参数，M5a 给出在参数之间光滑过渡、带力、能跑 MD 的机制，M5b 把它接进 PTBP 的拟合。界面 Li 的“取平均”在 M5a 里是权重 0.5 的特例。</li>
+      <li><strong>M5a 自己的限制</strong>：同一元素的各类型要有相同的 on-site 能、U、占据数和基组（只有 r0_w、r0_d、σ_rep 不同）；只在 NumPy 引擎中；窗口是手选的超参数。DOVE 改变约束势，原则上 on-site 能也变，M5a 现在不能直接用它的参数。</li>
+      <li><strong>Li 带 p 已经检查过</strong>（第四节）：发表的 PTBP Li 加上 p 壳层后，Li₂ 在 1.2 Å 比 6 Å 低 14.9 eV，界面塌缩结构的能量从 −0.74/−0.85 变成 −3.23/−3.55 eV/原子（DFT +1.29/+1.44）。PTBP 的 Li 只按 s 拟合过，p 的积分从没被检验。所以 <code>max_l</code> 的默认按用户的决定（2026-11-08）跟 PTBP 拟合时的基组走（占据壳层），文件里有更高壳层时警告一次；两种 Li 的重拟合仍用 Li s。</li>
+      <li><strong>结果见 <a href="../reports/M5d-short-range-switching.html">M5d 报告</a></strong>：短程 DFT（43 个单点，实收约 0.60 元）、Li–Li 墙、加短程数据的重拟合与带切换的界面都不改界面塌缩的符号。</li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#compare">一、已有工作的比较</a></li>
+      <li><a href="#diff">二、M5a 的不同之处</a></li>
+      <li><a href="#limits">三、M5a 的限制</a></li>
+      <li><a href="#next">四、下一步：Li 带 p 的重做</a></li>
+      <li><a href="#caveats">五、检索的范围</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="compare">
+      <h2>一、已有工作的比较</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>工作</th><th>什么随环境变</th><th>怎么决定</th><th>对位置可微、力</th><th>MD</th><th>与拟合</th></tr></thead>
+        <tbody>
+          <tr><td>DOVE（FHI，2026）</td><td>约束势参数 → SK 积分</td><td>离散：按氧化态分配；连续：GPR + 改进的 SOAP 预测约束参数</td><td>论文没有讨论；SK 积分随约束光滑变化，保证混合基组的重叠矩阵良态</td><td>没有（单点）</td><td>DSKO 优化每套参数</td></tr>
+          <tr><td>TBMaLT 环境基组（Bremen/Bonn，2023）</td><td>每个原子的约束半径与 on-site 能量</td><td>ACSF 描述符 + 随机森林，逐原子预测</td><td>框架用 PyTorch autograd，但没有展示环境相关基组下的力</td><td>没有</td><td>对偶极矩、DOS、电荷训练</td></tr>
+          <tr><td>DSKO 扩展基组（FHI，2026）</td><td>不变：一套参数</td><td>用带虚轨道的扩展基组同时拟合多种氧化态和配位的能带</td><td>普通 DFTB，可微</td><td>可以</td><td>多目标能带拟合</td></tr>
+          <tr><td>GFN-xTB（Grimme）</td><td>on-site 能量</td><td>随 D3 式配位数线性变化</td><td>可微，有力</td><td>可以</td><td>全局参数</td></tr>
+          <tr><td>pydftb M5a + PTBP M5b</td><td>整套 SK 参数（H0、S、排斥能）</td><td>按配位数的 C² 五次台阶权重，在几套离散参数之间混合</td><td>力、应力含 dw/dCN 项；切换区内力与能量差分一致到 5e-10 Ha/Bohr</td><td>NVE 守恒（进出窗口 78–220 次/ps，漂移 ≤ 6e-3 eV/ps）</td><td>PTBP 按类型拟合（M5b），M5c 用于 Li | Li₂O</td></tr>
+        </tbody>
+      </table></div>
+      <p>经典力场里有在两个模型之间用切换函数混合能量和力的做法（例如聚合物交联的拓扑转移，<a href="https://arxiv.org/pdf/2011.02820">arXiv 2011.02820</a>），思路相同，但不是 DFTB。</p>
+    </section>
+
+    <section id="diff">
+      <h2>二、M5a 的不同之处</h2>
+      <ul>
+        <li><strong>混合的是完整的参数集</strong>，不是一个标量（约束半径、on-site 能量）。原子对 (i, j) 的 H0、S 块是各类型对 (t, t′) 的块按 w<sub>i,t</sub> w<sub>j,t′</sub> 加权之和，排斥能同样。所以任何两套 SK 文件都能混合，包括用不同方法得到的参数。</li>
+        <li><strong>权重有解析导数</strong>：w(CN) 用 S(x) = 6x⁵ − 15x⁴ + 10x³，CN 用紧支撑的计数函数，力 = 固定权重的力 + Σ (∂E/∂w)(dw/dCN)(dCN/dR)。离散极限（权重恰为 0/1）与 DFTB+ 用固定标签的结果一致到 2e-11 Ha。</li>
+        <li><strong>已接进拟合</strong>：PTBP 的 <code>--types</code> 声明类型与切换，每种类型各有 r0_w、r0_d、σ_rep（M5b）。DOVE 也拟合参数，但拟合与“怎样在 MD 中用”是两件事；M5a 补的是后者。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>三、M5a 的限制</h2>
+      <ul>
+        <li>同一元素的类型必须有相同的 on-site 能、U、占据数、基组与质量（<code>typeswitch.unequal_type_quantities</code>）。混合 on-site 能需要把它也按权重混合并加入力的导数，是可以做的扩展，但 SCC 的参考布居和 U 也会跟着变，要另外设计。</li>
+        <li>只有 NumPy 引擎；torch 后端、autodiff、Casida、XL-BOMD 拒绝。</li>
+        <li>窗口（centre、width、计数截断）是手选的。M5c 的窗口按 Li 周围的 O 数选，结果对窗口的敏感程度还没有检查。</li>
+        <li>M5c 的结论是否定的，但原因不在切换：PTBP 的电子部分在 Li₂ 1.4 Å 附近有假势阱，训练集又没有短程数据。加上 Li 的 p 壳层不能解决，反而更糟（第四节）。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>四、下一步：Li 带 p 的重做</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>PTBP 发表的 Li、O</th><th>Li 只有 s</th><th>Li 带 p</th><th>DFT</th></tr></thead>
+        <tbody>
+          <tr><td>训练集 Ea MAE / 平均偏差（eV/原子）</td><td>0.786 / +0.786（少结合）</td><td>0.768 / −0.768（多结合）</td><td>—</td></tr>
+          <tr><td>训练集力 MAE（eV/Å）</td><td>0.209</td><td>0.323（rat_li8o3 1.53）</td><td>—</td></tr>
+          <tr><td>Li₂，相对 6 Å（eV）：1.2 / 1.4 / 1.6 / 2.7 Å</td><td>+1.13 / +0.17 / +0.64 / −1.54</td><td>−14.89 / −13.27 / −5.74 / −1.85</td><td>强排斥 / … / 最低点 2.67 Å</td></tr>
+          <tr><td>LiO 最低点（eV）</td><td>−3.00（1.8 Å）</td><td>−4.48（1.6 Å）</td><td>—</td></tr>
+          <tr><td>界面：初始界面 Ea（eV/原子）</td><td>−2.613</td><td>−4.158</td><td>−3.445</td></tr>
+          <tr><td>界面：塌缩快照 02 / 04 比初始高（eV/原子）</td><td>−0.74 / −0.85</td><td>−3.23 / −3.55</td><td>+1.29 / +1.44</td></tr>
+        </tbody>
+      </table></div>
+      <p>结论：p 壳层没有修好 Li₂ 的假势阱，而是在 1.6 Å 以内造成十几 eV 的假结合。<code>max_l</code> 的默认因此按 PTBP 拟合时的基组（占据壳层）；pydftb 和 DFTB+ 两边一致，SKF 有更高壳层时每个文件警告一次，用户可用 <code>max_l={"S": "d"}</code> 或 <code>"highest"</code> 显式打开（Perovskite 的 S、I、Sn、Cs 就该这样做）。</p>
+      <ol>
+        <li><strong>短程 DFT</strong>（作业 981219，已提交）：Li₂、LiO、O₂ 二聚体 1.0–3.5 Å 与 0.70–0.85 V₀ 的 bcc Li、Li₂O、Li₂O₂。</li>
+        <li><strong>重新拟合</strong>：一套 Li 与两种 Li 加切换，训练集加入短程数据，Li 仍为 s；排斥势用 M5c 的 <code>pair_wall</code> 给 Li–Li、Li–O、O–O 三对加短程墙，墙的参数对二聚体曲线拟合。</li>
+        <li><strong>界面</strong>：弛豫与 300 K MD（Langevin 300 步 + NVE 200 步），记录切换权重随时间的变化（<code>weights.csv</code>），这是 M5c 没能做成的检验。</li>
+        <li>结果写进 M5d 报告；短程 DFT 数据（M5c 第九节）仍待提交，有了以后再做三对原子的短程约束。</li>
+      </ol>
+    </section>
+
+    <section id="caveats">
+      <h2>五、检索的范围</h2>
+      <ul>
+        <li>2026-11-08 的网络检索，关键词覆盖“同一元素多套参数”“环境相关 SK 参数”“配位数切换”“FHI / Bremen”。DOVE 与 TBMaLT 读了摘要和部分正文，没有逐段读完；结论“没有找到”不等于“不存在”。</li>
+        <li>发表前要系统检索一次，重点是 Panosetti / Reuter 组在 DOVE 之后有没有做可微的版本，以及 DFTB+ 开发版里有没有类似的功能。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M5c-battery-demo.html">← M5c 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

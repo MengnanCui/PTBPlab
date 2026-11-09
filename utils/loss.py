@@ -413,6 +413,11 @@ class Loss():
         return func_vals, failed
 
 
+    def sigma_range(self) -> tuple:
+        """Bounds of the inner sigma_rep search: --sigma_range, default (0.1, 0.8) (M5c)."""
+        r = getattr(self.args_input, 'sigma_range', None)
+        return (float(r[0]), float(r[1])) if r else (0.1, 0.8)
+
     def penalty(self, r0_w: float, r0_d: float) -> float:
         """Regularisation factor for these confinement radii (see :func:`r0_penalty`)."""
         if self.cov_radius is None:
@@ -1218,7 +1223,7 @@ class Loss():
 
 
         #3. Parameterization for the Repulsion term, which is parallelized respect to
-            sigma_rep_best, mu = self.Repulsion_optimization(conf_parameters, 0.1, 0.8)
+            sigma_rep_best, mu = self.Repulsion_optimization(conf_parameters, *self.sigma_range())
             if not math.isfinite(float(mu)):                  # M5b-2: a failure, not a loss
                 raise LossFailure(f"the loss is {mu}")
             # Downstream print/plot/par.out blocks read the bare `sigma_rep`
@@ -1663,7 +1668,7 @@ class Loss():
             # extreme radii): none or only some is a failure (M5b-2; M5b failed on none only)
             self._check_complete_results()
 
-            svec, mu = self.Repulsion_optimization_types(x)
+            svec, mu = self.Repulsion_optimization_types(x, *self.sigma_range())
             if not math.isfinite(float(mu)):                  # M5b-2: a failure, not a loss
                 raise LossFailure(f"the loss is {mu}")
             self.last_sigma = list(svec)                  # sigma_rep of every set (mu's point)

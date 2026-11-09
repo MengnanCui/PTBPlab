@@ -58,13 +58,19 @@ _SETTINGS: dict[str, Any] = {
     "pydftb_backend": "numpy",        # M4d: numpy | torch
     "pydftb_device": "cpu",           # torch device: cpu, cuda[:i], mps, xpu (auto: run.py)
     "pydftb_dtype": "float64",
+    # MaxAngularMomentum of every element on both engines: "occupied" (default) = the highest
+    # shell occupied in the neutral atom (ASE's read_max_angular_momentum), the basis PTBP's
+    # parameters are fitted with; "highest" = every shell the SKF has integrals for
+    # (pydftb.skf.max_l_available), e.g. the d of S, I, Sn and the p of Li
+    "max_l": "occupied",
 }
+MAX_L_RULES = ("highest", "occupied")
 
 
 def configure(**kwargs) -> dict:
     """Set process-wide engine options (``engine``, ``smearing``,
     ``smearing_temperature``, ``mp_order``, ``pydftb_forces``, ``pydftb_backend``,
-    ``pydftb_device``, ``pydftb_dtype``)."""
+    ``pydftb_device``, ``pydftb_dtype``, ``max_l``)."""
     for key, value in kwargs.items():
         if value is None:
             continue
@@ -77,6 +83,8 @@ def configure(**kwargs) -> dict:
         raise ValueError(f"smearing must be one of {SMEARINGS}, got {_SETTINGS['smearing']!r}")
     if _SETTINGS["pydftb_forces"] not in PYDFTB_FORCES:
         raise ValueError(f"pydftb_forces must be one of {PYDFTB_FORCES}")
+    if _SETTINGS["max_l"] not in MAX_L_RULES:
+        raise ValueError(f"max_l must be one of {MAX_L_RULES}, got {_SETTINGS['max_l']!r}")
     if _SETTINGS["smearing"] == "mp" and int(_SETTINGS["mp_order"]) < 1:
         raise ValueError("Methfessel-Paxton order must be >= 1 (use smearing='gaussian' for 0)")
     _check_pydftb_backend()
@@ -149,7 +157,10 @@ def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | Non
     (pydftb: threads over k-points, bitwise identical results).
     Contract (both engines): energy = DFTB+ "Total energy" (eV), forces (eV/A);
     FileNotFoundError for a missing SKF; results are returned even if the SCC
-    does not converge (``ConvergentSCCOnly = No``).
+    does not converge (``ConvergentSCCOnly = No``: the loss treats such structures; pydftb's
+    own default is to stop, so the pydftb engine passes ``convergent_scc_only=False``).
+    Both engines use the ``max_l`` setting for MaxAngularMomentum (default: the occupied
+    shells, PTBP's fitting basis), written out explicitly for DFTB+.
     """
     engine = engine or dftb_args.get("engine") or _SETTINGS["engine"]
     if engine == "dftbplus":
@@ -256,7 +267,8 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                        dtype=_SETTINGS["pydftb_dtype"])
     if _TYPE_SWITCHING:                              # M5b; without switches the call is as before
         backend["type_switching"] = list(_TYPE_SWITCHING)
-    return PyDFTB(dftb_args.get("slater_p", "./"),
+    return PyDFTB(dftb_args.get("slater_p", "./"), max_l=_SETTINGS["max_l"],
+                  convergent_scc_only=False, warn_unconverged=False,   # PTBP's contract
                   kpts=kspec, time_reversal=not isinstance(kspec, dict),
                   smearing=pydftb_smearing(),
                   scc=str(dftb_args.get("SCC", "Yes")).lower() == "yes",

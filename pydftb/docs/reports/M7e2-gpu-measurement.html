@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7e-2 GPU 实测报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M7e-2</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7e-2 · 完成报告</p>
+    <h1>大体系（七）：GPU 实测与跨结构批量的决定</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span>（测量与决定：不做同步 SCC 的跨结构批量）</dd></div>
+      <div><dt>日期</dt><dd>2026-11-06</dd></div>
+      <div><dt>代码</dt><dd><code>c1a11bd</code>（没有改代码；数据在 <code>pydftb/bench/gpu_rtx5090/</code>）</dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M7e-gpu-check.html">M7e 设计文档</a>（第五节：判据） · <a href="M7e-gpu-check.html">M7e 报告</a> · <a href="M4d-devices.html">M4d 报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">在电光云 dg50 分区的 RTX 5090 上把 GPU 自检完整跑了一遍（P137–P140）。GPU 上的正确性成立：269 项检查只有 1 项超出阈值，原因不是 GPU（见第二节）。但按 M7e 设计文档第五节的判据，<strong>同步 SCC 的跨结构批量不做</strong>：PTBP 的 Cu 阶段在 GPU 上串行比 32 个 CPU 进程慢 8.6 倍，GPU 运行里 93% 的时间留在 CPU；带 k 点的分组堆叠只有 0.96–1.07 倍，远低于 3 倍的门槛。</p>
+    <ul>
+      <li><strong>正确性</strong>：65 个 DFTB+ 参考算例在 GPU 上 float64 全部通过；GPU 对 CPU（torch，float64）能量 ≤ 1.4e-14 Ha、力 ≤ 1.6e-14 Ha/Bohr、本征值 ≤ 1.0e-14 Ha；两次计算逐位相同；自动求导 GPU 对 CPU ≤ 2.9e-11；CUDA 之后 fork 的子进程正常结束。</li>
+      <li><strong>没过的一项</strong>：<code>cpu li2_sk_tail [float64]</code> 的电荷差 1.02e-10，阈值 1e-10，同一算例的能量差 5.6e-17、本征值差 1.4e-17。这个算例的电荷本来只准到 SCC 容差（M4a 报告：容差 1e-12 时 500 轮不收敛）。阈值不改，照实记下。</li>
+      <li><strong>PTBP 的 Cu 阶段</strong>（66 个结构）：NumPy 单线程 22.0 s，32 个进程 1.56 s（由最大的结构 1.55 s 决定，16 个进程已经到 1.62 s）；GPU 串行 float64 13.4 s，其中 CPU 上的工作 12.4 s，GPU 的求解只有 0.94 s。</li>
+      <li><strong>求解本身在 GPU 上确实快</strong>：Σ(diag − fill) 从 NumPy 单线程的 8.65 s 降到 0.94 s（9.2 倍）；单个 Cu32 晶胞（288 个轨道、14 个 k 点）每轮 SCC 0.068 s，NumPy 单线程 0.50 s、k 点线程 0.12 s；批量 ≥ 128 的 eigh 在 float64、complex128 下快 3.6–24 倍。但 PTBP 的结构太小，求解只占阶段的一小部分。</li>
+      <li><strong>堆叠</strong>：只有 Γ 点的实矩阵组（33 个结构、N = 18）快 11.7 倍，可这一组在单线程下一共才 2.5 s；带 k 点的复数组 0.96–1.07 倍，因为每轮的时间有 53–84%（complex128）花在 CPU 上的费米能级。Cu32（N = 288）1.56 倍。</li>
+      <li><strong>float32 不用于 PTBP</strong>：PTBP 阶段 |dE| 1.3e-4 Ha，4 个结构的 SCC 轮数不同（fcc 00 从 7 轮变成 45 轮）；Cu4 k8 100 轮不收敛；Cu32 的 complex64 堆叠对逐个的布居差 9.8e-3 e。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">268 / 269</span><span class="lbl">GPU 上通过的检查（1 项是阈值，不是 GPU）</span></li>
+      <li><span class="num">8.6 倍</span><span class="lbl">GPU 串行比 32 个 CPU 进程慢（PTBP 的 Cu 阶段）</span></li>
+      <li><span class="num">93%</span><span class="lbl">GPU 运行里留在 CPU 的工作</span></li>
+      <li><span class="num">1.26 元</span><span class="lbl">全部实测的费用（16.8 分钟卡时，实收 4.5 元/卡时）</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#run">一、怎么跑的</a></li>
+      <li><a href="#checks">二、正确性（P137）</a></li>
+      <li><a href="#ptbp">三、PTBP 的 Cu 阶段（P138）</a></li>
+      <li><a href="#stacked">四、堆叠的完整求解（P139）</a></li>
+      <li><a href="#other">五、eigh 与 Cu 晶胞（P140）</a></li>
+      <li><a href="#decision">六、按判据的决定</a></li>
+      <li><a href="#next">七、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="run">
+      <h2>一、怎么跑的</h2>
+      <p>机器：电光云 dg50 分区的节点 c7g001、c7g002，每个作业 1 张 NVIDIA GeForce RTX 5090（32 GB，计算能力 12.0，170 个 SM，驱动 595.71.05），CPU 是 AMD EPYC 9J14。环境：Python 3.12.16，torch 2.14.1+cu130，NumPy 2.5.4（OpenBLAS 0.3.34），SciPy 1.18.1，ASE 3.29.0；pydftb 是分支 <code>claude/inspiring-ride-zax2o7</code> 的 <code>c1a11bd</code>，可编辑安装（所以 JSON 里 <code>pydftb_commit</code> 为空：同步时没有带 <code>.git</code>）。TF32 关闭，<code>float32_matmul_precision = "highest"</code>。</p>
+      <p>完整的自检拆成三个作业，各占一张卡同时运行；检查每次都会跑，所以计时作业用 <code>--cases h2o</code> 把参考算例压到一个：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>作业</th><th>命令</th><th>CPU</th><th>用时</th><th>JSON</th></tr></thead>
+        <tbody>
+          <tr><td>958027</td><td><code>--quick --dtype both</code>（先确认环境）</td><td>16</td><td>4:19</td><td><code>gc_quick.json</code>，31 项全部通过</td></tr>
+          <tr><td>958059</td><td><code>--dtype both --skip-timing</code></td><td>16</td><td>3:17</td><td><code>gc_checks.json</code></td></tr>
+          <tr><td>958060</td><td><code>--dtype both --timings eigh,stacked --cases h2o</code></td><td>16</td><td>5:52</td><td><code>gc_eighstk.json</code></td></tr>
+          <tr><td>958061</td><td><code>--dtype both --timings cu,ptbp --cases h2o</code></td><td>32</td><td>3:20</td><td><code>gc_cuptbp.json</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>四个 JSON 和作业脚本放在 <code>pydftb/bench/gpu_rtx5090/</code>。dg50 的费用按费用清单：GPU 实收 4.5 元/卡时（列表价 6 × 0.75），CPU 单价为 0。按 <code>sacct</code>：作业 958027、958059、958060、958061 合计 1008 s 卡时（16.8 分钟），实收 <strong>1.26 元</strong>（初稿写约 1.7 元按列表价，中间一版按 CPU 也计费写约 2.2 元，均已更正）。节点同时有别人的作业（状态 mix），所以 CPU 进程池的时间可能偏慢；结论不受影响，因为差距是数倍。</p>
+    </section>
+
+    <section id="checks">
+      <h2>二、正确性（P137）</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>检查</th><th>项数</th><th>未通过</th><th>最大差</th></tr></thead>
+        <tbody>
+          <tr><td>references [float64]（DFTB+ 参考，<code>refgen --check</code> 的容差）</td><td>65</td><td>0</td><td>能量 2.2e-7 Ha、力 1.2e-6 Ha/Bohr、电荷 3.0e-7 e（都在各自算例的容差内）</td></tr>
+          <tr><td>cpu [float64]（GPU 对 torch 的 CPU，阈值 1e-10）</td><td>65</td><td>1</td><td>能量 1.4e-14、力 1.6e-14、本征值 1.0e-14；电荷 1.0e-10（<code>li2_sk_tail</code>）</td></tr>
+          <tr><td>determinism [float64]、[float32]</td><td>2 + 2</td><td>0</td><td>能量、力、电荷、本征值逐位相同</td></tr>
+          <tr><td>references / cpu [float32]（只报告）</td><td>65 + 65</td><td>—</td><td>能量 2.6e-5 Ha、力 2.3e-6 Ha/Bohr、电荷 8.8e-5 e</td></tr>
+          <tr><td>autodiff（hf 与 implicit，GPU 对 CPU）</td><td>3</td><td>0</td><td>2.9e-11（相对）</td></tr>
+          <tr><td>fork（CUDA 之后 fork 一个 NumPy 计算）</td><td>1</td><td>0</td><td>子进程结束，退出码 0</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong><code>li2_sk_tail</code></strong>：两个 Li 原子相距 14.8 Bohr，落在 SK 表之后的五次衰减尾巴里。GPU 对 DFTB+ 的参考是通过的（电荷差 6.9e-11，容差 1e-9）。GPU 对 CPU 的能量差 5.6e-17 Ha、力 2.1e-22 Ha/Bohr、本征值 1.4e-17 Ha，只有电荷差 1.02e-10 e。这个算例在默认 SCC 容差（1e-10）下 1 轮就停，容差 1e-12 时 500 轮不收敛（M4a 报告，两个后端相同），所以电荷只准到 SCC 容差的量级，两边舍入的不同就够越过固定的 1e-10。这不是 GPU 的错误；<code>CPU_TOL</code> 不改，照实记为一项未通过。</p>
+    </section>
+
+    <section id="ptbp">
+      <h2>三、PTBP 的 Cu 阶段（P138）</h2>
+      <p>完整的 66 个结构（<code>validation/ptbp_workload.py</code>），<code>--workers 32</code>；时间是每个结构从新建计算器到 <code>get_forces()</code> 返回：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方式</th><th>每个结构之和</th><th>阶段的完成时间</th><th>SCC 轮数</th><th>对 NumPy 单线程</th></tr></thead>
+        <tbody>
+          <tr><td><code>numpy_1</code></td><td>22.04 s</td><td>22.04 s</td><td>443</td><td>—</td></tr>
+          <tr><td><code>numpy_kthreads</code></td><td>27.74 s</td><td>27.74 s</td><td>443</td><td>逐位相同（比单线程慢 26%）</td></tr>
+          <tr><td><code>numpy_procs</code>（32 个进程）</td><td>25.70 s</td><td><strong>1.56 s</strong>（按池里的时间排程 1.55 s）</td><td>443</td><td>逐位相同</td></tr>
+          <tr><td><code>device_float64</code></td><td>13.37 s</td><td>13.37 s</td><td>443</td><td>|dE| 9.3e-11 Ha、|dF| 3.3e-11 Ha/Bohr、|dS| 5.5e-12</td></tr>
+          <tr><td><code>device_float32</code></td><td>12.42 s</td><td>12.42 s</td><td>482</td><td>|dE| 1.3e-4 Ha、|dF| 6.4e-5 Ha/Bohr、|dS| 1.4e-5；4 个结构轮数不同</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>分项（66 个结构之和）</th><th>NumPy 单线程</th><th>GPU float64</th><th>GPU float32</th></tr></thead>
+        <tbody>
+          <tr><td>原子对与 H0、S</td><td>1.54 s</td><td>1.19 s</td><td>1.19 s</td></tr>
+          <tr><td>γ（Ewald 与短程）</td><td>4.97 s</td><td>4.96 s</td><td>4.96 s</td></tr>
+          <tr><td>求解（不含费米能级）</td><td>8.65 s</td><td><strong>0.94 s</strong></td><td>0.44 s</td></tr>
+          <tr><td>费米能级（<code>fill</code>，CPU）</td><td>3.69 s</td><td>3.68 s</td><td>3.23 s</td></tr>
+          <tr><td>力与应力</td><td>2.57 s</td><td>2.15 s</td><td>2.13 s</td></tr>
+          <tr><td>留在 CPU 的工作</td><td>—</td><td>12.44 s（93%）</td><td>11.98 s（96%）</td></tr>
+          <tr><td>流水线的上限 max(CPU 工作 / 32, GPU 求解)</td><td>—</td><td>0.94 s</td><td>0.44 s</td></tr>
+          <tr><td>GPU 串行对 32 个进程</td><td>—</td><td>慢 8.6 倍</td><td>慢 8.0 倍</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>按相（NumPy 单线程 / GPU float64）：beta-Sn 10.24 / 4.31 s（每个 1099–1688 个 k 点）、bcc 4.75 / 3.23 s、fcc 4.53 / 3.09 s（≤ 2048 个 k 点，N = 9），只用 Γ 点的 dimer、AA-graphite、diamond 共 2.53 / 2.74 s：小的 Γ 点结构在 GPU 上更慢。</li>
+        <li>进程池的完成时间由最大的结构决定：最大的 beta-Sn 结构 1.55 s，按池里的时间排程，16 个进程 1.62 s，32 与 64 个都是 1.55 s。所以再加核也不会更快；GPU 串行时最大的结构是 0.59 s。</li>
+        <li>流水线（32 个 CPU 进程做 γ、原子对、费米能级与力，GPU 逐个求解）的理论上限 0.94 s，比进程池的 1.56 s 快 1.66 倍。但这需要多个进程共用一张卡、CPU 与 GPU 之间来回传 H、S 与密度矩阵；而另一种做法，把 32 个进程换成 64 核，也到不了 1.55 s 以下（最大结构的下限）。</li>
+        <li>float32 下 fcc 00 的 SCC 从 7 轮变成 45 轮，diamond 00、03 多一轮，bcc 08 少一轮。</li>
+      </ul>
+    </section>
+
+    <section id="stacked">
+      <h2>四、堆叠的完整求解（P139）</h2>
+      <p>每组逐个对堆叠的时间（一轮含 Cholesky、eigh、费米能级、密度矩阵与布居）；fill 占比是费米能级占逐个一轮的比例；最后一列是两者最大的布居差：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>组</th><th>结构</th><th>k 点（矩阵）</th><th>prepare</th><th>一轮：逐个 / 堆叠</th><th>只算 eigh</th><th>fill 占一轮</th><th>|Δq|</th></tr></thead>
+        <tbody>
+          <tr><td>Γ 点 N = 18，实数</td><td>33</td><td>33</td><td>33.2 倍</td><td>25.9 / 2.2 ms，<strong>11.66 倍</strong></td><td>27.2 倍</td><td>5%</td><td>4.9e-15</td></tr>
+          <tr><td>beta-Sn N = 18，复数</td><td>11</td><td>14632</td><td>1.34 倍</td><td>223 / 219 ms，1.02 倍</td><td>1.12 倍</td><td>76%</td><td>1.3e-15</td></tr>
+          <tr><td>bcc 与 fcc N = 9，复数</td><td>22</td><td>35416</td><td colspan="5">complex128 堆叠时显存不够（要 38.4 GiB，卡上 31.4 GiB），这一组没有结果；complex64：一轮 1.05 倍，fill 占 94%</td></tr>
+          <tr><td>Cu1 k14，N = 9</td><td>8</td><td>10976</td><td>1.97 倍</td><td>111 / 116 ms，0.96 倍</td><td>1.42 倍</td><td>84%</td><td>1.1e-15</td></tr>
+          <tr><td>Cu2 k12×12×6，N = 18</td><td>8</td><td>3456</td><td>1.75 倍</td><td>32.5 / 33.0 ms，0.98 倍</td><td>1.31 倍</td><td>53%</td><td>2.7e-15</td></tr>
+          <tr><td>Cu4 k8，N = 36</td><td>8</td><td>2048</td><td>1.46 倍</td><td>117 / 119 ms，0.99 倍</td><td>1.23 倍</td><td>67%</td><td>3.8e-15</td></tr>
+          <tr><td>Cu8 k6，N = 72</td><td>8</td><td>864</td><td>1.57 倍</td><td>84.6 / 79.4 ms，1.07 倍</td><td>1.25 倍</td><td>17%</td><td>1.3e-15</td></tr>
+          <tr><td>Cu32 k3，N = 288</td><td>8</td><td>112</td><td>1.95 倍</td><td>248 / 159 ms，1.56 倍</td><td>2.15 倍</td><td>13%</td><td>5.9e-11</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>带 k 点的组里，GPU 的 eigh 已经很快，一轮的大部分时间是 CPU 上的费米能级，堆叠省不掉它，所以一轮只有 0.96–1.07 倍。</li>
+        <li>complex64 的组：一轮 0.98–1.11 倍，Cu32 2.43 倍，但 Cu32 堆叠对逐个的布居差 9.8e-3 e（float64 时 5.9e-11），不能用。</li>
+        <li>bcc 与 fcc 的 complex128 组一次堆叠 35416 个矩阵，申请 38.4 GiB 显存而失败，自检把错误记在这一行，其余照常；这也说明真要堆叠时须按显存分批。</li>
+      </ul>
+    </section>
+
+    <section id="other">
+      <h2>五、eigh 与 Cu 晶胞（P140）</h2>
+      <ul>
+        <li><strong>eigh</strong>（GPU 对 NumPy，NumPy 用 16 个 BLAS 线程）：单个矩阵时 float64 与 complex128 在 N ≤ 144 慢（0.05–0.98 倍），N = 288 时 0.99 与 1.74 倍；批量 ≥ 128 时 float64 4.2–18 倍、complex128 3.6–24 倍、float32 14–147 倍、complex64 16–184 倍（最低的都是 N = 9）。float64 N = 72 的批量 1 与 16 两行是 46.6 与 739 倍，是 NumPy 那一次的计时异常（同一节点有别人的作业），不采用。</li>
+        <li><strong>Cu 晶胞</strong>（每轮 SCC：NumPy 单线程 / k 点线程 / GPU float64）：Cu1 k14 0.075 / 0.091 / 0.050 s；Cu2 0.069 / 0.076 / 0.060 s；Cu4 k8 0.073 / 0.051 / 0.024 s；Cu8 k6 0.24 / 0.17 / 0.15 s；Cu32 k3 0.50 / 0.12 / 0.068 s。Cu32 在 100 轮内哪种方式都不收敛（计时上限 <code>TIMING_MAX_SCC</code>，与 M7e 在 CPU 上相同）。</li>
+        <li>Cu4 k8（T = 0）的 SCC 轮数：NumPy 28 轮，GPU float64 57 轮，float32 100 轮不收敛（M4d 在 CPU 上的 torch 是 37 轮）。能量差 7.2e-11 Ha。T = 0 的金属对舍入敏感，已在 M4a、M4d 记录，不是新问题。</li>
+      </ul>
+    </section>
+
+    <section id="decision">
+      <h2>六、按判据的决定</h2>
+      <p>M7e 设计文档第五节的三条判据：</p>
+      <ol>
+        <li><strong>留在 CPU 的工作</strong>：GPU 运行里留在 CPU 的工作 12.4 s ≥ 进程池的 1.56 s，所以单把求解（包括堆叠）放到 GPU 上不会比现在快。要快只能做流水线，上限 0.94 s，即对进程池 1.66 倍。</li>
+        <li><strong>堆叠的收益</strong>：要“明显大于 1（例如 ≥ 3 倍）”。带 k 点的组只有 0.96–1.07 倍，只有 Γ 点的小组达到（11.7 倍），而这一组在阶段里不到 12%，在进程池里本来就不是瓶颈。<strong>不满足</strong>。</li>
+        <li><strong>float32</strong>：T ≈ 0 的金属上轮数变化大、个别不收敛、堆叠的布居差到 1e-2。<strong>PTBP 不用 float32</strong>。</li>
+      </ol>
+      <p><strong>决定</strong>：不做同步 SCC 的跨结构批量与相应的 API。PTBP 的默认（CPU 进程池）不变。CPU 进程加 GPU 的流水线最多快 1.66 倍，代价是多进程共用一张卡、来回搬数据，还要另付 GPU 的费用；现在不做，等 PTBP 的结构明显变大时再评估。GPU 后端仍适合较大的单个体系（几百个轨道以上、k 点不多）和自动求导。</p>
+    </section>
+
+    <section id="next">
+      <h2>七、下一步</h2>
+      <ul>
+        <li><strong>M5 的固态电池示范</strong>（需要含 Li 的 DFT 数据）。</li>
+        <li>分治的内存、SK 原子对分块、不建 γ 的 SCC 电势（M7d2 报告第八节）；任务 162（旧 SCC 路径最后一轮不混合）。</li>
+        <li>如果以后要做 GPU 流水线：先把费米能级（带 k 点时占 GPU 一轮的 53–94%）搬到 GPU 上，再考虑按显存分批的堆叠。</li>
+        <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26、B28、B29：需要你同意再提交 issue。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="M7e-gpu-check.html">← M7e 报告</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

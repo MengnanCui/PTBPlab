@@ -206,6 +206,22 @@ class DFTBResult:
                 "Fock": self.e_fock, "-TS": -self.ts}
 
 
+class SCCNotConvergedError(RuntimeError):
+    """The SCC did not reach ``scc_tol`` within ``max_scc`` iterations (DFTB+'s default
+    ``ConvergentSCCOnly = Yes`` stops there too).  ``result`` holds the last iteration's
+    :class:`DFTBResult` (energies only; no forces), for those who want to look at it; pass
+    ``convergent_scc_only=False`` to get the unconverged results returned instead."""
+
+    def __init__(self, n_iter: int, error: float, tol: float, result=None):
+        self.n_iter, self.error, self.tol, self.result = n_iter, error, tol, result
+        super().__init__(
+            f"SCC not converged after {n_iter} iterations (max |dq| = {error:.2e} > "
+            f"{tol:.1e}).  The results are not returned, as DFTB+ with ConvergentSCCOnly = Yes "
+            "(its default); try mixer='anderson', a smaller mixing, a finite electronic "
+            "temperature or more max_scc iterations, or pass convergent_scc_only=False to "
+            "accept the last iteration's results.")
+
+
 @dataclass(frozen=True)
 class SCCControl:
     """The SCC iterations of one XL-BOMD step (milestone M6e), by DFTB+'s rules: converged
@@ -382,8 +398,17 @@ class DFTB:
                           at T > 0 without eigenvalues, the exact electron count).
     repulsive : str       "skf" (spline, else polynomial), "polynomial"
                           (DFTB+ ``PolynomialRepulsive = Yes``) or "none".
-    warn_unconverged : bool  warn (but still return results, like DFTB+
-                          ``ConvergentSCCOnly = No``) if the SCC does not converge.
+    convergent_scc_only : bool  DFTB+ ``ConvergentSCCOnly`` (default True, as DFTB+): an SCC
+                          that does not reach ``scc_tol`` in ``max_scc`` iterations raises
+                          :class:`SCCNotConvergedError` instead of returning results.  False:
+                          the last iteration's results are returned (DFTB+
+                          ``ConvergentSCCOnly = No``), with a warning unless
+                          ``warn_unconverged`` is False.  XL-BOMD's fixed SCC steps
+                          (``scc_control``) are never checked.
+    warn_unconverged : bool  with ``convergent_scc_only=False``: warn when the SCC does not
+                          converge.  ``warn_unconverged=False`` alone also turns the check off
+                          (``convergent_scc_only`` defaults to it), for callers that limit
+                          ``max_scc`` on purpose.
     fd_delta : float      None (default): exact H0/S derivatives.  A step (Bohr)
                           reproduces DFTB+'s finite-difference derivatives
                           (current DFTB+ default epsilon**(1/4) = 2**-13 = 1.2207e-4;
@@ -566,6 +591,7 @@ class DFTB:
                  charge: float = 0.0, solver: str = "eigh", verbose: bool = False,
                  repulsive: str = "skf", smearing=None, mixer: str = "broyden",
                  warn_unconverged: bool = True, fd_delta: float | None = None,
+                 convergent_scc_only: bool | None = None,
                  third_order: str | None = None, hubbard_derivs: dict | None = None,
                  h_damping: float | None = None, spin: bool = False,
                  unpaired_electrons: float = 0.0, relax_total_spin: bool = False,
@@ -642,6 +668,10 @@ class DFTB:
         self.verbose = verbose
         self.repulsive = repulsive
         self.warn_unconverged = warn_unconverged
+        # DFTB+ ConvergentSCCOnly = Yes by default; warn_unconverged=False (callers that cut
+        # the SCC short on purpose) keeps its old meaning: no check
+        self.convergent_scc_only = (bool(warn_unconverged) if convergent_scc_only is None
+                                    else bool(convergent_scc_only))
         self.fd_delta = fd_delta
         self.third_order = third_order
         self.hubbard_derivs = hubbard_derivs
@@ -1268,6 +1298,11 @@ class DFTB:
         else:
             state = self._scc(setup, q_init, need_derivs, timings, scc_control)
         res = self._energies(setup, state) if not xl else self._energies_xl(setup, state)
+        if (self.scc and self.convergent_scc_only and scc_control is None
+                and not state.converged):
+            if state.errors is not None:
+                res.scc_errors = np.array(state.errors)
+            raise SCCNotConvergedError(state.n_iter, state.error, self.scc_tol, res)
         if state.errors is not None:
             res.scc_errors = np.array(state.errors)
         if self.fixed_fermi_level is not None:                          # M6f-2
@@ -2610,7 +2645,8 @@ class DFTB:
             t_diag += time.perf_counter() - t1
         timings["diag"] = t_diag
         timings["scc_iter"] = nit
-        if self.scc and not converged and self.warn_unconverged and control is None:
+        if (self.scc and not converged and self.warn_unconverged and control is None
+                and not self.convergent_scc_only):
             warnings.warn(f"SCC not converged after {nit} iterations "
                           f"(max |dq| = {diff:.2e} > {self.scc_tol:.1e}); returning the last "
                           "iteration's results", RuntimeWarning, stacklevel=3)
@@ -2724,7 +2760,7 @@ class DFTB:
             t_diag += time.perf_counter() - t1
         timings["diag"] = t_diag
         timings["scc_iter"] = nit
-        if not converged and self.warn_unconverged:
+        if not converged and self.warn_unconverged and not self.convergent_scc_only:
             warnings.warn(f"SCC not converged after {nit} iterations (max |dDeltaP| = "
                           f"{diff:.2e} > {self.scc_tol:.1e}); returning the last iteration's "
                           "results", RuntimeWarning, stacklevel=3)
@@ -2821,7 +2857,7 @@ class DFTB:
             t_diag += time.perf_counter() - t1
         timings["diag"] = t_diag
         timings["scc_iter"] = nit
-        if not converged and self.warn_unconverged:
+        if not converged and self.warn_unconverged and not self.convergent_scc_only:
             warnings.warn(f"SCC not converged after {nit} iterations (max |dDeltaP| = "
                           f"{diff:.2e} > {self.scc_tol:.1e}); returning the last iteration's "
                           "results", RuntimeWarning, stacklevel=4)

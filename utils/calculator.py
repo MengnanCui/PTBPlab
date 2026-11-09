@@ -199,6 +199,21 @@ def dftbplus_calculator(mole:Atoms, dftb_args:dict):
     return make_calculator(mole, dftb_args)
 
 
+def _max_angular_momentum_kwargs(mole: Atoms, slater_p: str) -> dict:
+    """MaxAngularMomentum of every element, written out instead of left to ASE.  The rule is the
+    engine setting ``max_l``: "occupied" (default, the same shells ASE's
+    ``read_max_angular_momentum`` picks and PTBP fits with; warns once per file when the SKF
+    has integrals for a higher shell) or "highest" (every shell the SKF has integrals for)."""
+    from utils.engines import settings
+    from pydftb.skf import default_max_l
+    rule = settings()["max_l"]
+    out = {"Hamiltonian_MaxAngularMomentum_": ""}
+    for sym in sorted(set(mole.get_chemical_symbols())):
+        lmax = default_max_l(os.path.join(slater_p, f"{sym}-{sym}.skf"), rule, warn=False)
+        out[f"Hamiltonian_MaxAngularMomentum_{sym}"] = '"{}"'.format("spdf"[lmax])
+    return out
+
+
 def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
     '''
     DFTB+ through ASE (the original implementation).
@@ -241,7 +256,7 @@ def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
                     Hamiltonian_SlaterKosterFiles_Prefix=slater_p,
                     Hamiltonian_SlaterKosterFiles_Separator='"-"',
                     Hamiltonian_SlaterKosterFiles_Suffix='".skf"',
-                    Hamiltonian_MaxAngularMomentum_='',
+                    **_max_angular_momentum_kwargs(mole, slater_p),
 
 
                     # Repulsive Potential
@@ -264,6 +279,7 @@ def _dftbplus_ase_calculator(mole:Atoms, dftb_args:dict, filling=None):
                 Hamiltonian_SlaterKosterFiles_Prefix=slater_p,
                 Hamiltonian_SlaterKosterFiles_Separator='"-"',
                 Hamiltonian_SlaterKosterFiles_Suffix='".skf"',
+                **_max_angular_momentum_kwargs(mole, slater_p),
                 Hamiltonian_PolynomialRepulsive=f'SetForAll {{{poly_rep}}}',
                 Hamiltonian_ForceEvaluation='dynamics',
 

@@ -19,8 +19,7 @@ or, with one set of options for either engine, :func:`pydftb.engines.make_calcul
   :class:`pydftb.calculator.DFTBResult` (atomic units) with the fields DFTB+ gives, ``output``
   everything parsed, with the parser of the frozen references.
 * DFTB+-only options: ``binary`` (default ``$DFTBPLUS``, then ``dftb+`` on PATH),
-  ``ewald_tolerance`` (1e-12; None: DFTB+'s 1e-9), ``convergent_scc_only`` (True: DFTB+ stops on
-  an unconverged SCC, which raises ``CalculationFailed``), ``regions`` (``ProjectStates`` in the
+  ``ewald_tolerance`` (1e-12; None: DFTB+'s 1e-9), ``regions`` (``ProjectStates`` in the
   run), ``workdir`` and ``keep_files``, and HSD text added as it is: ``extra_hamiltonian``,
   ``extra_analysis``, ``extra_options``, ``extra_top``.
 """
@@ -51,7 +50,7 @@ from .calculator import DFTBResult
 from .casida import Casida
 from .hybrid import Hybrid
 from .kpoints import supercell_folding
-from .skf import SKFile, max_l_from_skf, parse_selected_shells
+from .skf import SKFile, default_max_l, parse_max_l, parse_selected_shells
 from .validation import dftbplus as _dp
 
 FD_DEFAULT = float(np.finfo(float).eps) ** 0.25    # DFTB+'s FiniteDiff step, 2^-13 Bohr
@@ -71,7 +70,7 @@ def _pydftb_defaults() -> dict:
 #: PyDFTB's options and defaults: the options both engines take
 OPTION_DEFAULTS = _pydftb_defaults()
 #: the DFTB+ engine's own options
-DFTBPLUS_DEFAULTS = {"binary": None, "ewald_tolerance": 1e-12, "convergent_scc_only": True,
+DFTBPLUS_DEFAULTS = {"binary": None, "ewald_tolerance": 1e-12,
                      "regions": None, "workdir": None, "keep_files": False,
                      "extra_hamiltonian": "", "extra_analysis": "", "extra_options": "",
                      "extra_top": ""}
@@ -146,18 +145,20 @@ def _selected(spec) -> dict:
 
 
 def _max_l(skdir, species, max_l, sel) -> dict:
+    """MaxAngularMomentum per label: the given ones, the others by pydftb's rule (default: the
+    occupied shells, PTBP's basis, with a warning for unused parametrised shells; "highest":
+    :func:`pydftb.skf.max_l_available`).  DFTB+ itself has no default."""
+    rule, given = parse_max_l(max_l)
     out = {}
     for lab in species:
         if lab in sel:
             continue
-        if max_l and lab in max_l:
-            out[lab] = int(max_l[lab])
+        if lab in given:
+            out[lab] = given[lab]
             continue
-        path = os.path.join(skdir, f"{lab}-{lab}.skf")
-        lmax = max_l_from_skf(path)
-        if lmax is None:
-            raise ValueError(f"{path}: no occupied shell; give max_l for {lab}")
-        out[lab] = lmax
+        out[lab] = default_max_l(os.path.join(skdir, f"{lab}-{lab}.skf"), rule,
+                                 warn=not isinstance(max_l, str)
+                                 and not (isinstance(max_l, dict) and "default" in max_l))
     return out
 
 
@@ -593,7 +594,7 @@ def result_of(out: dict, inp: Input, q0: np.ndarray) -> DFTBResult:
 
 class DFTBPlus(Calculator):
     """DFTB+ with :class:`pydftb.ase_calc.PyDFTB`'s options (see the module docstring); the
-    DFTB+-only options are ``binary``, ``ewald_tolerance``, ``convergent_scc_only``,
+    DFTB+-only options are ``binary``, ``ewald_tolerance``,
     ``regions``, ``workdir``, ``keep_files`` and the ``extra_*`` HSD text."""
     implemented_properties = PyDFTB.implemented_properties
     engine = "dftbplus"

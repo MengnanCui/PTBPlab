@@ -162,6 +162,9 @@ def run_pydftb(case: Case, inp: dict, skdir: str | None = None, solver: str = "e
             kpts = (np.array(inp["kpoints"]), np.array(inp["kweights"]))
         opts = dict(scc=case.scc, kpts=kpts, smearing=tuple(case.filling), scc_tol=case.scc_tol,
                     max_scc=case.fixed_scc or 500, solver=solver, repulsive=case.repulsive,
+                    # the references include fixed and unconverged SCCs (fixed_scc, saddle
+                    # points): their last iteration is what is compared, as before
+                    convergent_scc_only=False,
                     fd_delta=fd_delta,
                     dispersion=inp.get("dispersion"), k_threads=k_threads,
                     backend=backend, device=device, dtype=dtype,

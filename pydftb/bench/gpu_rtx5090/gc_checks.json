@@ -1,0 +1,2941 @@
+{
+ "pydftb_gpu_check": 2,
+ "complete": true,
+ "date": "2026-11-06 21:29:12",
+ "device": "cuda",
+ "dtypes": [
+  "float64",
+  "float32"
+ ],
+ "dtypes_skipped": [],
+ "quick": false,
+ "timing_sections": [],
+ "environment": {
+  "python": "3.12.16",
+  "numpy": "2.5.4",
+  "torch": "2.14.1+cu130",
+  "cuda_version": "13.0",
+  "hip_version": null,
+  "platform": "Linux-4.18.0-553.el8_10.x86_64-x86_64-with-glibc2.28",
+  "cpu": "AMD EPYC 9J14 96-Core Processor",
+  "cpu_count": 192,
+  "usable_cpus": 16,
+  "physical_cores": 192,
+  "device": "cuda",
+  "capabilities": {
+   "device": "cuda",
+   "kind": "cuda",
+   "name": "NVIDIA GeForce RTX 5090",
+   "rocm": false,
+   "float64": true,
+   "linalg": true,
+   "complex": true,
+   "notes": []
+  },
+  "pydftb": "0.1.0.dev0",
+  "pydftb_path": "/data/home/dg002434/PTBPlab/pydftb",
+  "command_line": [
+   "pydftb gpu-check",
+   "--dtype",
+   "both",
+   "--skip-timing",
+   "--json",
+   "gc_checks.json"
+  ],
+  "scipy": "1.18.1",
+  "ase": "3.29.0",
+  "threadpoolctl": "3.8.0",
+  "threadpools": [
+   {
+    "user_api": "openmp",
+    "internal_api": "openmp",
+    "num_threads": 16,
+    "version": null,
+    "prefix": "libgomp"
+   },
+   {
+    "user_api": "blas",
+    "internal_api": "openblas",
+    "num_threads": 16,
+    "version": "0.3.31.dev",
+    "threading_layer": "pthreads",
+    "architecture": "SkylakeX",
+    "prefix": "libscipy_openblas"
+   },
+   {
+    "user_api": "blas",
+    "internal_api": "openblas",
+    "num_threads": 16,
+    "version": "0.3.34.106.0",
+    "threading_layer": "pthreads",
+    "architecture": "SkylakeX",
+    "prefix": "libscipy_openblas"
+   }
+  ],
+  "torch_threads": 16,
+  "float32_matmul_precision": "highest",
+  "deterministic_algorithms": false,
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "gpu_memory_gb": 31.36,
+  "compute_capability": "12.0",
+  "multiprocessors": 170,
+  "cublas_workspace": ":4096:8",
+  "gpu_free_memory_gb": 30.86,
+  "linalg_library": "_LinalgBackend.Default",
+  "allow_tf32": false,
+  "driver": "595.71.05",
+  "pydftb_commit": null,
+  "pydftb_dirty": null
+ },
+ "sections": [
+  {
+   "section": "environment",
+   "ok": true,
+   "wall_s": 0.4844380561262369,
+   "max_rss_gb": 0.5564613342285156,
+   "max_memory_allocated_gb": 0.0
+  },
+  {
+   "section": "references [float64]",
+   "ok": true,
+   "wall_s": 72.21129572670907,
+   "max_rss_gb": 1.9569091796875,
+   "max_memory_allocated_gb": 0.14936161041259766
+  },
+  {
+   "section": "determinism [float64]",
+   "ok": true,
+   "wall_s": 0.43178087286651134,
+   "max_rss_gb": 1.9828414916992188,
+   "max_memory_allocated_gb": 0.12905025482177734
+  },
+  {
+   "section": "references [float32]",
+   "ok": true,
+   "wall_s": 11.26038779783994,
+   "max_rss_gb": 2.217456817626953,
+   "max_memory_allocated_gb": 0.08385896682739258
+  },
+  {
+   "section": "determinism [float32]",
+   "ok": true,
+   "wall_s": 0.27697470504790545,
+   "max_rss_gb": 2.2437362670898438,
+   "max_memory_allocated_gb": 0.08385896682739258
+  },
+  {
+   "section": "autodiff",
+   "ok": true,
+   "wall_s": 4.7907384261488914,
+   "max_rss_gb": 2.5995445251464844,
+   "max_memory_allocated_gb": 0.08809471130371094
+  },
+  {
+   "section": "fork",
+   "ok": true,
+   "wall_s": 17.194354712963104,
+   "max_rss_gb": 2.5995445251464844,
+   "max_memory_allocated_gb": 0.0625
+  }
+ ],
+ "checks": [
+  {
+   "name": "references h2o [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7531309737250922e-11,
+    "forces": 1.1619050308137036e-06,
+    "charges": 9.43689570931383e-16,
+    "n_scc": 8,
+    "n_scc_ref": 8,
+    "wall": 42.96181529387832
+   }
+  },
+  {
+   "name": "cpu h2o [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.881784197001252e-16,
+    "forces": 4.718447854656915e-16,
+    "charges": 8.881784197001252e-16,
+    "eigenvalues": 7.771561172376096e-16
+   }
+  },
+  {
+   "name": "references h2o_nonscc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 9.652278976091111e-12,
+    "forces": 6.884237144649807e-07,
+    "charges": 1.609823385706477e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.005840744823217392
+   }
+  },
+  {
+   "name": "cpu h2o_nonscc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 1.1102230246251565e-16,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 2.220446049250313e-16
+   }
+  },
+  {
+   "name": "references ch3oh [float64]",
+   "ok": true,
+   "details": {
+    "energy": 9.332978834208916e-12,
+    "forces": 1.3728596037765328e-08,
+    "charges": 5.218048215738236e-15,
+    "n_scc": 12,
+    "n_scc_ref": 12,
+    "wall": 0.1540648490190506
+   }
+  },
+  {
+   "name": "cpu ch3oh [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.5404344466674047e-15,
+    "charges": 4.440892098500626e-15,
+    "eigenvalues": 3.6637359812630166e-15
+   }
+  },
+  {
+   "name": "references cu4co_300K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7896795156957523e-11,
+    "forces": 1.647204916910283e-08,
+    "charges": 2.7958191317623005e-13,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.15883482620120049
+   }
+  },
+  {
+   "name": "cpu cu4co_300K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 2.220446049250313e-15,
+    "charges": 1.7763568394002505e-14,
+    "eigenvalues": 1.9984014443252818e-15
+   }
+  },
+  {
+   "name": "references cu4co_shell_resolved [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.717381957812904e-11,
+    "forces": 1.681988415214164e-08,
+    "charges": 4.2818526502230725e-13,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.08521225769072771
+   }
+  },
+  {
+   "name": "cpu cu4co_shell_resolved [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 5.773159728050814e-15,
+    "charges": 6.217248937900877e-14,
+    "eigenvalues": 7.105427357601002e-15
+   }
+  },
+  {
+   "name": "references cu_fcc_k6 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.957279362675763e-13,
+    "forces": 1.3234889800848443e-23,
+    "charges": 3.33066907387547e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.40129133593291044
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 2.261530307971902e-47,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 5.551115123125783e-16
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.836752971939859e-12,
+    "forces": 4.6730828632927934e-07,
+    "charges": 2.966992762153814e-09,
+    "n_scc": 9,
+    "n_scc_ref": 9,
+    "wall": 0.14884964749217033
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 9.840218917478438e-16,
+    "charges": 8.881784197001252e-15,
+    "eigenvalues": 3.247402347028583e-15
+   }
+  },
+  {
+   "name": "references water_box_gamma [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3156283173998418e-07,
+    "forces": 4.327656252800516e-08,
+    "charges": 1.7494526693973e-07,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.08204753696918488
+   }
+  },
+  {
+   "name": "cpu water_box_gamma [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.0990154059319366e-15,
+    "charges": 2.842170943040401e-14,
+    "eigenvalues": 7.13318293321663e-15
+   }
+  },
+  {
+   "name": "references cuo_chain_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 6.96607926897741e-09,
+    "forces": 8.92711527790413e-09,
+    "charges": 3.981111695861017e-08,
+    "n_scc": 16,
+    "n_scc_ref": 16,
+    "wall": 0.10071491170674562
+   }
+  },
+  {
+   "name": "cpu cuo_chain_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 4.392780627096582e-16,
+    "charges": 7.105427357601002e-15,
+    "eigenvalues": 8.881784197001252e-16
+   }
+  },
+  {
+   "name": "references water_dimer_typed [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7640111593664187e-11,
+    "forces": 1.0351746463493905e-08,
+    "charges": 8.881784197001252e-15,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.07187343388795853
+   }
+  },
+  {
+   "name": "cpu water_dimer_typed [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-15,
+    "forces": 1.304512053934559e-15,
+    "charges": 7.993605777301127e-15,
+    "eigenvalues": 5.88418203051333e-15
+   }
+  },
+  {
+   "name": "references li2h2_orbit [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.756439686559588e-11,
+    "forces": 2.2938819730419086e-09,
+    "charges": 2.4424906541753444e-15,
+    "n_scc": 10,
+    "n_scc_ref": 10,
+    "wall": 0.3613206231966615
+   }
+  },
+  {
+   "name": "cpu li2h2_orbit [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.220446049250313e-16,
+    "forces": 9.367506770274758e-17,
+    "charges": 1.609823385706477e-15,
+    "eigenvalues": 3.0531133177191805e-16
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_T0 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.487832245241407e-11,
+    "forces": 1.3234889800848443e-23,
+    "charges": 3.097522238704185e-14,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.01887584012001753
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_T0 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 2.261530307971902e-47,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 5.551115123125783e-16
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_mp1_3000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.3994584097408733e-11,
+    "forces": 1.3234889800848443e-23,
+    "charges": 3.46389583683049e-14,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.022314255125820637
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_mp1_3000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 2.261530307971902e-47,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 5.551115123125783e-16
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355_mp2_2000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.101607942175178e-11,
+    "forces": 4.6621904182652524e-07,
+    "charges": 2.9155192140736808e-09,
+    "n_scc": 10,
+    "n_scc_ref": 10,
+    "wall": 0.17675443086773157
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355_mp2_2000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 4.0549161250957866e-16,
+    "charges": 5.329070518200751e-15,
+    "eigenvalues": 1.2490009027033011e-15
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355_gauss_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.9324987710642745e-11,
+    "forces": 4.660757344072085e-07,
+    "charges": 2.920828797575714e-09,
+    "n_scc": 10,
+    "n_scc_ref": 10,
+    "wall": 0.16383287869393826
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355_gauss_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.552713678800501e-15,
+    "forces": 1.1796119636642288e-15,
+    "charges": 1.4210854715202004e-14,
+    "eigenvalues": 7.771561172376096e-16
+   }
+  },
+  {
+   "name": "references cu4co_mp2_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 6.497913318526116e-12,
+    "forces": 1.6472057051686306e-08,
+    "charges": 8.603534551454572e-14,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.03727089334279299
+   }
+  },
+  {
+   "name": "cpu cu4co_mp2_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 2.3978215246689416e-15,
+    "charges": 1.5987211554602254e-14,
+    "eigenvalues": 2.8033131371785203e-15
+   }
+  },
+  {
+   "name": "references water_box_mp1_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3156283173998418e-07,
+    "forces": 4.327656252800516e-08,
+    "charges": 1.7494526693973e-07,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.07949259597808123
+   }
+  },
+  {
+   "name": "cpu water_box_mp1_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.0990154059319366e-15,
+    "charges": 2.842170943040401e-14,
+    "eigenvalues": 7.13318293321663e-15
+   }
+  },
+  {
+   "name": "references h2o_gauss_2000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7531309737250922e-11,
+    "forces": 1.1619050308137036e-06,
+    "charges": 9.43689570931383e-16,
+    "n_scc": 8,
+    "n_scc_ref": 8,
+    "wall": 0.014379255473613739
+   }
+  },
+  {
+   "name": "cpu h2o_gauss_2000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.881784197001252e-16,
+    "forces": 4.718447854656915e-16,
+    "charges": 8.881784197001252e-16,
+    "eigenvalues": 7.771561172376096e-16
+   }
+  },
+  {
+   "name": "references water_dimer_polyrep [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.675371201301459e-12,
+    "forces": 1.0352248782166673e-08,
+    "charges": 6.661338147750939e-15,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.07519889902323484
+   }
+  },
+  {
+   "name": "cpu water_dimer_polyrep [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.8318679906315083e-15,
+    "charges": 9.769962616701378e-15,
+    "eigenvalues": 6.2450045135165055e-15
+   }
+  },
+  {
+   "name": "references li2_sk_tail [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3351014738205436e-11,
+    "forces": 4.253897589878036e-14,
+    "charges": 6.925127138401876e-11,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.005020515993237495
+   }
+  },
+  {
+   "name": "cpu li2_sk_tail [float64]",
+   "ok": false,
+   "details": {
+    "energy": 5.551115123125783e-17,
+    "forces": 2.117582368135751e-22,
+    "charges": 1.0212253265251547e-10,
+    "eigenvalues": 1.3877787807814457e-17
+   }
+  },
+  {
+   "name": "references li_bcc_k666_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.4108493807138984e-11,
+    "forces": 1.6940658945086007e-21,
+    "charges": 1.7763568394002473e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.06926908995956182
+   }
+  },
+  {
+   "name": "cpu li_bcc_k666_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 5.551115123125783e-17,
+    "forces": 4.702381476246964e-49,
+    "charges": 5.551115123125783e-16,
+    "eigenvalues": 1.942890293094024e-16
+   }
+  },
+  {
+   "name": "references li_bcc_k666_node [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.7677139186342856e-11,
+    "forces": 1.6940658945086007e-21,
+    "charges": 2.442490654175346e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.0134610990062356
+   }
+  },
+  {
+   "name": "cpu li_bcc_k666_node [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3877787807814457e-16,
+    "forces": 1.0420831838361222e-47,
+    "charges": 7.771561172376096e-16,
+    "eigenvalues": 1.6653345369377348e-16
+   }
+  },
+  {
+   "name": "references h2o_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.3590907833058736e-11,
+    "forces": 1.0153386924421914e-06,
+    "charges": 2.886579864025407e-15,
+    "n_scc": 9,
+    "n_scc_ref": 9,
+    "wall": 0.018712393008172512
+   }
+  },
+  {
+   "name": "cpu h2o_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 5.342948306008566e-16,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 8.049116928532385e-16
+   }
+  },
+  {
+   "name": "references ch3oh_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.0095036745715333e-11,
+    "forces": 1.2838782204038779e-08,
+    "charges": 2.7755575615628914e-15,
+    "n_scc": 12,
+    "n_scc_ref": 12,
+    "wall": 0.034387776628136635
+   }
+  },
+  {
+   "name": "cpu ch3oh_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.881784197001252e-16,
+    "forces": 4.614364446098307e-16,
+    "charges": 1.5543122344752192e-15,
+    "eigenvalues": 1.5265566588595902e-15
+   }
+  },
+  {
+   "name": "references water_dimer_dftb3_nodamp [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.865707671162454e-11,
+    "forces": 1.0194058378681925e-08,
+    "charges": 1.7208456881689926e-15,
+    "n_scc": 12,
+    "n_scc_ref": 12,
+    "wall": 0.024223399348556995
+   }
+  },
+  {
+   "name": "cpu water_dimer_dftb3_nodamp [float64]",
+   "ok": true,
+   "details": {
+    "energy": 5.329070518200751e-15,
+    "forces": 5.134781488891349e-16,
+    "charges": 4.440892098500626e-15,
+    "eigenvalues": 3.0253577421035516e-15
+   }
+  },
+  {
+   "name": "references water_dimer_hdamp [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.1035618519581476e-11,
+    "forces": 1.0069164089326899e-08,
+    "charges": 8.659739592076221e-14,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.01986614614725113
+   }
+  },
+  {
+   "name": "cpu water_dimer_hdamp [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 8.187894806610529e-16,
+    "charges": 2.1094237467877974e-15,
+    "eigenvalues": 2.1094237467877974e-15
+   }
+  },
+  {
+   "name": "references h2o_dftb3_onsite [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.7129410657144035e-11,
+    "forces": 1.117746394760366e-06,
+    "charges": 9.992007221626409e-16,
+    "n_scc": 8,
+    "n_scc_ref": 8,
+    "wall": 0.014349711127579212
+   }
+  },
+  {
+   "name": "cpu h2o_dftb3_onsite [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3322676295501878e-15,
+    "forces": 3.191891195797325e-16,
+    "charges": 4.440892098500626e-15,
+    "eigenvalues": 1.6653345369377348e-16
+   }
+  },
+  {
+   "name": "references cu4co_dftb3_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.028688411177427e-12,
+    "forces": 1.6818046844058188e-08,
+    "charges": 3.4321157027505933e-13,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.09861782286316156
+   }
+  },
+  {
+   "name": "cpu cu4co_dftb3_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 4.718447854656915e-15,
+    "charges": 9.237055564881302e-14,
+    "eigenvalues": 5.662137425588298e-15
+   }
+  },
+  {
+   "name": "references water_box_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.2154787160388878e-07,
+    "forces": 5.586850274075239e-08,
+    "charges": 2.9618321939484105e-07,
+    "n_scc": 18,
+    "n_scc_ref": 18,
+    "wall": 0.09368640184402466
+   }
+  },
+  {
+   "name": "cpu water_box_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.0658141036401503e-14,
+    "forces": 1.3739009929736312e-15,
+    "charges": 1.4210854715202004e-14,
+    "eigenvalues": 3.1086244689504383e-15
+   }
+  },
+  {
+   "name": "references cuo_chain_dftb3_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.539428719700481e-09,
+    "forces": 8.793685083493402e-09,
+    "charges": 5.405816960735166e-08,
+    "n_scc": 14,
+    "n_scc_ref": 14,
+    "wall": 0.055612485855817795
+   }
+  },
+  {
+   "name": "cpu cuo_chain_dftb3_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 1.7066426397094325e-15,
+    "charges": 1.5987211554602254e-14,
+    "eigenvalues": 7.771561172376096e-16
+   }
+  },
+  {
+   "name": "references o2_triplet [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.5639045614079805e-11,
+    "forces": 1.3917118582562615e-08,
+    "charges": 2.1538326677728075e-14,
+    "n_scc": 2,
+    "n_scc_ref": 2,
+    "wall": 0.07094096578657627
+   }
+  },
+  {
+   "name": "cpu o2_triplet [float64]",
+   "ok": true,
+   "details": {
+    "energy": 5.329070518200751e-15,
+    "forces": 5.273559366969494e-16,
+    "charges": 7.105427357601002e-15,
+    "eigenvalues": 4.551914400963142e-15
+   }
+  },
+  {
+   "name": "references o2_triplet_wmatrix [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.110845328701544e-12,
+    "forces": 1.3917059213386374e-08,
+    "charges": 6.883382752675972e-15,
+    "n_scc": 5,
+    "n_scc_ref": 5,
+    "wall": 0.010529949329793453
+   }
+  },
+  {
+   "name": "cpu o2_triplet_wmatrix [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.3877787807814457e-16,
+    "charges": 7.105427357601002e-15,
+    "eigenvalues": 4.163336342344337e-15
+   }
+  },
+  {
+   "name": "references o2_triplet_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.845546103775632e-11,
+    "forces": 1.3927737851915367e-08,
+    "charges": 7.327471962526038e-15,
+    "n_scc": 6,
+    "n_scc_ref": 6,
+    "wall": 0.013795142993330956
+   }
+  },
+  {
+   "name": "cpu o2_triplet_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 5.329070518200751e-15,
+    "forces": 4.579669976578771e-16,
+    "charges": 8.881784197001252e-15,
+    "eigenvalues": 5.6066262743570405e-15
+   }
+  },
+  {
+   "name": "references oh_radical [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.5082160227138957e-11,
+    "forces": 1.1996490925647585e-08,
+    "charges": 5.828670879282072e-15,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.020172479562461376
+   }
+  },
+  {
+   "name": "cpu oh_radical [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 1.249000902703301e-16,
+    "charges": 2.220446049250313e-15,
+    "eigenvalues": 2.55351295663786e-15
+   }
+  },
+  {
+   "name": "references o2_relaxed_spin [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.130385253934946e-12,
+    "forces": 1.3917059546453281e-08,
+    "charges": 8.215650382226162e-15,
+    "n_scc": 5,
+    "n_scc_ref": 5,
+    "wall": 0.008879215456545353
+   }
+  },
+  {
+   "name": "cpu o2_relaxed_spin [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.0547118733938987e-15,
+    "charges": 3.552713678800501e-15,
+    "eigenvalues": 4.9960036108132044e-15
+   }
+  },
+  {
+   "name": "references oh_radical_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.1731506311416524e-11,
+    "forces": 1.1785373316142156e-08,
+    "charges": 3.0531133177191805e-15,
+    "n_scc": 10,
+    "n_scc_ref": 10,
+    "wall": 0.02218375727534294
+   }
+  },
+  {
+   "name": "cpu oh_radical_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 8.049116928532385e-16,
+    "charges": 2.6645352591003757e-15,
+    "eigenvalues": 3.4416913763379853e-15
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.0120922401883945e-09,
+    "forces": 8.79958812261862e-09,
+    "charges": 4.412897114391967e-08,
+    "n_scc": 23,
+    "n_scc_ref": 23,
+    "wall": 0.08185170125216246
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 1.9164357600853776e-15,
+    "charges": 1.9539925233402755e-14,
+    "eigenvalues": 1.0436096431476471e-14
+   }
+  },
+  {
+   "name": "references water_dimer_uff [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.671640851938719e-11,
+    "forces": 1.0351746460024458e-08,
+    "charges": 8.881784197001252e-15,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.020452923141419888
+   }
+  },
+  {
+   "name": "cpu water_dimer_uff [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-15,
+    "forces": 1.304512053934559e-15,
+    "charges": 7.993605777301127e-15,
+    "eigenvalues": 5.88418203051333e-15
+   }
+  },
+  {
+   "name": "references water_box_uff [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3159655765093703e-07,
+    "forces": 4.3276569994255e-08,
+    "charges": 1.7494532389417117e-07,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.09517109487205744
+   }
+  },
+  {
+   "name": "cpu water_box_uff [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.0990154059319366e-15,
+    "charges": 2.842170943040401e-14,
+    "eigenvalues": 7.13318293321663e-15
+   }
+  },
+  {
+   "name": "references cuo_chain_uff_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.002080693041535e-09,
+    "forces": 8.927115287445109e-09,
+    "charges": 3.981111695861017e-08,
+    "n_scc": 16,
+    "n_scc_ref": 16,
+    "wall": 0.05543705075979233
+   }
+  },
+  {
+   "name": "cpu cuo_chain_uff_k422 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 4.392780627096582e-16,
+    "charges": 7.105427357601002e-15,
+    "eigenvalues": 8.881784197001252e-16
+   }
+  },
+  {
+   "name": "references water_dimer_sk [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.2016165840122994e-11,
+    "forces": 1.035174648084114e-08,
+    "charges": 8.881784197001252e-15,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.02034758310765028
+   }
+  },
+  {
+   "name": "cpu water_dimer_sk [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-15,
+    "forces": 1.304512053934559e-15,
+    "charges": 7.993605777301127e-15,
+    "eigenvalues": 5.88418203051333e-15
+   }
+  },
+  {
+   "name": "references ch3oh_sk_hybrid [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.1233683134578314e-11,
+    "forces": 1.3728596204298782e-08,
+    "charges": 5.218048215738236e-15,
+    "n_scc": 12,
+    "n_scc_ref": 12,
+    "wall": 0.027363223023712635
+   }
+  },
+  {
+   "name": "cpu ch3oh_sk_hybrid [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.5404344466674047e-15,
+    "charges": 4.440892098500626e-15,
+    "eigenvalues": 3.6637359812630166e-15
+   }
+  },
+  {
+   "name": "references water_box_sk_hybrid [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.3150257061056436e-07,
+    "forces": 4.327655846181333e-08,
+    "charges": 1.7494526693973e-07,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.08463321346789598
+   }
+  },
+  {
+   "name": "cpu water_box_sk_hybrid [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.0990154059319366e-15,
+    "charges": 2.842170943040401e-14,
+    "eigenvalues": 7.13318293321663e-15
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.957279362675763e-13,
+    "forces": 1.3234889800848443e-23,
+    "charges": 3.33066907387547e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.020431159995496273
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 2.261530307971902e-47,
+    "charges": 1.7763568394002505e-15,
+    "eigenvalues": 5.551115123125783e-16
+   }
+  },
+  {
+   "name": "references li_bcc_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.4108493807138984e-11,
+    "forces": 1.6940658945086007e-21,
+    "charges": 1.7763568394002473e-15,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.014268258586525917
+   }
+  },
+  {
+   "name": "cpu li_bcc_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 5.551115123125783e-17,
+    "forces": 4.702381476246964e-49,
+    "charges": 5.551115123125783e-16,
+    "eigenvalues": 1.942890293094024e-16
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.2091661005797505e-11,
+    "forces": 8.89134686254782e-09,
+    "charges": 4.421152333122791e-11,
+    "n_scc": 23,
+    "n_scc_ref": 23,
+    "wall": 0.1285756565630436
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 1.9164357600853776e-15,
+    "charges": 1.9539925233402755e-14,
+    "eigenvalues": 1.0436096431476471e-14
+   }
+  },
+  {
+   "name": "references cuo_chain_dftb3_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.942801640732796e-11,
+    "forces": 8.948331453855624e-09,
+    "charges": 5.273326220134322e-11,
+    "n_scc": 14,
+    "n_scc_ref": 14,
+    "wall": 0.056731827557086945
+   }
+  },
+  {
+   "name": "cpu cuo_chain_dftb3_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 1.7066426397094325e-15,
+    "charges": 1.5987211554602254e-14,
+    "eigenvalues": 7.771561172376096e-16
+   }
+  },
+  {
+   "name": "references water_box_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 6.283329412326566e-11,
+    "forces": 1.0781810402815672e-08,
+    "charges": 7.487477304835011e-11,
+    "n_scc": 19,
+    "n_scc_ref": 19,
+    "wall": 0.08023960515856743
+   }
+  },
+  {
+   "name": "cpu water_box_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.0990154059319366e-15,
+    "charges": 2.842170943040401e-14,
+    "eigenvalues": 7.13318293321663e-15
+   }
+  },
+  {
+   "name": "references cu4co_pdos [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7896795156957523e-11,
+    "forces": 1.647204916910283e-08,
+    "charges": 2.7958191317623005e-13,
+    "n_scc": 11,
+    "n_scc_ref": 11,
+    "wall": 0.03753170743584633
+   }
+  },
+  {
+   "name": "cpu cu4co_pdos [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 2.220446049250313e-15,
+    "charges": 1.7763568394002505e-14,
+    "eigenvalues": 1.9984014443252818e-15
+   }
+  },
+  {
+   "name": "references li_bcc_cubic_k444_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.4150905154083375e-11,
+    "forces": 2.768525533739456e-18,
+    "charges": 6.66133814775094e-16,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.015261317603290081
+   }
+  },
+  {
+   "name": "cpu li_bcc_cubic_k444_1000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.220446049250313e-16,
+    "forces": 2.236166980751353e-18,
+    "charges": 2.220446049250313e-16,
+    "eigenvalues": 6.245004513516506e-17
+   }
+  },
+  {
+   "name": "references ch3oh_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.0031087072093214e-11,
+    "forces": 1.3728622849651373e-08,
+    "charges": 3.6415315207705135e-14,
+    "n_scc": 10,
+    "n_scc_ref": 10,
+    "wall": 0.025288790464401245
+   }
+  },
+  {
+   "name": "cpu ch3oh_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 1.1379786002407855e-15,
+    "charges": 7.993605777301127e-15,
+    "eigenvalues": 3.497202527569243e-15
+   }
+  },
+  {
+   "name": "references water_dimer_dftb3_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.125411041082771e-11,
+    "forces": 1.019399253551767e-08,
+    "charges": 8.881784197001252e-16,
+    "n_scc": 8,
+    "n_scc_ref": 8,
+    "wall": 0.02022333536297083
+   }
+  },
+  {
+   "name": "cpu water_dimer_dftb3_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.6645352591003757e-15,
+    "forces": 7.28583859910259e-16,
+    "charges": 2.6645352591003757e-15,
+    "eigenvalues": 3.941291737419306e-15
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.8982150840638496e-11,
+    "forces": 8.891286760017228e-09,
+    "charges": 4.4093506623710255e-11,
+    "n_scc": 17,
+    "n_scc_ref": 17,
+    "wall": 0.06572669744491577
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_loose_scc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 6.9091867643811256e-15,
+    "charges": 1.3677947663381929e-13,
+    "eigenvalues": 4.121702978920894e-15
+   }
+  },
+  {
+   "name": "references gdo2_nonscc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 9.780620757737779e-12,
+    "forces": 1.855652843885114e-08,
+    "charges": 5.1736392947532295e-14,
+    "n_scc": 1,
+    "n_scc_ref": 1,
+    "wall": 0.6712330337613821
+   }
+  },
+  {
+   "name": "cpu gdo2_nonscc [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 2.3592239273284576e-16,
+    "charges": 1.5987211554602254e-14,
+    "eigenvalues": 4.440892098500626e-16
+   }
+  },
+  {
+   "name": "references gdo2_atom [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.9555912444957357e-11,
+    "forces": 1.924545220410856e-08,
+    "charges": 3.459732500488144e-14,
+    "n_scc": 9,
+    "n_scc_ref": 9,
+    "wall": 0.022325883619487286
+   }
+  },
+  {
+   "name": "cpu gdo2_atom [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.881784197001252e-15,
+    "forces": 4.6351811278100286e-15,
+    "charges": 4.1744385725905886e-14,
+    "eigenvalues": 1.7763568394002505e-15
+   }
+  },
+  {
+   "name": "references gdo2_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 2.3021584638627246e-12,
+    "forces": 2.5827724653426642e-08,
+    "charges": 3.2385205628315816e-13,
+    "n_scc": 25,
+    "n_scc_ref": 25,
+    "wall": 0.07251835893839598
+   }
+  },
+  {
+   "name": "cpu gdo2_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.4210854715202004e-14,
+    "forces": 1.3405943022348765e-14,
+    "charges": 9.414691248821327e-14,
+    "eigenvalues": 1.4432899320127035e-15
+   }
+  },
+  {
+   "name": "references gdo2_dftb3_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.574385563202668e-12,
+    "forces": 2.5015004567752186e-08,
+    "charges": 1.396660564978447e-13,
+    "n_scc": 29,
+    "n_scc_ref": 29,
+    "wall": 0.08311674185097218
+   }
+  },
+  {
+   "name": "cpu gdo2_dftb3_shell [float64]",
+   "ok": true,
+   "details": {
+    "energy": 7.105427357601002e-15,
+    "forces": 1.61259894326804e-14,
+    "charges": 8.171241461241152e-14,
+    "eigenvalues": 2.8033131371785203e-15
+   }
+  },
+  {
+   "name": "references gdo_spin [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.857536346960842e-11,
+    "forces": 1.1250986531319285e-08,
+    "charges": 1.1324274851176597e-14,
+    "n_scc": 36,
+    "n_scc_ref": 36,
+    "wall": 0.10949763096868992
+   }
+  },
+  {
+   "name": "cpu gdo_spin [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 8.049116928532385e-16,
+    "charges": 7.993605777301127e-15,
+    "eigenvalues": 2.2343238370581275e-15
+   }
+  },
+  {
+   "name": "references gdo_rocksalt_k444 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.651390301229185e-11,
+    "forces": 3.6073973053510344e-09,
+    "charges": 2.6341470671376044e-11,
+    "n_scc": 7,
+    "n_scc_ref": 7,
+    "wall": 0.05327044706791639
+   }
+  },
+  {
+   "name": "cpu gdo_rocksalt_k444 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 6.217248937900877e-15,
+    "forces": 4.087442190270352e-17,
+    "charges": 1.2434497875801753e-14,
+    "eigenvalues": 1.1102230246251565e-15
+   }
+  },
+  {
+   "name": "references gd2o2_typed [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.105693562905799e-11,
+    "forces": 7.91075491224369e-09,
+    "charges": 9.189871086334733e-14,
+    "n_scc": 12,
+    "n_scc_ref": 12,
+    "wall": 0.15109056420624256
+   }
+  },
+  {
+   "name": "cpu gd2o2_typed [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 5.995204332975845e-15,
+    "charges": 2.042810365310288e-13,
+    "eigenvalues": 1.1657341758564144e-15
+   }
+  },
+  {
+   "name": "references gdo_rocksalt_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.18944870514315e-11,
+    "forces": 3.6008543154421944e-17,
+    "charges": 2.572080048945935e-11,
+    "n_scc": 7,
+    "n_scc_ref": 7,
+    "wall": 0.05284002609550953
+   }
+  },
+  {
+   "name": "cpu gdo_rocksalt_bands [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.7763568394002505e-15,
+    "forces": 6.320551959256332e-17,
+    "charges": 7.993605777301127e-14,
+    "eigenvalues": 5.551115123125783e-15
+   }
+  },
+  {
+   "name": "references h2o_ntpoly [float64]",
+   "ok": true,
+   "details": {
+    "energy": 1.624433920710544e-11,
+    "forces": 9.874046025259986e-13,
+    "charges": 8.215650382226158e-15,
+    "n_scc": 0,
+    "n_scc_ref": 8,
+    "wall": 0.0474824421107769
+   }
+  },
+  {
+   "name": "cpu h2o_ntpoly [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 2.3592239273284576e-16,
+    "charges": 1.7763568394002505e-15
+   }
+  },
+  {
+   "name": "references h2o_nonscc_ntpoly [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.96624963375325e-11,
+    "forces": 8.571893195252756e-13,
+    "charges": 2.886579864025407e-15,
+    "n_scc": 0,
+    "n_scc_ref": 1,
+    "wall": 0.0124275553971529
+   }
+  },
+  {
+   "name": "cpu h2o_nonscc_ntpoly [float64]",
+   "ok": true,
+   "details": {
+    "energy": 4.440892098500626e-16,
+    "forces": 2.0816681711721685e-16,
+    "charges": 1.7763568394002505e-15
+   }
+  },
+  {
+   "name": "references ch3oh_ntpoly_pm [float64]",
+   "ok": true,
+   "details": {
+    "energy": 9.519496302345942e-12,
+    "forces": 1.0937639682850886e-12,
+    "charges": 6.161737786669619e-15,
+    "n_scc": 0,
+    "n_scc_ref": 12,
+    "wall": 0.0836668936535716
+   }
+  },
+  {
+   "name": "cpu ch3oh_ntpoly_pm [float64]",
+   "ok": true,
+   "details": {
+    "energy": 8.881784197001252e-16,
+    "forces": 4.4200754167889045e-15,
+    "charges": 5.329070518200751e-15
+   }
+  },
+  {
+   "name": "references water_dimer_typed_ntpoly_trs2 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 3.914113477776482e-11,
+    "forces": 1.0936460070887222e-12,
+    "charges": 1.6653345369377348e-15,
+    "n_scc": 0,
+    "n_scc_ref": 13,
+    "wall": 0.10239536128938198
+   }
+  },
+  {
+   "name": "cpu water_dimer_typed_ntpoly_trs2 [float64]",
+   "ok": true,
+   "details": {
+    "energy": 0.0,
+    "forces": 3.0531133177191805e-16,
+    "charges": 2.6645352591003757e-15
+   }
+  },
+  {
+   "name": "determinism cu8_distorted_k355_mp2_2000K [float64]",
+   "ok": true,
+   "details": {
+    "energy": "same",
+    "forces": "same",
+    "charges": "same",
+    "eigenvalues": "same"
+   }
+  },
+  {
+   "name": "determinism ch3oh_dftb3 [float64]",
+   "ok": true,
+   "details": {
+    "energy": "same",
+    "forces": "same",
+    "charges": "same",
+    "eigenvalues": "same"
+   }
+  },
+  {
+   "name": "references h2o [float32]",
+   "ok": null,
+   "details": {
+    "energy": 7.393275751610418e-07,
+    "forces": 1.0389588455950172e-06,
+    "charges": 1.3324019775273754e-06,
+    "wall": 0.059517184272408485
+   }
+  },
+  {
+   "name": "cpu h2o [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.573473183088765e-07,
+    "forces": 2.848570010149931e-07,
+    "charges": 2.4207156457123347e-06,
+    "eigenvalues": 1.7881393432617188e-07
+   }
+  },
+  {
+   "name": "references h2o_nonscc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.048075354923242e-07,
+    "forces": 6.85635162669257e-07,
+    "charges": 3.604229417142335e-07,
+    "wall": 0.005455832928419113
+   }
+  },
+  {
+   "name": "cpu h2o_nonscc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.753711426834343e-07,
+    "forces": 1.2301094065580997e-07,
+    "charges": 1.7600032151676714e-06,
+    "eigenvalues": 1.4901161193847656e-07
+   }
+  },
+  {
+   "name": "references ch3oh [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.1879983957973081e-07,
+    "forces": 4.186159455604743e-07,
+    "charges": 1.8856338882544676e-06,
+    "wall": 0.023941121995449066
+   }
+  },
+  {
+   "name": "cpu ch3oh [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0711514226713348e-06,
+    "forces": 7.541866999874469e-07,
+    "charges": 4.401539399623289e-06,
+    "eigenvalues": 7.748603820800781e-07
+   }
+  },
+  {
+   "name": "references cu4co_300K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.7479901277539511e-06,
+    "forces": 1.4416868685529494e-06,
+    "charges": 4.232178223317895e-06,
+    "wall": 0.20337791554629803
+   }
+  },
+  {
+   "name": "cpu cu4co_300K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.246855483420632e-07,
+    "forces": 1.5013849210543384e-06,
+    "charges": 6.666822791601135e-06,
+    "eigenvalues": 7.152557373046875e-07
+   }
+  },
+  {
+   "name": "references cu4co_shell_resolved [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.5378265398879876e-06,
+    "forces": 8.55092171514471e-07,
+    "charges": 4.067595214526931e-06,
+    "wall": 0.0674365907907486
+   }
+  },
+  {
+   "name": "cpu cu4co_shell_resolved [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.032155107580593e-07,
+    "forces": 4.966814512001594e-07,
+    "charges": 7.265563565894695e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references cu_fcc_k6 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1449130474794345e-06,
+    "forces": 1.3234850683786009e-23,
+    "charges": 5.795704307809402e-06,
+    "wall": 0.03355441801249981
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1294627135782775e-06,
+    "forces": 7.34243995845886e-29,
+    "charges": 5.815007954268481e-06,
+    "eigenvalues": 4.172325134277344e-07
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2597159698989344e-08,
+    "forces": 5.527855726455803e-07,
+    "charges": 9.411149126626814e-07,
+    "wall": 0.08884893357753754
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.156386310683047e-07,
+    "forces": 2.9435127216290852e-08,
+    "charges": 5.790042543196705e-07,
+    "eigenvalues": 2.980232238769531e-07
+   }
+  },
+  {
+   "name": "references water_box_gamma [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4739556490894756e-06,
+    "forces": 6.991956247037745e-07,
+    "charges": 1.9931191105326818e-06,
+    "wall": 0.059425005689263344
+   }
+  },
+  {
+   "name": "cpu water_box_gamma [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1396067414182198e-06,
+    "forces": 1.0789944867445334e-06,
+    "charges": 5.112379018790136e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references cuo_chain_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.5605162504049872e-05,
+    "forces": 2.0354418279585544e-07,
+    "charges": 6.195709702361274e-05,
+    "wall": 0.04655590187758207
+   }
+  },
+  {
+   "name": "cpu cuo_chain_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.4768276961850688e-05,
+    "forces": 3.331732060149993e-07,
+    "charges": 6.425635534057506e-05,
+    "eigenvalues": 1.3172626495361328e-05
+   }
+  },
+  {
+   "name": "references water_dimer_typed [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.1451115728154946e-07,
+    "forces": 4.776381443138966e-07,
+    "charges": 4.218822623691665e-06,
+    "wall": 0.06673550046980381
+   }
+  },
+  {
+   "name": "cpu water_dimer_typed [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.0565525666048643e-07,
+    "forces": 3.176544338956422e-07,
+    "charges": 4.380088608257893e-06,
+    "eigenvalues": 1.2516975402832031e-06
+   }
+  },
+  {
+   "name": "references li2h2_orbit [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.9073104762235005e-08,
+    "forces": 8.146635322716853e-09,
+    "charges": 3.6982678541797043e-07,
+    "wall": 0.01549687422811985
+   }
+  },
+  {
+   "name": "cpu li2h2_orbit [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0621387280806971e-07,
+    "forces": 6.243193382150097e-08,
+    "charges": 2.691522240638733e-07,
+    "eigenvalues": 2.384185791015625e-07
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_T0 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1489471019032749e-06,
+    "forces": 1.3234810328625969e-23,
+    "charges": 5.813994053194271e-06,
+    "wall": 0.01871486660093069
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_T0 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1310341734294127e-06,
+    "forces": 1.239824310825574e-28,
+    "charges": 5.837619610815636e-06,
+    "eigenvalues": 4.172325134277344e-07
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_mp1_3000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1436365472405896e-06,
+    "forces": 1.3235327619192696e-23,
+    "charges": 5.809995976768789e-06,
+    "wall": 0.021143386140465736
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_mp1_3000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1291013679581852e-06,
+    "forces": 4.378171118153016e-28,
+    "charges": 5.828944763308641e-06,
+    "eigenvalues": 4.172325134277344e-07
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355_mp2_2000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.5781644552580474e-07,
+    "forces": 5.26048301691031e-07,
+    "charges": 1.166427762157654e-06,
+    "wall": 0.11040094587951899
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355_mp2_2000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.2838269109779503e-07,
+    "forces": 6.129320233652646e-08,
+    "charges": 8.411409879727216e-07,
+    "eigenvalues": 3.7997961044311523e-07
+   }
+  },
+  {
+   "name": "references cu8_distorted_k355_gauss_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.435014536203653e-07,
+    "forces": 4.528368635968276e-07,
+    "charges": 1.3050575942141762e-06,
+    "wall": 0.08826348930597305
+   }
+  },
+  {
+   "name": "cpu cu8_distorted_k355_gauss_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4254346325515144e-07,
+    "forces": 7.643130577007426e-08,
+    "charges": 8.731542404660786e-07,
+    "eigenvalues": 4.842877388000488e-07
+   }
+  },
+  {
+   "name": "references cu4co_mp2_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.421619271421378e-07,
+    "forces": 1.217992331992157e-06,
+    "charges": 4.3272960957921325e-06,
+    "wall": 0.027897200547158718
+   }
+  },
+  {
+   "name": "cpu cu4co_mp2_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.203763630528101e-07,
+    "forces": 1.790083199337822e-06,
+    "charges": 1.1606637125183283e-05,
+    "eigenvalues": 1.6093254089355469e-06
+   }
+  },
+  {
+   "name": "references water_box_mp1_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4739556490894756e-06,
+    "forces": 6.991956247037745e-07,
+    "charges": 1.9931191105326818e-06,
+    "wall": 0.058695473708212376
+   }
+  },
+  {
+   "name": "cpu water_box_mp1_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1396067414182198e-06,
+    "forces": 1.0789944867445334e-06,
+    "charges": 5.112379018790136e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references h2o_gauss_2000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 7.393275751610418e-07,
+    "forces": 1.0389588455950172e-06,
+    "charges": 1.3324019775273754e-06,
+    "wall": 0.013717586174607277
+   }
+  },
+  {
+   "name": "cpu h2o_gauss_2000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.573473183088765e-07,
+    "forces": 2.848570010149931e-07,
+    "charges": 2.4207156457123347e-06,
+    "eigenvalues": 1.7881393432617188e-07
+   }
+  },
+  {
+   "name": "references water_dimer_polyrep [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.3383200478122035e-06,
+    "forces": 6.433158749041823e-07,
+    "charges": 1.6979968968655612e-06,
+    "wall": 0.016363855451345444
+   }
+  },
+  {
+   "name": "cpu water_dimer_polyrep [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.3917783627803715e-06,
+    "forces": 5.054862395326154e-07,
+    "charges": 3.971470471597627e-06,
+    "eigenvalues": 1.4901161193847656e-06
+   }
+  },
+  {
+   "name": "references li2_sk_tail [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.251948319104585e-09,
+    "forces": 2.5105458868994056e-14,
+    "charges": 8.806306428521538e-08,
+    "wall": 0.005330683663487434
+   }
+  },
+  {
+   "name": "cpu li2_sk_tail [float32]",
+   "ok": null,
+   "details": {
+    "energy": 0.0,
+    "forces": 3.729459385222846e-15,
+    "charges": 0.0,
+    "eigenvalues": 7.450580596923828e-09
+   }
+  },
+  {
+   "name": "references li_bcc_k666_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1734239413474512e-09,
+    "forces": 1.6940658945134257e-21,
+    "charges": 2.2852318704025265e-08,
+    "wall": 0.047556803561747074
+   }
+  },
+  {
+   "name": "cpu li_bcc_k666_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 0.0,
+    "forces": 0.0,
+    "charges": 0.0,
+    "eigenvalues": 0.0
+   }
+  },
+  {
+   "name": "references li_bcc_k666_node [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.8782066996988505e-09,
+    "forces": 1.694065894491978e-21,
+    "charges": 3.426664063610474e-08,
+    "wall": 0.013738787733018398
+   }
+  },
+  {
+   "name": "cpu li_bcc_k666_node [float32]",
+   "ok": null,
+   "details": {
+    "energy": 0.0,
+    "forces": 0.0,
+    "charges": 0.0,
+    "eigenvalues": 0.0
+   }
+  },
+  {
+   "name": "references h2o_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.2619523849273264e-08,
+    "forces": 1.0199831301516138e-06,
+    "charges": 3.3470914273525665e-07,
+    "wall": 0.01713426783680916
+   }
+  },
+  {
+   "name": "cpu h2o_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 6.839098203315075e-07,
+    "forces": 1.1330687959068553e-07,
+    "charges": 1.3352519090403803e-06,
+    "eigenvalues": 1.1920928955078125e-07
+   }
+  },
+  {
+   "name": "references ch3oh_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.072628956881431e-07,
+    "forces": 3.659013141851797e-07,
+    "charges": 1.09290154728936e-06,
+    "wall": 0.030276735313236713
+   }
+  },
+  {
+   "name": "cpu ch3oh_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.3309921426981646e-07,
+    "forces": 3.2722687987041255e-07,
+    "charges": 6.842149105068529e-07,
+    "eigenvalues": 4.76837158203125e-07
+   }
+  },
+  {
+   "name": "references water_dimer_dftb3_nodamp [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.84941332049516e-07,
+    "forces": 4.4843198397648276e-07,
+    "charges": 2.5949124422552927e-06,
+    "wall": 0.019922480918467045
+   }
+  },
+  {
+   "name": "cpu water_dimer_dftb3_nodamp [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.7575379933632007e-06,
+    "forces": 6.358193184174965e-07,
+    "charges": 2.7292791306976483e-06,
+    "eigenvalues": 1.0728836059570312e-06
+   }
+  },
+  {
+   "name": "references water_dimer_hdamp [float32]",
+   "ok": null,
+   "details": {
+    "energy": 6.805006966814631e-07,
+    "forces": 5.200036303498745e-07,
+    "charges": 3.3946016489982966e-06,
+    "wall": 0.01644254382699728
+   }
+  },
+  {
+   "name": "cpu water_dimer_hdamp [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.258529545606791e-06,
+    "forces": 9.261268289761926e-07,
+    "charges": 5.751576146906245e-06,
+    "eigenvalues": 6.556510925292969e-07
+   }
+  },
+  {
+   "name": "references h2o_dftb3_onsite [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.530614053510078e-07,
+    "forces": 1.1387267440238213e-06,
+    "charges": 9.154511043663049e-07,
+    "wall": 0.013710806146264076
+   }
+  },
+  {
+   "name": "cpu h2o_dftb3_onsite [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0302987165644595e-06,
+    "forces": 6.690682321803393e-08,
+    "charges": 7.143871698644944e-07,
+    "eigenvalues": 6.854534149169922e-07
+   }
+  },
+  {
+   "name": "references cu4co_dftb3_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 6.406661441360484e-07,
+    "forces": 4.3439334107553407e-07,
+    "charges": 7.109833855503678e-06,
+    "wall": 0.07858302257955074
+   }
+  },
+  {
+   "name": "cpu cu4co_dftb3_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.7961807777264767e-06,
+    "forces": 1.1584742078962762e-06,
+    "charges": 1.025148638333917e-05,
+    "eigenvalues": 1.0728836059570312e-06
+   }
+  },
+  {
+   "name": "references water_box_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.499651380105661e-06,
+    "forces": 6.147576740930805e-07,
+    "charges": 1.5824580462675542e-06,
+    "wall": 0.07214764878153801
+   }
+  },
+  {
+   "name": "cpu water_box_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.7676450652668336e-06,
+    "forces": 7.155040189776862e-07,
+    "charges": 5.155164162218284e-06,
+    "eigenvalues": 1.6987323760986328e-06
+   }
+  },
+  {
+   "name": "references cuo_chain_dftb3_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.648031105145776e-05,
+    "forces": 4.080015824333219e-07,
+    "charges": 5.297083581379258e-05,
+    "wall": 0.046445575542747974
+   }
+  },
+  {
+   "name": "cpu cuo_chain_dftb3_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.6215022204567617e-05,
+    "forces": 8.234472190287931e-07,
+    "charges": 5.2980276104008794e-05,
+    "eigenvalues": 8.821487426757812e-06
+   }
+  },
+  {
+   "name": "references o2_triplet [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.256742056618634e-06,
+    "forces": 9.377962950501972e-07,
+    "charges": 3.738975109079945e-06,
+    "wall": 0.3991508213803172
+   }
+  },
+  {
+   "name": "cpu o2_triplet [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.792495129635199e-06,
+    "forces": 7.711678173677461e-07,
+    "charges": 6.926811806806654e-06,
+    "eigenvalues": 2.8014183044433594e-06
+   }
+  },
+  {
+   "name": "references o2_triplet_wmatrix [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.105788296016044e-06,
+    "forces": 3.6820934712356035e-07,
+    "charges": 6.485942550371604e-06,
+    "wall": 0.009399762377142906
+   }
+  },
+  {
+   "name": "cpu o2_triplet_wmatrix [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.477974128252015e-06,
+    "forces": 4.2197288815937206e-07,
+    "charges": 3.875572588185605e-06,
+    "eigenvalues": 3.0994415283203125e-06
+   }
+  },
+  {
+   "name": "references o2_triplet_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.275031159435173e-06,
+    "forces": 7.881120770159011e-07,
+    "charges": 6.576588359452629e-06,
+    "wall": 0.011368276551365852
+   }
+  },
+  {
+   "name": "cpu o2_triplet_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.215300351579799e-06,
+    "forces": 9.606828916541854e-07,
+    "charges": 1.0982865887854132e-05,
+    "eigenvalues": 2.302229404449463e-06
+   }
+  },
+  {
+   "name": "references oh_radical [float32]",
+   "ok": null,
+   "details": {
+    "energy": 7.861269373243829e-07,
+    "forces": 1.484087440023485e-07,
+    "charges": 7.940843630982464e-07,
+    "wall": 0.01752227358520031
+   }
+  },
+  {
+   "name": "cpu oh_radical [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.262681521209458e-07,
+    "forces": 1.5431956043587824e-07,
+    "charges": 9.178183972835541e-07,
+    "eigenvalues": 8.791685104370117e-07
+   }
+  },
+  {
+   "name": "references o2_relaxed_spin [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.105788296016044e-06,
+    "forces": 3.682093491219618e-07,
+    "charges": 6.4859425557006745e-06,
+    "wall": 0.007892354391515255
+   }
+  },
+  {
+   "name": "cpu o2_relaxed_spin [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.477974128252015e-06,
+    "forces": 4.2197288815937206e-07,
+    "charges": 3.875572588185605e-06,
+    "eigenvalues": 3.0994415283203125e-06
+   }
+  },
+  {
+   "name": "references oh_radical_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 7.414713745212964e-07,
+    "forces": 1.1082460690814422e-07,
+    "charges": 8.590990435153323e-07,
+    "wall": 0.020402316004037857
+   }
+  },
+  {
+   "name": "cpu oh_radical_dftb3 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 6.449185523393908e-07,
+    "forces": 8.455237540151705e-08,
+    "charges": 6.377231329679489e-07,
+    "eigenvalues": 5.960464477539062e-07
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2520820317950552e-05,
+    "forces": 6.977537024732867e-07,
+    "charges": 7.049840969353127e-05,
+    "wall": 0.060721744783222675
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2541014267574155e-05,
+    "forces": 5.616586348565304e-07,
+    "charges": 6.925477295993687e-05,
+    "eigenvalues": 1.4543533325195312e-05
+   }
+  },
+  {
+   "name": "references water_dimer_uff [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.144468007614364e-07,
+    "forces": 4.776381442306299e-07,
+    "charges": 4.218822623691665e-06,
+    "wall": 0.017064583487808704
+   }
+  },
+  {
+   "name": "cpu water_dimer_uff [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.0565525666048643e-07,
+    "forces": 3.176544338956422e-07,
+    "charges": 4.380088608257893e-06,
+    "eigenvalues": 1.2516975402832031e-06
+   }
+  },
+  {
+   "name": "references water_box_uff [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4739219231785228e-06,
+    "forces": 6.991955979751552e-07,
+    "charges": 1.9931191435063056e-06,
+    "wall": 0.07255296036601067
+   }
+  },
+  {
+   "name": "cpu water_box_uff [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1396067414182198e-06,
+    "forces": 1.0789944867445334e-06,
+    "charges": 5.112379018790136e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references cuo_chain_uff_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.5605126502625808e-05,
+    "forces": 2.0354418279650596e-07,
+    "charges": 6.195709702361274e-05,
+    "wall": 0.0479165967553854
+   }
+  },
+  {
+   "name": "cpu cuo_chain_uff_k422 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.4768276961850688e-05,
+    "forces": 3.331732060149993e-07,
+    "charges": 6.425635534057506e-05,
+    "eigenvalues": 1.3172626495361328e-05
+   }
+  },
+  {
+   "name": "references water_dimer_sk [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.1448150100411567e-07,
+    "forces": 4.77638144286141e-07,
+    "charges": 4.218822623691665e-06,
+    "wall": 0.016949409618973732
+   }
+  },
+  {
+   "name": "cpu water_dimer_sk [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.0565525666048643e-07,
+    "forces": 3.176544338956422e-07,
+    "charges": 4.380088608257893e-06,
+    "eigenvalues": 1.2516975402832031e-06
+   }
+  },
+  {
+   "name": "references ch3oh_sk_hybrid [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.1883174028403118e-07,
+    "forces": 4.186159462543637e-07,
+    "charges": 1.8856338882544676e-06,
+    "wall": 0.024119202978909016
+   }
+  },
+  {
+   "name": "cpu ch3oh_sk_hybrid [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0711514226713348e-06,
+    "forces": 7.541866999874469e-07,
+    "charges": 4.401539399623289e-06,
+    "eigenvalues": 7.748603820800781e-07
+   }
+  },
+  {
+   "name": "references water_box_sk_hybrid [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4740159137716091e-06,
+    "forces": 6.991956247037745e-07,
+    "charges": 1.9931191105326818e-06,
+    "wall": 0.0635706102475524
+   }
+  },
+  {
+   "name": "cpu water_box_sk_hybrid [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1396067378655061e-06,
+    "forces": 1.0789944867445334e-06,
+    "charges": 5.112379018790136e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references cu_fcc_k6_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1449130474794345e-06,
+    "forces": 1.3234850683786009e-23,
+    "charges": 5.795704307809402e-06,
+    "wall": 0.019784893840551376
+   }
+  },
+  {
+   "name": "cpu cu_fcc_k6_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1294627135782775e-06,
+    "forces": 7.34243995845886e-29,
+    "charges": 5.815007954268481e-06,
+    "eigenvalues": 4.172325134277344e-07
+   }
+  },
+  {
+   "name": "references li_bcc_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1734239413474512e-09,
+    "forces": 1.6940658945134257e-21,
+    "charges": 2.2852318704025265e-08,
+    "wall": 0.014344803988933563
+   }
+  },
+  {
+   "name": "cpu li_bcc_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 0.0,
+    "forces": 0.0,
+    "charges": 0.0,
+    "eigenvalues": 0.0
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2527820318529734e-05,
+    "forces": 6.978454612132159e-07,
+    "charges": 7.045503694758093e-05,
+    "wall": 0.06087728124111891
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2541014267574155e-05,
+    "forces": 5.616586348565304e-07,
+    "charges": 6.925477295993687e-05,
+    "eigenvalues": 1.4543533325195312e-05
+   }
+  },
+  {
+   "name": "references cuo_chain_dftb3_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.6488811052161054e-05,
+    "forces": 4.0815622880368413e-07,
+    "charges": 5.291744332480697e-05,
+    "wall": 0.047088565304875374
+   }
+  },
+  {
+   "name": "cpu cuo_chain_dftb3_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.6215022204567617e-05,
+    "forces": 8.234472190287931e-07,
+    "charges": 5.2980276104008794e-05,
+    "eigenvalues": 8.821487426757812e-06
+   }
+  },
+  {
+   "name": "references water_box_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.6054556475353365e-06,
+    "forces": 6.897770929159552e-07,
+    "charges": 1.9379667215435603e-06,
+    "wall": 0.05957074649631977
+   }
+  },
+  {
+   "name": "cpu water_box_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1396067414182198e-06,
+    "forces": 1.0789944867445334e-06,
+    "charges": 5.112379018790136e-06,
+    "eigenvalues": 1.430511474609375e-06
+   }
+  },
+  {
+   "name": "references cu4co_pdos [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.7479901277539511e-06,
+    "forces": 1.4416868685529494e-06,
+    "charges": 4.232178223317895e-06,
+    "wall": 0.031320792622864246
+   }
+  },
+  {
+   "name": "cpu cu4co_pdos [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.246855483420632e-07,
+    "forces": 1.5013849210543384e-06,
+    "charges": 6.666822791601135e-06,
+    "eigenvalues": 7.152557373046875e-07
+   }
+  },
+  {
+   "name": "references li_bcc_cubic_k444_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.695075464666303e-09,
+    "forces": 2.1947441920873775e-10,
+    "charges": 1.4185207009020928e-07,
+    "wall": 0.014908025041222572
+   }
+  },
+  {
+   "name": "cpu li_bcc_cubic_k444_1000K [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0913943082613287e-09,
+    "forces": 5.288197685738433e-10,
+    "charges": 1.0766234481707215e-07,
+    "eigenvalues": 4.470348358154297e-08
+   }
+  },
+  {
+   "name": "references ch3oh_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.1879983957973081e-07,
+    "forces": 4.521188437800472e-07,
+    "charges": 3.1717527039024085e-06,
+    "wall": 0.023915564641356468
+   }
+  },
+  {
+   "name": "cpu ch3oh_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0711514226713348e-06,
+    "forces": 7.541866999874469e-07,
+    "charges": 4.401539399623289e-06,
+    "eigenvalues": 7.748603820800781e-07
+   }
+  },
+  {
+   "name": "references water_dimer_dftb3_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.84941332049516e-07,
+    "forces": 5.591622457001844e-07,
+    "charges": 3.713782741998628e-06,
+    "wall": 0.019944935105741024
+   }
+  },
+  {
+   "name": "cpu water_dimer_dftb3_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.7575379933632007e-06,
+    "forces": 6.358193184174965e-07,
+    "charges": 2.7292791306976483e-06,
+    "eigenvalues": 1.0728836059570312e-06
+   }
+  },
+  {
+   "name": "references cuo_chain_spin_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2526620318430446e-05,
+    "forces": 6.741521768633286e-07,
+    "charges": 7.010492608450214e-05,
+    "wall": 0.06074743438512087
+   }
+  },
+  {
+   "name": "cpu cuo_chain_spin_loose_scc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.2541014267574155e-05,
+    "forces": 5.616586348565304e-07,
+    "charges": 6.925477295993687e-05,
+    "eigenvalues": 1.4543533325195312e-05
+   }
+  },
+  {
+   "name": "references gdo2_nonscc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.353681408834746e-07,
+    "forces": 1.9928147354519865e-07,
+    "charges": 3.4120192380360237e-06,
+    "wall": 0.007417527958750725
+   }
+  },
+  {
+   "name": "cpu gdo2_nonscc [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.8854129990586443e-07,
+    "forces": 2.584471311406489e-07,
+    "charges": 2.37722292517617e-06,
+    "eigenvalues": 3.8743019104003906e-07
+   }
+  },
+  {
+   "name": "references gdo2_atom [float32]",
+   "ok": null,
+   "details": {
+    "energy": 7.222450690846927e-07,
+    "forces": 7.265882160933934e-07,
+    "charges": 6.511940893010049e-06,
+    "wall": 0.020440333522856236
+   }
+  },
+  {
+   "name": "cpu gdo2_atom [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.044156490579098e-06,
+    "forces": 7.143865371761482e-07,
+    "charges": 6.920298773138711e-06,
+    "eigenvalues": 8.344650268554688e-07
+   }
+  },
+  {
+   "name": "references gdo2_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.1037018623483164e-06,
+    "forces": 6.057277082971435e-07,
+    "charges": 2.185268581755828e-06,
+    "wall": 0.06296002678573132
+   }
+  },
+  {
+   "name": "cpu gdo2_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.0683250987474366e-06,
+    "forces": 8.269011396444537e-07,
+    "charges": 1.7354098247324146e-06,
+    "eigenvalues": 1.0132789611816406e-06
+   }
+  },
+  {
+   "name": "references gdo2_dftb3_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 5.551453146068752e-07,
+    "forces": 9.143085325791223e-07,
+    "charges": 6.81860453433103e-06,
+    "wall": 0.07504453603178263
+   }
+  },
+  {
+   "name": "cpu gdo2_dftb3_shell [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.6688517940651764e-08,
+    "forces": 2.30503074608035e-06,
+    "charges": 9.470854024584696e-06,
+    "eigenvalues": 1.2367963790893555e-06
+   }
+  },
+  {
+   "name": "references gdo_spin [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.382749949438107e-06,
+    "forces": 4.984092777104987e-07,
+    "charges": 1.9571644726990023e-05,
+    "wall": 0.10366206429898739
+   }
+  },
+  {
+   "name": "cpu gdo_spin [float32]",
+   "ok": null,
+   "details": {
+    "energy": 9.265308600348021e-06,
+    "forces": 1.1917028077401692e-06,
+    "charges": 1.6121557614212634e-05,
+    "eigenvalues": 1.0758638381958008e-05
+   }
+  },
+  {
+   "name": "references gdo_rocksalt_k444 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.3067378758613302e-05,
+    "forces": 3.476121223202136e-08,
+    "charges": 7.671110849537255e-05,
+    "wall": 0.04935589246451855
+   }
+  },
+  {
+   "name": "cpu gdo_rocksalt_k444 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.314112554684499e-05,
+    "forces": 3.01728636034615e-08,
+    "charges": 7.957240944200805e-05,
+    "eigenvalues": 3.1828880310058594e-05
+   }
+  },
+  {
+   "name": "references gd2o2_typed [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.4515603226072926e-06,
+    "forces": 2.3596801358716224e-07,
+    "charges": 8.277406099682638e-06,
+    "wall": 0.15462480392307043
+   }
+  },
+  {
+   "name": "cpu gd2o2_typed [float32]",
+   "ok": null,
+   "details": {
+    "energy": 4.055854027740224e-06,
+    "forces": 3.335025940097436e-07,
+    "charges": 8.691662944926293e-06,
+    "eigenvalues": 1.3113021850585938e-06
+   }
+  },
+  {
+   "name": "references gdo_rocksalt_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.3996439219177148e-05,
+    "forces": 2.5720081071814864e-09,
+    "charges": 8.429858824947345e-05,
+    "wall": 0.05129298008978367
+   }
+  },
+  {
+   "name": "cpu gdo_rocksalt_bands [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.3956422038496896e-05,
+    "forces": 6.480635936391741e-09,
+    "charges": 8.798240997265339e-05,
+    "eigenvalues": 3.463029861450195e-05
+   }
+  },
+  {
+   "name": "references h2o_ntpoly [float32]",
+   "ok": null,
+   "details": {
+    "energy": 6.765978195488742e-07,
+    "forces": 5.449999408851935e-07,
+    "charges": 1.7110687273724778e-06,
+    "wall": 0.03601434547454119
+   }
+  },
+  {
+   "name": "cpu h2o_ntpoly [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.123697416984044e-07,
+    "forces": 5.431339044764671e-07,
+    "charges": 2.4753726393100806e-06
+   }
+  },
+  {
+   "name": "references h2o_nonscc_ntpoly [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.262525773983782e-07,
+    "forces": 4.252058094511568e-08,
+    "charges": 5.105162810270514e-07,
+    "wall": 0.01278492622077465
+   }
+  },
+  {
+   "name": "cpu h2o_nonscc_ntpoly [float32]",
+   "ok": null,
+   "details": {
+    "energy": 2.823086333592073e-07,
+    "forces": 4.5463993032096583e-08,
+    "charges": 3.764871507883072e-07
+   }
+  },
+  {
+   "name": "references ch3oh_ntpoly_pm [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.040542098797232e-08,
+    "forces": 1.8380516957038073e-06,
+    "charges": 2.706677565578186e-06,
+    "wall": 0.07854784931987524
+   }
+  },
+  {
+   "name": "cpu ch3oh_ntpoly_pm [float32]",
+   "ok": null,
+   "details": {
+    "energy": 3.460914808073312e-07,
+    "forces": 1.0703899707906195e-06,
+    "charges": 4.0040549720288254e-06
+   }
+  },
+  {
+   "name": "references water_dimer_typed_ntpoly_trs2 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 8.078285791413009e-07,
+    "forces": 9.098761017400925e-07,
+    "charges": 2.698533815181925e-06,
+    "wall": 0.0895288297906518
+   }
+  },
+  {
+   "name": "cpu water_dimer_typed_ntpoly_trs2 [float32]",
+   "ok": null,
+   "details": {
+    "energy": 1.0163432726528754e-06,
+    "forces": 2.4066135831390945e-07,
+    "charges": 1.3494541493130896e-06
+   }
+  },
+  {
+   "name": "determinism cu8_distorted_k355_mp2_2000K [float32]",
+   "ok": true,
+   "details": {
+    "energy": "same",
+    "forces": "same",
+    "charges": "same",
+    "eigenvalues": "same"
+   }
+  },
+  {
+   "name": "determinism ch3oh_dftb3 [float32]",
+   "ok": true,
+   "details": {
+    "energy": "same",
+    "forces": "same",
+    "charges": "same",
+    "eigenvalues": "same"
+   }
+  },
+  {
+   "name": "autodiff h2o",
+   "ok": true,
+   "details": {
+    "hf_vs_implicit": 1.2790416465820926e-14,
+    "device_vs_cpu": 5.4998790803029985e-14
+   }
+  },
+  {
+   "name": "autodiff cu4co_shell_resolved",
+   "ok": true,
+   "details": {
+    "hf_vs_implicit": 9.150725055888637e-13,
+    "device_vs_cpu": 3.781764176178699e-12
+   }
+  },
+  {
+   "name": "autodiff cuo_chain_spin_k422",
+   "ok": true,
+   "details": {
+    "hf_vs_implicit": 2.8807773930941892e-11,
+    "device_vs_cpu": 2.8807773930941892e-11
+   }
+  },
+  {
+   "name": "fork after CUDA",
+   "ok": true,
+   "details": {
+    "result": "the child ended",
+    "code": 0
+   }
+  }
+ ],
+ "timings": {},
+ "ok": false,
+ "errors": [],
+ "verdicts": []
+}
