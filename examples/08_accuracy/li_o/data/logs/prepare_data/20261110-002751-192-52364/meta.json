@@ -1,0 +1,49 @@
+{
+  "name": "prepare_data",
+  "start": "2026-11-10T00:27:51",
+  "argv": [
+    "prepare_data.py"
+  ],
+  "cwd": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o",
+  "args": {
+    "out": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data",
+    "src": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/07_battery_li_li2o/data",
+    "d2": []
+  },
+  "git": {
+    "commit": "37bdb6bdf989ec4c0ac718246aeadb75db46012c",
+    "branch": "claude/inspiring-ride-zax2o7",
+    "dirty": true,
+    "dirty_files": [
+      "M cli/main.py",
+      " M parameterize.py",
+      " M pydftb/docs/ROADMAP.md",
+      " M pydftb/docs/index.html",
+      " M utils/hotcent_parallel.py",
+      " M utils/hotpy.py"
+    ]
+  },
+  "host": "192.168.1.17",
+  "platform": "macOS-15.5-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu_count": 10,
+  "python": "3.12.10",
+  "executable": "/Users/mncui/Software/miniforge3/bin/python3",
+  "packages": {
+    "numpy": "2.2.6",
+    "scipy": "1.15.3",
+    "ase": "3.26.0b1",
+    "pydftb": "0.1.0.dev0",
+    "hotcent": "2.0.1",
+    "skopt": null,
+    "torch": null,
+    "mace": null,
+    "gpaw": null,
+    "tblite": null,
+    "dftd3": null,
+    "dscribe": null
+  },
+  "env": {
+    "CONDA_DEFAULT_ENV": "base"
+  }
+}

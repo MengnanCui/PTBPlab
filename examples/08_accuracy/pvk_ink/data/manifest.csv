@@ -1,0 +1,149 @@
+name,family,role,natoms,formula,box_A,source,note
+mol_R1_PbI2,mol_R1_PbI2,train,3,I2Pb,20.23,molecules/mace_omol/R1_PbI2.xyz,
+mol_R1_PbI2_r1,mol_R1_PbI2,train,3,I2Pb,20.29,molecules/mace_omol/R1_PbI2.xyz,rattled 0.05 A
+mol_R1_PbI2_r2,mol_R1_PbI2,train,3,I2Pb,20.18,molecules/mace_omol/R1_PbI2.xyz,rattled 0.05 A
+mol_R2_SnI2,mol_R2_SnI2,train,3,I2Sn,20.12,molecules/mace_omol/R2_SnI2.xyz,
+mol_R2_SnI2_r1,mol_R2_SnI2,train,3,I2Sn,20.12,molecules/mace_omol/R2_SnI2.xyz,rattled 0.05 A
+mol_R2_SnI2_r2,mol_R2_SnI2,train,3,I2Sn,20.13,molecules/mace_omol/R2_SnI2.xyz,rattled 0.05 A
+mol_R4_SnI4,mol_R4_SnI4,train,5,I4Sn,19.07,molecules/mace_omol/R4_SnI4.xyz,
+mol_R4_SnI4_r1,mol_R4_SnI4,train,5,I4Sn,19.17,molecules/mace_omol/R4_SnI4.xyz,rattled 0.05 A
+mol_R4_SnI4_r2,mol_R4_SnI4,train,5,I4Sn,19.19,molecules/mace_omol/R4_SnI4.xyz,rattled 0.05 A
+mol_R5_DMSO,mol_R5_DMSO,train,10,C2H6OS,19.71,molecules/mace_omol/R5_DMSO.xyz,
+mol_R5_DMSO_r1,mol_R5_DMSO,train,10,C2H6OS,19.66,molecules/mace_omol/R5_DMSO.xyz,rattled 0.05 A
+mol_R5_DMSO_r2,mol_R5_DMSO,train,10,C2H6OS,19.69,molecules/mace_omol/R5_DMSO.xyz,rattled 0.05 A
+mol_R6_DMF,mol_R6_DMF,train,12,C3H7NO,19.77,molecules/mace_omol/R6_DMF.xyz,
+mol_R6_DMF_r1,mol_R6_DMF,train,12,C3H7NO,19.74,molecules/mace_omol/R6_DMF.xyz,rattled 0.05 A
+mol_R6_DMF_r2,mol_R6_DMF,train,12,C3H7NO,19.68,molecules/mace_omol/R6_DMF.xyz,rattled 0.05 A
+mol_R12_PPD,mol_R12_PPD,train,16,C6H8N2,22.47,molecules/mace_omol/R12_PPD.xyz,
+mol_R12_PPD_r1,mol_R12_PPD,train,16,C6H8N2,22.5,molecules/mace_omol/R12_PPD.xyz,rattled 0.05 A
+mol_R12_PPD_r2,mol_R12_PPD,train,16,C6H8N2,22.54,molecules/mace_omol/R12_PPD.xyz,rattled 0.05 A
+mol_R13_3T,mol_R13_3T,train,17,C4H10N2S,22.0,molecules/mace_omol/R13_3T.xyz,
+mol_R13_3T_r1,mol_R13_3T,train,17,C4H10N2S,21.95,molecules/mace_omol/R13_3T.xyz,rattled 0.05 A
+mol_R13_3T_r2,mol_R13_3T,train,17,C4H10N2S,21.9,molecules/mace_omol/R13_3T.xyz,rattled 0.05 A
+mol_R14_toluene,mol_R14_toluene,train,15,C7H8,21.79,molecules/mace_omol/R14_toluene.xyz,
+mol_R14_toluene_r1,mol_R14_toluene,train,15,C7H8,21.7,molecules/mace_omol/R14_toluene.xyz,rattled 0.05 A
+mol_R14_toluene_r2,mol_R14_toluene,train,15,C7H8,21.85,molecules/mace_omol/R14_toluene.xyz,rattled 0.05 A
+mol_R15_NMP,mol_R15_NMP,test,16,C5H9NO,21.1,molecules/mace_omol/R15_NMP.xyz,
+mol_R15_NMP_r1,mol_R15_NMP,test,16,C5H9NO,21.03,molecules/mace_omol/R15_NMP.xyz,rattled 0.05 A
+mol_R15_NMP_r2,mol_R15_NMP,test,16,C5H9NO,21.01,molecules/mace_omol/R15_NMP.xyz,rattled 0.05 A
+mol_R16_DMAc,mol_R16_DMAc,test,15,C4H9NO,20.38,molecules/mace_omol/R16_DMAc.xyz,
+mol_R16_DMAc_r1,mol_R16_DMAc,test,15,C4H9NO,20.4,molecules/mace_omol/R16_DMAc.xyz,rattled 0.05 A
+mol_R16_DMAc_r2,mol_R16_DMAc,test,15,C4H9NO,20.44,molecules/mace_omol/R16_DMAc.xyz,rattled 0.05 A
+mol_R17_DEF,mol_R17_DEF,test,18,C5H11NO,21.12,molecules/mace_omol/R17_DEF.xyz,
+mol_R17_DEF_r1,mol_R17_DEF,test,18,C5H11NO,21.08,molecules/mace_omol/R17_DEF.xyz,rattled 0.05 A
+mol_R17_DEF_r2,mol_R17_DEF,test,18,C5H11NO,21.2,molecules/mace_omol/R17_DEF.xyz,rattled 0.05 A
+mol_R18_DMPU,mol_R18_DMPU,test,21,C6H12N2O,21.23,molecules/mace_omol/R18_DMPU.xyz,
+mol_R18_DMPU_r1,mol_R18_DMPU,test,21,C6H12N2O,21.18,molecules/mace_omol/R18_DMPU.xyz,rattled 0.05 A
+mol_R18_DMPU_r2,mol_R18_DMPU,test,21,C6H12N2O,21.29,molecules/mace_omol/R18_DMPU.xyz,rattled 0.05 A
+mol_R19_GBL,mol_R19_GBL,test,12,C4H6O2,20.31,molecules/mace_omol/R19_GBL.xyz,
+mol_R19_GBL_r1,mol_R19_GBL,test,12,C4H6O2,20.36,molecules/mace_omol/R19_GBL.xyz,rattled 0.05 A
+mol_R19_GBL_r2,mol_R19_GBL,test,12,C4H6O2,20.32,molecules/mace_omol/R19_GBL.xyz,rattled 0.05 A
+mol_R20_2mME,mol_R20_2mME,test,13,C3H8O2,20.02,molecules/mace_omol/R20_2ME.xyz,
+mol_R20_2mME_r1,mol_R20_2mME,test,13,C3H8O2,20.09,molecules/mace_omol/R20_2ME.xyz,rattled 0.05 A
+mol_R20_2mME_r2,mol_R20_2mME,test,13,C3H8O2,20.09,molecules/mace_omol/R20_2ME.xyz,rattled 0.05 A
+cplx_PbI2_DMSO1_o0,cplx_PbI2_DMSO1,train,13,C2H6I2OPbS,21.07,molecules/mace_omol_complexes/PbI2_DMSO1_o0.xyz,
+cplx_PbI2_DMSO2_o0,cplx_PbI2_DMSO2,train,23,C4H12I2O2PbS2,24.29,molecules/mace_omol_complexes/PbI2_DMSO2_o0.xyz,
+cplx_PbI2_DMSO3_o0,cplx_PbI2_DMSO3,test,33,C6H18I2O3PbS3,26.51,molecules/mace_omol_complexes/PbI2_DMSO3_o0.xyz,
+cplx_PbI2_DMSO1_o1,cplx_PbI2_DMSO1,train,13,C2H6I2OPbS,21.17,molecules/mace_mpa_complexes/PbI2_DMSO1_o1.xyz,
+cplx_PbI2_DMSO2_o1,cplx_PbI2_DMSO2,train,23,C4H12I2O2PbS2,22.44,molecules/mace_mpa_complexes/PbI2_DMSO2_o1.xyz,
+cplx_PbI2_DMSO3_o1,cplx_PbI2_DMSO3,test,33,C6H18I2O3PbS3,23.83,molecules/mace_mpa_complexes/PbI2_DMSO3_o1.xyz,
+cplx_PbI2_DMSO1_o2,cplx_PbI2_DMSO1,train,13,C2H6I2OPbS,21.13,molecules/mace_mpa_complexes/PbI2_DMSO1_o2.xyz,
+cplx_PbI2_DMSO2_o2,cplx_PbI2_DMSO2,train,23,C4H12I2O2PbS2,24.06,molecules/mace_mpa_complexes/PbI2_DMSO2_o2.xyz,
+cplx_PbI2_DMSO3_o2,cplx_PbI2_DMSO3,test,33,C6H18I2O3PbS3,26.39,molecules/mace_mpa_complexes/PbI2_DMSO3_o2.xyz,
+cplx_PbI2_DMF1_o0,cplx_PbI2_DMF1,train,15,C3H7I2NOPb,22.19,molecules/mace_omol_complexes/PbI2_DMF1_o0.xyz,
+cplx_PbI2_DMF2_o0,cplx_PbI2_DMF2,train,27,C6H14I2N2O2Pb,23.84,molecules/mace_omol_complexes/PbI2_DMF2_o0.xyz,
+cplx_PbI2_DMF3_o0,cplx_PbI2_DMF3,test,39,C9H21I2N3O3Pb,27.36,molecules/mace_omol_complexes/PbI2_DMF3_o0.xyz,
+cplx_PbI2_DMF1_o1,cplx_PbI2_DMF1,train,15,C3H7I2NOPb,21.19,molecules/mace_mpa_complexes/PbI2_DMF1_o1.xyz,
+cplx_PbI2_DMF2_o1,cplx_PbI2_DMF2,train,27,C6H14I2N2O2Pb,24.09,molecules/mace_mpa_complexes/PbI2_DMF2_o1.xyz,
+cplx_PbI2_DMF3_o1,cplx_PbI2_DMF3,test,39,C9H21I2N3O3Pb,26.93,molecules/mace_mpa_complexes/PbI2_DMF3_o1.xyz,
+cplx_PbI2_DMF1_o2,cplx_PbI2_DMF1,train,15,C3H7I2NOPb,21.34,molecules/mace_mpa_complexes/PbI2_DMF1_o2.xyz,
+cplx_PbI2_DMF2_o2,cplx_PbI2_DMF2,train,27,C6H14I2N2O2Pb,23.57,molecules/mace_mpa_complexes/PbI2_DMF2_o2.xyz,
+cplx_PbI2_DMF3_o2,cplx_PbI2_DMF3,test,39,C9H21I2N3O3Pb,26.17,molecules/mace_mpa_complexes/PbI2_DMF3_o2.xyz,
+cplx_SnI2_DMSO1_o0,cplx_SnI2_DMSO1,train,13,C2H6I2OSSn,21.07,molecules/mace_omol_complexes/SnI2_DMSO1_o0.xyz,
+cplx_SnI2_DMSO2_o0,cplx_SnI2_DMSO2,train,23,C4H12I2O2S2Sn,24.16,molecules/mace_omol_complexes/SnI2_DMSO2_o0.xyz,
+cplx_SnI2_DMSO3_o0,cplx_SnI2_DMSO3,test,33,C6H18I2O3S3Sn,25.87,molecules/mace_omol_complexes/SnI2_DMSO3_o0.xyz,
+cplx_SnI2_DMSO1_o1,cplx_SnI2_DMSO1,train,13,C2H6I2OSSn,20.99,molecules/mace_mpa_complexes/SnI2_DMSO1_o1.xyz,
+cplx_SnI2_DMSO2_o1,cplx_SnI2_DMSO2,train,23,C4H12I2O2S2Sn,23.19,molecules/mace_mpa_complexes/SnI2_DMSO2_o1.xyz,
+cplx_SnI2_DMSO3_o1,cplx_SnI2_DMSO3,test,33,C6H18I2O3S3Sn,25.4,molecules/mace_mpa_complexes/SnI2_DMSO3_o1.xyz,
+cplx_SnI2_DMSO1_o2,cplx_SnI2_DMSO1,train,13,C2H6I2OSSn,20.88,molecules/mace_mpa_complexes/SnI2_DMSO1_o2.xyz,
+cplx_SnI2_DMSO2_o2,cplx_SnI2_DMSO2,train,23,C4H12I2O2S2Sn,24.9,molecules/mace_mpa_complexes/SnI2_DMSO2_o2.xyz,
+cplx_SnI2_DMSO3_o2,cplx_SnI2_DMSO3,test,33,C6H18I2O3S3Sn,25.22,molecules/mace_mpa_complexes/SnI2_DMSO3_o2.xyz,
+cplx_SnI2_DMF1_o0,cplx_SnI2_DMF1,train,15,C3H7I2NOSn,21.82,molecules/mace_omol_complexes/SnI2_DMF1_o0.xyz,
+cplx_SnI2_DMF2_o0,cplx_SnI2_DMF2,train,27,C6H14I2N2O2Sn,24.32,molecules/mace_omol_complexes/SnI2_DMF2_o0.xyz,
+cplx_SnI2_DMF3_o0,cplx_SnI2_DMF3,test,39,C9H21I2N3O3Sn,28.16,molecules/mace_omol_complexes/SnI2_DMF3_o0.xyz,
+cplx_SnI2_DMF1_o1,cplx_SnI2_DMF1,train,15,C3H7I2NOSn,21.03,molecules/mace_mpa_complexes/SnI2_DMF1_o1.xyz,
+cplx_SnI2_DMF2_o1,cplx_SnI2_DMF2,train,27,C6H14I2N2O2Sn,23.78,molecules/mace_mpa_complexes/SnI2_DMF2_o1.xyz,
+cplx_SnI2_DMF3_o1,cplx_SnI2_DMF3,test,39,C9H21I2N3O3Sn,26.41,molecules/mace_mpa_complexes/SnI2_DMF3_o1.xyz,
+cplx_SnI2_DMF1_o2,cplx_SnI2_DMF1,train,15,C3H7I2NOSn,21.19,molecules/mace_mpa_complexes/SnI2_DMF1_o2.xyz,
+cplx_SnI2_DMF2_o2,cplx_SnI2_DMF2,train,27,C6H14I2N2O2Sn,23.88,molecules/mace_mpa_complexes/SnI2_DMF2_o2.xyz,
+cplx_SnI2_DMF3_o2,cplx_SnI2_DMF3,test,39,C9H21I2N3O3Sn,26.14,molecules/mace_mpa_complexes/SnI2_DMF3_o2.xyz,
+ion_fa_i,ion_fa_i,train,9,CH5IN2,21.49,molecules/mace_omol/R10_FAI.xyz,
+ion_fa_i_r1,ion_fa_i,train,9,CH5IN2,21.48,molecules/mace_omol/R10_FAI.xyz,rattled 0.05 A
+ion_csi,ion_csi,train,2,CsI,19.35,molecules/mace_omol/R11_CsI.xyz,
+ion_csi_r1,ion_csi,train,2,CsI,19.38,molecules/mace_omol/R11_CsI.xyz,rattled 0.05 A
+ion_fa_i_dmso,ion_fa_i_dmso,train,19,C3H11IN2OS,26.05,molecules/proton_transfer/FA_DMSO_HB_mace_omol.xyz + I- on the free N-H,
+ion_fa_i_dmso_r1,ion_fa_i_dmso,train,19,C3H11IN2OS,26.21,molecules/proton_transfer/FA_DMSO_HB_mace_omol.xyz + I- on the free N-H,rattled 0.05 A
+ion_fa_i_dmf,ion_fa_i_dmf,train,21,C4H12IN3O,25.43,molecules/proton_transfer/FA_DMF_HB_mace_omol.xyz + I- on the free N-H,
+ion_fa_i_dmf_r1,ion_fa_i_dmf,train,21,C4H12IN3O,25.27,molecules/proton_transfer/FA_DMF_HB_mace_omol.xyz + I- on the free N-H,rattled 0.05 A
+ion_pbi3_fa,ion_pbi3_fa,train,12,CH5I3N2Pb,24.18,molecules/mace_omol/R21a + FA+ (built),
+ion_pbi3_fa_r1,ion_pbi3_fa,train,12,CH5I3N2Pb,24.06,molecules/mace_omol/R21a + FA+ (built),rattled 0.05 A
+ion_pbi4_2fa,ion_pbi4_2fa,test,21,C2H10I4N4Pb,30.61,molecules/mace_omol/R21a + I- + 2 FA+ (built),
+ion_pbi4_2fa_r1,ion_pbi4_2fa,test,21,C2H10I4N4Pb,30.61,molecules/mace_omol/R21a + I- + 2 FA+ (built),rattled 0.05 A
+ion_sni3_fa,ion_sni3_fa,train,12,CH5I3N2Sn,23.92,molecules/mace_omol/R21b + FA+ (built),
+ion_sni3_fa_r1,ion_sni3_fa,train,12,CH5I3N2Sn,23.77,molecules/mace_omol/R21b + FA+ (built),rattled 0.05 A
+ion_sni4_2fa,ion_sni4_2fa,test,21,C2H10I4N4Sn,30.63,molecules/mace_omol/R21b + I- + 2 FA+ (built),
+ion_sni4_2fa_r1,ion_sni4_2fa,test,21,C2H10I4N4Sn,30.62,molecules/mace_omol/R21b + I- + 2 FA+ (built),rattled 0.05 A
+scan_pbo_00,scan_pbo,train,13,C2H6I2OPbS,20.72,cplx_PbI2_DMSO1_o0,d(Pb-O) = 1.992 A
+scan_pbo_01,scan_pbo,train,13,C2H6I2OPbS,21.02,cplx_PbI2_DMSO1_o0,d(Pb-O) = 2.286 A
+scan_pbo_02,scan_pbo,train,13,C2H6I2OPbS,21.31,cplx_PbI2_DMSO1_o0,d(Pb-O) = 2.579 A
+scan_pbo_03,scan_pbo,train,13,C2H6I2OPbS,21.6,cplx_PbI2_DMSO1_o0,d(Pb-O) = 2.873 A
+scan_pbo_04,scan_pbo,train,13,C2H6I2OPbS,21.89,cplx_PbI2_DMSO1_o0,d(Pb-O) = 3.167 A
+scan_pbo_05,scan_pbo,train,13,C2H6I2OPbS,22.18,cplx_PbI2_DMSO1_o0,d(Pb-O) = 3.461 A
+scan_pbo_06,scan_pbo,train,13,C2H6I2OPbS,22.47,cplx_PbI2_DMSO1_o0,d(Pb-O) = 3.754 A
+scan_pbo_07,scan_pbo,train,13,C2H6I2OPbS,22.77,cplx_PbI2_DMSO1_o0,d(Pb-O) = 4.048 A
+scan_pbo_08,scan_pbo,train,13,C2H6I2OPbS,23.06,cplx_PbI2_DMSO1_o0,d(Pb-O) = 4.342 A
+scan_sno_00,scan_sno,train,13,C2H6I2OSSn,20.73,cplx_SnI2_DMSO1_o0,d(Sn-O) = 1.862 A
+scan_sno_01,scan_sno,train,13,C2H6I2OSSn,21.02,cplx_SnI2_DMSO1_o0,d(Sn-O) = 2.155 A
+scan_sno_02,scan_sno,train,13,C2H6I2OSSn,21.31,cplx_SnI2_DMSO1_o0,d(Sn-O) = 2.449 A
+scan_sno_03,scan_sno,train,13,C2H6I2OSSn,21.6,cplx_SnI2_DMSO1_o0,d(Sn-O) = 2.743 A
+scan_sno_04,scan_sno,train,13,C2H6I2OSSn,21.89,cplx_SnI2_DMSO1_o0,d(Sn-O) = 3.037 A
+scan_sno_05,scan_sno,train,13,C2H6I2OSSn,22.18,cplx_SnI2_DMSO1_o0,d(Sn-O) = 3.330 A
+scan_sno_06,scan_sno,train,13,C2H6I2OSSn,22.48,cplx_SnI2_DMSO1_o0,d(Sn-O) = 3.624 A
+scan_sno_07,scan_sno,train,13,C2H6I2OSSn,22.77,cplx_SnI2_DMSO1_o0,d(Sn-O) = 3.918 A
+scan_sno_08,scan_sno,train,13,C2H6I2OSSn,23.06,cplx_SnI2_DMSO1_o0,d(Sn-O) = 4.212 A
+scan_pbi_00,scan_pbi,train,3,I2Pb,20.05,mol_R1,d(Pb-I) = 2.550 A
+scan_pbi_01,scan_pbi,train,3,I2Pb,20.24,mol_R1,d(Pb-I) = 2.806 A
+scan_pbi_02,scan_pbi,train,3,I2Pb,20.44,mol_R1,d(Pb-I) = 3.062 A
+scan_pbi_03,scan_pbi,train,3,I2Pb,20.63,mol_R1,d(Pb-I) = 3.319 A
+scan_pbi_04,scan_pbi,train,3,I2Pb,20.82,mol_R1,d(Pb-I) = 3.575 A
+scan_pbi_05,scan_pbi,train,3,I2Pb,21.02,mol_R1,d(Pb-I) = 3.831 A
+scan_pbi_06,scan_pbi,train,3,I2Pb,21.21,mol_R1,d(Pb-I) = 4.087 A
+scan_pbi_07,scan_pbi,train,3,I2Pb,21.41,mol_R1,d(Pb-I) = 4.344 A
+scan_pbi_08,scan_pbi,train,3,I2Pb,21.6,mol_R1,d(Pb-I) = 4.600 A
+scan_sni_00,scan_sni,train,3,I2Sn,19.91,mol_R2,d(Sn-I) = 2.450 A
+scan_sni_01,scan_sni,train,3,I2Sn,20.11,mol_R2,d(Sn-I) = 2.706 A
+scan_sni_02,scan_sni,train,3,I2Sn,20.3,mol_R2,d(Sn-I) = 2.963 A
+scan_sni_03,scan_sni,train,3,I2Sn,20.5,mol_R2,d(Sn-I) = 3.219 A
+scan_sni_04,scan_sni,train,3,I2Sn,20.69,mol_R2,d(Sn-I) = 3.475 A
+scan_sni_05,scan_sni,train,3,I2Sn,20.88,mol_R2,d(Sn-I) = 3.731 A
+scan_sni_06,scan_sni,train,3,I2Sn,21.08,mol_R2,d(Sn-I) = 3.987 A
+scan_sni_07,scan_sni,train,3,I2Sn,21.27,mol_R2,d(Sn-I) = 4.244 A
+scan_sni_08,scan_sni,train,3,I2Sn,21.47,mol_R2,d(Sn-I) = 4.500 A
+scan_pt_fa_i_00,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.020 A
+scan_pt_fa_i_01,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.097 A
+scan_pt_fa_i_02,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.174 A
+scan_pt_fa_i_03,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.251 A
+scan_pt_fa_i_04,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.328 A
+scan_pt_fa_i_05,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.405 A
+scan_pt_fa_i_06,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.481 A
+scan_pt_fa_i_07,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.558 A
+scan_pt_fa_i_08,scan_pt_fa_i,train,9,CH5IN2,21.49,ion_fa_i,d(N...I) = 3.26 A fixed; d(N-H) = 1.635 A
+scan_pt_fa_o_00,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.020 A
+scan_pt_fa_o_01,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.098 A
+scan_pt_fa_o_02,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.177 A
+scan_pt_fa_o_03,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.255 A
+scan_pt_fa_o_04,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.333 A
+scan_pt_fa_o_05,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.412 A
+scan_pt_fa_o_06,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.490 A
+scan_pt_fa_o_07,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.568 A
+scan_pt_fa_o_08,scan_pt_fa_o,test,19,C3H11IN2OS,26.05,ion_fa_i_dmso,d(N...O) = 2.63 A fixed; d(N-H) = 1.647 A

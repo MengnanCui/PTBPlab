@@ -1,0 +1,66 @@
+# A1.2: Li and O both fitted, Li with p (basis factor of A1).  Every strategy and the controls on
+# one 4-D Sobol set of (Li r0_w, Li r0_d, O r0_w, O r0_d), PTBP's published radii first.
+#   ptbp scan points scan_li_o.yaml && ptbp scan run scan_li_o.yaml --jobs 64
+#   ptbp scan losses scan_li_o.yaml --jobs 64 && ptbp scan report scan_li_o.yaml
+# K3 (the spline oracle over the whole set) is the "oracle" column of losses.csv.
+name: li_o_sp_sobol
+out: runs/li_o_sp_sobol
+space:
+  elements: [Li, O]
+  fit: [Li, O]
+  bounds: {around: [0.6, 1.8]}     # factor box around PTBP's radii (Li 4.377/11.209, O 2.011/2.664)
+  kind: sobol
+  n: 256                           # a power of two keeps the Sobol balance (+ published)
+  seed: 0
+  include_published: true
+sk:
+  xc: GGA_X_PBE+GGA_C_PBE
+  superposition: density
+  label: ptbp
+  confinement: selfconsistent
+  grid: {nr: 100, ntheta: 300}
+  workers: 1
+  cache: skcache
+dftb:
+  max_l: {Li: p, O: p}             # Li with p (basis factor)
+  smearing: [gaussian, 0.05]
+  kspacing: 0.15
+  scc_tol: 1.0e-6
+  max_scc: 300
+  mixer: broyden
+  threads: 1
+data:
+  train: [data/li_o_train.xyz]     # train.xyz (68) + short_range.xyz (43)
+  test: [data/li_o_test.xyz]       # rattled cells, seed 101 (8)
+  ood: [data/li_o_ood.xyz]         # the three interface structures (DFT: collapse +1.29/+1.44 eV/atom)
+  e0s: data/E0s_dft.json
+bands:
+  refs: [bands/li_*_v*.json, bands/li2o_v*.json, bands/li2o2_v*.json, bands/dimer_*.json]   # D1 (bands_gpaw.py), not energies.json
+  settings:
+    below: 3.0
+    above: 1.0
+    levels: [1]
+    conduction_weight: 0.4
+    gap_weight: 1.0
+physrep:
+  sigma_bounds: [0.1, 0.8]
+  grid: 11
+  maxiter: 25
+loss:
+  eps_e: 0.010
+  eps_f: 0.10
+  lambda_f: 1.0
+  lambda_band: 1.0
+  penalty: false
+strategies: [S1, S1o, S1eos, S2, S3, S4]
+repfit:
+  pairs:
+    Li-Li: [1.15, 3.6]             # Li2 down to 1.2 A
+    Li-O: [1.15, 3.2]              # LiO down to 1.2 A
+    O-O: [0.95, 3.0]               # O2 down to 1.0 A; peroxide O-O 1.55 A, Li2O O-O 3.26 A
+  n_knots: 12
+  smooth: 1.0e-3
+  force_weight: 1.0
+  monotonic: true
+  offsets: none
+reactions: reactions_li_o.yaml

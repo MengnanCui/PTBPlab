@@ -1,0 +1,7 @@
+input,reason
+R3 SnF2,"elements ['F'] outside the model ['H', 'C', 'N', 'O', 'S', 'I', 'Cs', 'Sn', 'Pb']"
+R7 FA+,charge 1: only in neutral ion clusters
+R8 Cs+,charge 1: only in neutral ion clusters
+R9 I-,charge -1: only in neutral ion clusters
+R21a PbI3-,charge -1: only in neutral ion clusters
+R21b SnI3-,charge -1: only in neutral ion clusters

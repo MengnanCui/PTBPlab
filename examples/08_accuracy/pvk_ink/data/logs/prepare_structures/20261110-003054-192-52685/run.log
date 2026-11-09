@@ -1,0 +1,9 @@
+[runlog] prepare_structures: logs in /Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/pvk_ink/data/logs/prepare_structures/20261110-003054-192-52685
+[prepare_structures       0.1s] written structures=148 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/pvk_ink/data/structures.xyz scans=6 train=105 test=43 ood=0 excluded=6 max_atoms=39
+  excluded R3 SnF2: elements ['F'] outside the model ['H', 'C', 'N', 'O', 'S', 'I', 'Cs', 'Sn', 'Pb']
+  excluded R7 FA+: charge 1: only in neutral ion clusters
+  excluded R8 Cs+: charge 1: only in neutral ion clusters
+  excluded R9 I-: charge -1: only in neutral ion clusters
+  excluded R21a PbI3-: charge -1: only in neutral ion clusters
+  excluded R21b SnI3-: charge -1: only in neutral ion clusters
+148 structures -> /Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/pvk_ink/data/structures.xyz ({'train': 105, 'test': 43, 'ood': 0})

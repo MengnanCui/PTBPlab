@@ -1,0 +1,12 @@
+1
+Lattice="-1.522387003 1.522387003 1.522387003 1.522387003 -1.522387003 1.522387003 1.522387003 1.522387003 -1.522387003" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=cmp_li_bcc_70 group=cmp_li_bcc name=cmp_li_bcc_70 family=cmp_li_bcc role=ood kspacing=0.15 source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.77026419 free_energy=-1.77026419 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000
+1
+Lattice="-1.557803979 1.557803979 1.557803979 1.557803979 -1.557803979 1.557803979 1.557803979 1.557803979 -1.557803979" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=cmp_li_bcc_75 group=cmp_li_bcc name=cmp_li_bcc_75 family=cmp_li_bcc role=ood kspacing=0.15 source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.81957706 free_energy=-1.81957706 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000
+1
+Lattice="-1.591679844 1.591679844 1.591679844 1.591679844 -1.591679844 1.591679844 1.591679844 1.591679844 -1.591679844" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=cmp_li_bcc_80 group=cmp_li_bcc name=cmp_li_bcc_80 family=cmp_li_bcc role=ood kspacing=0.15 source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.85356288 free_energy=-1.85356288 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000
+1
+Lattice="-1.624172039 1.624172039 1.624172039 1.624172039 -1.624172039 1.624172039 1.624172039 1.624172039 -1.624172039" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=cmp_li_bcc_85 group=cmp_li_bcc name=cmp_li_bcc_85 family=cmp_li_bcc role=ood kspacing=0.15 source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.87762899 free_energy=-1.87762899 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000      -0.00000000

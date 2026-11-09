@@ -1,0 +1,13 @@
+# Balanced energy differences for the Li-only scan (pydftb.assess.load_reactions).
+# "family:<name>" = the Birch-Murnaghan minimum of that EOS family (its cell); coefficients count cells.
+reactions:
+  - name: "Li bcc -> Li fcc (per atom)"
+    reactants: {"family:eos_li_bcc": 1}
+    products: {"family:eos_li_fcc": 1}
+    normalize: products_atoms
+    decisive: false            # PBE: about 1-2 meV/atom, below what decides anything
+  - name: "Li2 (2.70 A) -> 2 Li bcc (cohesion relative to the dimer)"
+    reactants: {"dimer_Li2_2.70": 1}
+    products: {"family:eos_li_bcc": 2}
+    normalize: products_atoms
+    decisive: true

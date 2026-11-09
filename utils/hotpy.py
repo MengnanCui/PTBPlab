@@ -344,7 +344,12 @@ class hotpy():
                     rmin, dr, N = 0.4, 0.02, 700
 
                     sk = SlaterKosterTable(atom_a, atom_b)
-                    sk.run(rmin, dr, N, superposition=superposition, xc=xc)
+                    try:                       # A0: the integration grid, {} = defaults
+                        from utils.hotcent_parallel import grid as _grid
+                        _gkw = _grid()
+                    except ImportError:        # a hotcent without the sharded driver
+                        _gkw = {}
+                    sk.run(rmin, dr, N, superposition=superposition, xc=xc, **_gkw)
 
                     if atom_a == atom_b:
                         print(f'atom_a.info: {atom_a.info}')

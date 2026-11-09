@@ -1,0 +1,7 @@
+# A series: computed results stay out of git (sync them with rsync; see README.md section 2)
+**/runs/
+**/skcache/
+**/models/
+**/__pycache__/
+*.traj
+*.tmp

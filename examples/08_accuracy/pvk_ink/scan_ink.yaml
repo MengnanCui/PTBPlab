@@ -1,0 +1,133 @@
+# A1.3: single SK set for the Pb–Sn perovskite ink, every strategy on the same Sobol points.
+# Used by `ptbp scan` (cli/cmd_scan.py, utils/accuracy.py).  Relative paths are relative to this file.
+#
+#   ptbp scan points scan_ink.yaml
+#   ptbp scan run scan_ink.yaml --jobs 16          (or a Slurm array: --index $SLURM_ARRAY_TASK_ID --stride N)
+#   ptbp scan losses scan_ink.yaml --jobs 16
+#   ptbp scan report scan_ink.yaml
+#
+# Needs: data/structures_dft_{train,test,ood}.xyz and data/E0s_dft.json (collect_d4.py after D4), and
+# bands/*.json (orbitals_gpaw.py, D1) or bands_vasp/*.json (collect_d4.py --bands).
+
+name: scan_ink
+out: runs/scan_ink                     # points/, losses.csv, report.md, logs/
+
+space:
+  elements: [H, C, N, O, S, I, Cs, Sn, Pb]    # every element of the ink; SK files of all pairs
+  fit: [I, Pb, Sn, Cs]                 # (r0_w, r0_d) of these vary; H C N O S keep PTBP's published radii
+  bounds: {around: [0.7, 1.4]}         # factor box around the published radii (Bohr)
+  kind: sobol                          # grid | sobol | random
+  n: 128                               # Sobol points (a power of 2), 8-D space
+  seed: 0
+  include_published: true              # point 0 = PTBP's published set (the baseline)
+
+sk:                                    # what besides the radii changes the SK files (utils/skgrid.py)
+  xc: GGA_X_PBE+GGA_C_PBE
+  superposition: density
+  label: ptbp                          # PTBP's valence shells, on-site energies and U
+  confinement: selfconsistent          # M4e: r0_d acts on the density
+  grid: {nr: 100, ntheta: 300}         # denser hotcent integration than PTBP's default (the SK-table
+                                       # noise of the M409 tests); K1 checks it; {} = hotcent's default
+  workers: 4                           # hotcent processes per SK set (9 elements: 45 pairs)
+  cache: skcache_ink                   # $PTBP_SKCACHE overrides it: put it on a large disk (several GB)
+
+dftb:                                  # pydftb settings of the electronic part (repulsive = none)
+  max_l: {S: d, I: d, Sn: d, Cs: d, Pb: p}   # the shells PTBP's SK files have (Perovskite stage 0);
+                                             # H, C, N, O: the occupied shells
+  smearing: [gaussian, 0.01]           # eV, as VASP's ISMEAR 0 SIGMA 0.01 of D4
+  kspacing: gamma                      # molecules and clusters: non-periodic; M409 frames: Gamma point
+  scc_tol: 1.0e-6
+  max_scc: 300
+  mixer: broyden
+  threads: 1
+
+data:                                  # role = the list a file is in (utils.accuracy.load_data)
+  train: [data/structures_dft_train.xyz]
+  test: [data/structures_dft_test.xyz]
+  ood: [data/structures_dft_ood.xyz]   # D4 has none; add D5 here: data_d5/clusters_dft_ood.xyz
+  # train/test of D5 (clusters from the M409 trajectories), once collected:
+  #   train: [data/structures_dft_train.xyz, data_d5/clusters_dft_train.xyz]
+  #   test:  [data/structures_dft_test.xyz, data_d5/clusters_dft_test.xyz]
+  e0s: data/E0s_dft.json               # VASP isolated atoms, spin-unpolarized (D4 atoms/)
+
+bands:
+  refs: [bands/*.json]                 # GPAW (D1); or [bands_vasp/*.json] from the D4 runs
+  settings:                            # pydftb.bandloss.BandSettings
+    below: 3.0                         # eV below the HOMO (user: HOMO-3 eV)
+    above: 1.0                         # eV above the LUMO (user: LUMO+1 eV)
+    edge: 0.1
+    conduction_weight: 0.4
+    gap_weight: 1.0                    # the FA+/I- gap error counts in full
+
+physrep:                               # the 2-body repulsive of S1-S4, one sigma per element
+  sigma_bounds: [0.1, 0.8]
+  grid: 11
+  maxiter: 25
+  # fit: [I, Pb, Sn, Cs]               # default: the fitted elements; the others keep PTBP's sigma
+
+loss:
+  eps_e: 0.010                         # eV/atom: the acceptance line (L_EF = 1 per term on the line)
+  eps_f: 0.10                          # eV/A
+  lambda_f: 1.0
+  lambda_band: 1.0                     # S4
+  penalty: false                       # PTBP's r0 penalty is reported, not used
+
+# S2 and S1eos need EOS families (eos_*), which the ink data have none of.
+strategies: [S1, S1o, S3, S4]
+
+reactions: reactions_ink.yaml
+
+# R2b control and oracle: a flexible two-body spline per pair (pydftb.repfit) on each point's
+# electronic part.  utils.accuracy uses these splines as the WHOLE repulsive, so every pair that
+# occurs in the data is listed, not only the seven of interest (I-Pb, I-Sn, I-Cs, Pb-O, Sn-O, H-I,
+# I-N).  r_lo must be below the shortest distance of that pair in the data (else the control
+# reports an error).  r_cut lies between the first and second neighbours.  Values in Angstrom.
+repfit:
+  n_knots: 10
+  smooth: 1.0e-3
+  force_weight: 1.0
+  monotonic: true
+  offsets: none
+  pairs:
+    # the pairs of interest
+    I-Pb: [2.3, 4.2]
+    I-Sn: [2.2, 4.2]
+    Cs-I: [2.8, 5.0]
+    O-Pb: [1.9, 3.6]
+    O-Sn: [1.6, 3.5]
+    H-I: [1.2, 3.2]                   # the FA+ -> I- proton-transfer scan reaches H-I 1.62 A
+    I-N: [2.6, 4.2]
+    # the rest of the pairs in the molecules, complexes and clusters
+    H-H: [0.6, 2.6]
+    C-H: [0.8, 2.4]
+    H-N: [0.8, 2.4]
+    H-O: [0.75, 2.4]                  # the N-H -> O(DMSO) scan reaches O-H 0.98 A
+    H-S: [1.0, 2.8]
+    C-C: [1.1, 2.8]
+    C-N: [1.0, 2.6]
+    C-O: [0.95, 2.6]
+    C-S: [1.4, 3.0]
+    N-N: [1.8, 3.0]
+    N-O: [1.8, 3.0]
+    O-O: [1.8, 3.0]
+    O-S: [1.3, 3.0]
+    S-S: [2.8, 4.2]
+    C-I: [2.8, 4.4]
+    I-O: [2.6, 4.2]
+    I-S: [3.0, 4.6]
+    I-I: [3.5, 5.0]
+    Pb-S: [2.5, 4.4]
+    S-Sn: [2.5, 4.4]
+    C-Pb: [2.4, 4.0]
+    N-Pb: [2.4, 4.0]
+    H-Pb: [2.2, 4.0]
+    C-Sn: [2.4, 4.0]
+    N-Sn: [2.4, 4.0]
+    H-Sn: [2.2, 4.0]
+    C-Cs: [2.6, 4.5]
+    Cs-N: [2.6, 4.5]
+    Cs-O: [2.4, 4.5]
+    Cs-H: [2.4, 4.5]
+    Cs-S: [2.8, 4.8]
+    N-S: [2.2, 3.4]                   # N...S of the thiourea additive (3T)
+    Pb-Sn: [3.5, 5.0]                 # iodide-bridged metals in the M409 clusters

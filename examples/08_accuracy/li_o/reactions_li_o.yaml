@@ -1,0 +1,35 @@
+# Balanced energy differences for the Li-O scans (pydftb.assess.load_reactions).
+# "family:<name>" = the Birch-Murnaghan minimum of that EOS family (its cell); coefficients count cells:
+# eos_li_bcc 1 atom, eos_li_fcc 1 atom, eos_li2o 3 atoms (1 Li2O), eos_li2o2 8 atoms (2 Li2O2).
+# The O2 reference is the closed-shell dimer at 1.20 A of short_range.xyz (ISPIN 1 on both sides).
+reactions:
+  - name: "2 Li + Li2O2 -> 2 Li2O"
+    reactants: {"family:eos_li_bcc": 2, "family:eos_li2o2": 0.5}
+    products: {"family:eos_li2o": 2}
+    normalize: products_atoms
+    decisive: true
+  - name: "Li2O2 -> Li2O + 1/2 O2(singlet, 1.20 A)"
+    reactants: {"family:eos_li2o2": 0.5}
+    products: {"family:eos_li2o": 1, "dimer_O2_1.20": 0.5}
+    normalize: products_atoms
+    decisive: false
+  - name: "2 Li + 1/2 O2(singlet) -> Li2O"
+    reactants: {"family:eos_li_bcc": 2, "dimer_O2_1.20": 0.5}
+    products: {"family:eos_li2o": 1}
+    normalize: products_atoms
+    decisive: false
+  - name: "Li bcc -> Li fcc (per atom)"
+    reactants: {"family:eos_li_bcc": 1}
+    products: {"family:eos_li_fcc": 1}
+    normalize: products_atoms
+    decisive: false
+  - name: "interface collapse: initial -> md02 (DFT +1.29 eV/atom)"
+    reactants: {iface_init: 1}
+    products: {iface_md02: 1}
+    normalize: products_atoms
+    decisive: true
+  - name: "interface collapse: initial -> md04 (DFT +1.44 eV/atom)"
+    reactants: {iface_init: 1}
+    products: {iface_md04: 1}
+    normalize: products_atoms
+    decisive: true

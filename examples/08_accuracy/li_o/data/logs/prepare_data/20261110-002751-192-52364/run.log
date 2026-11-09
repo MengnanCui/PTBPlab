@@ -1,0 +1,15 @@
+[runlog] prepare_data: logs in /Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/logs/prepare_data/20261110-002751-192-52364
+[prepare_data       0.1s] wrote set=li_o_train n=111 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_train.xyz
+[prepare_data       0.1s] wrote set=li_o_test n=8 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_test.xyz
+[prepare_data       0.1s] wrote set=li_o_ood n=3 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_ood.xyz
+[prepare_data       0.1s] wrote set=li_train n=38 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_train.xyz
+[prepare_data       0.1s] wrote set=li_test n=2 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_test.xyz
+[prepare_data       0.1s] wrote set=li_ood n=4 path=/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_ood.xyz
+{
+ "li_o_train": 111,
+ "li_o_test": 8,
+ "li_o_ood": 3,
+ "li_train": 38,
+ "li_test": 2,
+ "li_ood": 4
+}

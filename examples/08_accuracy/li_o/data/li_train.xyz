@@ -1,0 +1,214 @@
+1
+Lattice="-1.643059453 1.643059453 1.643059453 1.643059453 -1.643059453 1.643059453 1.643059453 1.643059453 -1.643059453" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_00 group=eos_li_bcc name=eos_li_bcc_00 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.88771569 free_energy=-1.88771569 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000       0.00000000
+1
+Lattice="-1.657862588 1.657862588 1.657862588 1.657862588 -1.657862588 1.657862588 1.657862588 1.657862588 -1.657862588" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_01 group=eos_li_bcc name=eos_li_bcc_01 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89511471 free_energy=-1.89511471 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000
+1
+Lattice="-1.672405985 1.672405985 1.672405985 1.672405985 -1.672405985 1.672405985 1.672405985 1.672405985 -1.672405985" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_02 group=eos_li_bcc name=eos_li_bcc_02 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89962288 free_energy=-1.89962288 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000      -0.00000000
+1
+Lattice="-1.686700746 1.686700746 1.686700746 1.686700746 -1.686700746 1.686700746 1.686700746 1.686700746 -1.686700746" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_03 group=eos_li_bcc name=eos_li_bcc_03 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90271891 free_energy=-1.90271891 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000       0.00000000
+1
+Lattice="-1.700757234 1.700757234 1.700757234 1.700757234 -1.700757234 1.700757234 1.700757234 1.700757234 -1.700757234" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_04 group=eos_li_bcc name=eos_li_bcc_04 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90455456 free_energy=-1.90455456 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000
+1
+Lattice="-1.714585135 1.714585135 1.714585135 1.714585135 -1.714585135 1.714585135 1.714585135 1.714585135 -1.714585135" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_05 group=eos_li_bcc name=eos_li_bcc_05 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90525301 free_energy=-1.90525301 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000       0.00000000
+1
+Lattice="-1.728193523 1.728193523 1.728193523 1.728193523 -1.728193523 1.728193523 1.728193523 1.728193523 -1.728193523" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_06 group=eos_li_bcc name=eos_li_bcc_06 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90491811 free_energy=-1.90491811 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000
+1
+Lattice="-1.741590907 1.741590907 1.741590907 1.741590907 -1.741590907 1.741590907 1.741590907 1.741590907 -1.741590907" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_07 group=eos_li_bcc name=eos_li_bcc_07 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90365643 free_energy=-1.90365643 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000
+1
+Lattice="-1.75478528 1.75478528 1.75478528 1.75478528 -1.75478528 1.75478528 1.75478528 1.75478528 -1.75478528" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_08 group=eos_li_bcc name=eos_li_bcc_08 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90004929 free_energy=-1.90004929 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000
+1
+Lattice="-1.767784164 1.767784164 1.767784164 1.767784164 -1.767784164 1.767784164 1.767784164 1.767784164 -1.767784164" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_09 group=eos_li_bcc name=eos_li_bcc_09 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89722346 free_energy=-1.89722346 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000
+1
+Lattice="-1.780594641 1.780594641 1.780594641 1.780594641 -1.780594641 1.780594641 1.780594641 1.780594641 -1.780594641" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_bcc_10 group=eos_li_bcc name=eos_li_bcc_10 family=eos_li_bcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89372038 free_energy=-1.89372038 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000       0.00000000
+1
+Lattice="0.0 2.069564525 2.069564525 2.069564525 0.0 2.069564525 2.069564525 2.069564525 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_00 group=eos_li_fcc name=eos_li_fcc_00 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89303089 free_energy=-1.89303089 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000
+1
+Lattice="0.0 2.088210255 2.088210255 2.088210255 0.0 2.088210255 2.088210255 2.088210255 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_01 group=eos_li_fcc name=eos_li_fcc_01 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89886573 free_energy=-1.89886573 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000      -0.00000000
+1
+Lattice="0.0 2.106528824 2.106528824 2.106528824 0.0 2.106528824 2.106528824 2.106528824 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_02 group=eos_li_fcc name=eos_li_fcc_02 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90315459 free_energy=-1.90315459 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000      -0.00000000
+1
+Lattice="0.0 2.124534217 2.124534217 2.124534217 0.0 2.124534217 2.124534217 2.124534217 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_03 group=eos_li_fcc name=eos_li_fcc_03 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90605348 free_energy=-1.90605348 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000
+1
+Lattice="0.0 2.142239485 2.142239485 2.142239485 0.0 2.142239485 2.142239485 2.142239485 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_04 group=eos_li_fcc name=eos_li_fcc_04 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90394564 free_energy=-1.90394564 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000
+1
+Lattice="0.0 2.159656831 2.159656831 2.159656831 0.0 2.159656831 2.159656831 2.159656831 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_05 group=eos_li_fcc name=eos_li_fcc_05 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90466992 free_energy=-1.90466992 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000      -0.00000000
+1
+Lattice="0.0 2.176797681 2.176797681 2.176797681 0.0 2.176797681 2.176797681 2.176797681 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_06 group=eos_li_fcc name=eos_li_fcc_06 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90437931 free_energy=-1.90437931 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000
+1
+Lattice="0.0 2.193672756 2.193672756 2.193672756 0.0 2.193672756 2.193672756 2.193672756 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_07 group=eos_li_fcc name=eos_li_fcc_07 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.903184 free_energy=-1.903184 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000
+1
+Lattice="0.0 2.210292122 2.210292122 2.210292122 0.0 2.210292122 2.210292122 2.210292122 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_08 group=eos_li_fcc name=eos_li_fcc_08 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.90116355 free_energy=-1.90116355 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000      -0.00000000
+1
+Lattice="0.0 2.226665253 2.226665253 2.226665253 0.0 2.226665253 2.226665253 2.226665253 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_09 group=eos_li_fcc name=eos_li_fcc_09 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89839569 free_energy=-1.89839569 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000
+1
+Lattice="0.0 2.242801071 2.242801071 2.242801071 0.0 2.242801071 2.242801071 2.242801071 0.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=eos_li_fcc_10 group=eos_li_fcc name=eos_li_fcc_10 family=eos_li_fcc role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.89495618 free_energy=-1.89495618 pbc="T T T"
+Li       0.00000000       0.00000000       0.00000000      -0.00000000       0.00000000      -0.00000000
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s05_train1 group=rat_li_bcc16 name=rat_li_bcc16_s05_train1 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-30.40522061 free_energy=-30.40522061 pbc="T T T"
+Li       0.08122000       6.82775000       6.83193000      -0.09694100       0.09456400      -0.00899200
+Li       1.66094000       1.75786000       1.59951000       0.07879000      -0.10138000       0.16676600
+Li       0.08724000       6.82028000       3.44512000      -0.13172200       0.03012800      -0.02860800
+Li       1.70212000       1.78769000       5.04075000       0.04896800      -0.04670700       0.12429600
+Li       6.84222000       3.40997000       0.05669000      -0.03773700       0.01337300      -0.16334700
+Li       1.65959000       5.13513000       1.67069000       0.08060000       0.02198000       0.03617600
+Li       0.00211000       3.45831000       3.37414000      -0.04013300       0.01061300       0.08165100
+Li       1.77182000       5.18883000       5.16888000      -0.06628900      -0.10215500       0.02507800
+Li       3.47421000       6.82415000       6.85220000      -0.11458600       0.09180400       0.03480100
+Li       5.09697000       1.70119000       1.74110000       0.07428300      -0.01815600       0.00362300
+Li       3.39459000       6.83850000       3.39481000       0.00204100       0.00196800      -0.02726400
+Li       5.10150000       1.68102000       5.14312000       0.04331600       0.05499400      -0.00213900
+Li       3.37330000       3.44089000       0.08299000       0.06267700      -0.01886200      -0.10053300
+Li       5.18086000       5.13416000       1.67020000      -0.02887700       0.06011400       0.05830300
+Li       3.39181000       3.51379000       3.43171000       0.05185000      -0.03869800      -0.05869900
+Li       5.11191000       5.15330000       5.24877000       0.07376000      -0.05357900      -0.14110900
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s05_train2 group=rat_li_bcc16 name=rat_li_bcc16_s05_train2 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-30.36465382 free_energy=-30.36465382 pbc="T T T"
+Li       6.83750000       6.85553000       6.75153000       0.00806100      -0.04767400       0.19765500
+Li       1.79660000       1.62491000       1.67250000      -0.17673600       0.14918600      -0.00224400
+Li       0.02514000       6.79608000       3.37627000      -0.02945000       0.14620600       0.09504500
+Li       1.66913000       1.74216000       5.25837000       0.05417000      -0.03776200      -0.21057000
+Li       0.00208000       3.37327000       0.02695000       0.00005400       0.11962100       0.03474400
+Li       1.68478000       5.14280000       1.77334000       0.04893000      -0.00609500      -0.18100600
+Li       6.82095000       3.42962000       3.38526000       0.03099600      -0.11969800       0.07043400
+Li       1.70676000       5.15658000       5.09432000      -0.02681000       0.01245800       0.07756300
+Li       3.41223000       6.84653000       6.82646000       0.00967700      -0.08859400       0.00549500
+Li       5.08437000       1.64352000       1.70691000       0.11376900       0.10505600      -0.03454800
+Li       3.41572000       0.11157000       3.30743000       0.02139100      -0.14797700       0.28060200
+Li       5.14939000       1.73311000       5.21174000      -0.04385600      -0.02039400      -0.16759200
+Li       3.45426000       3.38696000       0.00000000      -0.02952400       0.10024200       0.06285800
+Li       5.17087000       5.12808000       1.75314000      -0.09553900       0.02611000      -0.08966700
+Li       3.33577000       3.51573000       3.50255000       0.10802300      -0.15523200      -0.08248200
+Li       5.12697000       5.17432000       5.14615000       0.00684500      -0.03545400      -0.05628700
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s05_train3 group=rat_li_bcc16 name=rat_li_bcc16_s05_train3 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-30.39271763 free_energy=-30.39271763 pbc="T T T"
+Li       0.08943000       0.02183000       0.00482000      -0.24039600      -0.05607100      -0.00199100
+Li       1.62141000       1.70072000       1.69685000       0.09586200      -0.01324100       0.02415400
+Li       6.85420000       6.82699000       3.42698000      -0.00350200      -0.03776600      -0.03558100
+Li       1.69072000       1.64889000       5.18799000       0.03612800       0.09441800      -0.05940000
+Li       0.04407000       3.51465000       0.00250000      -0.09872500      -0.13626100      -0.08369600
+Li       1.69435000       5.11649000       1.63726000       0.06609700       0.05526200       0.15906100
+Li       0.04912000       3.37412000       3.36992000      -0.03831300       0.04140600       0.10236900
+Li       1.70430000       5.21806000       5.15559000       0.08465800      -0.11115000      -0.11031700
+Li       3.37798000       6.82269000       0.03126000       0.10894600       0.03013500      -0.01672300
+Li       5.13573000       1.67614000       1.70308000       0.08794200       0.05271700      -0.09131300
+Li       3.46642000       0.09881000       3.36696000      -0.14084200      -0.17147600      -0.00052900
+Li       5.11243000       1.67440000       5.02280000       0.09559400       0.05271700       0.21278100
+Li       3.38298000       3.37798000       0.05620000       0.02476000      -0.02675300      -0.09200600
+Li       5.13716000       5.06259000       1.74692000       0.00958300       0.08957200      -0.01809500
+Li       3.41136000       3.34201000       3.39934000      -0.08380800       0.09746600       0.01987000
+Li       5.11433000       5.10006000       5.14524000      -0.00398400       0.03902600      -0.00858400
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s10_train1 group=rat_li_bcc16 name=rat_li_bcc16_s10_train1 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-30.17979426 free_energy=-30.17979426 pbc="T T T"
+Li       0.16243000       6.79716000       6.80552000      -0.20340700       0.18158300      -0.03149200
+Li       1.60729000       1.80113000       1.48443000       0.15443700      -0.23906900       0.34307900
+Li       0.17448000       6.78222000       3.46107000      -0.25817000       0.06311100      -0.05813500
+Li       1.68965000       1.86080000       4.93774000       0.08236800      -0.08820500       0.24001000
+Li       6.82610000       3.39076000       0.11338000      -0.10529300       0.03593000      -0.34384100
+Li       1.60460000       5.12651000       1.62680000       0.16562100       0.04532300       0.08045600
+Li       0.00422000       3.48745000       3.31911000      -0.07916800       0.01226600       0.15542200
+Li       1.82906000       5.23391000       5.19400000      -0.11565900      -0.20252000       0.04615700
+Li       3.51926000       6.78997000       6.84605000      -0.22950500       0.19326500       0.10236100
+Li       5.05018000       1.68780000       1.76762000       0.13995300      -0.02165200       0.00623900
+Li       3.36000000       6.81867000       3.36045000       0.01212300       0.00454600      -0.04928700
+Li       5.05923000       1.64746000       5.14249000       0.08548900       0.10646700      -0.00429800
+Li       3.31744000       3.45261000       0.16598000       0.14285000      -0.01685400      -0.20481700
+Li       5.21796000       5.12457000       1.62582000      -0.06654000       0.12179000       0.12665900
+Li       3.35445000       3.59842000       3.43425000       0.11485000      -0.06735500      -0.11689800
+Li       5.08006000       5.16285000       5.35378000       0.16004900      -0.12862700      -0.29161600
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s10_train2 group=rat_li_bcc16 name=rat_li_bcc16_s10_train2 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-29.99681658 free_energy=-29.99681658 pbc="T T T"
+Li       6.81666000       6.85271000       6.64472000       0.02031100      -0.10699500       0.38970200
+Li       1.87861000       1.53524000       1.63041000      -0.41633000       0.33576400      -0.05099100
+Li       0.05029000       6.73381000       3.32338000      -0.07051100       0.30311800       0.18783500
+Li       1.62368000       1.76973000       5.37298000       0.13527500      -0.06434000      -0.42862100
+Li       0.00415000       3.31738000       0.05391000      -0.01187500       0.24744000       0.09557900
+Li       1.65497000       5.14184000       1.83209000       0.11594800      -0.02690600      -0.37210200
+Li       6.78355000       3.43007000       3.34136000       0.05955700      -0.23994700       0.15736600
+Li       1.69894000       5.16941000       5.04488000      -0.08210900       0.05585600       0.18431400
+Li       3.39529000       6.83472000       6.79458000       0.02097100      -0.17860800      -0.00642200
+Li       5.02499000       1.57246000       1.69924000       0.29891100       0.22528600      -0.11826700
+Li       3.40226000       0.22314000       3.18569000       0.04789500      -0.36097100       0.63330100
+Li       5.15503000       1.75163000       5.27972000      -0.09758500      -0.03128700      -0.33194000
+Li       3.47936000       3.34475000       0.00000000      -0.05701300       0.20108400       0.13114800
+Li       5.19799000       5.11240000       1.79169000      -0.20880000       0.05063600      -0.18331900
+Li       3.24236000       3.60229000       3.57594000       0.23420600      -0.32737600      -0.17315000
+Li       5.11019000       5.20489000       5.14855000       0.01114900      -0.08275500      -0.11443300
+16
+Lattice="6.858340542 0.0 0.0 0.0 6.858340542 0.0 0.0 0.0 6.858340542" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=rat_li_bcc16_s10_train3 group=rat_li_bcc16 name=rat_li_bcc16_s10_train3 family=rat_li_bcc16 role=train kspacing=0.15 source=examples/07/data/train.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-30.12226228 free_energy=-30.12226228 pbc="T T T"
+Li       0.17886000       0.04365000       0.00965000      -0.49837000      -0.12269900       0.00679700
+Li       1.52824000       1.68685000       1.67911000       0.21170400      -0.02495900       0.04936600
+Li       6.85007000       6.79564000       3.42479000      -0.00613500      -0.07583900      -0.07476900
+Li       1.66686000       1.58320000       5.23222000       0.08726600       0.21418900      -0.14615200
+Li       0.08813000       3.60013000       0.00500000      -0.19526300      -0.27090900      -0.17497300
+Li       1.67412000       5.08922000       1.55994000       0.13537200       0.11578400       0.34020300
+Li       0.09824000       3.31906000       3.31067000      -0.08615800       0.09307100       0.21444400
+Li       1.69402000       5.29237000       5.16743000       0.16316500      -0.23003200      -0.22518300
+Li       3.32679000       6.78704000       0.06252000       0.22627300       0.06430400      -0.02789200
+Li       5.12770000       1.63770000       1.69158000       0.18982500       0.10873200      -0.20221400
+Li       3.50368000       0.19761000       3.30476000      -0.32008200      -0.37631700      -0.00647700
+Li       5.08111000       1.63421000       4.90185000       0.21143200       0.10912900       0.43109900
+Li       3.33679000       3.32678000       0.11240000       0.05297400      -0.05433700      -0.17832400
+Li       5.13056000       4.98143000       1.77925000       0.00829500       0.16802500      -0.02501500
+Li       3.39354000       3.25486000       3.36951000      -0.17051400       0.20928200       0.03488600
+Li       5.08490000       5.05637000       5.14673000      -0.00978400       0.07257400      -0.01579400
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_1.20 group=dimer_Li2 name=dimer_Li2_1.20 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=3.55969937 free_energy=3.55969937 pbc="T T T"
+Li       7.10000000       7.30000000       7.00000000       0.00000000      -0.00000000     -12.57282900
+Li       7.10000000       7.30000000       8.20000000      -0.00000000       0.00000000      12.57282900
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_1.40 group=dimer_Li2 name=dimer_Li2_1.40 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=1.74241685 free_energy=1.74241685 pbc="T T T"
+Li       7.10000000       7.30000000       6.90000000      -0.00000000      -0.00000000      -6.76943500
+Li       7.10000000       7.30000000       8.30000000       0.00000000       0.00000000       6.76943500
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_1.60 group=dimer_Li2 name=dimer_Li2_1.60 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=0.59954977 free_energy=0.59954977 pbc="T T T"
+Li       7.10000000       7.30000000       6.80000000       0.00000100      -0.00000100      -4.87709600
+Li       7.10000000       7.30000000       8.40000000      -0.00000100       0.00000100       4.87709600
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_1.80 group=dimer_Li2 name=dimer_Li2_1.80 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-0.23426723 free_energy=-0.23426723 pbc="T T T"
+Li       7.10000000       7.30000000       6.70000000       0.00000000      -0.00000000      -3.48363200
+Li       7.10000000       7.30000000       8.50000000      -0.00000000       0.00000000       3.48363200
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_2.00 group=dimer_Li2 name=dimer_Li2_2.00 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-0.80670526 free_energy=-0.80670526 pbc="T T T"
+Li       7.10000000       7.30000000       6.60000000       0.00000000      -0.00000000      -2.27839800
+Li       7.10000000       7.30000000       8.60000000      -0.00000000       0.00000000       2.27839800
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_2.20 group=dimer_Li2 name=dimer_Li2_2.20 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.16422245 free_energy=-1.16422245 pbc="T T T"
+Li       7.10000000       7.30000000       6.50000000      -0.00000000       0.00000000      -1.34268900
+Li       7.10000000       7.30000000       8.70000000       0.00000000      -0.00000000       1.34268900
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_2.40 group=dimer_Li2 name=dimer_Li2_2.40 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.36181397 free_energy=-1.36181397 pbc="T T T"
+Li       7.10000000       7.30000000       6.40000000      -0.00000000       0.00000000      -0.67094800
+Li       7.10000000       7.30000000       8.80000000       0.00000000      -0.00000000       0.67094800
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_2.70 group=dimer_Li2 name=dimer_Li2_2.70 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.45889598 free_energy=-1.45889598 pbc="T T T"
+Li       7.10000000       7.30000000       6.25000000       0.00000000      -0.00000000      -0.04087900
+Li       7.10000000       7.30000000       8.95000000      -0.00000000       0.00000000       0.04087900
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_3.00 group=dimer_Li2 name=dimer_Li2_3.00 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.41552841 free_energy=-1.41552841 pbc="T T T"
+Li       7.10000000       7.30000000       6.10000000       0.00000000      -0.00000000       0.29160900
+Li       7.10000000       7.30000000       9.10000000      -0.00000000       0.00000000      -0.29160900
+2
+Lattice="15.0 0.0 0.0 0.0 15.5 0.0 0.0 0.0 16.0" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=dimer_Li2_3.50 group=dimer_Li2 name=dimer_Li2_3.50 family=dimer_Li2 role=train kspacing=gamma source=examples/07/data/short_range.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-1.20709564 free_energy=-1.20709564 pbc="T T T"
+Li       7.10000000       7.30000000       5.85000000       0.00000000      -0.00000000       0.49194600
+Li       7.10000000       7.30000000       9.35000000      -0.00000000       0.00000000      -0.49194600

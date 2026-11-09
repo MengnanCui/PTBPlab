@@ -1,0 +1,63 @@
+# A1.1 / K2: Li only, PTBP's basis (Li s).  Every strategy (S1, S1o, S1eos, S2, S3, S4) and the
+# controls (R2b, oracle) on one 12 x 12 grid of (r0_w, r0_d) plus PTBP's published radii.
+#   ptbp scan points scan_li.yaml && ptbp scan run scan_li.yaml --jobs 32
+#   ptbp scan losses scan_li.yaml --jobs 32 && ptbp scan report scan_li.yaml
+# Paths are relative to this file; $PTBP_SKCACHE overrides sk.cache.
+name: li_s_grid
+out: runs/li_s_grid
+space:
+  elements: [Li]
+  fit: [Li]
+  bounds: {around: [0.5, 2.0]}     # factor box around PTBP's Li (r0_w 4.377, r0_d 11.209 Bohr)
+  kind: grid                       # grid | sobol | random
+  n: 12                            # per dimension for a grid: 144 points (+ published)
+  seed: 0
+  include_published: true
+sk:
+  xc: GGA_X_PBE+GGA_C_PBE
+  superposition: density
+  label: ptbp
+  confinement: selfconsistent      # PTBP's default since M4e
+  grid: {nr: 100, ntheta: 300}     # denser hotcent integration than the default (50, 150); K1
+  workers: 1                       # hotcent processes per SK set (points run in parallel)
+  cache: skcache                   # one directory per SK set (shared by all scans)
+dftb:
+  max_l: {Li: s}                   # PTBP's fitted basis (s); scan_li_sp.yaml has Li p
+  smearing: [gaussian, 0.05]       # eV, as VASP ISMEAR 0 / SIGMA 0.05
+  kspacing: 0.15                   # 1/A, VASP's KSPACING rule (frames carry their own)
+  scc_tol: 1.0e-6
+  max_scc: 300
+  mixer: broyden
+  threads: 1
+data:                              # from prepare_data.py
+  train: [data/li_train.xyz]
+  test: [data/li_test.xyz]
+  ood: [data/li_ood.xyz]
+  e0s: data/E0s_dft.json           # DFT isolated atoms, spin-unpolarized (as DFTB's)
+bands:                             # D1 references (bands_gpaw.py or collect_bands.py)
+  refs: [bands/li_bcc_v*.json, bands/li_fcc_v*.json, bands/li_hcp_v*.json, bands/dimer_Li2_*.json]
+  settings:
+    below: 3.0                     # eV below VBM / E_F (the user's window)
+    above: 1.0                     # eV above CBM / E_F
+    levels: [1]                    # 1: special points and the points next to them; [1, 2]: + lines
+    conduction_weight: 0.4
+    gap_weight: 1.0
+physrep:
+  sigma_bounds: [0.1, 0.8]         # PTBP's sigma_rep range
+  grid: 11
+  maxiter: 25
+loss:
+  eps_e: 0.010                     # eV/atom: the acceptance line (user, 2026-11-09)
+  eps_f: 0.10                      # eV/A
+  lambda_f: 1.0
+  lambda_band: 1.0                 # S4
+  penalty: false                   # PTBP's r0 penalty is reported, not used
+strategies: [S1, S1o, S1eos, S2, S3, S4]
+repfit:                            # R2b control and the oracle: two-body splines
+  pairs: {Li-Li: [1.15, 3.6]}      # A: r_lo below the shortest distance (Li2 at 1.2 A)
+  n_knots: 12
+  smooth: 1.0e-3
+  force_weight: 1.0
+  monotonic: true
+  offsets: none
+reactions: reactions_li.yaml

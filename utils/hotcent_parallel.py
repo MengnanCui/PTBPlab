@@ -39,6 +39,26 @@ from hotcent.offsite_twocenter import Offsite2cTable
 from utils.parallel import ForkBackend, SerialBackend, map_tasks
 
 RMIN, DR, NPOINTS = 0.4, 0.02, 700           # hotpy.generate_skf
+# Integration grid of the two-centre tables (A series, A0): empty = hotcent's defaults
+# (nr 50, ntheta 150), which every PTBP run so far used, so the files stay byte-identical.
+# set_grid() makes it denser for new parameter sets (the SK-table noise of the Perovskite tests).
+# Process-wide; forked workers inherit it.
+_GRID: dict = {}
+
+
+def set_grid(nr: int | None = None, ntheta: int | None = None) -> None:
+    """hotcent's radial (``nr``) and angular (``ntheta``) integration points for the tables of
+    this process (None: hotcent's default)."""
+    _GRID.clear()
+    if nr is not None:
+        _GRID["nr"] = int(nr)
+    if ntheta is not None:
+        _GRID["ntheta"] = int(ntheta)
+
+
+def grid() -> dict:
+    """The integration-grid keywords in use ({} = hotcent's defaults)."""
+    return dict(_GRID)
 # Offsite2cTable.run of hotcent 2.1.0, which the record/replay below was checked against
 RUN_SHA256 = "e211b26dfcb5246996222b92bb6ed9d70b46712ee45d798fb3709aea840511ea"
 
@@ -155,7 +175,7 @@ def generate_all(hp, superposition: str, opt_elem=(), label: str = "ptbp", worke
     # tables, once each, rows sharded over the workers
     tables = list(dict.fromkeys(t for job in jobs if not any(s in failed for s in job)
                                 for t in job_tables(job)))
-    kw = dict(superposition=superposition, xc=xc)
+    kw = dict(superposition=superposition, xc=xc, **_GRID)
     nshard = max(1, -(-workers // max(1, len(tables))))
     print(f"[hotcent] {len(tables)} table(s) x {nshard} shard(s) on {workers} process(es)")
     tasks = [(t, s) for t in tables for s in range(nshard)]
@@ -190,7 +210,7 @@ def _generate_tables(hp, superposition, label, workers, outdir, tables, element)
     xc, r0, p = hp.xc, hp.confinement_r0, hp.confinement_p
     atoms = {sym: hp.hot_hamiltonian(r0[sym], p[sym], xc, element(sym), label)
              for sym in dict.fromkeys(s for t in tables for s in t)}
-    kw = dict(superposition=superposition, xc=xc)
+    kw = dict(superposition=superposition, xc=xc, **_GRID)
     nshard = max(1, -(-workers // max(1, len(tables))))
     tasks = [(t, s) for t in tables for s in range(nshard)]
     backend = ForkBackend(workers) if hasattr(os, "fork") else SerialBackend()

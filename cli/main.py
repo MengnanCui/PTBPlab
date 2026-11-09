@@ -6,6 +6,7 @@ Layout:
     ptbp postprocess RUN_DIR             # Re-emit plots / packaging from a prior run
     ptbp plan DATASET [...]              # Parallel plan and estimated time, without running
     ptbp parity DATASET [...]            # Loss parity of the DFTB engines (tools/engine_parity.py)
+    ptbp scan STAGE CONFIG               # A-series accuracy scans (cli/cmd_scan.py)
 
 Backwards-compat: when `parameterize.main()` sees a sys.argv[1] that is NOT
 one of {gen, optimize, postprocess}, it falls through to the legacy flat
@@ -25,7 +26,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_RUN = REPO_ROOT / 'cli' / 'run.py'
 
-SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity'}
+SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity', 'scan'}
 
 
 def _build_top_parser() -> argparse.ArgumentParser:
@@ -35,12 +36,13 @@ def _build_top_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest='cmd', metavar='COMMAND', required=True)
 
-    from cli import cmd_gen, cmd_optimize, cmd_plan, cmd_postprocess, cmd_setup
+    from cli import cmd_gen, cmd_optimize, cmd_plan, cmd_postprocess, cmd_scan, cmd_setup
     cmd_gen.add_parser(sub)
     cmd_optimize.add_parser(sub)
     cmd_postprocess.add_parser(sub)
     cmd_setup.add_parser(sub)
     cmd_plan.add_parser(sub)
+    cmd_scan.add_parser(sub)              # A series: accuracy scans (utils/accuracy.py)
     # Listed for `ptbp --help` only: dispatch() hands `ptbp parity ...` to the tool's own parser.
     parity = sub.add_parser('parity', add_help=False,
                             help="Loss parity of the DFTB engines at fixed parameter points "

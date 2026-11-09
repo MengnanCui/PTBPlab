@@ -1,0 +1,52 @@
+# Balanced reactions of the Pb–Sn ink data (pydftb.assess.load_reactions; A0 section 1).
+#
+# Keys are structure names from prepare_structures.py / collect_d4.py, or "family:<name>".  A
+# family term takes the lowest-energy structure of that family on each side separately, i.e.
+# the most stable orientation, the relaxed geometry when D4's relaxations are collected.
+# "normalize: reaction" reports eV per reaction.
+#
+# decisive: true marks the signs of the acceptance line (user decision 2026-11-09), which are:
+#   - the Pb/Sn selectivity for DMSO over DMF;
+#   - proton transfer from FA+ being uphill (it happened spuriously in DFTB(PTBP) MD);
+#   - the FA+/I- gap (K5).
+# The sign is compared with DFT, not with an assumed answer.
+reactions:
+  # ---- binding of the solvent to MI2 (eV per reaction) -------------------------------------
+  - {name: "PbI2 + DMSO -> PbI2(DMSO)", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R5_DMSO": 1}, products: {"family:cplx_PbI2_DMSO1": 1}, normalize: reaction}
+  - {name: "PbI2 + 2 DMSO -> PbI2(DMSO)2", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R5_DMSO": 2}, products: {"family:cplx_PbI2_DMSO2": 1}, normalize: reaction}
+  - {name: "PbI2 + 3 DMSO -> PbI2(DMSO)3", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R5_DMSO": 3}, products: {"family:cplx_PbI2_DMSO3": 1}, normalize: reaction}
+  - {name: "PbI2 + DMF -> PbI2(DMF)", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R6_DMF": 1}, products: {"family:cplx_PbI2_DMF1": 1}, normalize: reaction}
+  - {name: "PbI2 + 2 DMF -> PbI2(DMF)2", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R6_DMF": 2}, products: {"family:cplx_PbI2_DMF2": 1}, normalize: reaction}
+  - {name: "PbI2 + 3 DMF -> PbI2(DMF)3", reactants: {"family:mol_R1_PbI2": 1, "family:mol_R6_DMF": 3}, products: {"family:cplx_PbI2_DMF3": 1}, normalize: reaction}
+  - {name: "SnI2 + DMSO -> SnI2(DMSO)", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R5_DMSO": 1}, products: {"family:cplx_SnI2_DMSO1": 1}, normalize: reaction}
+  - {name: "SnI2 + 2 DMSO -> SnI2(DMSO)2", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R5_DMSO": 2}, products: {"family:cplx_SnI2_DMSO2": 1}, normalize: reaction}
+  - {name: "SnI2 + 3 DMSO -> SnI2(DMSO)3", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R5_DMSO": 3}, products: {"family:cplx_SnI2_DMSO3": 1}, normalize: reaction}
+  - {name: "SnI2 + DMF -> SnI2(DMF)", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R6_DMF": 1}, products: {"family:cplx_SnI2_DMF1": 1}, normalize: reaction}
+  - {name: "SnI2 + 2 DMF -> SnI2(DMF)2", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R6_DMF": 2}, products: {"family:cplx_SnI2_DMF2": 1}, normalize: reaction}
+  - {name: "SnI2 + 3 DMF -> SnI2(DMF)3", reactants: {"family:mol_R2_SnI2": 1, "family:mol_R6_DMF": 3}, products: {"family:cplx_SnI2_DMF3": 1}, normalize: reaction}
+
+  # ---- Pb/Sn selectivity for DMSO (decisive at n = 2, the M409 starting complexes) ----------
+  - {name: "PbI2(DMF)2 + SnI2(DMSO)2 -> PbI2(DMSO)2 + SnI2(DMF)2", reactants: {"family:cplx_PbI2_DMF2": 1, "family:cplx_SnI2_DMSO2": 1}, products: {"family:cplx_PbI2_DMSO2": 1, "family:cplx_SnI2_DMF2": 1}, normalize: reaction, decisive: true}
+  - {name: "PbI2(DMF) + SnI2(DMSO) -> PbI2(DMSO) + SnI2(DMF)", reactants: {"family:cplx_PbI2_DMF1": 1, "family:cplx_SnI2_DMSO1": 1}, products: {"family:cplx_PbI2_DMSO1": 1, "family:cplx_SnI2_DMF1": 1}, normalize: reaction}
+  - {name: "PbI2(DMF)3 + SnI2(DMSO)3 -> PbI2(DMSO)3 + SnI2(DMF)3", reactants: {"family:cplx_PbI2_DMF3": 1, "family:cplx_SnI2_DMSO3": 1}, products: {"family:cplx_PbI2_DMSO3": 1, "family:cplx_SnI2_DMF3": 1}, normalize: reaction}
+
+  # ---- solvent exchange DMF -> DMSO on one metal ---------------------------------------------
+  - {name: "PbI2(DMF)2 + 2 DMSO -> PbI2(DMSO)2 + 2 DMF", reactants: {"family:cplx_PbI2_DMF2": 1, "family:mol_R5_DMSO": 2}, products: {"family:cplx_PbI2_DMSO2": 1, "family:mol_R6_DMF": 2}, normalize: reaction}
+  - {name: "SnI2(DMF)2 + 2 DMSO -> SnI2(DMSO)2 + 2 DMF", reactants: {"family:cplx_SnI2_DMF2": 1, "family:mol_R5_DMSO": 2}, products: {"family:cplx_SnI2_DMSO2": 1, "family:mol_R6_DMF": 2}, normalize: reaction}
+  - {name: "PbI2(DMF) + DMSO -> PbI2(DMSO) + DMF", reactants: {"family:cplx_PbI2_DMF1": 1, "family:mol_R5_DMSO": 1}, products: {"family:cplx_PbI2_DMSO1": 1, "family:mol_R6_DMF": 1}, normalize: reaction}
+  - {name: "SnI2(DMF) + DMSO -> SnI2(DMSO) + DMF", reactants: {"family:cplx_SnI2_DMF1": 1, "family:mol_R5_DMSO": 1}, products: {"family:cplx_SnI2_DMSO1": 1, "family:mol_R6_DMF": 1}, normalize: reaction}
+
+  # ---- proton transfer from FA+ (decisive: the DFT sign, expected uphill) -------------------
+  - {name: "FA+.I-: N-H -> H-I (scan end - start)", reactants: {scan_pt_fa_i_00: 1}, products: {scan_pt_fa_i_08: 1}, normalize: reaction, decisive: true}
+  - {name: "FA+.I-.DMSO: N-H -> O-H (scan end - start)", reactants: {scan_pt_fa_o_00: 1}, products: {scan_pt_fa_o_08: 1}, normalize: reaction, decisive: true}
+
+  # ---- where the iodide goes: Pb vs Sn (informative; DFT will decide) -----------------------
+  - {name: "PbI2 + FAI -> PbI3-.FA+", reactants: {"family:mol_R1_PbI2": 1, "family:ion_fa_i": 1}, products: {"family:ion_pbi3_fa": 1}, normalize: reaction}
+  - {name: "SnI2 + FAI -> SnI3-.FA+", reactants: {"family:mol_R2_SnI2": 1, "family:ion_fa_i": 1}, products: {"family:ion_sni3_fa": 1}, normalize: reaction}
+  - {name: "PbI3-.FA+ + FAI -> PbI4(2-).2FA+", reactants: {"family:ion_pbi3_fa": 1, "family:ion_fa_i": 1}, products: {"family:ion_pbi4_2fa": 1}, normalize: reaction}
+  - {name: "SnI3-.FA+ + FAI -> SnI4(2-).2FA+", reactants: {"family:ion_sni3_fa": 1, "family:ion_fa_i": 1}, products: {"family:ion_sni4_2fa": 1}, normalize: reaction}
+  - {name: "PbI3-.FA+ + SnI2 -> PbI2 + SnI3-.FA+", reactants: {"family:ion_pbi3_fa": 1, "family:mol_R2_SnI2": 1}, products: {"family:mol_R1_PbI2": 1, "family:ion_sni3_fa": 1}, normalize: reaction}
+
+  # ---- solvation of the ion pair by the solvent ----------------------------------------------
+  - {name: "FAI + DMSO -> FA+.I-.DMSO", reactants: {"family:ion_fa_i": 1, "family:mol_R5_DMSO": 1}, products: {"family:ion_fa_i_dmso": 1}, normalize: reaction}
+  - {name: "FAI + DMF -> FA+.I-.DMF", reactants: {"family:ion_fa_i": 1, "family:mol_R6_DMF": 1}, products: {"family:ion_fa_i_dmf": 1}, normalize: reaction}
