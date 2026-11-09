@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8c 主动学习设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M8c</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8c · 设计文档</p>
+    <h1>AI 层（三）：主动学习的框架</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">框架完成，等数据</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>提交</dt><dd><code>1423ad2</code>，<code>3d69659</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M8c-active-learning.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M8a 的自适应模型在 Cu<sub>13</sub> 的 MD 里走到了训练集之外。主动学习要回答两个问题：模型什么时候在外推？下一批 DFT 该算哪些结构？做法是一个委员会：同一个模型拟合几次，每次用不同的重抽样数据和不同的锚点，成员之间的分歧就是不确定度。从 MD 轨迹里挑分歧最大、彼此不相似、也不像训练集的结构，写成 VASP 输入，接到 M8b 的训练集生成器上。</p>
+    <ul>
+      <li><strong>委员会</strong>：<code>fit_committee</code>。先做一次基础拟合，再把 n 个成员各自拟合到一份 bootstrap 重抽样上。重抽样可以按单个结构，也可以按整组（<code>groups=</code>）。成员从基础拟合热启动。</li>
+      <li><strong>锚点</strong>（<code>perturb=</code>）：岭回归把每个成员拉向它自己的锚点 base + perturb · N(0, 1)，即 anchored ensemble（Pearce 等 2020）。没有锚点时，所有成员在数据约束不到的方向上都保持基础拟合的值，恰好在最该有分歧的地方完全一致。</li>
+      <li><strong>不确定度</strong>：<code>committee_predict</code> 给出每个成员的相对能量（减去该成员自己的偏移）和力。σ<sub>E</sub> 是能量的标准差，σ<sub>F</sub> 是力的分歧最大的那个原子的值；SCC 不收敛的帧标为失败，分数记为无穷大。</li>
+      <li><strong>挑结构</strong>：<code>select</code> 按分数从高到低取，有阈值；指纹（CN 与角度 q 的展宽直方图，按原子数归一）离已选的帧和训练集都至少 <code>min_distance</code>。<code>write_candidates</code> 写 VASP 输入，只写，不提交。</li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#why">一、为什么这样设计</a></li>
+      <li><a href="#api">二、接口</a></li>
+      <li><a href="#exp">三、实验设计</a></li>
+      <li><a href="#limits">四、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="why">
+      <h2>一、为什么这样设计</h2>
+      <ul>
+        <li><strong>委员会而不是解析的不确定度</strong>：模型对系数是非线性的（SCC），用线性化的协方差只在拟合点附近成立；而主动学习要找的恰好是远离数据的结构。委员会只需要多拟合几次，复用 M8a 的拟合和并行。</li>
+        <li><strong>热启动</strong>：成员从基础拟合出发，30–40 次评估就收敛，四个成员的代价约等于一次从零开始的拟合。</li>
+        <li><strong>相对能量</strong>：每个成员的偏移不同（能量零点是自由的），分歧要在各自减去偏移之后算，否则零点的差别会被当成不确定度。</li>
+        <li><strong>指纹</strong>：用模型自己的描述符（CN 与 q），所以“像不像训练集”与模型看到的环境一致；按原子数归一，不同大小的结构可以比较。</li>
+        <li><strong>接到生成器上</strong>：挑出的帧走 <code>cu_dft_dataset.write_set</code>，INCAR、k 点、核数、Slurm 数组与 M8b 训练集完全相同，collect.py 照用。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>二、接口</h2>
+      <pre><code>from pydftb.active import fit_committee, committee_predict, fingerprints, select, write_candidates
+
+com = fit_committee(models, samples, sk, options, n=4, perturb=0.02, base=fit)   # groups=… 可选
+u = committee_predict(com, frames, sk, options)          # u.sigma_e, u.sigma_f, u.failed, u.score()
+pick = select(u.score(), fingerprints(com.base, frames), n=10,
+              reference=fingerprints(com.base, [s.atoms for s in samples]))
+write_candidates("cu_dft_m8b_active", [frames[k] for k in pick], names, group="round1")</code></pre>
+      <p>实验脚本：<code>python -m pydftb.bench.active_cu adaptive_cu.json cu13_adaptive.extxyz --perturb 0.02 --write DIR</code>。</p>
+    </section>
+
+    <section id="exp">
+      <h2>三、实验设计</h2>
+      <ul>
+        <li><strong>校准</strong>：委员会在不含 diamond 的 5 个相上拟合，在全部 6 个相上预测。合格的标准是 diamond 的 σ 明显大于见过的相，并且 σ 与基础模型的真实误差相关（对数相关系数）。</li>
+        <li><strong>筛选</strong>：围绕 M8a 的自适应拟合建委员会，跑 M8a 那段 Cu<sub>13</sub> 轨迹（41 帧，每 10 fs 一帧）。期望团簇重构时 σ 上升，挑出的帧落在重构段。</li>
+        <li><strong>两种委员会对照</strong>：按相重抽样且锚定在基础拟合上；按结构重抽样且锚点扰动 0.02。</li>
+        <li><strong>单元测试</strong>：bootstrap 的计数（整组同进同出）；预测等于成员自己的能量减偏移；并行与串行逐位相同；离数据远的结构 σ 更大；成员相同时 σ = 0；SCC 失败的处理；指纹的平移与超胞不变性；select 的顺序、阈值与去重；VASP 输入；锚点让数据约束不到的系数分开。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>四、风险与之后</h2>
+      <ul>
+        <li><strong>σ 偏小</strong>：小委员会通常低估误差，需要用留出数据标定一个比例因子。</li>
+        <li><strong>扰动的大小</strong>：on-site 系数的单位是 Hartree，扰动 0.1 已经是 2.7 eV，SCC 会不收敛。所以成员失败时把扰动减半重试，最多三次。按通道设不同的尺度留到之后。</li>
+        <li><strong>之后</strong>：DFT 数据回来后的完整循环：拟合 → MD → 挑结构 → DFT → 再拟合；用 σ 做 MD 中的停止条件（不确定度超过阈值就停下并挑帧）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M8b-forces-angles.html">← M8b 报告</a><a href="../reports/M8c-active-learning.html">M8c 报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

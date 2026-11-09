@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8a 随环境变化的参数设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M8a</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8a · 设计文档</p>
+    <h1>AI 层（一）：随环境连续变化的参数</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>提交</dt><dd><code>ee00e6e</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M8a-adaptive-params.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">DFTB+ 给每个原子一套固定的参数；M5a 用配位数的权重在几套离散的参数之间切换，窗口是超参数，几套参数的 on-site 能量与 U 必须相同。M8a 让参数本身成为原子环境的光滑函数：每个原子的 on-site 能量、跃迁积分的标度和排斥势的标度都由它的配位数 CN 决定，系数可以拟合；力与应力精确，周期体系、优化与 MD 都能用；每次计算顺带给出自由能对每个系数的导数，所以拟合有解析的 Jacobian。</p>
+    <ul>
+      <li><strong>描述符</strong>：CN<sub>A</sub> = Σ<sub>B</sub> f(r<sub>AB</sub>)，f 是 M5a 的 C<sup>2</sup> 计数函数。默认窗口 (0.9, 1.3) × (R<sub>A</sub> + R<sub>B</sub>) 从密堆金属的第一壳层里面开始，所以 CN 随体积连续变化，不只随结构变。</li>
+      <li><strong>基函数</strong>：Φ(CN) = [1, exp(−(CN − c<sub>k</sub>)<sup>2</sup> / 2w<sup>2</sup>)]。只有常数时就是“不随环境变”的同一个模型，用作公平的对照。</li>
+      <li><strong>四个通道</strong>，每个都对系数 θ 线性，p<sub>A</sub> = Φ(CN<sub>A</sub>) · θ：
+        <ul>
+          <li>on-site：ε<sub>A,l</sub> + p<sub>A,l</sub>；</li>
+          <li>跃迁：H0<sub>μν</sub> → c<sub>μ</sub> H0<sub>μν</sub> c<sub>ν</sub>，c<sub>μ</sub> = exp(p<sub>A,l</sub>/2)。它保持对称，而且不改 S，S 仍正定；</li>
+          <li>排斥势的标度：V<sub>AB</sub> exp((p<sub>A</sub> + p<sub>B</sub>)/2)；</li>
+          <li>加上的对排斥势：V(r) = Σ c<sub>n</sub> (r<sub>c</sub> − r)<sup>n</sup>（就是路线图上的“ML 排斥势”的最简形式）。</li>
+        </ul></li>
+      <li><strong>导数</strong>：固定参数时的项走原来的力代码（缩放后的 H0 与 dH0、平移后的 ε、缩放后的排斥势）；参数随几何变化多出 Σ<sub>A</sub> ∂E/∂p<sub>A</sub> · dp/dCN · dCN/dR。∂E/∂p 在固定密度下是变分的：on-site 用对角密度 D<sub>μμ</sub>，跃迁用 ½ Σ<sub>e</sub> P<sub>e</sub> H<sub>e</sub>（力代码已有的 P<sub>e</sub>），与 M5a 的 ∂E/∂w 同一条路。同样的 ∂E/∂p 乘 Φ 就是 ∂F/∂θ（Mermin 自由能，精确）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">0</span><span class="lbl">系数全为零时改变的位</span></li>
+      <li><span class="num">2.4e-9</span><span class="lbl">周期金属（k 点、1000 K）的力对差分（Ha/Bohr）</span></li>
+      <li><span class="num">1e-9</span><span class="lbl">∂F/∂θ 对差分的相对误差</span></li>
+      <li><span class="num">4</span><span class="lbl">通道：on-site、跃迁、排斥势标度、对排斥势</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#why">一、为什么这样设计</a></li>
+      <li><a href="#scope">二、范围</a></li>
+      <li><a href="#api">三、接口</a></li>
+      <li><a href="#impl">四、实现</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#fit">五、拟合</a></li>
+      <li><a href="#exp">六、实验设计</a></li>
+      <li><a href="#limits">七、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="why">
+      <h2>一、为什么这样设计</h2>
+      <ul>
+        <li><strong>可微且有力</strong>：文献里随环境调整的 DFTB 参数（Song 等 2026，环境自适应的 Li；TBMaLT 调压缩半径）没有力或不支持周期体系（WHY.md 第 4 节）。这里每个通道都是参数的光滑函数，力与应力由变分性质精确给出，不需要对本征分解求导。</li>
+        <li><strong>线性的系数</strong>：每个通道对 θ 线性，∂F/∂θ = Σ<sub>A</sub> ∂F/∂p<sub>A</sub> Φ<sub>A</sub>，计算一次就有全部梯度；换成神经网络只需换 Φ（同一个接口：p(CN)、dp/dCN、dp/dθ）。</li>
+        <li><strong>跃迁用乘法标度、不碰 S</strong>：c<sub>μ</sub> H c<sub>ν</sub> 对每个原子对自动对称，k 点折叠照旧；S 不变，所以不会因为拟合把重叠矩阵弄成非正定（DFTB 里最常见的失败）。</li>
+        <li><strong>先用 CN</strong>：一个数就能区分 dimer（1）到 fcc（12），导数简单（M5a 已有）；更丰富的描述符（按元素的 CN、径向基、角度）可以沿同一接口加。</li>
+      </ul>
+    </section>
+
+    <section id="scope">
+      <h2>二、范围</h2>
+      <ul>
+        <li><strong>做</strong>：<code>pydftb/adaptive.py</code>（模型、描述符、几何项与导数）、<code>pydftb/adaptive_fit.py</code>（最小二乘拟合）、<code>DFTB(adaptive=…)</code> 与 <code>PyDFTB(adaptive=…)</code>、<code>DFTBResult.adaptive</code>（CN、每个原子的参数、∂F/∂θ）、Cu 的拟合实验与 MD 检查（<code>pydftb/bench/adaptive_cu.py</code>、<code>adaptive_md.py</code>）。</li>
+        <li><strong>支持</strong>：分子、周期体系与 k 点、有限温度、共线自旋、SCC、DFTB3、壳层分辨 SCC、色散、外场等通过电势起作用的项；NumPy 引擎的稠密求解器（eigh、batched、NTPoly 与 FOE 的稠密路径）。</li>
+        <li><strong>拒绝</strong>（ValueError）：torch 后端与 autodiff（加入 <code>numpy_only_options</code>）、两分量自旋、杂化泛函、DFTB+U 与 onsite 修正、Casida、类型切换、分析输出、稀疏与分治求解器、SelectedShells；DFTB+ 引擎（它没有对应的东西）。</li>
+        <li><strong>不做</strong>：神经网络的 Φ、主动学习（M8 的后两项）、对力的损失（需要二阶导数）。</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2>三、接口</h2>
+      <pre><code>from pydftb.adaptive import AdaptiveParams, RBF, PairRepulsive
+m = AdaptiveParams("Cu", RBF((2.0, 6.0, 10.0), width=2.5),
+                   onsite={"s": θ, "p": θ, "d": θ}, hopping={"s": θ, "p": θ, "d": θ},
+                   repulsive=θ, pair_repulsive={"Cu": PairRepulsive(6.05, (c2, c3, ...))})
+r = DFTB(sk, adaptive=[m]).calculate(...)        # 也可 PyDFTB(skdir, adaptive=[m])
+r.adaptive.cn, r.adaptive.parameters, r.adaptive.gradient([m])   # dF/dθ（Ha）
+m.vector(), m.with_vector(x), m.parameter_names()
+
+from pydftb.adaptive_fit import Sample, fit_adaptive, predict
+fit = fit_adaptive([m], [Sample(atoms, e_ev_per_atom, kpts=(8, 8, 8)), ...], sk,
+                   options={"temperature": 300.0}, l2=1e-4, processes=8)</code></pre>
+      <p>系数用原子单位（on-site 为 Hartree，标度为无量纲的对数，对排斥势为 Hartree/Bohr<sup>n</sup>）；PyDFTB 照原样传给引擎。</p>
+    </section>
+
+    <section id="impl">
+      <h2>四、实现</h2>
+      <div class="dev">
+      <ul>
+        <li><code>_setup</code>：<code>build_pairs</code> 之后算 CN 与各通道的 p，<code>scale_pairs</code> 原地把 <code>pb.h</code>、<code>pb.dh</code> 乘以 c<sub>row</sub> c<sub>col</sub>，ε 加上平移，再折叠成 H0；排斥势（原来的 SK 排斥势乘标度，加上模型的对排斥势）在这里算好能量、固定参数的梯度、位力与 ∂E/∂p，<code>_repulsive_energy</code> 与 <code>_repulsive_gradient</code> 直接取（与 M5a 的做法相同）。</li>
+        <li><code>_gradient</code>：在 M5a 的权重梯度之后，用力代码已有的 P<sub>e</sub> 与 <code>_onsite_density</code>（Σ<sub>k</sub> w<sub>k</sub> Re ρ<sub>k,μμ</sub>）算 ∂E/∂p，再经 CN 的原子对给出梯度与位力。</li>
+        <li><code>_run</code>：SCC 之后总是算 ∂F/∂θ（没有力时 wdm 为 None，只取密度）。</li>
+        <li>系数全为零时 c = exp(0) = 1、平移为 0，乘 1 与加 0 不改变任何一位，多出的力是 +0。</li>
+      </ul>
+      </div>
+    </section>
+
+    <section id="fit">
+      <h2>五、拟合</h2>
+      <ul>
+        <li>残差：每个结构的 F/N 减参考，再减它们的加权平均（孤立原子的参考能量因此不需要），加上岭回归项 √l2 (θ − θ<sub>0</sub>)。</li>
+        <li>SciPy 的 <code>least_squares</code>（trf，<code>x_scale="jac"</code>），Jacobian 来自 ∂F/∂θ；一次评估的所有结构在 fork 出的进程里并行，每个进程一个 BLAS 线程。</li>
+        <li>只拟合能量：力的损失要 ∂F/∂θ 对坐标的导数（二阶），留待之后（autodiff 的 implicit 模式是一条路）。</li>
+      </ul>
+    </section>
+
+    <section id="exp">
+      <h2>六、实验设计</h2>
+      <ul>
+        <li><strong>数据</strong>：PTBP 的 Cu 集合，6 个相（dimer、AA-graphite、diamond、β-Sn、bcc、fcc：CN 1 到 12）× 11 个体积（V/V<sub>0</sub> = 0.80–1.20）。参考能量取 <code>dft/fit.json</code> 里 FHI-aims 的 Birch–Murnaghan 参数（<code>dft.xyz</code> 只存了每个相的一个能量，11 个体积相同，不能直接用）。</li>
+        <li><strong>电子部分</strong>：仓库自带的 ptbp_hcocu 的 Cu–Cu 表，壳层分辨 SCC，300 K。它的样条排斥势在 4.96 Bohr 截断，比 fcc 的最近邻还短，等于没有排斥势（PTBP 单独拟合排斥势），所以两个模型都带对排斥势（截断 3.2 Å，6 个系数）。k 点用 PTBP 的密度（5），所有周期相都用，dimer 只用 Γ 点。</li>
+        <li><strong>对照</strong>：固定模型（只有常数基函数：s、p、d 的 on-site 平移与跃迁标度，加对排斥势，12 个参数）与自适应模型（CN 的 RBF 基，中心 2、6、10，宽 2.5：同样的通道加排斥势标度，34 个参数）。</li>
+        <li><strong>评价</strong>：全部数据的拟合误差，以及留一相交叉验证：用 5 个相拟合，预测没见过的相（考察跨配位数的迁移）。</li>
+        <li><strong>MD</strong>：拟合好的自适应模型在扭曲的 Cu<sub>13</sub> 二十面体上（表面 CN 约 6，中心 12），力对差分，600 K 的 NVE 看总能量是否守恒。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>七、风险与之后</h2>
+      <ul>
+        <li><strong>过拟合</strong>：66 个能量、34 个参数；留一相的交叉验证与岭回归是检验与约束。</li>
+        <li><strong>描述符太粗</strong>：CN 区分不了同配位不同几何（如平面与四面体），之后加角度或按元素的描述符。</li>
+        <li><strong>只拟合能量</strong>：没有力的数据时，力的质量只能间接保证（光滑性、MD 守恒）。实测（报告第四节）：只用 6 个理想相的能量拟合的自适应模型在 Cu<sub>13</sub> 的 MD 里不稳定；实现时还加了一个固定的短程墙（<code>PairRepulsive(wall=, wall_strength=)</code>，在数据最短的键以内，不参与拟合）。</li>
+        <li><strong>之后</strong>：M8b 神经网络的 Φ 与更丰富的描述符、力与应力进入损失；M8c 主动学习（不确定度、在 MD 中挑结构算 DFT）。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../index.html">文档索引</a><a href="../reports/M8a-adaptive-params.html">M8a 报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

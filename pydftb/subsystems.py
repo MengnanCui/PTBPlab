@@ -51,6 +51,7 @@ DEGENERATE = 1.0e-12          # Ha: copies of one level from several subsystems
 EPS2 = 2.0 * np.finfo(float).eps
 EPS_SINGLE = float(np.finfo(np.float32).eps)
 M_EXP_ARG = 36.043653389117154
+CONTIGUOUS_MIN = 8            # subsystems per worker for the contiguous assignment (M7d3)
 
 
 # ---- partition --------------------------------------------------------------------------------
@@ -136,31 +137,67 @@ def partition(species, pos, cell, pbc, buffer=DEFAULT_BUFFER, core=DEFAULT_CORE,
 
 
 # ---- the subsystems on the pattern ------------------------------------------------------------
-def subsystem_index(indptr, indices, n, offsets, norb_atom, core, atoms):
-    """Orbitals of a subsystem and its pattern entries: dict with ``orbs``, ``core`` (bool per
-    orbital), ``r``, ``c``, ``g`` (local row, column and pattern position of every entry in the
-    subsystem's block) and ``kr``, ``kc``, ``kg``, ``kp`` (the entries with partition p > 0)."""
+def _int(nmax):
+    """The smallest of int32, int64 that holds 0..nmax - 1."""
+    return np.int32 if nmax <= np.iinfo(np.int32).max else np.int64
+
+
+def _position_matrix(indptr, indices, n):
+    """The pattern with the values 1..nnz (the position + 1 of every entry), float64: exact up
+    to 2^53 entries."""
     nnz = len(indices)
-    idx = sp.csr_matrix((np.arange(1, nnz + 1, dtype=np.float64), indices, indptr), shape=(n, n))
-    return _index(idx, offsets, norb_atom, core, atoms)
+    return sp.csr_matrix((np.arange(1, nnz + 1, dtype=np.float64), indices, indptr),
+                         shape=(n, n))
+
+
+def subsystem_index(indptr, indices, n, offsets, norb_atom, core, atoms):
+    """Orbitals of a subsystem and its pattern entries (see :func:`_index`)."""
+    return _index(_position_matrix(indptr, indices, n), offsets, norb_atom, core, atoms)
 
 
 def _index(idx, offsets, norb_atom, core, atoms):
+    """Orbitals of a subsystem and its pattern entries (M7d3: compact): dict with ``orbs``,
+    ``core`` (bool per orbital), ``lin`` (r m + c, the flat position in the subsystem's m x m
+    block) and ``g`` (the pattern position) of every entry, the entries with partition p > 0
+    first (``nk`` of them), and ``both`` (bool, the first ``nk``: p = 1, else p = 1/2).  int32
+    where it holds the values: 9 bytes per entry instead of 40."""
     orbs = np.concatenate([np.arange(offsets[a], offsets[a] + norb_atom[a]) for a in atoms])
     is_core = np.repeat(np.isin(atoms, core), norb_atom[atoms])
     blk = idx[orbs][:, orbs].tocoo()
-    r, c = blk.row.astype(np.int32), blk.col.astype(np.int32)
-    g = blk.data.astype(np.int64) - 1
-    p = 0.5 * (is_core[r].astype(float) + is_core[c].astype(float))
-    keep = p > 0
-    return dict(orbs=orbs, core=is_core, r=r, c=c, g=g, kr=r[keep], kc=c[keep], kg=g[keep],
-                kp=p[keep])
+    m = len(orbs)
+    r, c = blk.row, blk.col
+    keep = is_core[r] | is_core[c]
+    order = np.argsort(~keep, kind="stable")          # p > 0 first, the COO order within
+    nk = int(keep.sum())
+    r, c = r[order], c[order]
+    lin = (r.astype(np.int64) * m + c).astype(_int(m * m))
+    g = (blk.data[order] - 1.0).astype(_int(idx.nnz))
+    both = is_core[r[:nk]] & is_core[c[:nk]]
+    return dict(orbs=orbs, core=is_core, lin=lin, g=g, nk=nk, both=both)
+
+
+def _partition_weights(sub):
+    """p of the entries with p > 0: 1 (both orbitals in the core) or 1/2 (as 0.5 (c_i + c_j))."""
+    return np.where(sub["both"], 1.0, 0.5)
+
+
+def _localise(subs):
+    """The pattern entries a set of subsystems uses (sorted positions, ``_int``) and the
+    subsystems with ``g`` renumbered into them (M7d3: a worker gets and returns only these)."""
+    if not subs:
+        return np.zeros(0, np.int32), subs
+    used = np.unique(np.concatenate([s["g"] for s in subs]))
+    used = used.astype(_int(int(used[-1]) + 1 if len(used) else 1))
+    dt = _int(len(used))
+    for s in subs:
+        s["g"] = np.searchsorted(used, s["g"]).astype(dt)
+    return used, subs
 
 
 def _dense(data, sub, dtype):
     m = len(sub["orbs"])
     a = np.zeros((m, m), dtype=dtype)
-    a[sub["r"], sub["c"]] = data[sub["g"]]
+    a.reshape(-1)[sub["lin"]] = data[sub["g"]]
     return a
 
 
@@ -186,11 +223,13 @@ def density_subsystems(subs, states, fills, need_w, nnz, dtype):
             continue
         co = c[:, occ]
         cf = co * f[occ]
+        nk = sub["nk"]
+        lin, g, p = sub["lin"][:nk], sub["g"][:nk], _partition_weights(sub)
         d = cf @ co.conj().T
-        rho[sub["kg"]] += sub["kp"] * d[sub["kr"], sub["kc"]]
+        rho[g] += p * d.reshape(-1)[lin]
         if need_w:
             d = (cf * e[occ]) @ co.conj().T
-            wdm[sub["kg"]] += sub["kp"] * d[sub["kr"], sub["kc"]]
+            wdm[g] += p * d.reshape(-1)[lin]
     return rho, wdm
 
 
@@ -275,11 +314,22 @@ def chemical_potential(blocks, nfill, kt, fermi_level="dftb+"):
 
 
 # ---- executors ----------------------------------------------------------------------------------
+def _build_group(group, pattern_args):
+    """The indices of the subsystems ``group`` [(core atoms, subsystem atoms)], localised to the
+    pattern entries they use: (used, subsystems)."""
+    indptr, indices, n, offsets, norb_atom = pattern_args
+    idx = _position_matrix(indptr, indices, n)
+    subs = [_index(idx, offsets, norb_atom, c, a) for c, a in group]
+    del idx
+    return _localise(subs)
+
+
 class _Serial:
     """The subsystems in this process, BLAS on one thread."""
 
-    def __init__(self, subs):
+    def __init__(self, subs, used=None):
         self.subs = subs
+        self.used = used          # the pattern entries of ``subs`` (M7d3); None: all of them
         self.states = None
         self.s_data = None
 
@@ -296,6 +346,8 @@ class _Serial:
     def density(self, fills, need_w, nnz, dtype):
         from threadpoolctl import threadpool_limits
         with threadpool_limits(1, user_api="blas"):
+            if self.used is not None:
+                nnz = len(self.used)
             return [density_subsystems(self.subs, st, f, need_w, nnz, dtype)
                     for st, f in zip(self.states, fills)]
 
@@ -304,14 +356,23 @@ class _Serial:
         self.s_data = None
 
 
-def _worker_main(conn, subs, inherited=()):
+def _worker_main(conn, group, pattern_args, inherited=()):
     # the master's ends of the pipes, copied at the fork: closed, so that a master that dies
     # without stopping its workers (killed, out of memory) ends their recv() with EOFError
     for c in inherited:
         c.close()
     from threadpoolctl import threadpool_limits
     with threadpool_limits(1, user_api="blas"):
-        local = _Serial(subs)
+        try:                      # M7d3: every worker builds the indices of its own subsystems
+            used, subs = _build_group(group, pattern_args)
+        except BaseException as exc:            # noqa: BLE001 -- reported by the master
+            conn.send(("error", f"{type(exc).__name__}: {exc}"))
+            conn.close()
+            return
+        del group, pattern_args
+        conn.send(("used", used))
+        local = _Serial(subs, used)
+        del subs, used
         while True:
             try:
                 msg = conn.recv()
@@ -329,27 +390,40 @@ def _worker_main(conn, subs, inherited=()):
 
 
 class _Workers:
-    """Forked worker processes, each with a fixed set of subsystems (inherited at the fork)."""
+    """Forked worker processes, each with a fixed set of subsystems.  M7d3: a worker gets the
+    atoms of its subsystems and the pattern at the fork and builds their indices itself; it
+    gets and returns only the pattern entries its subsystems use (``used``)."""
 
-    def __init__(self, groups):
+    def __init__(self, groups, pattern_args):
         import multiprocessing as mp
         ctx = mp.get_context("fork")
         self.procs = []
-        for subs in groups:
-            a, b = ctx.Pipe()
-            inherited = [a] + [c for _, c in self.procs]
-            p = ctx.Process(target=_worker_main, args=(b, subs, inherited), daemon=True)
-            p.start()
-            b.close()
-            self.procs.append((p, a))
+        try:
+            for group in groups:
+                a, b = ctx.Pipe()
+                inherited = [a] + [c for _, c in self.procs]
+                p = ctx.Process(target=_worker_main, args=(b, group, pattern_args, inherited),
+                                daemon=True)
+                p.start()
+                b.close()
+                self.procs.append((p, a))
+            self.used = []
+            for _, conn in self.procs:
+                kind, val = conn.recv()
+                if kind == "error":
+                    raise RuntimeError(f"a subsystem worker failed: {val}")
+                self.used.append(val)
+        except BaseException:
+            self.close()
+            raise
 
     def set_overlap(self, s_data):
-        for _, conn in self.procs:
-            conn.send(("overlap", s_data))
+        for (_, conn), u in zip(self.procs, self.used):
+            conn.send(("overlap", [s[u] for s in s_data]))
 
     def eig(self, h_data, offset, dtype):
-        for _, conn in self.procs:
-            conn.send(("eig", h_data, offset, dtype))
+        for (_, conn), u in zip(self.procs, self.used):
+            conn.send(("eig", [h[u] for h in h_data], offset, dtype))
         return [conn.recv() for _, conn in self.procs]
 
     def density(self, fills_per_worker, need_w, nnz, dtype):
@@ -387,12 +461,19 @@ class _MPI:
         self.comm = _comm()
         self.comm.bcast(("geometry", pattern_args), root=0)
         self.comm.scatter([None] + groups, root=0)
+        got = self.comm.gather(None, root=0)[1:]           # M7d3: the entries every rank uses
+        errors = [v for kind, v in got if kind == "error"]
+        if errors:
+            raise RuntimeError(f"a subsystem rank failed: {errors[0]}")
+        self.used = [v for _, v in got]
 
     def set_overlap(self, s_data):
-        self.comm.bcast(("overlap", s_data), root=0)
+        self.comm.bcast(("overlap",), root=0)
+        self.comm.scatter([None] + [[s[u] for s in s_data] for u in self.used], root=0)
 
     def eig(self, h_data, offset, dtype):
-        self.comm.bcast(("eig", h_data, offset, dtype), root=0)
+        self.comm.bcast(("eig", offset, dtype), root=0)
+        self.comm.scatter([None] + [[h[u] for h in h_data] for u in self.used], root=0)
         return self.comm.gather(None, root=0)[1:]
 
     def density(self, fills_per_worker, need_w, nnz, dtype):
@@ -422,15 +503,22 @@ def serve() -> bool:
             if msg[0] == "stop":
                 break
             if msg[0] == "geometry":
-                indptr, indices, n, offsets, norb_atom = msg[1]
-                idx = sp.csr_matrix((np.arange(1, len(indices) + 1, dtype=np.float64),
-                                     indices, indptr), shape=(n, n))
                 mine = comm.scatter(None, root=0)
-                local = _Serial([_index(idx, offsets, norb_atom, c, a) for c, a in mine])
+                local = None
+                try:
+                    used, subs = _build_group(mine, msg[1])
+                except Exception as exc:        # noqa: BLE001 -- reported by rank 0
+                    comm.gather(("error", f"{type(exc).__name__}: {exc}"), root=0)
+                    continue
+                del mine, msg
+                comm.gather(("used", used), root=0)
+                local = _Serial(subs, used)
+                del subs, used
             elif msg[0] == "overlap":
-                local.set_overlap(msg[1])
+                local.set_overlap(comm.scatter(None, root=0))
             elif msg[0] == "eig":
-                comm.gather(local.eig(*msg[1:]), root=0)
+                h_data = comm.scatter(None, root=0)
+                comm.gather(local.eig(h_data, *msg[1:]), root=0)
             elif msg[0] == "density":
                 fills = comm.scatter(None, root=0)
                 comm.gather(local.density(fills, *msg[1:]), root=0)
@@ -493,18 +581,15 @@ class Subsystems:
         self.nnz, self.norb = pattern.nnz, pattern.n
         nworkers = self._nworkers()
         self.owner = self._assign(nworkers) if nworkers else [list(range(len(atoms)))]
-        if self.processes == "mpi" and nworkers:
+        if nworkers:              # M7d3: the workers build their indices, not this process
             pattern_args = (pattern.indptr, pattern.indices, pattern.n, offsets, norb_atom)
             groups = [[(cores[a], atoms[a]) for a in o] for o in self.owner]
-            self._exec = _MPI(groups, pattern_args)
+            ex = _MPI if self.processes == "mpi" else _Workers
+            self._exec = ex(groups, pattern_args)
         else:
-            idx = sp.csr_matrix((np.arange(1, pattern.nnz + 1, dtype=np.float64),
-                                 pattern.indices, pattern.indptr), shape=(pattern.n, pattern.n))
-            subs = [_index(idx, offsets, norb_atom, c, a) for c, a in zip(cores, atoms)]
-            if nworkers:
-                self._exec = _Workers([[subs[a] for a in o] for o in self.owner])
-            else:
-                self._exec = _Serial(subs)
+            idx = _position_matrix(pattern.indptr, pattern.indices, pattern.n)
+            self._exec = _Serial([_index(idx, offsets, norb_atom, c, a)
+                                  for c, a in zip(cores, atoms)])
         self.timings["partition"] = self.timings.get("partition", 0.0) + time.perf_counter() - t0
 
     def _nworkers(self) -> int:
@@ -516,8 +601,19 @@ class Subsystems:
         return 0
 
     def _assign(self, nworkers):
-        """Subsystems to workers: the largest (m^3) first to the least loaded."""
+        """Subsystems to workers.  M7d3: runs of consecutive cores (the grid order, so a worker's
+        subsystems are neighbours in space and share most of their pattern entries) of about
+        equal cost (m^3), when there are at least CONTIGUOUS_MIN subsystems per worker;
+        otherwise the largest first to the least loaded (M7d).  The results do not depend on
+        the assignment (at most two contributions per pattern entry, summed in any order)."""
         cost = self.sizes.astype(float) ** 3
+        n = len(cost)
+        if n >= CONTIGUOUS_MIN * nworkers:
+            cum = np.cumsum(cost)
+            cuts = np.searchsorted(cum, cum[-1] * np.arange(1, nworkers) / nworkers)
+            cuts = np.maximum.accumulate(np.clip(cuts, 1, n - 1))
+            bounds = np.concatenate([[0], cuts, [n]])
+            return [list(range(int(bounds[k]), int(bounds[k + 1]))) for k in range(nworkers)]
         load = np.zeros(nworkers)
         owner = [[] for _ in range(nworkers)]
         for a in np.argsort(-cost, kind="stable"):
@@ -591,13 +687,20 @@ class Subsystems:
                                    need_w, self.nnz, dtype)
         if isinstance(self._exec, _Serial):
             parts = [parts]
+        used = getattr(self._exec, "used", None) or [None] * len(parts)
         rho = np.zeros((nh, self.nnz), dtype=dtype)
         wdm = np.zeros((nh, self.nnz), dtype=dtype) if need_w else None
-        for res in parts:                                # at most two contributions per entry
-            for ik, (r, wd) in enumerate(res):
-                rho[ik] += r
+        for u, res in zip(used, parts):                  # at most two contributions per entry
+            for ik, (r, wd) in enumerate(res):           # (+0 elsewhere: the same bits)
+                if u is None:
+                    rho[ik] += r
+                else:
+                    rho[ik, u] += r
                 if need_w:
-                    wdm[ik] += wd
+                    if u is None:
+                        wdm[ik] += wd
+                    else:
+                        wdm[ik, u] += wd
         rho *= spin_factor
         if need_w:
             wdm *= spin_factor

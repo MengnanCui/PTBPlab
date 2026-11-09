@@ -171,10 +171,11 @@ def test_finite_buffers(sk_water):
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
 def test_processes_give_the_same_bits(sk_water):
     """The sums over worker processes do not depend on their number (two contributions per
-    entry of the pattern at most)."""
+    entry of the pattern at most).  M7d3: 1 and 2 workers take runs of cores, 4 the largest
+    first (27 < CONTIGUOUS_MIN * 4)."""
     box = _water_box(27)
     out = []
-    for p in (None, 1, 2):
+    for p in (None, 1, 2, 4):
         s = Subsystems(buffer=3.0, core=3.0, processes=p)
         out.append(_calc(sk_water, box, s))
         s.close()
@@ -183,13 +184,15 @@ def test_processes_give_the_same_bits(sk_water):
         assert np.array_equal(r.forces, out[0].forces) and np.array_equal(r.stress, out[0].stress)
 
 
-@pytest.mark.skipif(not hasattr(os, "fork") or not os.path.isdir("/proc"), reason="needs fork and /proc")
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
 def test_workers_exit_with_the_master(tmp_path):
     """A master killed without stopping its workers (out of memory, SIGKILL): the workers see
     their pipes close and exit instead of waiting for ever (M7d2)."""
     script = ("import os, signal\n"
+              "import numpy as np\n"
               "from pydftb.subsystems import _Workers\n"
-              "w = _Workers([[], [], []])\n"
+              "none = np.zeros(0, int)\n"
+              "w = _Workers([[], [], []], (np.zeros(1, int), none, 0, none, none))\n"
               "print(' '.join(str(p.pid) for p, _ in w.procs), flush=True)\n"
               "os.kill(os.getpid(), signal.SIGKILL)\n")
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([os.path.dirname(os.path.dirname(dc.__file__))]
@@ -201,6 +204,12 @@ def test_workers_exit_with_the_master(tmp_path):
     assert len(pids) == 3
 
     def alive(pid):
+        if not os.path.isdir("/proc"):               # macOS: orphans are reaped by launchd
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
         try:
             with open(f"/proc/{pid}/stat") as fh:
                 return fh.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")

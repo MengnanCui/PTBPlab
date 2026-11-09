@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M8b 力与角度设计</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 设计文档 / M8b</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M8b · 设计文档</p>
+    <h1>AI 层（二）：力进入拟合、角度描述符、Cu 的 DFT 训练集</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">框架完成，等数据</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-07</dd></div>
+      <div><dt>提交</dt><dd><code>7dd430b</code>（训练集），<code>2217b1a</code>（代码）</dd></div>
+      <div><dt>配套</dt><dd><a href="../reports/M8b-forces-angles.html">完成报告</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">M8a 的自适应模型只拟合了 6 个理想相的能量，在 Cu<sub>13</sub> 的 MD 里不稳定，留一相交叉验证里 diamond 也没有改进。M8b 补三样东西：力进入损失函数；一个区分 diamond 与密堆、平面配位的角度描述符；一份带力与应力的 Cu DFT 训练集（VASP 输入，只生成，不提交）。这次只做不依赖新数据的部分：框架与描述符用单元测试和现有的 66 个结构验证，训练集等用户决定是否在电光云上算。</p>
+    <ul>
+      <li><strong>力进入拟合</strong>：<code>Sample(atoms, energy, forces=…)</code>，<code>fit_adaptive(..., force_weight=w)</code>。残差加上 √w (F − F<sub>ref</sub>)，它对 θ 的 Jacobian 用 θ 的中心差分（每个系数两次计算）。</li>
+      <li><strong>角度描述符</strong>：q<sub>A</sub> = Σ<sub>B,C</sub> f<sub>B</sub> f<sub>C</sub> P<sub>3</sub>(cos θ<sub>BAC</sub>) / (CN<sub>A</sub><sup>2</sup> + 0.01)。有反演对称的环境（fcc、bcc、sc）q = 0，diamond 5/9，石墨 0.624，二聚体 0.99。用法是 <code>AdaptiveParams(..., angular=RBF(...))</code>，Φ = [Φ(CN), Φ<sub>q</sub>(q)]，仍然对 θ 线性。</li>
+      <li><strong>训练集</strong>：176 个结构，分为二聚体、团簇（含 MD 里重构掉的 Cu<sub>13</sub>）、MD 快照、表面、空位、扰动与拉伸的晶胞、PTBP 原有的相。估计 1403 核时、约 140 元（dg83）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">176</span><span class="lbl">训练集结构数（只生成）</span></li>
+      <li><span class="num">~1403</span><span class="lbl">估计核时，dg83，约 140 元</span></li>
+      <li><span class="num">0 / 5/9</span><span class="lbl">q：fcc、bcc / diamond</span></li>
+      <li><span class="num">1e-8</span><span class="lbl">dq/dR 对差分</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#why">一、为什么这样设计</a></li>
+      <li><a href="#forces">二、力进入拟合</a></li>
+      <li><a href="#angles">三、角度描述符</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#data">四、Cu 的 DFT 训练集</a></li>
+      <li><a href="#exp">五、实验设计</a></li>
+      <li><a href="#limits">六、风险与之后</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="why">
+      <h2>一、为什么这样设计</h2>
+      <ul>
+        <li><strong>力</strong>：一个 N 原子结构有 3N 个力分量，只有 1 个能量，所以力是信息最多、最便宜的数据。M8a 的 MD 失败正是因为没有约束“短键、低配位”这类畸变环境的力。</li>
+        <li><strong>力的 Jacobian 用差分</strong>：解析的 ∂F<sub>力</sub>/∂θ 要对 ∂F/∂θ 再对坐标求一次导数，即 SCC 的响应（M8a 设计里提到的 implicit 求导）。差分代价是每次评估 2·n<sub>θ</sub> 次计算，对 48 个系数可以接受，而且与能量的解析 Jacobian 共用同一套并行。解析版本留到系数多到差分太贵的时候（神经网络 Φ）。</li>
+        <li><strong>角度</strong>：CN 无法区分 diamond（CN 4，四面体）与平面四配位，也无法区分 CN 相近的 β-Sn 与密堆环境的畸变。l = 3 的勒让德多项式对有反演中心的环境严格为 0，对四面体最大，所以一个数就能把“共价、方向性强”与“金属、各向同性”分开，导数简单（只要单位矢量）。</li>
+        <li><strong>q 用 CN<sup>2</sup> 归一</strong>：S = Σ f<sub>B</sub> f<sub>C</sub> P<sub>3</sub> 随邻居数平方增长，除以 CN<sup>2</sup> 后 q 只看形状；加 0.01 让孤立原子 q = 0 且光滑。</li>
+      </ul>
+    </section>
+
+    <section id="forces">
+      <h2>二、力进入拟合</h2>
+      <ul>
+        <li><code>Sample.forces</code>（eV/Å，形状 (N, 3)，可以是 None）。有力的样本贡献 3N 个残差 √w<sub>F</sub> · w<sub>k</sub> · (F − F<sub>ref</sub>)，w<sub>F</sub> 的单位是 (eV/atom)<sup>2</sup> 每 (eV/Å)<sup>2</sup>。</li>
+        <li><code>evaluate_all(models, samples, sk, opts, x, with_forces, step)</code>：能量与解析的 ∂E/∂θ 照旧；有力时在 θ ± step 处各算一次力，得到 ∂F<sub>力</sub>/∂θ。</li>
+        <li><code>FitResult.force_rmse</code>（eV/Å）；拟合历史是 (时间, 能量 RMSE, 力 RMSE)。</li>
+        <li>检验：∂F<sub>力</sub>/∂θ 应等于 −∇<sub>R</sub>(∂F/∂θ)（混合二阶导数对称），即“差分的力 Jacobian”与“解析 ∂F/∂θ 的坐标差分”一致。</li>
+      </ul>
+    </section>
+
+    <section id="angles">
+      <h2>三、角度描述符</h2>
+      <ul>
+        <li>对原子 A 的邻居条目 B（含周期像），u<sub>B</sub> = r<sub>AB</sub>/|r<sub>AB</sub>|，c<sub>BC</sub> = u<sub>B</sub>·u<sub>C</sub>，S = f<sup>T</sup> P<sub>3</sub>(c) f（含 B = C 的对角项，P<sub>3</sub>(1) = 1），q = S / (CN<sup>2</sup> + ε)。截断函数 f 与 CN 相同（M5a 的光滑计数函数），所以 q 在截断处光滑。</li>
+        <li>dq/dr<sub>B</sub> = [2 Σ<sub>C</sub> f<sub>C</sub> P<sub>3</sub>'(c<sub>BC</sub>) f<sub>B</sub> (u<sub>C</sub> − c<sub>BC</sub> u<sub>B</sub>)/|r<sub>B</sub>| + 2 (P<sub>3</sub> f)<sub>B</sub> f'<sub>B</sub> u<sub>B</sub>] / (CN<sup>2</sup> + ε) − 2 CN S/(CN<sup>2</sup> + ε)<sup>2</sup> · f'<sub>B</sub> u<sub>B</sub>。每个邻居条目给一个 3 矢量，与 CN 的对导数走同一条散射到力与应力的路（<code>coordinate_gradient</code> 加上 q 的条目）。</li>
+        <li><code>AdaptiveParams.angular</code> 是一个不含常数的 RBF（常数已在 CN 的基里，必须 <code>constant=False</code>）；<code>features(cn, q)</code> 返回 Φ、∂Φ/∂CN、∂Φ/∂q。每个通道的系数个数变成 <code>size</code> = CN 基 + q 基。</li>
+        <li>结果里多了 <code>AdaptiveResult.q</code>。不用 <code>angular</code> 时什么都不变（Φ 与以前逐位相同）。</li>
+      </ul>
+    </section>
+
+    <section id="data">
+      <h2>四、Cu 的 DFT 训练集</h2>
+      <p>生成器 <code>python -m pydftb.bench.cu_dft_dataset</code>，输出在 <code>cu_dft_m8b/</code>（仓库外）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组</th><th>结构数</th><th>原子数</th><th>内容</th><th>估计核时</th></tr></thead>
+        <tbody>
+          <tr><td>dimer</td><td>10</td><td>2</td><td>1.7–3.5 Å，短程区</td><td>0</td></tr>
+          <tr><td>cluster</td><td>29</td><td>3–55</td><td>三角、四面体、菱形、八面体、五角双锥、Cu<sub>13</sub> 二十面体 / 立方八面体 / 十面体、Cu<sub>38</sub>、Cu<sub>55</sub>，以及扰动 0.05、0.12 Å</td><td>38</td></tr>
+          <tr><td>md</td><td>10</td><td>13</td><td>M8a 自适应模型 MD 里重构的 Cu<sub>13</sub> 快照（正是该学会的结构）</td><td>5</td></tr>
+          <tr><td>surface</td><td>8</td><td>30–37</td><td>(111)、(100)、(110)、(111) 加吸附原子，各一个扰动</td><td>332</td></tr>
+          <tr><td>vacancy</td><td>3</td><td>30–31</td><td>32 原子 fcc 的单空位（加扰动）与双空位</td><td>173</td></tr>
+          <tr><td>rattled</td><td>26</td><td>8–32</td><td>fcc、bcc、hcp、diamond、sc 在 0.9、1.0、1.1 倍体积，扰动 0.05、0.15 Å</td><td>740</td></tr>
+          <tr><td>strain</td><td>24</td><td>1</td><td>fcc 原胞 6 种应变 × ±3%、±6%（弹性常数、应力）</td><td>22</td></tr>
+          <tr><td>ptbp</td><td>66</td><td>1–2</td><td>M8a 的 6 个相 × 11 个体积，用 VASP 重算（同一个泛函，避免 FHI-aims 与 VASP 的差别混进训练集）</td><td>93</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>设置</strong>：PBE PAW（Cu，11 个电子），ENCUT 450 eV，EDIFF 1e-6；Fermi 展宽 300 K（ISMEAR = −1），VASP 的自由能就是 pydftb 拟合的 Mermin F；周期体系 KSPACING 0.2 1/Å；团簇与二聚体只用 Γ 点并自旋极化；真空 ≥ 12 Å；单点，输出力与应力。</li>
+        <li><strong>队列</strong>：dg83（CPU，76 核/节点）。按原子数分 19、38、76 核三个 Slurm 数组；已算完的目录跳过，可以重复提交。dg50 的 RTX 5090 双精度只有 1.7 TFLOPS，不适合 VASP。</li>
+        <li><strong>估计</strong>：32 原子体相每个 k 点约 1 核时，按原子数的 2.2 次方与真空的平面波数放大，Γ-only 减半、自旋加倍。很粗，先算三个校准作业再定。</li>
+        <li><code>collect.py</code> 把结果写成 <code>cu_m8b.extxyz</code>（自由能、力、应力），直接给 <code>Sample</code>。</li>
+      </ul>
+    </section>
+
+    <section id="exp">
+      <h2>五、实验设计</h2>
+      <ul>
+        <li><strong>单元测试</strong>：q 的取值（二聚体、石墨、diamond、bcc、fcc）与 dq/dR 对差分；带角度的模型的力、应力、∂F/∂θ 对差分（与 CN 模型同一组测试，参数化为 cn 与 cn+angular）；力 Jacobian 的对称性检验；用力拟合恢复一个已知模型（远离平衡的水分子，|F| &gt; 0.5 eV/Å）。</li>
+        <li><strong>现有数据上的角度模型</strong>：在 M8a 的自适应模型上加 q 的 RBF（中心 0.3、0.6，宽 0.15），共 48 个系数；拟合全部 66 个结构，再做留出 diamond 与留出 β-Sn 两折交叉验证，与 M8a 的固定、自适应模型比较。</li>
+        <li><strong>不做</strong>：带力的真实拟合（现有的 66 个结构都是理想晶格，力按对称为 0，没有信息）与新数据上的 MD，等训练集算完。</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>六、风险与之后</h2>
+      <ul>
+        <li><strong>6 个相不够约束角度项</strong>：训练集里 q 只取 0、0.62、0.99 三个值，q 的基函数可以只“记住”石墨与二聚体。留出 diamond 正是在测这件事（结果见报告）。</li>
+        <li><strong>差分的力 Jacobian</strong>：每次评估多 2 n<sub>θ</sub> 次带力的计算。176 个结构、48 个系数时约 1.7 万次计算一轮，本机要按小时算；系数再多就要解析的 implicit 导数。</li>
+        <li><strong>VASP 与 FHI-aims</strong>：ptbp 组用 VASP 重算，就不需要跨代码的能量对齐。</li>
+        <li><strong>之后</strong>：数据回来之后的带力拟合与 MD；按元素的 CN；神经网络的 Φ；M8c 主动学习。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../reports/M8a-adaptive-params.html">← M8a 报告</a><a href="../reports/M8b-forces-angles.html">M8b 报告 →</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/design/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -1075,11 +1075,14 @@ four processes, against 404 s for the eigensolver and 219 s for the sparse path 
 solver time per SCC iteration grows linearly (3.9 ms per water at 1000 and 1728 waters, the
 sparse path 9.8 ms), and 1728 waters take 216 s (the sparse path 411 s).  With buffers of 8 A
 1000 waters take 287 s, 1.3 times the sparse path.  With the Coulomb in blocks (M7d2, below)
-1728 waters take 172 s and the main process peaks at 2.1 GiB; at about 5000 waters four
-workers do not fit in 13 GiB (the subsystems' pattern indices, 2 GiB, stay with every worker
-through the fork, and each worker has its own copies of the pattern arrays), where the sparse
-path does.  Details and timings:
-[`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html).
+1728 waters take 172 s and the main process peaks at 2.1 GiB.  Since milestone M7d3 every
+worker builds the compact indices of its own subsystems (9 bytes per pattern entry instead of
+40) and gets and returns only the pattern entries they use, and the workers take runs of
+neighbouring cores of equal cost; the results are bitwise unchanged.  4913 waters (14739 atoms)
+with four processes then peak at 10.9 GiB for all processes together instead of 15.2 GiB and
+take 857 s instead of 1308 s (macOS, 10 cores).  Details and timings:
+[`docs/reports/M7d-divide-and-conquer.html`](docs/reports/M7d-divide-and-conquer.html),
+[`docs/reports/M7d3-dc-memory.html`](docs/reports/M7d3-dc-memory.html).
 
 ### Large periodic systems: the Coulomb in blocks
 
@@ -1102,8 +1105,93 @@ GiB and the run takes 172 s instead of 216 s; 4913 waters (14739 atoms) take 128
 sparse path with a 5.73 GiB peak, where the old table alone would have needed 13 GiB.  The
 torch backend's forward calculation uses the same NumPy Coulomb; the autodiff (`pydftb.autodiff`)
 needs the whole table and refuses such a Coulomb.  gamma itself (N^2, 1.6 GiB at 4913 waters)
-and the SK pair list remain.  Details:
+remains.  The SK pair blocks are built chunk by chunk into their final arrays (M7d3): the
+build's temporary peak, the spline coefficients of whole groups of pairs, fell from 0.94 to
+0.06 GiB at 1728 waters.  Details:
 [`docs/reports/M7d2-large-coulomb.html`](docs/reports/M7d2-large-coulomb.html).
+
+### Environment-adaptive parameters (`adaptive=`)
+
+Milestone M8a lets the parameters of every atom change smoothly with its environment, its
+coordination number CN (M5a's counting function, periodic images included):
+
+```python
+from pydftb.adaptive import AdaptiveParams, RBF, PairRepulsive
+from pydftb.adaptive_fit import Sample, fit_adaptive
+
+z = (0.0,) * 4                                     # constant + 3 Gaussians of CN
+m = AdaptiveParams("Cu", RBF((2.0, 6.0, 10.0), width=2.5),
+                   onsite={"s": z, "d": z},        # eps_A,l + Phi(CN_A) . theta   (Hartree)
+                   hopping={"s": z, "p": z, "d": z},   # H0_mu,nu -> c_mu H0 c_nu, c = exp(p/2)
+                   repulsive=z,                    # V_AB exp((p_A + p_B)/2)
+                   pair_repulsive={"Cu": PairRepulsive(6.05, (0.0,) * 6,       # sum c_n (r_c - r)^n
+                                                       wall=3.78, wall_strength=5.45)})
+r = DFTB(sk, adaptive=[m]).calculate(labels, pos, cell, pbc)   # or PyDFTB(skdir, adaptive=[m])
+r.adaptive.cn, r.adaptive.gradient([m])            # dF/dtheta for every coefficient (Hartree)
+fit = fit_adaptive([m], [Sample(atoms, e_per_atom_ev, kpts=(8, 8, 8)), ...], sk,
+                   options={"temperature": 300.0}, processes=8)
+```
+
+The channels are linear in their coefficients; S is never scaled (it stays positive definite).
+Forces and stress include the parameters' dependence on the geometry (central differences:
+2.4e-9 Ha/Bohr for a Cu metal with k-points at 1000 K, stress 4e-11), and every calculation
+returns the derivatives of the Mermin free energy with respect to every coefficient (relative
+error 1e-9), which `fit_adaptive` uses as its Jacobian (least squares on relative energies per
+atom, ridge, the structures in forked processes).  With zero coefficients the calculation is
+the plain one, bit for bit.  A pair repulsive's `wall` is a fixed core term (wall - r)^3, never
+fitted: put it below the shortest bond of the data.  NumPy engine and dense solvers; not with
+two-component spin, hybrids, +U and onsite corrections, Casida, type switching, analyses, the
+sparse and divide-and-conquer solvers, torch or autodiff.
+
+On PTBP's Cu set (6 phases from the dimer to fcc, CN 1 to 12, 11 volumes each, FHI-aims
+Birch-Murnaghan energies) the relative energies are fitted to 15.6 meV/atom by the same
+channels without environment dependence and to 1.4 meV/atom with it; in a leave-one-phase-out
+cross-validation the error on the unseen phase falls from 117 to 40 meV/atom (better for 5 of
+the 6 phases, not for diamond).  Fitted to these ideal structures alone, the adaptive model is
+not safe for MD: a Cu13 cluster restructures and atoms evaporate, where the fixed model keeps
+the total energy within 2.2 meV over 2 ps; it needs forces and distorted structures.  Details:
+[`docs/reports/M8a-adaptive-params.html`](docs/reports/M8a-adaptive-params.html).
+
+Milestone M8b adds forces to the fit and an angular descriptor.  `Sample(atoms, energy,
+forces=F)` (eV/A) with `fit_adaptive(..., force_weight=w, force_step=1e-4)` adds the residuals
+sqrt(w) (F - F_ref), whose Jacobian comes from central differences in the coefficients
+(`FitResult.force_rmse`).  `AdaptiveParams(..., angular=RBF((0.3, 0.6), 0.15, constant=False))`
+appends a basis in q = sum_BC f_B f_C P3(cos theta_BAC) / (CN^2 + 0.01), which is 0 for
+centrosymmetric environments (fcc, bcc), 5/9 for diamond and 0.62 for graphite
+(`r.adaptive.q`; forces and stress stay exact).  On the 6 ideal Cu phases alone the angular
+terms overfit: the fit falls from 1.4 to 0.5 meV/atom, but the held-out diamond error rises
+from 76 to 224 meV/atom and beta-Sn from 19 to 61, so use them only with distorted structures
+in the data.  `python -m pydftb.bench.cu_dft_dataset` writes such a Cu training set (176
+structures: clusters, surfaces, vacancies, rattled and strained cells) as VASP inputs and Slurm
+array scripts.  Details: [`docs/reports/M8b-forces-angles.html`](docs/reports/M8b-forces-angles.html).
+
+Milestone M8c adds active learning (`pydftb.active`).  `fit_committee(models, samples, sk,
+options, n=4, perturb=0.02, base=fit)` refits members to bootstrap resamples, each anchored
+(its start and its ridge) at the base plus a random perturbation: without the perturbation all
+members keep the base's values where no data constrains them and agree exactly where they
+should not.  `committee_predict(com, frames, sk, options)` gives the spread of the relative
+energies per atom (`sigma_e`) and of the forces (`sigma_f`, the worst atom), `select` picks the
+most uncertain frames that are unlike each other and unlike the training set (fingerprints of
+CN and q), and `write_candidates` writes them as VASP inputs (never submitted).  On Cu with
+diamond held out, the anchored committee's spread on diamond is 17 times that on the seen
+phases (log correlation with the true error 0.75, the spread about 9 times too small); along
+the M8a Cu13 trajectory it rises as the cluster restructures.  Details:
+[`docs/reports/M8c-active-learning.html`](docs/reports/M8c-active-learning.html).
+
+Milestone M8d fits the adaptive Cu models to the VASP set (142 single points computed on
+DianGuang Cloud, 7.98 yuan): `python -m pydftb.bench.cu_dft_fit cu_m8b.extxyz [--force-weight w]`
+reads `collect.py`'s extxyz, solves the pair repulsive by linear least squares first and keeps a
+fixed core wall below the data (1.6 A).  Fitted to energies only, the adaptive model reaches
+39.6 meV/atom (test: clusters 65, ideal phases 43 meV/atom) and is stable in a 2 ps Cu13 MD at
+600 K; with forces at weight 0.01 the fit did not converge.  `fit_adaptive` now rejects trial
+steps where an SCC fails, `evaluate_sample` retries a non-converged SCC with gentler mixing, and
+fits on macOS should run with `VECLIB_MAXIMUM_THREADS=1` (forked workers otherwise segfault in
+Accelerate).  Warm-started from the energy fit with `--x0 fit.json --force-weight 0.001`, forces
+improve to 0.91 eV/A at 44.9 meV/atom and the Cu13 MD conserves energy to 1 meV over 2 ps.
+`python -m pydftb.bench.cu_dimer_repulsive cu_m8b.extxyz OUT` writes a copy of ptbp_hcocu whose
+Cu-Cu spline repulsive is fitted to the VASP dimer (`cu_dft_fit --skf OUT`); fitted on top of it
+the training error drops to 22.8 meV/atom but compressed bcc overbinds and the MD loses an atom.
+Details: [`docs/reports/M8d-cu-dft-fit.html`](docs/reports/M8d-cu-dft-fit.html).
 
 ### Cost model
 

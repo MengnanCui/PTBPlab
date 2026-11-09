@@ -286,8 +286,8 @@ class PyDFTB(Calculator):
                  hubbard: dict | None = None, reference_occupations=None,
                  truncate_sk_range=None, h5=None, halogen_correction: bool = False,
                  dipole_correction=None, analysis=None, type_switching=None,
-                 selected_shells=None, hybrid=None, convergent_scc_only: bool = True,
-                 **kwargs):
+                 selected_shells=None, hybrid=None, adaptive=None,
+                 convergent_scc_only: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.params = ParamSet(skdir, max_l=max_l, shell_resolved=shell_resolved,
                                selected_shells=selected_shells)
@@ -330,7 +330,8 @@ class PyDFTB(Calculator):
                                 truncate_sk_range=_truncation_au(truncate_sk_range), h5=h5,
                                 halogen_correction=halogen_correction,
                                 dipole_correction=_dipole_correction_au(dipole_correction),
-                                analysis=_analysis_au(analysis), hybrid=_hybrid_au(hybrid))
+                                analysis=_analysis_au(analysis), hybrid=_hybrid_au(hybrid),
+                                adaptive=adaptive)
         self.type_switching = None                    # M5a
         if type_switching is not None:
             self.type_switching = check_switches(

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>M7d3 分治的内存报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<link rel="stylesheet" href="../assets/docs.css">
+<script src="../assets/docs.js" defer></script>
+</head>
+<body>
+<div class="page">
+  <nav class="crumbs" aria-label="位置"><a href="../index.html">pydftb 开发文档</a> / 完成报告 / M7d3</nav>
+  <header class="doc-head">
+    <p class="eyebrow">M7d3 · 完成报告</p>
+    <h1>大体系（六）：分治与 SK 原子对的内存</h1>
+    <dl class="meta">
+      <div><dt>状态</dt><dd><span class="chip done">已完成</span></dd></div>
+      <div><dt>日期</dt><dd>2026-11-06</dd></div>
+      <div><dt>提交</dt><dd><code>8db30d5</code></dd></div>
+      <div><dt>配套</dt><dd><a href="../design/M7d3-dc-memory.html">设计文档</a></dd></div>
+    </dl>
+  </header>
+
+  <section class="key" aria-labelledby="key-title">
+    <h2 id="key-title">关键信息</h2>
+    <p class="lead">4913 个水分子（14739 个原子）用分治、4 个进程的 SCC 加力现在放得下：全部进程的物理占用合计峰值 10.88 GiB，在 M7d2 被系统杀掉的 13.36 GiB 之内；合计峰值从 15.23 GiB 降到 10.88 GiB，时间从 1308 s 降到 857 s。结果对 M7d2 逐位相同，没有新的用户选项。改的是 M7d2 报告第八节列出的三处：子体系的索引（每个图样元 40 → 9 字节，由工作进程自己建）、工作进程收发的数据（只有自己用到的图样元，空间上连续的分配）、SK 原子对的建立（按块写进最终的数组）。</p>
+    <ul>
+      <li><strong>逐位相同</strong>：1728 与 4913 个水分子的能量、电荷、力对 M7d2 的代码逐位相同；<code>build_pairs</code> 的 12 个数组在各种块大小下逐位相同（水、Cu、CO、SelectedShells，无导数、复数步长、有限差分）；1、2、4 个工作进程与 MPI 的 3 个进程都等于单进程。</li>
+      <li><strong>4913 个水分子</strong>（4 个进程，同一台机器、同一口径）：合计峰值 15.23 → 10.88 GiB，主进程 5.86 → 4.99 GiB（VmHWM 8.24 → 5.53 GiB），最大的工作进程 2.84 → 1.68 GiB；本征分解 545 → 331 s，密度 314 → 113 s（工作进程收发的数据少了）。M7d2 的 15.23 GiB 超过 13.36 GiB，与当时被杀相符。</li>
+      <li><strong>1728 个水分子</strong>（同一台机器、同一口径）：合计峰值 3.58 → 3.20 GiB，最大的工作进程 0.87 → 0.61 GiB，全程 263 → 205 s。</li>
+      <li><strong>SK 原子对</strong>：建立时的临时峰值不是邻居表（1728 个水分子只有 0.22 GiB），而是 <code>SKTable.evaluate</code> 为整组原子对取出的样条系数（每对约 1.3 kB）。按块（至多 2<sup>14</sup> 对）之后，1728 个水分子带导数的临时峰值 0.94 → 0.06 GiB，时间 20.7 → 14.6 s。</li>
+      <li><strong>还在的</strong>：γ（N × N，4913 个水分子 1.62 GiB）、工作进程里的本征矢；再往上要不建 γ 的 SCC 电势（第八节）。</li>
+    </ul>
+    <ul class="figures">
+      <li><span class="num">10.88 GiB</span><span class="lbl">4913 个水分子分治（4 个进程）全部进程的合计峰值；M7d2 超出 13.36 GiB 被杀</span></li>
+      <li><span class="num">1308 → 857 s</span><span class="lbl">4913 个水分子 SCC 加力，分治 4 个进程</span></li>
+      <li><span class="num">0.94 → 0.06</span><span class="lbl">1728 个水分子建立 SK 原子对的临时峰值（GiB）</span></li>
+      <li><span class="num">0</span><span class="lbl">改变的位</span></li>
+    </ul>
+  </section>
+
+  <nav class="toc" aria-label="目录">目录
+    <ol>
+      <li><a href="#what">一、改了什么</a></li>
+      <li><a href="#use">二、怎么用</a></li>
+      <li><a href="#bits">三、逐位相同</a></li>
+      <li><a href="#memory">四、内存与时间</a></li>
+      <li><a href="#pairs">五、SK 原子对</a></li>
+      <li><a href="#tests">六、测试与门槛</a> <span class="dev-mark">开发细节</span></li>
+      <li><a href="#dev">七、与设计的偏差</a></li>
+      <li><a href="#next">八、下一步</a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+    <section id="what">
+      <h2>一、改了什么</h2>
+      <ul>
+        <li><code>subsystems.py</code>：
+          <ul>
+            <li><code>_index</code>：存 <code>lin</code>（子体系块里的平铺位置）、<code>g</code>（图样位置）、<code>nk</code>、<code>both</code>；p &gt; 0 的元在前，不再复制；放得下时用 int32。</li>
+            <li><code>_Workers(groups, pattern_args)</code>：每个工作进程拿到自己的（核心、子体系原子）与图样，fork 之后自己建索引，发回用到的图样元 <code>used</code>；出错时主进程关掉全部工作进程，抛出 <code>RuntimeError("a subsystem worker failed: …")</code>。</li>
+            <li><code>set_overlap</code>、<code>eig</code> 只发 <code>s[used]</code>、<code>h[used]</code>，<code>density</code> 只回这些元，主进程 <code>rho[ik, used] += part</code>。MPI 改用 scatter，协议相同。</li>
+            <li><code>_assign</code>：子体系不少于 8 × 进程数时，按代价 m<sup>3</sup> 的累加和把连续的核心（格子的次序）切成等代价的段；否则照旧“最大的先给最空的”。</li>
+          </ul></li>
+        <li><code>hamiltonian.build_pairs</code>：先分组、算出元的总数，分配最终的 rows、cols、pair_of、h、s、dh、ds，再按块（<code>PAIR_CHUNK_PAIRS</code> = 2<sup>14</sup> 对、<code>PAIR_CHUNK_ELEMENTS</code> = 2<sup>18</sup> 个元）填进去；块至少两对。<code>PairBlocks</code> 的字段与类型不变。</li>
+      </ul>
+    </section>
+
+    <section id="use">
+      <h2>二、怎么用</h2>
+      <p>没有新的选项，照旧：</p>
+      <pre><code>DFTB(sk, scc=True, solver=Subsystems(buffer=6.0, core=6.0, processes=4))</code></pre>
+      <p>MPI 照旧是 <code>mpiexec -n N python -m pydftb.subsystems run.py</code>。</p>
+    </section>
+
+    <section id="bits">
+      <h2>三、逐位相同</h2>
+      <ul>
+        <li><strong>整个计算</strong>（M7d2 的提交 c1a11bd 的冻结副本对本次的代码，同一个解释器，水盒子 <code>bench.systems.water_box</code>，ptbp_hcocu 的 H s、O sp，SCC 加力，scc_tol 1e-7，Γ 点，缓冲与核心 6 Å，4 个进程）：216、1728、4913 个水分子的能量、电荷与力的字节都相同，SCC 轮数相同（15、16、16）。</li>
+        <li><strong>进程数</strong>：27 个水分子 1、2、4 个工作进程（2 个走连续分配，4 个走“最大的先”）与 216 个水分子 4 个进程都等于单进程；MPI 3 个进程（MPICH 4.3、mpi4py 4.1）等于单进程。</li>
+        <li><strong>SK 原子对</strong>：五组设置（水 27 个分子、Cu fcc 32 个原子、CO 分子、SelectedShells 的水分子；无导数、复数步长、有限差分 1e-4 Bohr）在每块 1–2<sup>14</sup> 对、1–2<sup>18</sup> 个元的各种组合下，12 个数组与原来的字节相同。</li>
+      </ul>
+    </section>
+
+    <section id="memory">
+      <h2>四、内存与时间</h2>
+      <p>这台机器是 macOS、32 GB、10 核。内存用每个进程的物理占用（<code>ri_phys_footprint</code>：fork 继承而没有改写的页只算在主进程上），每 0.5 s 采样，“合计”是各进程同时刻之和的最大值；另列主进程的 VmHWM 以便与 M7d2 的数比较。两边都在机器空闲时运行。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>水分子 / 原子</th><th>代码</th><th>全程</th><th>建立 SK</th><th>建立 Coulomb</th><th>求解（本征分解 + 密度）</th><th>力</th><th>主进程（物理占用 / HWM）</th><th>最大的工作进程</th><th>合计峰值</th></tr></thead>
+        <tbody>
+          <tr><td>1728 / 5184</td><td>M7d2</td><td>263 s</td><td>20.3 s</td><td>29.7 s</td><td>128 + 58 s</td><td>23.5 s</td><td>0.95 GiB / —</td><td>0.87 GiB</td><td>3.58 GiB</td></tr>
+          <tr><td>1728 / 5184</td><td>M7d3</td><td>205 s</td><td>19.1 s</td><td>29.6 s</td><td>102 + 29 s</td><td>23.0 s</td><td>1.09 / 2.41 GiB</td><td>0.61 GiB</td><td>3.20 GiB</td></tr>
+          <tr><td>4913 / 14739</td><td>M7d2</td><td>1308 s</td><td>55.3 s</td><td>269 s</td><td>545 + 314 s</td><td>109 s</td><td>5.86 / 8.24 GiB</td><td>2.84 GiB</td><td>15.23 GiB</td></tr>
+          <tr><td>4913 / 14739</td><td>M7d3</td><td>857 s</td><td>55.9 s</td><td>242 s</td><td>331 + 113 s</td><td>107 s</td><td>4.99 / 5.53 GiB</td><td>1.68 GiB</td><td>10.88 GiB</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li><strong>求解快了</strong>：本征分解与密度每轮都要把 H 发给工作进程、把 P、W 收回来。原来每个进程收发整个图样（4913 个水分子每个数组 0.10 GiB，P 与 W 各一份，四个进程），现在只有自己用到的那一段。密度一步快 2.0–2.8 倍，本征分解快 1.3–1.6 倍。</li>
+        <li><strong>工作进程</strong>：4913 个水分子时每个 1.53–1.68 GiB（原来 2.46–2.84 GiB），其中本征矢约 0.5 GiB（M7d2 第五节：全部子体系合计 1.92 GiB），其余是自己那些子体系的索引、S、H、P、W 的局部副本与子体系的临时数组。</li>
+        <li><strong>主进程</strong>：1728 个水分子时物理占用比原来略高（0.95 → 1.09 GiB），是给每个工作进程切出 <code>s[used]</code>、<code>h[used]</code> 的临时数组；4913 个水分子时 VmHWM 从 8.24 降到 5.53 GiB，因为主进程不再为全部子体系建索引（M7d2 第五节：1.99 GiB），SK 原子对的临时峰值也没有了。</li>
+        <li><strong>每个工作进程用到的图样元</strong>：216 个水分子、缓冲与核心 3 Å、4 个进程时每个都少于图样的 80%（测试的门槛）。</li>
+      </ul>
+    </section>
+
+    <section id="pairs">
+      <h2>五、SK 原子对</h2>
+      <p>只算 <code>build_pairs</code>（带导数，即算力时的设置），tracemalloc：</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>水分子</th><th>元</th><th>保留</th><th>原来：峰值（多出）、时间</th><th>只按元数分块</th><th>M7d3：峰值（多出）、时间</th></tr></thead>
+        <tbody>
+          <tr><td>512</td><td>1.44M</td><td>0.142 GiB</td><td>0.420 GiB（0.279），5.7 s</td><td>0.528 GiB（0.386）</td><td>0.195 GiB（0.053），4.5 s</td></tr>
+          <tr><td>1728</td><td>4.85M</td><td>0.478 GiB</td><td>1.417 GiB（0.939），20.7 s</td><td>1.136 GiB（0.659）</td><td>0.538 GiB（0.060），14.6 s</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <ul>
+        <li>邻居表本身很小：1728 个水分子 119 万对，保留 0.080、峰值 0.219 GiB。M7d2 报告把建立阶段的临时峰值（4913 个水分子 3.86 GiB）归给了“整张邻居表”，这是错的。</li>
+        <li>大头是 <code>SKTable.evaluate</code> 的 <code>coef[ii]</code>：每对 (8, 20) 个 float64，每个文件一次（A–B 与 B–A），复数步长时每个分量再来一遍；以前一次取一整组（如所有 H–H 对）。只按元数分块不够：H–H 每对一个元，一块仍有 26 万对。</li>
+        <li>块至少两对：一对的块让复数步长的 dh 在最后一位不同（≤ 2.8e-17，numpy 的堆叠 matmul 在批量为一时走另一条路）；两对以上的任何块都相同。</li>
+      </ul>
+    </section>
+
+    <section id="tests">
+      <h2>六、测试与门槛</h2>
+      <div class="dev">
+      <p><code>tests/test_dc_memory.py</code>（12 项）：紧凑索引对 M7d 的索引（元集合、分区权重、稠密块、密度贡献逐位相同）；<code>used</code> 的下标；连续分配；216 个水分子 4 个进程只用部分图样且结果逐位相同；工作进程出错时报错；<code>build_pairs</code> 在 5 种块大小下逐位相同（水与 Cu × 三种导数，6 项）；分子与没有原子对的情况。<code>test_subsystems.py</code>：<code>test_processes_give_the_same_bits</code> 多一个 4 个进程；<code>test_workers_exit_with_the_master</code> 改用新的 <code>_Workers</code> 参数，没有 /proc 时用 <code>os.kill(pid, 0)</code>，在 macOS 上也运行了。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>门槛</th><th>内容</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>pydftb 测试</td><td>本机（macOS，conda-forge 的 Python 3.12、NumPy 2.3、SciPy 1.15，没有 torch 与 mpi4py）</td><td>1711 个通过 / 588 个跳过 / 2 个失败；M7d2 的代码在同一环境 1698 / 589 / 2，失败的是同样两项 <code>test_kthreads</code>（本机的环境问题，与本块无关）；多出的 13 个通过是新文件的 12 项与在 macOS 上运行的 <code>test_workers_exit_with_the_master</code></td></tr>
+          <tr><td>MPI</td><td>草稿环境（MPICH 4.3、mpi4py 4.1）里的 <code>test_mpi_ranks_give_the_same_bits</code></td><td><code>OMP_NUM_THREADS=1</code> 时通过。不设时 M7d2 与 M7d3 都差 2e-14 Ha（同样的数）：测试只给 mpiexec 的子进程设了一个线程，进程内的参考用本机的多线程 BLAS</td></tr>
+          <tr><td>分治的参考</td><td><code>refgen --check --solver subsystems</code>（精确极限）</td><td>129 个通过，387 个跳过，0 个失败；c1a11bd 在同一环境逐字相同（每个算例的偏差与 SCC 轮数）。比 M7d2 报告的 144 个少，是因为本机没有 dftd3、dftd4（22 个算例要它们）</td></tr>
+          <tr><td>参考</td><td><code>refgen --check</code>（eigh）</td><td>494 个通过，22 个跳过（本机没有 dftd3、dftd4），0 个失败；c1a11bd 在同一环境逐字相同（除计时外）</td></tr>
+          <tr><td>G0：golden</td><td>与 M7d2 之后的提交 c1a11bd 逐字节比较（本机的最小环境，没有 torch 与 D3/D4）</td><td>1523 个计算、691747 个字段逐位相同（含 SK 原子对与它们的导数）；没有新的公有字段，不用 <code>--allow-new</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>代码检查：ruff 对改动的库文件告警数与 c1a11bd 相同（<code>subsystems.py</code> 1 条、<code>hamiltonian.py</code> 26 条，都是原有的），新测试文件没有告警。</p>
+      </div>
+    </section>
+
+    <section id="dev">
+      <h2>七、与设计的偏差</h2>
+      <ul>
+        <li><strong>SK 原子对的原因</strong>：M7d2 的计划是“SK 原子对分块”，以为要分块的是邻居表；探针（第五节）表明是样条系数，所以按对数封顶，邻居表照旧一次建好（它也是 <code>PairBlocks</code> 的字段）。</li>
+        <li><strong>量法</strong>：M7d2 在 Linux 上用 smaps_rollup 与 MemAvailable；这台机器是 macOS，psutil 读不到子进程的 USS，RSS 与“已用”不可靠，改用物理占用（设计第二节）。所以 4913 个水分子的“合计”与 M7d2 的“整台机器”不完全是同一个量，对比用同一台机器上两份代码的同一口径。</li>
+        <li><strong>4913 个水分子在哪里跑</strong>：M7d2 的 OOM 发生在 13.36 GiB 的作业上限下；这里的机器有 32 GB，原来的代码也能跑完，合计峰值 15.23 GiB（超过 13.36 GiB）。“放得下”是指新代码的合计峰值 10.88 GiB 小于 13.36 GiB，没有在那台机器上重跑。</li>
+        <li>其余按设计。</li>
+      </ul>
+    </section>
+
+    <section id="next">
+      <h2>八、下一步</h2>
+      <ul>
+        <li><strong>不建 γ</strong>：γ 是 N × N（4913 个水分子 1.62 GiB，一万个 6.7 GiB）。再往上要每轮 SCC 用结构因子算倒空间的电势、按块算实空间的电势，力也一样；ThirdOrder 的 Γ<sub>3</sub>、色散的参数矩阵、点电荷与 ESP 的 cos/sin 也是 N 的平方。</li>
+        <li><strong>工作进程的本征矢</strong>：只需要占据的态，但化学势要等所有子体系的本征值才知道；可以先发回本征值、定下 μ，再只留 f &gt; 0 的列（多一次通信），省下约三分之一。</li>
+        <li><strong>测试环境</strong>：<code>test_mpi_ranks_give_the_same_bits</code> 的参考也应在一个 BLAS 线程下算；本机 <code>test_kthreads</code> 的两项失败另查。</li>
+        <li>M7e-2：等 GPU 自检的 JSON。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <nav aria-label="翻页"><a href="../design/M7d3-dc-memory.html">← M7d3 设计</a><a href="../index.html">文档索引</a></nav>
+    <span>PTBPlab 仓库 <code>pydftb/docs/reports/</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -17,6 +17,11 @@ from .slako import bond_frames, rotation_blocks, sk_block
 from .neighbors import neighbor_list
 
 COMPLEX_STEP = 1e-30
+# build_pairs (M7d3): chunks of at most PAIR_CHUNK_PAIRS pairs and PAIR_CHUNK_ELEMENTS block
+# elements; the largest temporaries are SKTable.evaluate's spline coefficients, (pairs, 8, 20)
+# float64 per file (about 1.3 kB a pair), and the complex blocks of the complex step
+PAIR_CHUNK_PAIRS = 1 << 14
+PAIR_CHUNK_ELEMENTS = 1 << 18
 
 
 @dataclass
@@ -115,18 +120,37 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
     which allows bit-level comparisons with DFTB+ forces.
     """
     i, j, shift, vec, dist = neighbor_list(pos, cell, pbc, sk.cutoff)
-    rows, cols, pidx, hv, sv, dhv, dsv, groups = [], [], [], [], [], [], [], []
     spec = np.array(species)
     elems = sorted(set(species))
+    groups = []
     for a in elems:
         for b in elems:
-            mask = (spec[i] == a) & (spec[j] == b)
-            sel = np.nonzero(mask)[0]
-            if len(sel) == 0:
-                continue
-            groups.append((a, b, sel))
-            shells_a, shells_b = sk.shells(a), sk.shells(b)
-            na, nb = sk.norb(a), sk.norb(b)
+            sel = np.nonzero((spec[i] == a) & (spec[j] == b))[0]
+            if len(sel):
+                groups.append((a, b, sel))
+    # M7d3: the elements go straight into arrays of their final size, a chunk of pairs at a
+    # time (no temporaries of a whole group, no concatenation at the end); every value comes
+    # from its own pair, so the chunks give the same bits
+    sizes = [len(sel) * sk.norb(a) * sk.norb(b) for a, b, sel in groups]
+    nelem = int(sum(sizes))
+    rows, cols, pidx = (np.empty(nelem, int) for _ in range(3))
+    hv, sv = np.empty(nelem), np.empty(nelem)
+    dhv = np.empty((nelem, 3)) if derivatives else None
+    dsv = np.empty((nelem, 3)) if derivatives else None
+    e0 = 0
+    for a, b, sel_all in groups:
+        shells_a, shells_b = sk.shells(a), sk.shells(b)
+        na, nb = sk.norb(a), sk.norb(b)
+        # never a chunk of one pair out of several: numpy's stacked matmul (sk_block) takes
+        # another path for a batch of one, and the complex-step derivatives differ in the last
+        # bit; a group of one pair is one chunk, as before
+        npair = len(sel_all)
+        step = max(2, min(PAIR_CHUNK_PAIRS, PAIR_CHUNK_ELEMENTS // (na * nb)))
+        starts = list(range(0, npair, step))
+        if len(starts) > 1 and npair - starts[-1] == 1:
+            starts.pop()
+        for p0, p1 in zip(starts, starts[1:] + [npair]):
+            sel = sel_all[p0:p1]
 
             def blocks(v):
                 d = np.sqrt((v * v).sum(1))
@@ -144,9 +168,10 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                 blocks = _grouped_blocks(sk, a, b)
             v = vec[sel]
             hb, sb = blocks(v)
+            e1 = e0 + len(sel) * na * nb
             if derivatives:
-                dh = np.empty(hb.shape + (3,))
-                ds = np.empty(sb.shape + (3,))
+                dh = dhv[e0:e1].reshape(hb.shape + (3,))
+                ds = dsv[e0:e1].reshape(sb.shape + (3,))
                 for k in range(3):
                     if fd_delta is None:
                         vc = v.astype(complex)
@@ -154,6 +179,7 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                         hc, sc = blocks(vc)
                         dh[..., k] = hc.imag / COMPLEX_STEP
                         ds[..., k] = sc.imag / COMPLEX_STEP
+                        del hc, sc
                     else:
                         vp, vm = v.copy(), v.copy()
                         vp[:, k] += fd_delta
@@ -161,23 +187,19 @@ def build_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis,
                         (hp, sp_), (hm, sm) = blocks(vp), blocks(vm)
                         dh[..., k] = (hp - hm) / (2.0 * fd_delta)
                         ds[..., k] = (sp_ - sm) / (2.0 * fd_delta)
-                dhv.append(dh.reshape(-1, 3))
-                dsv.append(ds.reshape(-1, 3))
             r0 = basis.offsets[i[sel]]
             c0 = basis.offsets[j[sel]]
-            rr = (r0[:, None, None] + np.arange(na)[None, :, None]) + 0 * np.arange(nb)[None, None, :]
-            cc = (c0[:, None, None] + np.arange(nb)[None, None, :]) + 0 * np.arange(na)[None, :, None]
-            rows.append(rr.ravel())
-            cols.append(cc.ravel())
-            pidx.append(np.repeat(sel, na * nb))
-            hv.append(hb.ravel())
-            sv.append(sb.ravel())
-    cat = lambda x, dt: np.concatenate(x) if x else np.zeros(0, dt)
-    pb = PairBlocks(i, j, shift, vec, dist, cat(rows, int), cat(cols, int), cat(pidx, int),
-                    cat(hv, float), cat(sv, float), groups=groups)
+            rows[e0:e1].reshape(len(sel), na, nb)[...] = (
+                (r0[:, None, None] + np.arange(na)[None, :, None]) + 0 * np.arange(nb)[None, None, :])
+            cols[e0:e1].reshape(len(sel), na, nb)[...] = (
+                (c0[:, None, None] + np.arange(nb)[None, None, :]) + 0 * np.arange(na)[None, :, None])
+            pidx[e0:e1] = np.repeat(sel, na * nb)
+            hv[e0:e1] = hb.ravel()
+            sv[e0:e1] = sb.ravel()
+            e0 = e1
+    pb = PairBlocks(i, j, shift, vec, dist, rows, cols, pidx, hv, sv, groups=groups)
     if derivatives:
-        pb.dh = np.concatenate(dhv) if dhv else np.zeros((0, 3))
-        pb.ds = np.concatenate(dsv) if dsv else np.zeros((0, 3))
+        pb.dh, pb.ds = dhv, dsv
     return pb
 
 
