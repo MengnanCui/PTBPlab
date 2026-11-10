@@ -1,6 +1,5 @@
 import os
 from collections import OrderedDict
-from logging import raiseExceptions
 from math import ceil
 
 import matplotlib.pyplot as plt
@@ -614,7 +613,7 @@ class physrep():
                 fname = self.filename + self._name(Z1) + '-' + self._name(Z2) + '.skf'
 # mncui
                 if not os.path.exists(fname):
-                    raiseExceptions('-----*.skf file not existed-----')
+                    raise FileNotFoundError(f"{fname} not found: band-structure SKF must be generated before the repulsive part")
 
                 else: # to avoid write too many times 'Spline' content
                     # print('-----*.skf file existed--backup--Write in new *.skf files-----')
@@ -691,7 +690,7 @@ class physrep():
                 spli = spline_list[n]
 
                 if not os.path.exists(fname):
-                    raiseExceptions('-----*.skf file not existed-----')
+                    raise FileNotFoundError(f"{fname} not found: band-structure SKF must be generated before the repulsive part")
 
                 else: # to avoid write too many times 'Spline' content
                     print('-----*.skf file existed--backup--Write in new *.skf files-----')
