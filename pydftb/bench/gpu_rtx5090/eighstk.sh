@@ -6,7 +6,7 @@
 #SBATCH -t 02:00:00
 #SBATCH -o %x.%j.out
 #SBATCH -e %x.%j.err
-source ~/software/miniforge3/etc/profile.d/conda.sh
+source "${CONDA_SH:-$(conda info --base)/etc/profile.d/conda.sh}"   # CONDA_SH: your conda.sh
 conda activate pydftb
 export PYTHONUNBUFFERED=1
 cd ~/PTBPlab/gpurun

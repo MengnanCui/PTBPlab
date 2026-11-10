@@ -11,7 +11,15 @@
 #SBATCH -o logs/%x.%j.out
 #SBATCH -e logs/%x.%j.err
 set -euo pipefail
-source "$(dirname "$0")/env.sh"
+HERE="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+ENV_SH="${PTBP_ENV_SH:-}"
+if [ -z "$ENV_SH" ]; then          # Slurm runs a spooled copy: $0 is not this file inside a job
+  for d in "$HERE/slurm" "$HERE" "${PTBP_REPO:-}/examples/08_accuracy/slurm"; do
+    if [ -f "$d/env.sh" ]; then ENV_SH="$d/env.sh"; break; fi
+  done
+fi
+[ -n "$ENV_SH" ] || { echo "env.sh not found: submit from examples/08_accuracy or set PTBP_ENV_SH" >&2; exit 1; }
+source "$ENV_SH"
 module load cuda/12.9 2>/dev/null || true
 conda activate "${MACE_CONDA_ENV:-perov}" 2>/dev/null || true
 cd "$PTBP_REPO/examples/08_accuracy/li_o"

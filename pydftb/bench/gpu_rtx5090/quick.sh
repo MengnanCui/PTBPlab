@@ -6,7 +6,7 @@
 #SBATCH -t 00:30:00
 #SBATCH -o %x.%j.out
 #SBATCH -e %x.%j.err
-source ~/software/miniforge3/etc/profile.d/conda.sh
+source "${CONDA_SH:-$(conda info --base)/etc/profile.d/conda.sh}"   # CONDA_SH: your conda.sh
 conda activate pydftb
 cd ~/PTBPlab/gpurun
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv

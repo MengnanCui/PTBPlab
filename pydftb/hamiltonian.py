@@ -230,9 +230,10 @@ def build_mixed_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis, candidat
     type pair is computed with build_pairs' operations on the pairs where w_A,t w_B,u != 0, so
     with weights 0 and 1 the values are build_pairs' (bitwise).
 
-    Returns the PairBlocks and, with ``derivatives`` and ``keep`` (n_atom bool), the raw
-    type-pair blocks of the pairs with an atom in ``keep``: a list of (column of t, column of u,
-    pair indices, element indices, h, s), h and s flattened like the elements of ``pb.h``."""
+    Returns the PairBlocks and, with ``keep`` (n_atom bool), the raw type-pair blocks of the
+    pairs with an atom in ``keep``: a list of (column of t, column of u, pair indices, element
+    indices, h, s), h and s flattened like the elements of ``pb.h`` (the calculator passes
+    ``keep`` for the forces, and for dF/dw of a fitted switch)."""
     i, j, shift, vec, dist = neighbor_list(pos, cell, pbc, sk.cutoff)
     rows, cols, pidx, hv, sv, dhv, dsv, groups, kept = [], [], [], [], [], [], [], [], []
     spec = np.array(species)
@@ -252,7 +253,7 @@ def build_mixed_pairs(species, pos, cell, pbc, sk: SKSet, basis: Basis, candidat
             ds = np.zeros((len(sel), na, nb, 3)) if derivatives else None
             v_all = vec[sel]
             w_i, w_j = weights[i[sel]], weights[j[sel]]
-            touch = None if (keep is None or not derivatives) else keep[i[sel]] | keep[j[sel]]
+            touch = None if keep is None else keep[i[sel]] | keep[j[sel]]
             for t in candidates[a]:
                 for u in candidates[b]:
                     c = w_i[:, column[t]] * w_j[:, column[u]]

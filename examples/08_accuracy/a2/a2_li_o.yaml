@@ -1,0 +1,76 @@
+# A2 for Li-O (A0 section 4), on the A1.2 Sobol scan (Li s, O sp).
+#   python a2/a2.py plan a2/a2_li_o.yaml
+#   python a2/a2.py prepare a2/a2_li_o.yaml          # E1 copies; E2 typed SK set (hotcent, server)
+#   sbatch --array=0-7 slurm/a2_fit.sh a2/a2_li_o.yaml E3-L1-linear   # 0 = full fit, k = LOEO group k
+#   python a2/a2.py transfer a2/a2_li_o.yaml --run E3-L1-linear --jobs 32
+#   python a2/a2.py summary a2/a2_li_o.yaml
+# Distances in Bohr: Li-O 2.0 A = 3.78, O-O (peroxide) 1.55 A = 2.93, O2 1.21 A = 2.29,
+# Li-Li 2.67 A (dimer) = 5.05, 2.98 A (bcc) = 5.63.
+name: a2_li_o
+system: li_o
+scan: ../li_o/scan_li_o.yaml
+base: best:S3
+out: ../li_o/runs/a2_li_o
+k6: ../li_o/runs/k6/k6_results.json
+bands:
+  settings: {}
+  test_groups: [li_hcp]
+fit:
+  l2: 1.0e-3
+  max_evaluations: 40
+  processes: 8
+  band_jacobian: frozen
+  offsets: global
+typed_sk:
+  workers: 16                     # hotcent processes for a typed set (slurm/a2_prepare.sh)
+  cache: ../li_o/runs/typed_skcache
+descriptors:
+  L1:                             # coordination by neighbour element: Li's O coordination and Li coordination
+    transform: standardize
+    Li: [{kind: cn, neighbours: [Li, O], split: true}]
+    O: [{kind: cn, neighbours: [Li, O], split: true}]
+  L2:
+    transform: standardize
+    Li:
+      - {kind: cn, neighbours: [Li, O], split: true}
+      - {kind: radial, centres: [3.0, 3.75, 4.5, 5.25, 6.0, 7.0], width: 0.6, cutoff: 9.5, neighbours: [Li, O], split: true}
+      - {kind: angular, zetas: [1.0, 2.0, 4.0], lambdas: [-1.0, 1.0], etas: [0.0], cutoff: 9.0}
+    O:
+      - {kind: cn, neighbours: [Li, O], split: true}
+      - {kind: radial, centres: [2.3, 3.0, 3.75, 4.5, 5.25, 6.0], width: 0.6, cutoff: 9.5, neighbours: [Li, O], split: true}
+      - {kind: angular, zetas: [1.0, 2.0, 4.0], lambdas: [-1.0, 1.0], etas: [0.0], cutoff: 9.0}
+  L3:
+    transform: pca
+    variance: 0.99
+    Li: [{kind: soap, species: [Li, O], r_cut: 9.45, n_max: 4, l_max: 3, sigma: 0.95}]
+    O: [{kind: soap, species: [Li, O], r_cut: 9.45, n_max: 4, l_max: 3, sigma: 0.95}]
+  L4:
+    transform: pca
+    variance: 0.99
+    Li: [{kind: mace, model: small, family: mp}]
+    O: [{kind: mace, model: small, family: mp}]
+regressors:
+  linear: {kind: linear}
+  kernel: {kind: kernel, n_inducing: 32, length_scale: median}
+  mlp: {kind: mlp, hidden: [8]}
+channels:
+  E3:
+    Li: [onsite.s, hopping.s]
+    O: [onsite.s, onsite.p, hopping.s, hopping.p]
+  E2:                             # Li only: 7 Li nodes + O = 8 labels, 36 tables (plan prints the cost)
+    Li: {n: 7, spacing: [0.3, 0.0]}
+    # O: {n: 5, spacing: [0.2, 0.0]}        # both: 12 labels, 78 tables
+  E1:                             # Li in the metal vs in the oxides (its O coordination, M5c/M5d's idea);
+    Li: {centre: 1.0, width: 1.5, cutoff: {O: [4.4, 5.2]}, shells: [s], hubbard: true}   # Li-O <= 2.33 A counts fully
+    O: {centre: 0.5, width: 0.8, cutoff: {O: [3.4, 4.2]}, shells: [s, p], hubbard: true}   # oxide vs peroxide/O2 (O-O <= 1.8 A)
+runs:
+  - {channel: E3, level: L1, regressor: linear}
+  - {channel: E3, level: L1, regressor: kernel}
+  - {channel: E2, level: L1, regressor: linear}
+  - {channel: E1}
+  - {channel: E3, level: L2, regressor: linear}
+  - {channel: E3, level: L2, regressor: kernel}
+  - {channel: E3, level: L2, regressor: mlp}
+  - {channel: E2, level: L2, regressor: linear}
+  - {channel: E3, level: L3, regressor: linear}
+  - {channel: E3, level: L4, regressor: linear}

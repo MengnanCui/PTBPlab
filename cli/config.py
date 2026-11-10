@@ -44,6 +44,22 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     dtype:          # float64 / float32 (torch backend)
     ncores:         # int or auto (cores of the parallel BO step)
     seed:           # int (random seed for reproducibility)
+    A series (pydftb/docs/design/A0-accuracy-programme.html, section 8; written to
+    ptbp_run.yaml only when they differ from their defaults):
+    energy_reduction: # sum / mean / group (dataset/reaction mu_E)
+    force_weight:   # float, c in ((1 - c) mu_E + c mu_F); default 0.1
+    energy_offset:  # none / per-element
+    band_weight:    # float W of the band term W L_band; default 0
+    band_refs:      # list of BandRef JSON files or globs
+    band_settings:  # dict (pydftb.bandloss.BandSettings) or JSON string
+    fixed_r0:       # list of float: freeze r0 (every parameter set), fit sigma_rep only
+    sigma_finish:   # bool: finer sigma_rep search at the best point
+    kspacing:       # float, 1/A: VASP's Gamma-centred KSPACING grids
+    smearing_width: # float, eV (sets smearing_temperature)
+    energy_kind:    # total / sigma0
+    third_order:    # full / onsite (pydftb DFTB3)
+    hubbard_derivs: # dict {element: Ud} (Hartree/e)
+    hubbard:        # dict {element: U} (Hartree)
 """
 from __future__ import annotations
 
@@ -88,6 +104,29 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'grad_maxiter':  'grad_maxiter',
     'hotcent_fd_step': 'hotcent_fd_step',
     'seed':          'seed',
+    # A series (A0 plan, section 8)
+    'energy_reduction': 'energy_reduction',
+    'force_weight':  'force_weight',
+    'energy_offset': 'energy_offset',
+    'band_weight':   'band_weight',
+    'band_refs':     'band_refs',
+    'band_settings': 'band_settings',
+    'fixed_r0':      'fixed_r0',
+    'sigma_finish':  'sigma_finish',
+    'kspacing':      'kspacing',
+    'smearing_width': 'smearing_width',
+    'energy_kind':   'energy_kind',
+    'third_order':   'third_order',
+    'hubbard_derivs': 'hubbard_derivs',
+    'hubbard':       'hubbard',
+}
+# The A-series keys at their defaults are not written to ptbp_run.yaml, so that the file of a
+# run without them is the one of before.
+A_SERIES_DEFAULTS: Dict[str, Any] = {
+    'energy_reduction': 'sum', 'force_weight': None, 'energy_offset': 'none',
+    'band_weight': 0.0, 'band_refs': None, 'band_settings': None, 'fixed_r0': None,
+    'sigma_finish': None, 'kspacing': None, 'smearing_width': None, 'energy_kind': 'total',
+    'third_order': None, 'hubbard_derivs': None, 'hubbard': None,
 }
 
 
@@ -157,6 +196,10 @@ def write_effective(args: argparse.Namespace, run_dir: Path) -> None:
         if hasattr(args, attr):
             v = getattr(args, attr)
             if v is None:
+                continue
+            if yaml_key in A_SERIES_DEFAULTS and v == A_SERIES_DEFAULTS[yaml_key]:
+                continue
+            if yaml_key == 'sigma_finish' and v is False:
                 continue
             # E0s: prefer dict in YAML for human readability.
             if yaml_key == 'E0s' and isinstance(v, str) and v.lstrip().startswith('{'):

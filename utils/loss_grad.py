@@ -17,7 +17,11 @@ Every loss is P(r0) sum_j w_j |r_j(r0, sigma)| with constant weights w_j:
   (1 - c) b_g / (L B_g)) and the equilibrium volume ratios v0 / v0_DFT - 1
   (c b_g / L), c = 0.5;
 * dataset / reaction: the formation energies per atom (1 - c) and the force
-  components (c / N_F), c = 0.1.
+  components (c / N_F), c = 0.1.  The A-series options (utils.loss: --energy_reduction,
+  --energy_offset, --force_weight) change the energy weights to (1 - c) w_i and send the energy
+  residuals through the constant per-element offset projector; --band_weight adds a constant
+  (in sigma) W L_band inside the penalty, which :func:`mu` includes (the gradient optimisers
+  refuse it).
 
 :func:`mu` recomputes the loss of :class:`utils.loss.Loss` bit for bit from the step's
 files (tests); :func:`terms` gives the residuals with their derivatives with respect to
@@ -79,6 +83,8 @@ class StepData:
     numbers: list = field(default_factory=list)   # dataset: atomic numbers (physrep order)
     model: object = None                 # utils.typemodel.TypeModel (parameters per type)
     x: list | None = None                # the radii of every parameter set (model's order)
+    band_term: float = 0.0               # A series: W L_band of the step (Loss._band_term), a
+                                         #   constant in sigma inside the penalty
 
     @classmethod
     def from_files(cls, loss, r0_w: float | None = None, r0_d: float | None = None,
@@ -92,11 +98,13 @@ class StepData:
         bolt11 = [loss.bolt_f11[int(i)] for i in search_index]
         eos = int(loss.args_input.eos_points)
         bolt_f = loss.bolt_f11[floor(eos / 2)::eos]
+        band_term = float(getattr(loss, "_band_term", 0.0) or 0.0)
         if getattr(loss, "typed", False):
             x = [float(v) for v in (x if x is not None else (r0_w, r0_d))]
             return cls(loss, mode, dft, band, bolt11, bolt_f, eos, float("nan"), float("nan"),
-                       model=loss.types, x=x)
-        step = cls(loss, mode, dft, band, bolt11, bolt_f, eos, float(r0_w), float(r0_d))
+                       model=loss.types, x=x, band_term=band_term)
+        step = cls(loss, mode, dft, band, bolt11, bolt_f, eos, float(r0_w), float(r0_d),
+                   band_term=band_term)
         if mode == "energygeometry":
             ng = int(len(dft) / eos)
             step.groups = [loss.get_elements_from_dataset(dft[n * eos:(n + 1) * eos],
@@ -269,7 +277,10 @@ def _mu_energygeometry(step: StepData, sigma: float, parts: dict | None = None) 
     mu_e, mu_v = np.sum(mu_es) / bolt_left, np.sum(mu_vs) / bolt_left
     c = EG_C
     penalty = step.penalty()
-    out = (c * mu_v + (1 - c) * mu_e) * penalty
+    if step.band_term:                     # A series: + W L_band, as Loss.collectAndcalculate_muEV
+        out = (c * mu_v + (1 - c) * mu_e + step.band_term) * penalty
+    else:
+        out = (c * mu_v + (1 - c) * mu_e) * penalty
     if parts is not None:
         parts.update(mu_E=mu_e, mu_V=mu_v, mu_logb=np.sum(mu_bs) / bolt_left,
                      bolt_left=bolt_left, penalty=penalty)
@@ -277,6 +288,7 @@ def _mu_energygeometry(step: StepData, sigma: float, parts: dict | None = None) 
 
 
 def _mu_dataset(step: StepData, sigma: float, parts: dict | None = None) -> float:
+    from utils.loss import dataset_energy_term, dataset_options
     loss = step.loss
     pr, _ = step.physrep(sigma)
     full = _full(step.band, step.dft, pr)
@@ -284,14 +296,20 @@ def _mu_dataset(step: StepData, sigma: float, parts: dict | None = None) -> floa
         e0_dftb = loss.get_atomic_energy(step.dft)
         _, rel_b = loss.get_formation_energy(full, e0_dftb, '_')
         _, rel_d = loss.get_formation_energy(step.dft, loss.args_input.E0s, '_')
-    diffs = np.abs(np.array(rel_b) - np.array(rel_d))
-    mu_e = np.sum(diffs)
+    reduction, offset, c = dataset_options(loss.args_input)     # A series (defaults: as before)
+    if reduction == 'sum' and offset == 'none':
+        diffs = np.abs(np.array(rel_b) - np.array(rel_d))
+        mu_e = np.sum(diffs)
+    else:
+        diffs, mu_e = dataset_energy_term(step.dft, rel_b, rel_d, reduction, offset)
     f_d = loss.get_forces(step.dft, '_')
     f_b = loss.get_forces(full, '_')
     mu_f = np.mean(np.abs(np.array(f_d) - np.array(f_b)))
-    c = DS_C
     penalty = step.penalty()
-    out = (mu_e * (1 - c) + mu_f * c) * penalty
+    if step.band_term:                     # A series: + W L_band, as Loss.collectAndcalculate_muEF
+        out = (mu_e * (1 - c) + mu_f * c + step.band_term) * penalty
+    else:
+        out = (mu_e * (1 - c) + mu_f * c) * penalty
     if parts is not None:
         parts.update(mu_E=mu_e, mu_F=mu_f, e0=e0_dftb, diffs=diffs, penalty=penalty)
     return out
@@ -493,7 +511,8 @@ def _terms_dataset(step: StepData, sigma: float) -> Terms:
         _, rel_d = loss.get_formation_energy(step.dft, loss.args_input.E0s, '_')
     elements = [int(z) for z in e0_dftb.keys()]
     natoms = [len(a) for a in step.dft]
-    c = DS_C
+    from utils.loss import dataset_options
+    reduction, offset, c = dataset_options(loss.args_input)     # A series (defaults: as before)
     der = [repulsion_sigma_derivative(pr, varying, a) for a in step.dft]
     w, r, drds, kind, force = [], [], [], [], []
     a_e = np.zeros((n, n))
@@ -526,8 +545,30 @@ def _terms_dataset(step: StepData, sigma: float) -> Terms:
     a_e_full[:n] = a_e
     a_e0_full = np.zeros((nt, len(elements)))
     a_e0_full[:n] = a_e0
-    return Terms(float(sigma), step.penalty(), np.array(w), np.array(r), np.array(drds), kind,
+    w, r, drds = np.array(w), np.array(r), np.array(drds)
+    if (reduction, offset) != ("sum", "none"):
+        w, r, drds, a_e_full, a_e0_full = _option_rows(step, reduction, offset, c, w, r, drds,
+                                                       a_e_full, a_e0_full, n)
+    return Terms(float(sigma), step.penalty(), w, r, drds, kind,
                  a_e_full, a_e0_full, elements, [None] * n + force, natoms)
+
+
+def _option_rows(step: StepData, reduction: str, offset: str, c, w, r, drds, a_e, a_e0, n: int):
+    """The energy residuals (the first n terms) with the A-series options: weights
+    (1 - c) w_i of --energy_reduction and, with --energy_offset per-element, the residuals and
+    their derivatives (sigma, energies, E0) through the constant offset projector M (r <- M r)."""
+    from utils.loss import offset_projector, reduction_weights
+    wred = reduction_weights(step.dft, reduction)
+    w = w.copy()
+    w[:n] = (1 - c) * wred
+    if offset == "per-element":
+        m = offset_projector(step.dft, wred)
+        r, drds, a_e, a_e0 = r.copy(), drds.copy(), a_e.copy(), a_e0.copy()
+        r[:n] = m @ r[:n]
+        drds[:n] = m @ drds[:n]
+        a_e[:n] = m @ a_e[:n]
+        a_e0[:n] = m @ a_e0[:n]
+    return w, r, drds, a_e, a_e0
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +848,8 @@ def _terms_dataset_typed(step: StepData, sigma) -> TermsN:
         _, rel_d = loss.get_formation_energy(step.dft, loss.args_input.E0s, '_')
     elements = [int(z) for z in e0_dftb.keys()]
     natoms = [len(a) for a in step.dft]
-    c = DS_C
+    from utils.loss import dataset_options
+    reduction, offset, c = dataset_options(loss.args_input)     # A series (defaults: as before)
     de, df = _sigma_derivatives(pr, varying, step.dft, ns)
     w, r, drds, kind, force = [], [], [], [], []
     a_e = np.zeros((n, n))
@@ -839,8 +881,12 @@ def _terms_dataset_typed(step: StepData, sigma) -> TermsN:
     a_e_full[:n] = a_e
     a_e0_full = np.zeros((nt, len(elements)))
     a_e0_full[:n] = a_e0
-    return TermsN(np.asarray(sigma), step.penalty(), np.array(w), np.array(r),
-                  np.array(drds).reshape(nt, ns), kind, a_e_full, a_e0_full, elements,
+    w, r, drds = np.array(w), np.array(r), np.array(drds).reshape(nt, ns)
+    if (reduction, offset) != ("sum", "none"):
+        w, r, drds, a_e_full, a_e0_full = _option_rows(step, reduction, offset, c, w, r, drds,
+                                                       a_e_full, a_e0_full, n)
+    return TermsN(np.asarray(sigma), step.penalty(), w, r,
+                  drds, kind, a_e_full, a_e0_full, elements,
                   [None] * n + force, natoms)
 
 

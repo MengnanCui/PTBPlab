@@ -35,12 +35,21 @@ touch the shell for the hopping scales, and the repulsive's own terms.  The same
 derivatives of the Mermin free energy with respect to every coefficient (:class:`AdaptiveResult`),
 which is what a fit needs.  With zero coefficients the calculation is the plain one, bit for bit.
 
+Descriptor models (A series, A0 section 4): ``AdaptiveParams(element, descriptor=...,
+regressor=..., channels=("onsite.s", "hopping.p", "repulsive"), theta=...)`` replaces the CN
+basis by any :mod:`pydftb.descriptors` descriptor (radial, angular, SOAP, MACE features) and
+any :mod:`pydftb.regressors` regressor (linear, kernel, MLP) whose outputs are the channels'
+p_A; forces and stress go through the descriptor's gradient pairs
+(:meth:`pydftb.descriptors.Features.chain`), and dF/dtheta = sum_A dF/dp_A dp_A/dtheta.  A
+descriptor without position derivatives allows energies and bands only (no forces).
+
 NumPy engine, dense solvers, no spin, two-component spin, hybrids, Casida, type switching or
 autodiff (refused by :class:`pydftb.calculator.DFTB`).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 import numpy as np
 from ase.data import atomic_numbers, covalent_radii
@@ -186,10 +195,44 @@ class AdaptiveParams:
     window_scaled: bool = True
     neighbours: tuple | None = None
     angular: RBF | None = None
+    descriptor: object | None = None       # pydftb.descriptors: replaces the CN basis
+    regressor: object | None = None        # pydftb.regressors (default: Linear)
+    channels: tuple = ()                   # descriptor mode: "onsite.<l>", "hopping.<l>", "repulsive"
+    theta: tuple | None = None             # descriptor mode: the regressor's coefficients
+    engine_keyword: ClassVar[str] = "adaptive"        # pydftb.envmodel protocol
 
     @property
     def size(self) -> int:
         return self.basis.size + (self.angular.size if self.angular is not None else 0)
+
+    def gradient_from(self, result):
+        """dF/d(:meth:`vector`) in Hartree from a calculation with this model
+        (:mod:`pydftb.envmodel` protocol)."""
+        ad = getattr(result, "adaptive", None)
+        if ad is None or self.element not in ad.gradients:
+            return None
+        return np.asarray(ad.gradients[self.element], float)
+
+    def to_dict(self) -> dict:
+        """JSON form (:func:`pydftb.envmodel.model_from_dict` reads it back)."""
+        def rbf(b):
+            return None if b is None else {"centres": list(b.centres), "width": b.width,
+                                           "constant": b.constant,
+                                           "clamp": None if b.clamp is None else list(b.clamp)}
+        return {"kind": "adaptive", "element": self.element, "basis": rbf(self.basis),
+                "onsite": {k: list(v) for k, v in self.onsite.items()},
+                "hopping": {k: list(v) for k, v in self.hopping.items()},
+                "repulsive": None if self.repulsive is None else list(self.repulsive),
+                "pair_repulsive": {el: {"cutoff": r.cutoff, "coefficients": list(r.coefficients),
+                                        "wall": r.wall, "wall_strength": r.wall_strength}
+                                   for el, r in self.pair_repulsive.items()},
+                "window": list(self.window), "window_scaled": self.window_scaled,
+                "neighbours": None if self.neighbours is None else list(self.neighbours),
+                "angular": rbf(self.angular),
+                "descriptor": None if self.descriptor is None else self.descriptor.to_dict(),
+                "regressor": None if self.regressor is None else self.regressor.to_dict(),
+                "channels": list(self.channels),
+                "theta": None if self.theta is None else list(self.theta)}
 
     def features(self, cn, q=None):
         """Phi (n, size), dPhi/dCN and dPhi/dq (n, size): the CN basis, then the angular one."""
@@ -200,7 +243,83 @@ class AdaptiveParams:
         z = np.zeros_like(pq)
         return np.hstack([ph, pq]), np.hstack([dph, z]), np.hstack([np.zeros_like(ph), dpq])
 
+    @property
+    def descriptor_mode(self) -> bool:
+        """The parameters come from ``descriptor`` and ``regressor`` (not the CN basis)."""
+        return self.descriptor is not None
+
+    def channel_keys(self) -> list:
+        """The channel of every parameter p_A, in the order of the regressor outputs
+        (descriptor mode) or of :meth:`vector` (CN mode): ("onsite"|"hopping", element, shell)
+        or ("repulsive", element)."""
+        if self.descriptor_mode:
+            out = []
+            for c in self.channels:
+                kind, _, shell = c.partition(".")
+                out.append(("repulsive", self.element) if kind == "repulsive"
+                           else (kind, self.element, shell))
+            return out
+        return [key for key, _ in _channels(self)]
+
+    def onsite_shells(self) -> set:
+        if self.descriptor_mode:
+            return {k[2] for k in self.channel_keys() if k[0] == "onsite"}
+        return set(self.onsite)
+
+    def hopping_shells(self) -> set:
+        if self.descriptor_mode:
+            return {k[2] for k in self.channel_keys() if k[0] == "hopping"}
+        return set(self.hopping)
+
+    @property
+    def has_repulsive(self) -> bool:
+        if self.descriptor_mode:
+            return "repulsive" in self.channels
+        return self.repulsive is not None
+
+    def _check_descriptor_mode(self):
+        from .regressors import Linear
+        if self.onsite or self.hopping or self.repulsive is not None or self.angular is not None:
+            raise ValueError(f"AdaptiveParams({self.element}) with a descriptor: give the "
+                             "channels in 'channels' (not onsite/hopping/repulsive/angular)")
+        if getattr(self.descriptor, "element", None) != self.element:
+            raise ValueError(f"AdaptiveParams({self.element}): the descriptor describes "
+                             f"{getattr(self.descriptor, 'element', None)!r} atoms")
+        chans = tuple(str(c) for c in self.channels)
+        if not chans:
+            raise ValueError(f"AdaptiveParams({self.element}) with a descriptor needs channels "
+                             "(e.g. ('onsite.s', 'hopping.s'))")
+        if len(set(chans)) != len(chans):
+            raise ValueError(f"AdaptiveParams({self.element}): repeated channels {chans}")
+        for c in chans:
+            kind, dot, shell = c.partition(".")
+            ok = (c == "repulsive" or (kind in ("onsite", "hopping") and dot
+                                       and shell in SHELL_LETTERS and len(shell) == 1))
+            if not ok:
+                raise ValueError(f"channel {c!r}: use 'onsite.<s|p|d|f>', 'hopping.<s|p|d|f>' "
+                                 "or 'repulsive'")
+        object.__setattr__(self, "channels", chans)
+        reg = self.regressor
+        if reg is None:
+            reg = Linear(int(self.descriptor.size), n_out=len(chans))
+            object.__setattr__(self, "regressor", reg)
+        if reg.n_out != len(chans):
+            raise ValueError(f"AdaptiveParams({self.element}): the regressor has {reg.n_out} "
+                             f"outputs for {len(chans)} channels")
+        if reg.n_in != self.descriptor.size:
+            raise ValueError(f"AdaptiveParams({self.element}): the regressor takes {reg.n_in} "
+                             f"inputs, the descriptor gives {self.descriptor.size}")
+        theta = reg.initial() if self.theta is None else np.ravel(np.asarray(self.theta, float))
+        if len(theta) != reg.size:
+            raise ValueError(f"AdaptiveParams({self.element}): theta needs {reg.size} "
+                             f"coefficients, not {len(theta)}")
+        object.__setattr__(self, "theta", tuple(float(v) for v in theta))
+
     def __post_init__(self):
+        if self.descriptor is not None:
+            self._check_descriptor_mode()
+        elif self.regressor is not None or self.channels or self.theta is not None:
+            raise ValueError("regressor, channels and theta need a descriptor")
         if self.angular is not None and self.angular.constant:
             raise ValueError("the angular basis has no constant (the CN basis has it): "
                              "RBF(centres, width, constant=False)")
@@ -236,6 +355,18 @@ class AdaptiveParams:
     # -- the coefficients as one vector (fitting) ----------------------------------------------
     def parameter_names(self) -> list[str]:
         """Names of the entries of :meth:`vector`, in order."""
+        if self.descriptor_mode:
+            out = []
+            for name in self.regressor.names:
+                head, dot, rest = name.partition(".")
+                if dot and head.startswith("out") and head[3:].isdigit():
+                    out.append(f"{self.element}.{self.channels[int(head[3:])]}.{rest}")
+                else:
+                    out.append(f"{self.element}.reg.{name}")
+            for el in sorted(self.pair_repulsive):
+                out += [f"{self.element}-{el}.pair[{k}]"
+                        for k in range(len(self.pair_repulsive[el].coefficients))]
+            return out
         n = self.size
         out = [f"{self.element}.onsite.{s}[{k}]" for s in sorted(self.onsite) for k in range(n)]
         out += [f"{self.element}.hopping.{s}[{k}]" for s in sorted(self.hopping) for k in range(n)]
@@ -247,6 +378,10 @@ class AdaptiveParams:
         return out
 
     def vector(self) -> np.ndarray:
+        if self.descriptor_mode:
+            parts = [self.theta]
+            parts += [self.pair_repulsive[el].coefficients for el in sorted(self.pair_repulsive)]
+            return np.concatenate([np.asarray(p, float) for p in parts])
         parts = [self.onsite[s] for s in sorted(self.onsite)]
         parts += [self.hopping[s] for s in sorted(self.hopping)]
         if self.repulsive is not None:
@@ -258,6 +393,15 @@ class AdaptiveParams:
         x = np.asarray(x, float)
         if len(x) != len(self.vector()):
             raise ValueError(f"needs {len(self.vector())} values, not {len(x)}")
+        if self.descriptor_mode:
+            k = self.regressor.size
+            theta = tuple(x[:k])
+            pair = {}
+            for el in sorted(self.pair_repulsive):
+                r = self.pair_repulsive[el]
+                m = len(r.coefficients)
+                pair[el], k = replace(r, coefficients=tuple(x[k:k + m])), k + m
+            return replace(self, theta=theta, pair_repulsive=pair)
         n, k = self.size, 0
         onsite, hopping = {}, {}
         for s in sorted(self.onsite):
@@ -385,6 +529,8 @@ class AdaptiveTerms:
     rep_dedc: dict | None = None                    # (element, neighbour) -> dE/dc_n
     q: np.ndarray | None = None                     # the angular descriptor (M8b)
     q_pairs: tuple | None = None                    # (i, j, vec, dq_i/dvec)
+    feat: dict = field(default_factory=dict)        # descriptor mode: element -> (atoms,
+                                                    # Features, P, dP/dx or None, dP/dtheta)
 
 
 def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bool):
@@ -402,22 +548,49 @@ def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bo
     orb_scale = np.ones(basis.norb)
     onsite_shift = np.zeros(basis.norb)
     shell_of = {}
+    feat = {}
     for m in models:
-        c, qa, (i, j, v, f), (_, _, _, dqv) = m.descriptors(elements, pos, cell, pbc)
         atoms = np.array([a for a in range(natom) if elements[a] == m.element], int)
-        cn[atoms] = c[atoms]
-        q[atoms] = qa[atoms]
-        pi.append(i), pj.append(j), pv.append(v), pf.append(f)
-        if m.angular is not None:
-            qi.append(i), qj.append(j), qv.append(v), qd.append(dqv)
-        ph, dph, dphq = m.features(cn[atoms], q[atoms])
-        phi[m.element] = (atoms, ph, dph, dphq)
-        for chan, store in (("onsite", onsite), ("hopping", hopping)):
-            for shell, coef in getattr(m, chan).items():
-                store[(m.element, shell)] = ph @ np.asarray(coef)
-        if m.repulsive is not None:
-            rep_scale[atoms] = ph @ np.asarray(m.repulsive)
-        for shell in set(m.onsite) | set(m.hopping):
+        if m.descriptor_mode:                    # descriptor + regressor (A series)
+            if derivatives and not m.descriptor.has_derivatives:
+                raise ValueError(f"the {m.element} descriptor ({type(m.descriptor).__name__}) "
+                                 "has no position derivatives: no forces or stress with it "
+                                 "(energies and bands only: forces=False)")
+            c, _ = m.coordination_numbers(elements, pos, cell, pbc)
+            cn[atoms] = c[atoms]
+            fx = m.descriptor.compute(elements, pos, cell, pbc, derivatives)
+            if not np.array_equal(fx.atoms, atoms):
+                raise ValueError(f"the {m.element} descriptor does not describe all "
+                                 f"{m.element} atoms")
+            theta = np.asarray(m.theta, float)
+            pv_ = m.regressor.value(fx.values, theta)
+            dpx = m.regressor.d_input(fx.values, theta) if derivatives else None
+            dpt = m.regressor.d_theta(fx.values, theta)
+            feat[m.element] = (atoms, fx, pv_, dpx, dpt)
+            phi[m.element] = (atoms, None, None, None)
+            for col, key in enumerate(m.channel_keys()):
+                if key[0] == "onsite":
+                    onsite[(m.element, key[2])] = pv_[:, col]
+                elif key[0] == "hopping":
+                    hopping[(m.element, key[2])] = pv_[:, col]
+                else:
+                    rep_scale[atoms] = pv_[:, col]
+        else:
+            c, qa, (i, j, v, f), (_, _, _, dqv) = m.descriptors(elements, pos, cell, pbc)
+            cn[atoms] = c[atoms]
+            q[atoms] = qa[atoms]
+            pi.append(i), pj.append(j), pv.append(v), pf.append(f)
+            if m.angular is not None:
+                qi.append(i), qj.append(j), qv.append(v), qd.append(dqv)
+            ph, dph, dphq = m.features(cn[atoms], q[atoms])
+            phi[m.element] = (atoms, ph, dph, dphq)
+            for chan, store in (("onsite", onsite), ("hopping", hopping)):
+                for shell, coef in getattr(m, chan).items():
+                    store[(m.element, shell)] = ph @ np.asarray(coef)
+            if m.repulsive is not None:
+                rep_scale[atoms] = ph @ np.asarray(m.repulsive)
+        on_shells, hop_shells = m.onsite_shells(), m.hopping_shells()
+        for shell in sorted(on_shells | hop_shells):
             l = SHELL_LETTERS.index(shell)
             orbs = []
             for a in atoms:
@@ -428,15 +601,15 @@ def setup(models, species, pos, cell, pbc, basis, sk, mode: str, derivatives: bo
                 orbs.append(np.array(sel, int))
             shell_of[(m.element, shell)] = orbs
             for a_idx, o in enumerate(orbs):
-                if shell in m.onsite:
+                if shell in on_shells:
                     onsite_shift[o] += onsite[(m.element, shell)][a_idx]
-                if shell in m.hopping:
+                if shell in hop_shells:
                     orb_scale[o] = np.exp(0.5 * hopping[(m.element, shell)][a_idx])
     cat = lambda xs, shape: np.concatenate(xs) if xs else np.zeros(shape)
     cn_pairs = (cat(pi, 0).astype(int), cat(pj, 0).astype(int), cat(pv, (0, 3)), cat(pf, 0))
     q_pairs = (cat(qi, 0).astype(int), cat(qj, 0).astype(int), cat(qv, (0, 3)), cat(qd, (0, 3)))
     terms = AdaptiveTerms(models, elements, cn, cn_pairs, phi, onsite, hopping, rep_scale,
-                          orb_scale, onsite_shift, shell_of, q=q, q_pairs=q_pairs)
+                          orb_scale, onsite_shift, shell_of, q=q, q_pairs=q_pairs, feat=feat)
     _repulsive(terms, species, pos, cell, pbc, sk, mode, derivatives)
     return terms
 
@@ -537,7 +710,7 @@ def parameter_derivatives(terms: AdaptiveTerms, pb, p_e, d_onsite) -> dict:
         if (el, shell) in terms.hopping:
             out[("hopping", el, shell)] = np.array([0.5 * per_orb[o].sum() for o in orbs])
     for m in terms.models:
-        if m.repulsive is not None:
+        if m.has_repulsive:
             atoms = terms.phi[m.element][0]
             out[("repulsive", m.element)] = terms.rep_dedp[atoms]
     return out
@@ -550,6 +723,8 @@ def coordinate_gradient(terms: AdaptiveTerms, dedp: dict, virial: bool):
     dedcn = np.zeros(natom)
     dedq = np.zeros(natom)
     for m in terms.models:
+        if m.descriptor_mode:
+            continue
         atoms, _, dph, dphq = terms.phi[m.element]
         for key, coef in _channels(m):
             d = dedp.get(key)
@@ -566,7 +741,51 @@ def coordinate_gradient(terms: AdaptiveTerms, dedp: dict, virial: bool):
     grad = np.zeros((natom, 3))
     np.add.at(grad, j, g)
     np.add.at(grad, i, -g)
-    return grad, (g.T @ vec if virial else None)
+    vir = g.T @ vec if virial else None
+    for m in terms.models:                       # descriptor models: through their pairs
+        if not m.descriptor_mode:
+            continue
+        _, fx, _, dpx, _ = terms.feat[m.element]
+        if dpx is None:
+            raise ValueError(f"the {m.element} descriptor was computed without derivatives")
+        dedx = np.einsum("ac,acf->af", _channel_dedp(m, dedp, len(fx.atoms)), dpx)
+        g2, v2 = fx.chain(dedx, natom, virial)
+        grad = grad + g2
+        if virial:
+            vir = vir + v2
+    return grad, vir
+
+
+def _channel_dedp(m, dedp: dict, n: int) -> np.ndarray:
+    """dF/dp (n_atom_el, n_channels) of a descriptor model, in the regressor's output order."""
+    out = np.zeros((n, len(m.channels)))
+    for col, key in enumerate(m.channel_keys()):
+        d = dedp.get(key)
+        if d is not None:
+            out[:, col] = d
+    return out
+
+
+def channel_jacobians(m: AdaptiveParams, terms: AdaptiveTerms) -> dict:
+    """dp_A/d(:meth:`AdaptiveParams.vector`) of every channel of a model at one geometry:
+    {channel key: (atoms of the element, (n_atom_el, len(vector)))} (pydftb.banddiff)."""
+    n_x = len(m.vector())
+    out = {}
+    if m.descriptor_mode:
+        atoms, _, _, _, dpt = terms.feat[m.element]
+        for col, key in enumerate(m.channel_keys()):
+            jm = np.zeros((len(atoms), n_x))
+            jm[:, :dpt.shape[2]] = dpt[:, col, :]
+            out[key] = (atoms, jm)
+        return out
+    atoms, ph, _, _ = terms.phi[m.element]
+    k = 0
+    for key, coef in _channels(m):
+        jm = np.zeros((len(atoms), n_x))
+        jm[:, k:k + len(coef)] = ph
+        out[key] = (atoms, jm)
+        k += len(coef)
+    return out
 
 
 def _channels(m: AdaptiveParams):
@@ -587,6 +806,8 @@ class AdaptiveResult:
     parameters: dict                    # channel key -> p per atom of the element
     gradients: dict                     # element -> dF/d vector (same order as vector())
     q: np.ndarray | None = None         # the angular descriptor (M8b; zeros without it)
+    dedp: dict | None = None            # channel key -> dF/dp per atom of the element
+    features: dict | None = None        # descriptor models: element -> (atoms, values)
 
     def gradient(self, models) -> np.ndarray:
         """dF/d(the concatenated vectors of ``models``)."""
@@ -594,8 +815,20 @@ class AdaptiveResult:
 
 
 def result(terms: AdaptiveTerms, dedp: dict) -> AdaptiveResult:
-    grads, params = {}, {}
+    grads, params, feats = {}, {}, {}
     for m in terms.models:
+        if m.descriptor_mode:
+            atoms, fx, pv_, _, dpt = terms.feat[m.element]
+            d = _channel_dedp(m, dedp, len(atoms))
+            parts = [np.einsum("ac,acs->s", d, dpt)]
+            for col, key in enumerate(m.channel_keys()):
+                params[key] = pv_[:, col].copy()
+            for el in sorted(m.pair_repulsive):
+                parts.append(np.asarray(terms.rep_dedc.get(
+                    (m.element, el), np.zeros(len(m.pair_repulsive[el].coefficients)))))
+            grads[m.element] = np.concatenate(parts)
+            feats[m.element] = (atoms.copy(), fx.values.copy())
+            continue
         atoms, ph, *_ = terms.phi[m.element]
         parts = []
         for key, _ in _channels(m):
@@ -609,4 +842,40 @@ def result(terms: AdaptiveTerms, dedp: dict) -> AdaptiveResult:
                                                        np.zeros(len(m.pair_repulsive[el].coefficients)))))
         grads[m.element] = np.concatenate(parts) if parts else np.zeros(0)
     return AdaptiveResult(terms.cn.copy(), params, grads,
-                          None if terms.q is None else terms.q.copy())
+                          None if terms.q is None else terms.q.copy(),
+                          {k: np.asarray(v, float).copy() for k, v in dedp.items()},
+                          feats or None)
+
+
+def adaptive_from_dict(d: dict) -> AdaptiveParams:
+    """The AdaptiveParams of :meth:`AdaptiveParams.to_dict`."""
+    from .descriptors import descriptor_from_dict
+    from .regressors import regressor_from_dict
+    def rbf(b):
+        if b is None:
+            return None
+        return RBF(tuple(b["centres"]), b["width"], b["constant"],
+                   None if b.get("clamp") is None else tuple(b["clamp"]))
+    return AdaptiveParams(
+        d["element"], basis=rbf(d["basis"]),
+        onsite={k: tuple(v) for k, v in d.get("onsite", {}).items()},
+        hopping={k: tuple(v) for k, v in d.get("hopping", {}).items()},
+        repulsive=None if d.get("repulsive") is None else tuple(d["repulsive"]),
+        pair_repulsive={el: PairRepulsive(r["cutoff"], tuple(r["coefficients"]), r.get("wall", 0.0),
+                                          r.get("wall_strength", 0.0))
+                        for el, r in d.get("pair_repulsive", {}).items()},
+        window=tuple(d.get("window", DEFAULT_WINDOW)), window_scaled=d.get("window_scaled", True),
+        neighbours=None if d.get("neighbours") is None else tuple(d["neighbours"]),
+        angular=rbf(d.get("angular")),
+        descriptor=None if d.get("descriptor") is None else descriptor_from_dict(d["descriptor"]),
+        regressor=None if d.get("regressor") is None else regressor_from_dict(d["regressor"]),
+        channels=tuple(d.get("channels", ())),
+        theta=None if d.get("theta") is None else tuple(d["theta"]))
+
+
+def _register():
+    from . import envmodel
+    envmodel.register("adaptive", adaptive_from_dict)
+
+
+_register()

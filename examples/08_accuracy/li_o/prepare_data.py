@@ -58,10 +58,12 @@ def tag(frames, role, source, kspacing=None):
 
 
 def interface(frames):
-    """The interface runs used KSPACING 0.25 = a 4 x 4 x 1 grid (make_iface_dft.py, M5c); the
-    rule gives 2 along c for this cell (2 pi |b3| / 0.25 = 1.01), so the grid is set explicitly."""
+    """The interface runs used KSPACING 0.25.  Their OUTCARs say "generate k-points for: 4 4 2"
+    (checked 2026-11-10), which is the KSPACING rule of utils.accuracy.kpoints_for (2 along c:
+    ceil(2 pi |b3| / 0.25) = ceil(1.01)); M5c's note "4 x 4 x 1" was wrong.  So no explicit grid
+    is set: the frames carry kspacing 0.25 and the rule gives the DFT's grid."""
     for a in frames:
-        a.info["kpts"] = "4x4x1"
+        a.info.pop("kpts", None)
     return frames
 
 

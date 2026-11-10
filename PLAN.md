@@ -8,7 +8,7 @@
 | 范围 | 参数模型（每个元素的 r0_w、r0_d、σ_rep，类型，随环境变化的参数，排斥势，Δ-ML）；损失与数据集；多参数的优化策略（BO、并行 BO、PSO、梯度法、σ_rep 内层搜索、策略比较）；运行方案与工具（并行、`ptbp plan`、TUI、GUI） | 与 DFTB+ 逐项对照的功能（M2、M6）；求解器与大体系（M7）；PyTorch 后端、自动求导与设备（M4a、M4b、M4d）；双引擎与打包（P1、P2） |
 | 代码 | `cli/`、`utils/`、`tools/`、`gui/`、`parameterize.py`、`examples/` | `pydftb/` |
 | 路线图 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | [`pydftb/docs/ROADMAP.md`](pydftb/docs/ROADMAP.md) |
-| 当前状态 | A0（精度计划）的代码已备好，计算未开始 | 功能基本齐全，以维护为主 |
+| 当前状态 | A0 精度计划：A1–A4 的代码已备好，计算未开始 | 功能基本齐全，以维护为主 |
 
 ## 两条线的分工
 
@@ -20,11 +20,13 @@
 
 见 [`docs/ROADMAP.md`](docs/ROADMAP.md) 第二节，大致顺序：
 
-1. A1.0 的便宜检验 K1–K7；
-2. A1 的策略比较（`ptbp scan`，同一批 SK 点上比较 S1–S4）；
+1. A1.0 的便宜检验 K1–K7 与基线；
+2. A1 的策略比较（`ptbp scan`，同一批 SK 点上比较 S1–S4），关口 G1；
 3. 排斥势：按原子对的标度与短程墙接到 `optimize`，σ_rep 内层搜索的边界问题；
-4. A2：随环境变化的参数；
-5. 最后 A3（排斥势）与 A4（Δ-ML）。
+4. A2：随环境变化的电子部分，关口 G2；
+5. 最后 A3（排斥势）与 A4（Δ-ML），关口 G3、G4。
+
+A1–A4 的执行代码都在 `examples/08_accuracy/`（执行手册是其中的 `README.md`），都还没有算。
 
 需要你决定的事项：
 

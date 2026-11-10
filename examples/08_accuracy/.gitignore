@@ -5,3 +5,6 @@
 **/__pycache__/
 *.traj
 *.tmp
+# Slurm stdout/stderr (#SBATCH -o logs/...); the runs keep their own logs under <out>/logs
+/logs/*
+!/logs/.gitkeep

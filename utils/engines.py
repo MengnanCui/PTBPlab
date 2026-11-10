@@ -32,6 +32,15 @@ Several types of one element (milestone M5b, :func:`set_type_switching`): pydftb
 by the atoms' coordination numbers (pydftb's M5a); the atoms keep their element symbols.  DFTB+
 through ASE writes the element symbols only, so it refuses such runs.  Without switches every
 calculator is created exactly as before.
+
+Alignment with the DFT reference (A series, :func:`set_alignment`; all off by default, and then
+every calculator is created exactly as before): ``kspacing`` gives every periodic structure
+VASP's Gamma-centred KSPACING grid instead of PTBP's k-point density rule (both engines; the
+isolated atoms of the loss keep their Gamma point); ``energy_kind="sigma0"`` makes the energy
+Total - TS/2 (VASP's energy(sigma->0), the A-series scans' energy); ``third_order`` with
+``hubbard_derivs`` switches on DFTB3, ``hubbard`` replaces Hubbard values (the last three:
+pydftb only).  Smearing as the scans: ``configure(smearing="gaussian",
+smearing_temperature=0.05 eV / k_B)``.
 """
 from __future__ import annotations
 
@@ -147,6 +156,111 @@ def type_switching() -> tuple:
     return _TYPE_SWITCHING
 
 
+# ----------------------------------------------------------------------------
+# Alignment with the DFT reference (A series, A0 plan section 8).  Process-wide like the
+# settings (forked workers inherit them) and, like the type switches, kept out of _SETTINGS:
+# settings() and everything derived from it (plan.json, the advisor) stay as they were, and
+# every calculator is created exactly as before unless an option is set.
+# ----------------------------------------------------------------------------
+ENERGY_KINDS = ("total", "sigma0")
+THIRD_ORDERS = (None, "full", "onsite")
+_ALIGN_DEFAULTS = {
+    "kspacing": None,          # 1/A: Gamma-centred grid N_i = max(1, ceil(2 pi |b_i| / KSPACING))
+    "energy_kind": "total",    # total = DFTB+ "Total energy"; sigma0 = Total - TS/2 (VASP's
+                               #   energy(sigma->0), the A-series scans' E), pydftb only
+    "third_order": None,       # DFTB3: "full" (ThirdOrderFull) or "onsite", pydftb only
+    "hubbard_derivs": None,    # {element: Ud (Hartree/e)} for third_order
+    "hubbard": None,           # {element: U (Hartree)}: CustomisedHubbards, pydftb only
+}
+_ALIGN: dict[str, Any] = dict(_ALIGN_DEFAULTS)
+ALIGNMENT_ENGINE_ERROR = ("{name} is a pydftb option (DFTB+ through ASE would need other input "
+                          "keywords): use --engine pydftb")
+
+
+def set_alignment(**kwargs) -> dict:
+    """Set the DFT-alignment options (``kspacing``, ``energy_kind``, ``third_order``,
+    ``hubbard_derivs``, ``hubbard``); None keeps an option's current value.  Returns them."""
+    for key, value in kwargs.items():
+        if key not in _ALIGN:
+            raise KeyError(f"unknown alignment option {key!r}")
+        if value is not None:
+            _ALIGN[key] = value
+    ks = _ALIGN["kspacing"]
+    if ks is not None and not float(ks) > 0.0:
+        raise ValueError(f"kspacing must be > 0 (1/A), got {ks!r}")
+    if _ALIGN["energy_kind"] not in ENERGY_KINDS:
+        raise ValueError(f"energy_kind must be one of {ENERGY_KINDS}, got {_ALIGN['energy_kind']!r}")
+    if _ALIGN["third_order"] not in THIRD_ORDERS:
+        raise ValueError(f"third_order must be one of {THIRD_ORDERS}, got {_ALIGN['third_order']!r}")
+    if _ALIGN["third_order"] and not _ALIGN["hubbard_derivs"]:
+        raise ValueError("third_order needs hubbard_derivs ({element: Ud in Hartree/e})")
+    for key in ("hubbard_derivs", "hubbard"):
+        if _ALIGN[key] is not None:
+            _ALIGN[key] = {str(k): float(v) for k, v in dict(_ALIGN[key]).items()}
+    return dict(_ALIGN)
+
+
+def reset_alignment() -> dict:
+    """Every alignment option back to its default (PTBP's behaviour)."""
+    _ALIGN.clear()
+    _ALIGN.update(_ALIGN_DEFAULTS)
+    return dict(_ALIGN)
+
+
+def alignment() -> dict:
+    return dict(_ALIGN)
+
+
+def aligned() -> bool:
+    """Whether some alignment option differs from its default."""
+    return any(_ALIGN[k] != v for k, v in _ALIGN_DEFAULTS.items())
+
+
+def kspacing_grid(atoms: Atoms, kspacing: float) -> list:
+    """VASP's KSPACING rule (Gamma-centred): N_i = max(1, ceil(2 pi |b_i| / KSPACING)) with
+    the reciprocal vectors b_i of the cell (1/A, without 2 pi), 1 along non-periodic
+    directions; as ``utils.accuracy.kpoints_for`` (copied: no scan import here)."""
+    import numpy as np
+    rec = atoms.cell.reciprocal()
+    return [max(1, int(np.ceil(2 * np.pi * np.linalg.norm(b) / float(kspacing) - 1e-9)))
+            if atoms.pbc[i] else 1 for i, b in enumerate(rec)]
+
+
+def _aligned_kpts(mole: Atoms, dftb_args: Mapping[str, Any]):
+    """dftb_args with the KSPACING grid, Gamma-centred, instead of PTBP's density grid
+    (periodic structures with a grid; band paths, molecules and ``kpts_fixed`` calls keep
+    theirs)."""
+    ks = _ALIGN["kspacing"]
+    kpts = dftb_args.get("kpts")
+    if ks is None or dftb_args.get("kpts_fixed") or not any(mole.pbc):
+        return dftb_args
+    if kpts is not None and (hasattr(kpts, "kpts") or isinstance(kpts, dict)
+                             or len(kpts) != 3):
+        return dftb_args                               # a path or explicit k-points
+    return dict(dftb_args, kpts={"size": kspacing_grid(mole, ks), "gamma": True})
+
+
+def pydftb_alignment_kwargs() -> dict:
+    """PyDFTB keywords of the DFTB3 and Hubbard alignment options ({} by default)."""
+    out = {}
+    if _ALIGN["third_order"]:
+        out["third_order"] = _ALIGN["third_order"]
+        out["hubbard_derivs"] = dict(_ALIGN["hubbard_derivs"])
+    if _ALIGN["hubbard"]:
+        out["hubbard"] = dict(_ALIGN["hubbard"])
+    return out
+
+
+def check_alignment_engine(engine: str) -> None:
+    """The pydftb-only alignment options refuse the DFTB+ engine."""
+    if engine == "pydftb":
+        return
+    for key, name in (("energy_kind", "--energy-kind sigma0"), ("third_order", "--third-order"),
+                      ("hubbard", "--hubbard")):
+        if _ALIGN[key] != _ALIGN_DEFAULTS[key]:
+            raise ValueError(ALIGNMENT_ENGINE_ERROR.format(name=name))
+
+
 def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | None = None):
     """ASE calculator for one structure.
 
@@ -163,9 +277,12 @@ def make_calculator(mole: Atoms, dftb_args: Mapping[str, Any], engine: str | Non
     shells, PTBP's fitting basis), written out explicitly for DFTB+.
     """
     engine = engine or dftb_args.get("engine") or _SETTINGS["engine"]
+    if _ALIGN["kspacing"] is not None:               # A series: the DFT's k-point grid
+        dftb_args = _aligned_kpts(mole, dftb_args)
     if engine == "dftbplus":
         if _TYPE_SWITCHING:
             raise ValueError(DFTBPLUS_SWITCHING_ERROR)
+        check_alignment_engine(engine)
         from utils.calculator import _dftbplus_ase_calculator
         return _dftbplus_ase_calculator(mole, dftb_args, filling=dftbplus_filling_kwargs())
     if engine == "pydftb":
@@ -256,6 +373,8 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
     if kpts is not None:
         if hasattr(kpts, "kpts"):                       # ASE BandPath
             kspec = {"kpts": kpts.kpts}
+        elif isinstance(kpts, dict) and "size" in kpts:  # a Gamma-centred grid (A series)
+            kspec = {"size": [int(k) for k in kpts["size"]], "gamma": bool(kpts.get("gamma"))}
         elif len(kpts) == 3 and all(int(k) == k for k in kpts):
             kspec = tuple(int(k) for k in kpts)         # Monkhorst-Pack grid
         else:
@@ -267,9 +386,17 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                        dtype=_SETTINGS["pydftb_dtype"])
     if _TYPE_SWITCHING:                              # M5b; without switches the call is as before
         backend["type_switching"] = list(_TYPE_SWITCHING)
-    return PyDFTB(dftb_args.get("slater_p", "./"), max_l=_SETTINGS["max_l"],
+    time_reversal = not isinstance(kspec, dict)
+    cls = PyDFTB
+    if aligned():                                    # A series; by default the call is as before
+        if isinstance(kspec, dict) and "size" in kspec:
+            time_reversal = None                     # a Gamma-centred grid: k and -k merged
+        backend.update(pydftb_alignment_kwargs())
+        if _ALIGN["energy_kind"] == "sigma0":
+            cls = _sigma0_class()
+    return cls(dftb_args.get("slater_p", "./"), max_l=_SETTINGS["max_l"],
                   convergent_scc_only=False, warn_unconverged=False,   # PTBP's contract
-                  kpts=kspec, time_reversal=not isinstance(kspec, dict),
+                  kpts=kspec, time_reversal=time_reversal,
                   smearing=pydftb_smearing(),
                   scc=str(dftb_args.get("SCC", "Yes")).lower() == "yes",
                   scc_tol=1e-5, max_scc=1000,
@@ -278,3 +405,26 @@ def _pydftb_calculator(mole: Atoms, dftb_args: Mapping[str, Any]):
                   shell_resolved=True,          # DFTB+ under ASE (ParserVersion 1) default
                   fd_delta=fd_delta, threads=int(dftb_args.get("blas_threads", 1)),
                   k_threads=int(dftb_args.get("k_threads", 1)), **backend)
+
+
+_SIGMA0_CLASS = None
+
+
+def _sigma0_class():
+    """PyDFTB whose ``energy`` is E(sigma -> 0) = Total energy - TS/2 (DFTB+'s "Extrapolated
+    to 0", VASP's energy(sigma->0), the energy of the A-series scans); free energy and forces
+    as before (the forces are the gradient of the free energy, as in VASP)."""
+    global _SIGMA0_CLASS
+    if _SIGMA0_CLASS is None:
+        from ase import units
+
+        from pydftb.ase_calc import PyDFTB
+
+        class Sigma0PyDFTB(PyDFTB):
+            def _store(self, r, sk, labels):
+                super()._store(r, sk, labels)
+                if not self.excited:
+                    self.results["energy"] = r.e_zero * units.Hartree
+
+        _SIGMA0_CLASS = Sigma0PyDFTB
+    return _SIGMA0_CLASS

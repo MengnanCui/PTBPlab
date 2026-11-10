@@ -89,6 +89,9 @@ SHARED_LOSS_VERSION = 2
 # (its losses used the old factors).  One composition, --multi_element (identical weights) and
 # dataset/reaction: the factors did not change, the meta file is that of before, byte for byte.
 BOLTZMANN_PER_COMPOSITION = "per composition"
+# the modes whose optimisers search (r0_w, r0_d) of every parameter set: the energy losses and
+# the A-series band loss (--mode bands)
+R0_MODES = ('energygeometry', 'dataset', 'reaction', 'bands')
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +229,237 @@ def r0_penalty(r0_w: float, r0_d: float, cov_radius: float) -> float:
     return ((r0_w / (2 * cov_radius) - 1)**2 + 1)**2 * ((r0_d / (4 * cov_radius) - 1)**2 + 2)**2
 
 
+# ---------------------------------------------------------------------------
+# A-series options of the loss (A0 plan, section 8).  Every default is the loss of before, bit
+# for bit (tests/test_loss_options.py compares with the code of commit 66a6498).
+#
+# dataset / reaction: mu = ((1 - c) mu_E + c mu_F [+ W L_band]) P with
+#   mu_E = sum_i w_i |r_i|, r_i the formation-energy error per atom of structure i:
+#   --energy_reduction sum (default, w_i = 1), mean (1/n), group (1/(G n_g): every group, the
+#   structures' info 'family' / 'config_type' / 'group' / chemical formula, counts the same);
+#   --energy_offset per-element: r <- r - A c*, A_ik = n_ik / N_i, c* the per-element offsets
+#   (eV/atom) of the weighted least squares min sum_i w_i (r_i - A_i c)^2;
+#   --force_weight c (default 0.1); mu_F = mean |dF| over the force components, as before.
+# every mode: --band_weight W adds W L_band (pydftb.bandloss on --band_refs, at the step's SK
+#   files, pydftb engine) inside the penalty; --mode bands optimises L_band P alone.
+ENERGY_REDUCTIONS = ("sum", "mean", "group")
+ENERGY_OFFSETS = ("none", "per-element")
+DATASET_FORCE_WEIGHT = 0.1        # c of the dataset/reaction loss (0.1 since PTBP's first version)
+OFFSET_RCOND = 1e-10              # rank cut-off of the per-element offset least squares
+
+
+def _arg(args, name, default):
+    value = getattr(args, name, None)
+    return default if value is None else value
+
+
+def dataset_options(args) -> tuple:
+    """(energy reduction, energy offset, force weight c) of the dataset/reaction loss."""
+    reduction = str(_arg(args, 'energy_reduction', 'sum')).lower()
+    offset = str(_arg(args, 'energy_offset', 'none')).lower().replace('_', '-')
+    c = _arg(args, 'force_weight', DATASET_FORCE_WEIGHT)
+    if reduction not in ENERGY_REDUCTIONS:
+        raise ValueError(f"energy_reduction must be one of {ENERGY_REDUCTIONS}, not {reduction!r}")
+    if offset not in ENERGY_OFFSETS:
+        raise ValueError(f"energy_offset must be one of {ENERGY_OFFSETS}, not {offset!r}")
+    if not 0.0 <= float(c) <= 1.0:
+        raise ValueError(f"force_weight must be in [0, 1], not {c!r}")
+    return reduction, offset, c
+
+
+def band_weight(args) -> float:
+    """W of the band term (0: none)."""
+    w = float(_arg(args, 'band_weight', 0.0))
+    if w < 0.0:
+        raise ValueError(f"band_weight must be >= 0, not {w!r}")
+    return w
+
+
+def structure_group(atoms) -> str:
+    """The group of a structure for ``--energy_reduction group``: its info 'family', else
+    'config_type', else 'group', else its chemical formula."""
+    for key in ('family', 'config_type', 'group'):
+        value = atoms.info.get(key)
+        if value not in (None, ''):
+            return str(value)
+    return atoms.get_chemical_formula()
+
+
+def reduction_weights(structures, reduction: str) -> np.ndarray:
+    """w_i of mu_E = sum_i w_i |r_i| (see the A-series options above)."""
+    n = len(structures)
+    if reduction == 'sum':
+        return np.ones(n)
+    if reduction == 'mean':
+        return np.full(n, 1.0 / n)
+    if reduction == 'group':
+        from collections import Counter
+        groups = [structure_group(a) for a in structures]
+        counts = Counter(groups)
+        return np.array([1.0 / (len(counts) * counts[g]) for g in groups])
+    raise ValueError(f"energy_reduction must be one of {ENERGY_REDUCTIONS}, not {reduction!r}")
+
+
+def offset_design(structures) -> tuple:
+    """(A, Z): A_ik = (atoms of element Z_k in structure i) / N_i, Z sorted."""
+    zs = sorted({int(z) for a in structures for z in a.numbers})
+    a = np.array([[np.count_nonzero(np.asarray(s.numbers) == z) / len(s) for z in zs]
+                  for s in structures], dtype=float)
+    return a.reshape(len(structures), len(zs)), zs
+
+
+def offset_projector(structures, weights) -> np.ndarray:
+    """M with M r = r - A c*, c* = argmin sum_i w_i (r_i - A_i c)^2 (a constant matrix, so the
+    derivatives of the residuals go through it too)."""
+    a, _ = offset_design(structures)
+    sw = np.sqrt(np.asarray(weights, float))
+    return np.eye(len(a)) - a @ np.linalg.pinv(sw[:, None] * a, rcond=OFFSET_RCOND) * sw[None, :]
+
+
+def element_offsets(structures, residuals, weights) -> dict:
+    """{Z: c*_Z} (eV/atom) of the per-element offset least squares (for the log)."""
+    a, zs = offset_design(structures)
+    sw = np.sqrt(np.asarray(weights, float))
+    c = np.linalg.pinv(sw[:, None] * a, rcond=OFFSET_RCOND) @ (sw * np.asarray(residuals, float))
+    return {int(z): float(v) for z, v in zip(zs, c)}
+
+
+def dataset_energy_term(structures, rel_b, rel_d, reduction: str, offset: str) -> tuple:
+    """(|r_i| per structure, mu_E) of the dataset/reaction loss with these options."""
+    r = np.array(rel_b, dtype=float) - np.array(rel_d, dtype=float)
+    w = reduction_weights(structures, reduction)
+    if offset == 'per-element':
+        r = offset_projector(structures, w) @ r
+    diffs = np.abs(r)
+    return diffs, np.sum(w * diffs)
+
+
+def band_kpoints(atoms, ref, kpt_density: float):
+    """The SCC k-points of a band reference's structure: its own grid (meta ``kpts``, or meta
+    ``kspacing`` with VASP's rule, ``"gamma"``: the Gamma point), else ``--kspacing``, else
+    PTBP's k-point density rule; None (Gamma) for molecules."""
+    from utils import engines
+    if not np.any(atoms.pbc):
+        return None
+    meta = getattr(ref, 'meta', None) or {}
+    kp = meta.get('kpts')
+    if kp is not None and not (isinstance(kp, str) and kp.lower() == 'gamma'):
+        return {"size": [int(v) for v in (kp.lower().split('x') if isinstance(kp, str) else kp)],
+                "gamma": True}
+    ks = meta.get('kspacing')
+    if ks is None:
+        ks = engines.alignment()['kspacing']
+    if isinstance(ks, str):
+        if ks.strip().lower() == 'gamma':
+            return None
+        ks = float(ks)
+    if ks is not None:
+        if float(ks) == 0.0:
+            return None
+        return {"size": engines.kspacing_grid(atoms, float(ks)), "gamma": True}
+    from utils.calculator import monkhorstpack2kptdensity
+    _, grid = monkhorstpack2kptdensity(atoms, kpt_density)
+    return tuple(int(k) for k in grid)
+
+
+def band_calculator(skdir: str, atoms, ref, kpt_density: float, attempt: int = 0):
+    """pydftb for the SCC of a band reference's structure at the SK files of ``skdir``, with
+    the run's engine settings (smearing, max_l, types, DFTB3/Hubbard alignment), no repulsive;
+    ``attempt`` 1 and 2 are slower-mixing retries of a failed SCC (as the A-series scans)."""
+    from pydftb.ase_calc import PyDFTB
+
+    from utils import engines
+    opts = dict(max_l=engines.settings()['max_l'], kpts=band_kpoints(atoms, ref, kpt_density),
+                smearing=engines.pydftb_smearing(), repulsive='none', scc_tol=1e-6,
+                max_scc=300, shell_resolved=True, convergent_scc_only=True,
+                **engines.pydftb_alignment_kwargs())
+    if engines.type_switching():
+        opts['type_switching'] = list(engines.type_switching())
+    if attempt == 1:
+        opts.update(mixing=0.05, max_scc=1000)
+    elif attempt >= 2:
+        opts.update(mixer='anderson', mixing=0.02, max_scc=2000)
+    return PyDFTB(skdir, **opts)
+
+
+def band_results(refs, skdir: str, kpt_density: float, settings) -> list:
+    """pydftb.bandloss.compare of every reference (loss NaN and the error for a failed SCC)."""
+    from pydftb.bandloss import compare, dftb_bands
+    out = []
+    for ref in refs:
+        group = ref.meta.get('group') or ref.name
+        err = None
+        for attempt in range(3):
+            atoms = ref.atoms()
+            if atoms is None:
+                err = "the reference has no structure"
+                break
+            try:
+                calc = band_calculator(skdir, atoms, ref, kpt_density, attempt)
+                atoms.calc = calc
+                atoms.get_potential_energy()
+                out.append(compare(ref, dftb_bands(calc, atoms, ref), settings, group=group))
+                err = None
+                break
+            except Exception as exc:            # noqa: BLE001  (retried, then recorded)
+                err = f"{type(exc).__name__}: {exc}"
+        if err is not None:
+            out.append({"name": ref.name, "group": group, "loss": float('nan'), "error": err})
+    return out
+
+
+def _sigma_search(objective, n, lo, hi, grid=11, maxiter=25):
+    """min over sigma (n values in [lo, hi]) of ``objective``: a shared 1-D grid, one sweep of
+    per-set grids, then bounded L-BFGS-B, always within the bounds (``utils.accuracy.
+    sigma_search``, copied so that the loss does not import the scan module).  Returns
+    (sigma (n,), value, number of evaluations)."""
+    g = np.linspace(lo, hi, int(grid))
+    seen = {}
+
+    def f(s):
+        s = np.clip(np.atleast_1d(np.asarray(s, float)), lo, hi)
+        key = tuple(np.round(s, 10))
+        if key not in seen:
+            v = objective(s)
+            seen[key] = v if np.isfinite(v) else 1e12
+        return seen[key]
+
+    best = min((f(np.full(n, v)), tuple(np.full(n, v))) for v in g)
+    s = np.array(best[1])
+    if n > 1:
+        for i in range(n):
+            for v in g:
+                t = s.copy()
+                t[i] = v
+                if f(t) < f(s):
+                    s = t
+    if n:
+        res = minimize(f, s, method="L-BFGS-B", bounds=[(lo, hi)] * n,
+                       options={"maxiter": int(maxiter)})
+        if f(res.x) < f(s):
+            s = np.clip(res.x, lo, hi)
+    return s, f(s), len(seen)
+
+
+def _par_out_point(path, x=None):
+    """(sigma list, mu) of the par.out line of a step at the radii ``x`` (one parameter set:
+    r0_w, r0_d, sigma_rep, kxc, cov_radius, mu); (None, None) if there is none."""
+    if x is None or not os.path.exists(path):
+        return None, None
+    found = (None, None)
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith('#'):
+                continue
+            try:
+                vals = [float(v) for v in line.split(',')]
+            except ValueError:
+                continue
+            if len(vals) == 6 and abs(vals[0] - x[0]) < 1e-7 and abs(vals[1] - x[1]) < 1e-7:
+                found = ([vals[2]], vals[5])
+    return found
+
+
 class Loss():
     """
     For storing multiple loss functions and related functions
@@ -267,6 +501,10 @@ class Loss():
         # during Bayesian_optimization: the checkpoint's meta file and the index of the next
         # evaluation in its history, to record the failed ones there (None: no checkpoint)
         self._bo_log = None
+        # A series: W L_band of the current BO step (0.0 without --band_weight) and the band
+        # references (loaded on first use)
+        self._band_term = 0.0
+        self._band_refs = None
 
     @property
     def typed(self) -> bool:
@@ -280,6 +518,8 @@ class Loss():
         NO_SUCCESS_FAILURE per structure of the loss in dataset/reaction (mu_E is a sum over
         the structures)."""
         mode = str(getattr(self.args_input, 'optimization_option', '') or '').lower()
+        if mode in ('dataset', 'reaction') and dataset_options(self.args_input)[0] != 'sum':
+            return NO_SUCCESS_FAILURE            # A series: mu_E is a mean (per structure)
         if mode in ('dataset', 'reaction'):
             eos = max(1, int(getattr(self.args_input, 'eos_points', 1) or 1))
             return NO_SUCCESS_FAILURE * max(1, int(len(self.dft_input) / eos) * eos)
@@ -557,6 +797,9 @@ class Loss():
                      'SCC': 'Yes',
                      'slater_p': './',
                      'calc_type': 'static'}
+        from utils.engines import alignment as _alignment
+        if _alignment()['kspacing'] is not None:     # A series: an isolated atom keeps Gamma
+            dftb_args['kpts_fixed'] = True
 
         E0s = {}
         # one-atom runs: serial, on one thread whenever the run has a parallel plan
@@ -638,8 +881,19 @@ class Loss():
         _, dftb_energy_per_atom_relative = self.get_formation_energy(dftb_full, E0_dftb, '_')
         _, dft_energy_per_atom_relative = self.get_formation_energy(dft_incopy, self.args_input.E0s, '_')
 
-        diffs = np.abs(np.array(dftb_energy_per_atom_relative) - np.array(dft_energy_per_atom_relative))
-        delta_energy_per_atom = np.sum(diffs)
+        reduction, offset, c = dataset_options(self.args_input)
+        if reduction == 'sum' and offset == 'none':
+            diffs = np.abs(np.array(dftb_energy_per_atom_relative) - np.array(dft_energy_per_atom_relative))
+            delta_energy_per_atom = np.sum(diffs)
+        else:                        # A series: mean or group reduction, per-element offsets
+            diffs, delta_energy_per_atom = dataset_energy_term(
+                dft_incopy, dftb_energy_per_atom_relative, dft_energy_per_atom_relative,
+                reduction, offset)
+            if offset == 'per-element':
+                raw = np.array(dftb_energy_per_atom_relative) - np.array(dft_energy_per_atom_relative)
+                print("[offsets] per element (eV/atom): " + ", ".join(
+                    f"{chemical_symbols[z]} {v:+.6f}" for z, v in element_offsets(
+                        dft_incopy, raw, reduction_weights(dft_incopy, reduction)).items()))
 
         mu_E = delta_energy_per_atom
 
@@ -654,9 +908,12 @@ class Loss():
         # Penalty for overlarge parameters (regularization)
         penalty = self.penalty(r0_w, r0_d)
 
-        c = 0.1
-
-        mu = (mu_E * (1-c) + mu_F * c) * penalty
+        # c: the force weight (--force_weight, default 0.1), from dataset_options above
+        band = getattr(self, '_band_term', 0.0)
+        if band:                     # A series: + W L_band (--band_weight), inside the penalty
+            mu = (mu_E * (1-c) + mu_F * c + band) * penalty
+        else:
+            mu = (mu_E * (1-c) + mu_F * c) * penalty
 
         with  open(self.args_input.log_file, 'a') as output:
             output.write(f"{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep[0]:15.8f}, {0.0:20.8e}, {self.cov_radius:15.8f}, {mu_E:15.8f}, {mu_F:20.8f}, {0.0: 20.8f}, {penalty:15.5f}, {mu:25.11f}\n")
@@ -878,7 +1135,11 @@ class Loss():
 
         # Combine mu_E and mu_V
         c = 0.5
-        mu = (c * mu_V + (1 - c) * mu_E) * penalty 
+        band = getattr(self, '_band_term', 0.0)
+        if band:                     # A series: + W L_band (--band_weight), inside the penalty
+            mu = (c * mu_V + (1 - c) * mu_E + band) * penalty
+        else:
+            mu = (c * mu_V + (1 - c) * mu_E) * penalty
 
 
         # Log the results
@@ -1175,6 +1436,7 @@ class Loss():
         # SKF parameters changed → invalidate the per-iter E0_dftb cache so
         # the inner brute scan recomputes against the new band structure.
         self._E0_dftb_cache = {}
+        self._band_term = 0.0                    # A series: this step's W L_band (below)
 
         grad = getattr(self, 'grad_request', None)
         opt_directory = self.path / self.args_input.results_dir / (
@@ -1217,6 +1479,8 @@ class Loss():
             # M5b-2: structures without DFTB results (hotcent wrote no SKF for them) make the
             # point a failure, as when none has results
             self._check_complete_results()
+            # A series: W L_band at this step's SK files (0.0 without --band_weight)
+            self._band_term = self.band_term()
 
             # dft_subincopy_final = ase.io.read('dft_final.xyz', ':'); dftb_bandstructure_final = ase.io.read('dftb_band.xyz', ':')
             t_dftb = perf_counter()
@@ -1485,6 +1749,242 @@ class Loss():
 
         return mu
 
+    # =========================================================
+    # A series: the band term, --mode bands, --sigma_finish (A0 plan, section 8)
+    # =========================================================
+    def band_refs(self) -> list:
+        """The band references of --band_refs (pydftb.bandref.load_refs), loaded once."""
+        if getattr(self, '_band_refs', None) is None:
+            from pydftb.bandref import load_refs
+            patterns = getattr(self.args_input, 'band_refs', None)
+            if not patterns:
+                raise ValueError("--band_weight and --mode bands need --band_refs (BandRef JSON "
+                                 "files or glob patterns)")
+            refs = load_refs(list(patterns) if not isinstance(patterns, str) else [patterns])
+            if not refs:
+                raise ValueError(f"--band_refs {patterns}: no BandRef files")
+            self._band_refs = refs
+        return self._band_refs
+
+    def band_settings(self):
+        """pydftb.bandloss.BandSettings of --band_settings (JSON; default: the A-series ones)."""
+        from pydftb.bandloss import BandSettings
+        spec = getattr(self.args_input, 'band_settings', None)
+        if isinstance(spec, str):
+            spec = json.loads(spec) if spec.strip() else None
+        return BandSettings.from_dict(spec)
+
+    def band_loss_value(self, skdir: str = '.') -> float:
+        """L_band (eV, pydftb.bandloss.band_loss: the mean over groups) at the SK files of
+        ``skdir`` with the pydftb engine; writes ``band_loss.json`` there.  A reference whose
+        SCC fails three times makes the point a failure (LossFailure)."""
+        from pydftb.bandloss import band_loss
+        t0 = perf_counter()
+        res = band_results(self.band_refs(), skdir, float(getattr(self.args_input, 'kpt_density', 5.0)),
+                           self.band_settings())
+        value = band_loss(res)
+        with open(os.path.join(skdir, 'band_loss.json'), 'w') as fh:
+            json.dump({"band_loss_eV": value, "band_weight": band_weight(self.args_input),
+                       "seconds": round(perf_counter() - t0, 2), "per_structure": res}, fh,
+                      indent=1, default=lambda o: o.item() if hasattr(o, 'item') else str(o))
+        bad = [r for r in res if not math.isfinite(float(r.get('loss', float('nan'))))]
+        if bad or not math.isfinite(float(value)):
+            raise LossFailure(f"the band loss failed for {len(bad)} of {len(res)} references: "
+                              + "; ".join(f"{r['name']}: {r.get('error', 'NaN loss')}" for r in bad[:3]))
+        print(f"[bands] L_band = {value:.6f} eV ({len(res)} references, "
+              f"{perf_counter() - t0:.1f} s)")
+        return float(value)
+
+    def band_term(self) -> float:
+        """W L_band of this step's SK files (the current directory); 0.0 without --band_weight."""
+        w = band_weight(self.args_input)
+        if w == 0.0:
+            return 0.0
+        return w * self.band_loss_value('.')
+
+    def Bands(self, conf_parameters: list, xc: str, superposition: str) -> float:
+        """--mode bands: the band loss alone at these radii, mu = L_band P (no repulsive, no
+        DFTB stage); the step's files as for the other modes (results/opt_<r0_w>_<r0_d>)."""
+        r0_w, r0_d, p = conf_parameters
+        kxc, sigma_rep = 0.0, 0.0
+        opt_directory = self.path / self.args_input.results_dir / f"opt_{r0_w:.3f}_{r0_d:.3f}"
+        opt_directory.mkdir(exist_ok=True, parents=True)
+        os.chdir(opt_directory)
+        t_ini = perf_counter()
+        confinement_r0, confinement_p = self.set_parameters(conf_parameters)
+        print(f"Confinement_r0:{confinement_r0}, Confinement_p:{confinement_p}")
+        self.hp.set_variables(confinement_r0, confinement_p, xc=xc,
+                              superposition=self.args_input.superposition)
+        penalty = self.penalty(r0_w, r0_d)
+        try:
+            self.hp.full_hotcent(superposition=superposition, opt_elem=self.opt_elem)
+            t_hotcent = perf_counter()
+            l_band = self.band_loss_value('.')
+            mu = l_band * penalty
+            if not math.isfinite(float(mu)):
+                raise LossFailure(f"the loss is {mu}")
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.7f}, {mu:25.11f}\n')
+            with open(self.args_input.log_file, 'a') as output:
+                output.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.8f}, {l_band:15.8f}, {0.0:20.8f}, {0.0: 20.8f}, {penalty:15.5f}, {mu:25.11f}\n')
+            t_end = perf_counter()
+            self.step_timings = {'hotcent': t_hotcent - t_ini, 'dftb': t_end - t_hotcent,
+                                 'physrep': 0.0, 'data': 0.0, 'total': t_end - t_ini}
+            print(f"\nTime:\nHotcent: {t_hotcent - t_ini}\nBands: {t_end - t_hotcent}\n"
+                  f"Total: {t_end - t_ini}")
+            self._record_success(mu)
+            return mu
+        except (RuntimeError, AssertionError, UnboundLocalError,
+                ase.io.formats.UnknownFileTypeError) as error:
+            print("Error:", error)
+            mu = self._record_failure([r0_w, r0_d], error)
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.7f}, {mu:25.11f}\n')
+            with open(self.args_input.log_file, 'a') as output:
+                output.write(f'{r0_w:15.8f}, {r0_d:15.8f}, {sigma_rep:15.8f}, {kxc:20.8e}, {self.cov_radius:15.8f}, {10.0:15.8f}, {0.0:20.8f}, {0.0: 20.8f}, {penalty:15.5f}, {mu:25.11f}\n')
+            return mu
+
+    def BandsTypes(self, x, xc: str, superposition: str) -> float:
+        """:meth:`Bands` with parameters per type (M5b): the radii of every parameter set."""
+        model = self.types
+        x = [float(v) for v in x]
+        opt_directory = self.path / self.args_input.results_dir / model.directory_name(x, 3)
+        opt_directory.mkdir(exist_ok=True, parents=True)
+        os.chdir(opt_directory)
+        t_ini = perf_counter()
+        confinement_r0, confinement_p = self.set_parameters(x)
+        print(f"Confinement_r0:{confinement_r0}, Confinement_p:{confinement_p}")
+        self.hp.set_variables(confinement_r0, confinement_p, xc=xc,
+                              superposition=self.args_input.superposition,
+                              elements=model.element_of)
+        penalty = model.penalty(x)
+        svec = [0.0] * model.n_sigma
+        try:
+            self.hp.full_hotcent(superposition=superposition, opt_elem=[])
+            t_hotcent = perf_counter()
+            l_band = self.band_loss_value('.')
+            mu = l_band * penalty
+            if not math.isfinite(float(mu)):
+                raise LossFailure(f"the loss is {mu}")
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(model.par_line(x, svec, penalty, mu))
+            with open(self.args_input.log_file, 'a') as output:
+                output.write(model.log_line(x, svec, l_band, 0.0, 0.0, penalty, mu))
+            t_end = perf_counter()
+            self.step_timings = {'hotcent': t_hotcent - t_ini, 'dftb': t_end - t_hotcent,
+                                 'physrep': 0.0, 'data': 0.0, 'total': t_end - t_ini}
+            self._record_success(mu)
+            return mu
+        except (RuntimeError, AssertionError, UnboundLocalError,
+                ase.io.formats.UnknownFileTypeError) as error:
+            print("Error:", error)
+            mu = self._record_failure(x, error)
+            with open(self.args_input.para_file, 'a') as para:
+                para.write(model.par_line(x, svec, penalty, mu))
+            with open(self.args_input.log_file, 'a') as output:
+                output.write(model.log_line(x, svec, 10.0, 0.0, 0.0, penalty, mu))
+            return mu
+
+    def Loss_Bands(self, parameters: list) -> float:
+        """--mode bands: the loss at the radii ``parameters`` ([r0_w, r0_d], or every
+        parameter set's with parameters per type)."""
+        superposition = self.args_input.superposition
+        xc = self.args_input.xc
+        if self.typed:
+            return self.BandsTypes(list(parameters), xc=xc, superposition=superposition)
+        r0_w, r0_d = parameters
+        return self.Bands([r0_w, r0_d, 2.0], xc=xc, superposition=superposition)
+
+    def _band_term_at(self, directory: str) -> float:
+        """W L_band of a finished step (its band_loss.json; computed if missing)."""
+        w = band_weight(self.args_input)
+        if w == 0.0:
+            return 0.0
+        path = os.path.join(directory, 'band_loss.json')
+        if os.path.exists(path):
+            with open(path) as fh:
+                return w * float(json.load(fh)["band_loss_eV"])
+        return w * self.band_loss_value(directory)
+
+    def sigma_finish(self, x, directory, mu_before=None, write: bool = True, grid: int = 21,
+                     maxiter: int = 50) -> dict:
+        """--sigma_finish: at the radii ``x`` (the optimiser's best point), a finer search of
+        sigma_rep on the step's files in ``directory`` (no hotcent, no DFTB: the loss as
+        :func:`utils.loss_grad.mu` recomputes it): a ``grid``-point grid over the --sigma_range
+        bounds (every set on its own with several), bounded L-BFGS-B and, for one sigma, a
+        bounded Brent polish.  ``mu_before``: the optimiser's loss there (default: the step's
+        par.out).  With ``write`` and a lower loss, the step's SKF files and dftb_full.xyz (and
+        EOS files) are rewritten at the new sigma.  Returns {x, sigma, mu, sigma_before,
+        mu_before, improved, evaluations, ...}."""
+        from utils import loss_grad
+        directory = os.path.abspath(str(directory))
+        x = [float(v) for v in x]
+        cwd = os.getcwd()
+        os.chdir(directory)
+        try:
+            self._E0_dftb_cache = {}           # the isolated atoms at this step's SK files
+            self._band_term = self._band_term_at(directory)
+            if self.typed:
+                step = loss_grad.StepData.from_files(self, x=x, directory=directory)
+                n = int(self.types.n_sigma)
+            else:
+                step = loss_grad.StepData.from_files(self, x[0], x[1], directory=directory)
+                n = 1
+            lo, hi = self.sigma_range()
+
+            def objective(s):
+                s = [float(v) for v in np.atleast_1d(s)]
+                with loss_grad._quiet():
+                    return float(loss_grad.mu(step, s if self.typed else s[0]))
+
+            before_sigma, par_mu = _par_out_point(os.path.join(directory, self.args_input.para_file),
+                                                  None if self.typed else x)
+            before_mu = float(mu_before) if mu_before is not None else par_mu
+            s, f, evaluations = _sigma_search(objective, n, lo, hi, grid=grid, maxiter=maxiter)
+            if n == 1:
+                from scipy.optimize import minimize_scalar
+                width = (hi - lo) / max(1, grid - 1)
+                a, b = max(lo, float(s[0]) - width), min(hi, float(s[0]) + width)
+                res = minimize_scalar(lambda v: objective([v]), bounds=(a, b), method='bounded',
+                                      options={'xatol': 1e-8})
+                evaluations += int(res.nfev)
+                if float(res.fun) < f:
+                    s, f = np.array([float(res.x)]), float(res.fun)
+            out = {"x": x, "sigma": [float(v) for v in s], "mu": float(f),
+                   "sigma_before": before_sigma, "mu_before": before_mu,
+                   "improved": bool(before_mu is None or f < before_mu),
+                   "evaluations": int(evaluations), "band_term": float(self._band_term),
+                   "bounds": [lo, hi], "grid": int(grid)}
+            if write and out["improved"]:
+                self._write_step_at_sigma(x, [float(v) for v in s], step)
+                out["written"] = True
+            return out
+        finally:
+            os.chdir(cwd)
+
+    def _write_step_at_sigma(self, x, svec, step) -> None:
+        """The step's SKF repulsive and dftb_full.xyz (and EOS files with types) at sigma, in the
+        current directory, as the BO step writes them at its sigma*."""
+        if self.typed:
+            self._typed_step = step
+            self._write_typed_step(x, svec)
+            return
+        sigma = float(svec[0])
+        numbers, exclusive, _, _ = data.get_elements_from_dataset(self.dft_input, self.opt_elem)
+        if self.args_input.multi_element is None:
+            scale = [sigma] * len(numbers)
+        else:
+            scale = [get_PTBP()[chemical_symbols[z]]['sigma_rep'] for z in exclusive] + [sigma]
+        pr = physrep(numbers, rmin=0.5, rmax=20.0, npoints=700, scale_cov=scale,
+                     k_xc=[0.0] * len(numbers))
+        if self.args_input.multi_element is not None:
+            pr.write_specific_skf(self.opt_elem, 'ptbp')
+        else:
+            pr.write_skf('ptbp')
+        dft_final = ase.io.read('dft_final.xyz', ':')
+        band = ase.io.read('dftb_band.xyz', ':')
+        ase.io.write('dftb_full.xyz', data.get_full_dftb(band, dft_final, pr, True))
+
 
 
     # =========================================================
@@ -1650,6 +2150,7 @@ class Loss():
         mode = self.args_input.optimization_option.lower()
         kxc = 0.0
         self._E0_dftb_cache = {}
+        self._band_term = 0.0                    # A series: this step's W L_band (below)
         grad = getattr(self, 'grad_request', None)
         opt_directory = self.path / self.args_input.results_dir / model.directory_name(
             x, 3 if grad is None else 6)
@@ -1677,6 +2178,8 @@ class Loss():
             # every structure needs DFTB results (hotcent may write no tables for a type at
             # extreme radii): none or only some is a failure (M5b-2; M5b failed on none only)
             self._check_complete_results()
+            # A series: W L_band at this step's SK files (0.0 without --band_weight)
+            self._band_term = self.band_term()
 
             svec, mu = self.Repulsion_optimization_types(x, *self.sigma_range())
             if not math.isfinite(float(mu)):                  # M5b-2: a failure, not a loss
@@ -1749,6 +2252,10 @@ class Loss():
             print(f"Warning: search bounds use r_cov = {cov_radius} Bohr, "
                   f"the loss penalty {self.cov_radius} Bohr")
         opt = getattr(self.args_input, 'optimizer', 'bo')
+        mode = str(getattr(self.args_input, 'optimization_option', '') or '').lower()
+        if opt in ('gradient', 'bo_grad') and (mode == 'bands' or band_weight(self.args_input)):
+            raise SystemExit("--optimizer gradient/bo_grad: the band loss has no r0 gradient "
+                             "here; use bo, parallel_bo or pso")
         if opt == 'bo':
             return self.Bayesian_optimization(cov_radius, checkpoint_saver, n_calls)
         if opt == 'parallel_bo':
@@ -1779,20 +2286,21 @@ class Loss():
         wants raw lower/upper arrays).
         """
         opt_opt = self.args_input.optimization_option.lower()
-        if self.typed and opt_opt in ('energygeometry', 'dataset', 'reaction'):
+        if self.typed and opt_opt in R0_MODES:
             # M5b: (r0_w, r0_d) of every parameter set, bounds from the set's covalent radius
             lo, hi = self.types.bounds()
             dims = [Real(name=n, low=a, high=b, prior='uniform')
                     for n, a, b in zip(self.types.dimension_names(), lo, hi)]
-            return dims, lo, hi, self.Loss_EnergyGeometry
-        if opt_opt in ('energygeometry', 'dataset', 'reaction'):
+            return dims, lo, hi, (self.Loss_Bands if opt_opt == 'bands'
+                                  else self.Loss_EnergyGeometry)
+        if opt_opt in R0_MODES:
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius
             r0_d_lower, r0_d_upper = 3.4, 9.0 * cov_radius
             dims = [Real(name='r0_w', low=r0_w_lower, high=r0_w_upper, prior='uniform'),
                     Real(name='r0_d', low=r0_d_lower, high=r0_d_upper, prior='uniform')]
             lo = [r0_w_lower, r0_d_lower]
             hi = [r0_w_upper, r0_d_upper]
-            cost_fn = self.Loss_EnergyGeometry
+            cost_fn = self.Loss_Bands if opt_opt == 'bands' else self.Loss_EnergyGeometry
         else:  # bandstructure
             r0_lower, r0_upper = 2.1, 7.0 * cov_radius
             p_lower, p_upper = 1.01, 11.0
@@ -2036,13 +2544,13 @@ class Loss():
         failed_before = []                   # failed evaluations of a resumed checkpoint (M5b-2)
         if os.path.exists(self.args_input.checkpoint):
             loaded_meta = None
-            if mode in ('energygeometry', 'dataset', 'reaction'):
+            if mode in R0_MODES:
                 loaded_meta = self._check_checkpoint_meta(meta_path)
             res = load(self.args_input.checkpoint)
             x0 = res.x_iters
             y0 = res.func_vals
             done = len(x0)
-            if mode in ('energygeometry', 'dataset', 'reaction'):
+            if mode in R0_MODES:
                 # the worst successful loss starts from the loaded successes; the failures are
                 # those the meta file records, or the values 97-99 of an older checkpoint
                 y0, failed_before = self._resume_failures(x0, y0, loaded_meta)
@@ -2053,7 +2561,7 @@ class Loss():
             print(f"[checkpoint] Resuming from {self.args_input.checkpoint}: "
                   f"{done} prior iteration(s) loaded; will run {n_calls} more "
                   f"(total stored: {done + n_calls}).")
-        elif self.typed and mode in ('energygeometry', 'dataset', 'reaction'):
+        elif self.typed and mode in R0_MODES:
             # M5b: every parameter set starts at its declared start, PTBP's table, or
             # r_cov x (3, 5), inside the box (utils.typemodel)
             x0 = self.types.seed()
@@ -2073,7 +2581,7 @@ class Loss():
                 if (len(symbols) == 1
                         and symbols[0] in get_PTBP()
                         and self.args_input.optimization_option.lower() in
-                            ('energygeometry', 'dataset', 'reaction')):
+                            R0_MODES):
                     p = get_PTBP()[symbols[0]]
                     x0 = [p['r0_w'], p['r0_d']]
                     print(f"BO seed from PTBP[{symbols[0]}]: "
@@ -2117,11 +2625,11 @@ class Loss():
             # run without failures writes the meta file of before)
             json.dump(dict(meta, failed_evaluations=list(failed_before)) if failed_before
                       else meta, fh)
-        if mode in ('energygeometry', 'dataset', 'reaction'):
+        if mode in R0_MODES:
             self._bo_log = {'meta_path': meta_path, 'meta': meta, 'failed': list(failed_before),
                             'next': len(x0) if y0 is not None else 0}
 
-        if self.typed and mode in ('energygeometry', 'dataset', 'reaction'):
+        if self.typed and mode in R0_MODES:
             dimensions, lo, hi, cost_fn = self._bo_dimensions_and_cost(cov_radius)
             print("Bounds: " + ", ".join(f"{d.name}: {a} ~ {b:.6g}"
                                          for d, a, b in zip(dimensions, lo, hi)))
@@ -2136,7 +2644,7 @@ class Loss():
                                   random_state=123)
             finally:
                 self._end_bo_log()
-        elif self.args_input.optimization_option.lower() in ('energygeometry', 'dataset', 'reaction'):
+        elif self.args_input.optimization_option.lower() in R0_MODES:
             r0_w_lower, r0_w_upper = 2.1, 7.0 * cov_radius            # Wavefunction cutoff
             r0_d_lower, r0_d_upper = 3.4, 9.0 * cov_radius            # Density function cutoff
             print(f"Bounds: r0_w: {r0_w_lower} ~ {r0_w_upper}, r0_d: {r0_d_lower} ~ {r0_d_upper}")
@@ -2146,7 +2654,8 @@ class Loss():
             dimensions = [dr0_w, dr0_d]
 
             try:
-                res = gp_minimize(func=self.Loss_EnergyGeometry,
+                res = gp_minimize(func=(self.Loss_Bands if mode == 'bands'
+                                        else self.Loss_EnergyGeometry),
                                 dimensions=dimensions,
                                 n_calls=n_calls,
                                 acq_func="EI",

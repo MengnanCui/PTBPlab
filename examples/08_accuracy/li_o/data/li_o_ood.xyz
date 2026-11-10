@@ -1,5 +1,5 @@
 80
-Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_init group=iface name=iface_init family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" kpts=4x4x1 energy=-277.4666588 free_energy=-277.4666588 pbc="T T T"
+Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_init group=iface name=iface_init family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-277.4666588 free_energy=-277.4666588 pbc="T T T"
 Li       0.00000000       4.90333000       8.09007000       0.00000000      -0.00000100      -0.82681300
 Li       0.00000000       3.26888000      13.76388000       0.00000000      -0.00000100       0.00844700
 Li       0.00000000       0.00000000      13.76388000      -0.00000000       0.00000000       0.00844600
@@ -81,7 +81,7 @@ O        3.26888000       3.26888000       4.62290000      -0.00000000       0.0
 O        4.90333000       4.90333000       6.93435000      -0.00000000      -0.00000100       0.57277800
 O        0.00000000       0.00000000       0.00000000      -0.00000000      -0.00000000      -0.39787000
 80
-Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_md02 group=iface name=iface_md02 family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" kpts=4x4x1 energy=-174.54815803 free_energy=-174.54815803 pbc="T T T"
+Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_md02 group=iface name=iface_md02 family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-174.54815803 free_energy=-174.54815803 pbc="T T T"
 Li       6.13925000       4.12547000       6.35299000       1.76097200       1.20982600       3.40859300
 Li       6.28090000       0.92162000      18.78189000      -0.31180300      -0.38430700       0.07038200
 Li       5.09492000       5.21184000      15.03027000      -0.14157800      -0.20715600       0.11143800
@@ -163,7 +163,7 @@ O        4.77211000       5.04058000       7.54229000       0.02354600       0.3
 O        5.02334000       5.01821000       3.27206000      -1.06274200      -0.21291200      -0.24307900
 O        0.12844000       0.02121000      24.48897000      -0.18902100      -0.21954700       1.14516900
 80
-Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_md04 group=iface name=iface_md04 family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" kpts=4x4x1 energy=-162.50386861 free_energy=-162.50386861 pbc="T T T"
+Lattice="6.537767877 0.0 0.0 0.0 6.537767877 0.0 0.0 0.0 24.798392106" Properties=species:S:1:pos:R:3:forces:R:3 structure_name=iface_md04 group=iface name=iface_md04 family=iface role=ood kspacing=0.25 source=examples/07/data/interface.xyz dft="VASP 6.6.0 PBE (potpaw_PBE.54 Li_sv, O), ENCUT 800, PREC Accurate, ISMEAR 0, SIGMA 0.05, ISPIN 1" energy=-162.50386861 free_energy=-162.50386861 pbc="T T T"
 Li       0.27205000       3.90129000       6.39292000       1.19228200      -0.09923300       3.45540200
 Li       0.15305000       1.18532000      18.79525000       0.03060600       0.03840900       0.02967300
 Li       4.81161000       5.02962000      15.23833000      -0.20132400      -0.06086400       0.07741600

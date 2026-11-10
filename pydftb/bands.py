@@ -76,6 +76,8 @@ class States:
     projections: np.ndarray | None = None   # (n_spin, n_k, n_orb, n_state) Re[c* (S c)]
                                             # (two-component: summed over both spins)
     region_weights: dict | None = None      # P2: {DFTB+ region file: (n_spin, n_k, n_state)}
+    vectors: np.ndarray | None = None       # (n_spin, n_k, n_state, n_state) eigenvectors as
+                                            # columns, c^H S c = 1 (eigenstates(vectors=True))
 
     @property
     def nspin(self) -> int:
@@ -149,7 +151,8 @@ class States:
 
 
 def eigenstates(engine, species, positions, cell=None, pbc=None, populations=None, kpts=None,
-                projections: bool = False, scc_fermi=None, chunk: int | None = None) -> States:
+                projections: bool = False, scc_fermi=None, chunk: int | None = None,
+                vectors: bool = False) -> States:
     """Eigenstates of H built from fixed populations, at any k-points (atomic units).
 
     ``engine`` is a :class:`pydftb.DFTB`; positions and cell in Bohr.  ``populations`` is the
@@ -164,8 +167,68 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     ``kpts``: ``(kpts, weights)``, an (n_k, 3) array (equal weights), or None for the
     engine's own k-points.  Occupations are filled at these k-points as DFTB+ does in its
     band-structure run; ``scc_fermi`` (Hartree, one value or one per spin) is kept as the
-    zero of band plots.
+    zero of band plots.  ``vectors``: also keep the eigenvectors (``States.vectors``, columns
+    normalised as c^H S c = 1; A2's eigenvalue derivatives, :mod:`pydftb.banddiff`).
     """
+    fz = _frozen_setup(engine, species, positions, cell, pbc, populations, kpts)
+    nspin, norb, nstate, k = fz.nspin, fz.norb, fz.nstate, fz.k
+    solver = engine.solver if not isinstance(engine.solver, str) else SOLVERS[engine.solver]()
+    if not hasattr(solver, "eig"):
+        solver = BatchedSolver()                      # SP2 has no eigenvectors
+    chunk = chunk or max(1, MATRIX_BUDGET // (nstate * nstate))
+    evals = np.empty((nspin, len(k), nstate))
+    proj = np.empty((nspin, len(k), norb, nstate)) if projections else None
+    vecs = None
+    for c0, kc, h, s in _frozen_chunks(engine, fz, chunk):
+        solver.prepare(s)
+        e, c = solver.eig(h)
+        n = len(kc)
+        if vectors:
+            c_arr = np.asarray(c)
+            if vecs is None:
+                vecs = np.empty((nspin, len(k), nstate, nstate), dtype=c_arr.dtype)
+            elif np.iscomplexobj(c_arr) and not np.iscomplexobj(vecs):
+                vecs = vecs.astype(complex)
+            vecs[:, c0:c0 + n] = c_arr.reshape(nspin, n, nstate, nstate)
+        if fz.pauli:                                             # two-component (M6a)
+            evals[0, c0:c0 + n] = e
+            if projections:
+                share = (np.conj(c) * (s @ c)).real
+                proj[0, c0:c0 + n] = share[:, :norb] + share[:, norb:]
+            continue
+        evals[:, c0:c0 + n] = e.reshape(nspin, n, norb)
+        if projections:
+            share = (np.conj(c) * (s @ c)).real                 # Re[c* (S c)] per orbital, state
+            proj[:, c0:c0 + n] = share.reshape(nspin, n, norb, norb)
+    occ, fermi = _fill(engine, fz.st, evals, fz.kw)
+    if scc_fermi is not None:
+        scc_fermi = np.broadcast_to(np.atleast_1d(np.asarray(scc_fermi, float)), (nspin,)).copy()
+    return States(np.asarray(k, float), np.asarray(fz.kw, float), evals, occ, fermi, scc_fermi,
+                  fz.st.basis, proj, vectors=vecs)
+
+
+@dataclass
+class _Frozen:
+    """What :func:`_frozen_chunks` needs to build H(k) and S(k) at fixed populations."""
+    st: object
+    k: np.ndarray
+    kw: np.ndarray
+    v_orb: object
+    vs_orb: object
+    pots: object
+    pauli: bool
+    nspin: int
+    norb: int
+    nstate: int
+    gamma: bool
+    hyb_dp: object
+    hyb_k: object
+    hyb_cell: tuple
+
+
+def _frozen_setup(engine, species, positions, cell, pbc, populations, kpts) -> _Frozen:
+    """The engine's setup (real-space H0/S pair blocks, Coulomb kernel) and the potentials of
+    fixed populations (see :func:`eigenstates`)."""
     st = engine._setup(species, positions, cell, pbc, False, {}, matrices=False)
     if kpts is None:
         k, kw = st.kpts, st.kw
@@ -202,49 +265,46 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
     nspin = 1 if vs_orb is None or pauli else 2
     norb = st.basis.norb
     nstate = 2 * norb if pauli else norb
-    pb = st.pairs
-    ones = np.ones(norb)
     gamma = len(k) == 1 and not np.any(k[0])
     periodic = st.cell is not None and np.any(st.pbc)
     if hyb_dp is not None and hyb_k is None and periodic and not gamma:      # M6h-3a
         raise ValueError("the states at k-points of a periodic hybrid calculation need its SCC "
                          "on a supercell folding (M6h-3b), whose DeltaP(k) gives H_x at any k; "
                          "this one is at the Gamma point")
-    hyb_cell = (st.cell, pb) if periodic else (None, None)
-    solver = engine.solver if not isinstance(engine.solver, str) else SOLVERS[engine.solver]()
-    if not hasattr(solver, "eig"):
-        solver = BatchedSolver()                      # SP2 has no eigenvectors
-    chunk = chunk or max(1, MATRIX_BUDGET // (nstate * nstate))
-    evals = np.empty((nspin, len(k), nstate))
-    proj = np.empty((nspin, len(k), norb, nstate)) if projections else None
+    hyb_cell = (st.cell, st.pairs) if periodic else (None, None)
+    return _Frozen(st, k, kw, v_orb, vs_orb, pots, pauli, nspin, norb, nstate, gamma, hyb_dp,
+                   hyb_k, hyb_cell)
+
+
+def _frozen_chunks(engine, fz: _Frozen, chunk: int):
+    """(first k index, k-points, H, S) of every chunk of k-points, H and S as the solver takes
+    them: (n_spin * n_chunk, n, n) stacked [up k-points..., down k-points...] (collinear spin:
+    S repeated), or the spinor H and the 2N overlap of a two-component calculation."""
+    st, k, norb = fz.st, fz.k, fz.norb
+    v_orb, vs_orb, pots = fz.v_orb, fz.vs_orb, fz.pots
+    pb = st.pairs
+    ones = np.ones(norb)
     for c0 in range(0, len(k), chunk):
         kc = k[c0:c0 + chunk]
-        if gamma:
+        if fz.gamma:
             h0 = fold(pb, pb.h, norb, None, st.eps0)[None]
             s = fold(pb, pb.s, norb, None, ones)[None]
         else:
             h0 = fold_all(pb, pb.h, norb, kc, st.eps0)
             s = fold_all(pb, pb.s, norb, kc, ones)
         h0 = engine._with_net(st, h0)                 # net site potentials (M6c)
-        if pauli:                                                # two-component (M6a)
+        if fz.pauli:                                             # two-component (M6a)
             p = st.pauli
             hso = None if p.lam is None else so.soc_hamiltonian(p.lam, s if p.dual else None)
             if pots is not None:
                 h = engine._block_hamiltonian(st, h0, s, v_orb, vs_orb, pots, hso)
             else:
                 h = engine._spinor_hamiltonian(h0, s, v_orb, vs_orb, hso)
-            if hyb_dp is not None:                    # + H_x[DeltaP_in] (M6h-1b, molecules)
+            if fz.hyb_dp is not None:                 # + H_x[DeltaP_in] (M6h-1b, molecules)
                 terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real,
-                                             *hyb_cell)
-                h = h + terms.fock(hyb_dp)[0]
-            s2 = so.overlap2(s)
-            solver.prepare(s2)
-            e, c = solver.eig(h)
-            n = len(kc)
-            evals[0, c0:c0 + n] = e
-            if projections:
-                share = (np.conj(c) * (s2 @ c)).real
-                proj[0, c0:c0 + n] = share[:, :norb] + share[:, norb:]
+                                             *fz.hyb_cell)
+                h = h + terms.fock(fz.hyb_dp)[0]
+            yield c0, kc, h, so.overlap2(s)
             continue
         if pots is not None:
             h = engine._block_hamiltonian(st, h0, s, v_orb, vs_orb, pots, None)
@@ -256,25 +316,14 @@ def eigenstates(engine, species, positions, cell=None, pbc=None, populations=Non
                 hs = 0.5 * s * (vs_orb[:, None] + vs_orb[None, :])
                 h = np.concatenate([h + hs, h - hs])                 # up, down
                 s = np.concatenate([s, s])
-        if hyb_k is not None:               # + H_x[DeltaP_in](k) (M6h-3b)
-            h = h + np.concatenate(hyb_k.fock_at(kc, hyb_dp))
-        elif hyb_dp is not None:            # + H_x[DeltaP_in] (M6h-1; the Gamma point, M6h-3a)
+        if fz.hyb_k is not None:            # + H_x[DeltaP_in](k) (M6h-3b)
+            h = h + np.concatenate(fz.hyb_k.fock_at(kc, fz.hyb_dp))
+        elif fz.hyb_dp is not None:         # + H_x[DeltaP_in] (M6h-1; the Gamma point, M6h-3a)
             terms = engine._hybrid_terms(st.species, st.pos, st.basis, np.asarray(s[0]).real,
-                                         *hyb_cell)
+                                         *fz.hyb_cell)
             terms.reset(True)                         # the threshold build takes all of DeltaP
-            h = h + np.stack(terms.fock(hyb_dp))
-        solver.prepare(s)
-        e, c = solver.eig(h)
-        n = len(kc)
-        evals[:, c0:c0 + n] = e.reshape(nspin, n, norb)
-        if projections:
-            share = (np.conj(c) * (s @ c)).real                 # Re[c* (S c)] per orbital, state
-            proj[:, c0:c0 + n] = share.reshape(nspin, n, norb, norb)
-    occ, fermi = _fill(engine, st, evals, kw)
-    if scc_fermi is not None:
-        scc_fermi = np.broadcast_to(np.atleast_1d(np.asarray(scc_fermi, float)), (nspin,)).copy()
-    return States(np.asarray(k, float), np.asarray(kw, float), evals, occ, fermi, scc_fermi,
-                  st.basis, proj)
+            h = h + np.stack(terms.fock(fz.hyb_dp))
+        yield c0, kc, h, s
 
 
 def _kpoint_set(kpts):
