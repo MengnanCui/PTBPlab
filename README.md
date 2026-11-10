@@ -4,6 +4,11 @@
 <img src="./utils/ptbp.png" alt="drawing" width="30%"/>
 </div>
 
+**Development plan:** [`PLAN.md`](PLAN.md) splits the work into two tracks: the PTBP
+parameterisation itself (parameters, losses and data, multi-parameter optimisation
+strategies; roadmap [`docs/ROADMAP.md`](docs/ROADMAP.md), the current focus) and the pydftb
+engine (roadmap [`pydftb/docs/ROADMAP.md`](pydftb/docs/ROADMAP.md)).
+
 What does it include?
 #### 1. Quick SKF file generator
 
@@ -33,10 +38,10 @@ For detail format of SKF, reference to [SlaterKosterFiles][1].
 #    `pip install pylibxc` alone fails because the underlying C lib is missing.
 mamba install -c conda-forge libxc pylibxc
 
-# 2. hotcent — not on PyPI, install editable from GitLab source.
-#    Requires a C compiler (the package builds a small C extension `_hotcent`).
-git clone https://gitlab.com/mvdb/hotcent
-cd hotcent && pip install -e .
+# 2. hotcent — not on PyPI; its v2.1.0 source is in this repository (third_party/hotcent,
+#    GPL-3.0, see third_party/README.md), so no download is needed. Requires a C compiler
+#    (the package builds a small C extension `_hotcent`). Run from the repo root:
+pip install --no-build-isolation ./third_party/hotcent       # offline: add --no-deps
 
 # 3. (Optional, only for --optimization_option) DFTB+ binary.
 #    Pin to the nompi build to avoid pulling mpich/scalapack as dependencies.

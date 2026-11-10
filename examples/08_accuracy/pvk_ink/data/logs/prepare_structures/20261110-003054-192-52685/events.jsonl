@@ -1,1 +1,0 @@
-{"t": 0.075, "time": "2026-11-10T00:30:54", "kind": "written", "structures": 148, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/pvk_ink/data/structures.xyz", "scans": 6, "train": 105, "test": 43, "ood": 0, "excluded": 6, "max_atoms": 39}

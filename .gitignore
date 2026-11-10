@@ -48,3 +48,10 @@ examples/*/par.out
 examples/*/*.skf
 examples/*/*.png
 examples/*/console.out
+
+# vendored hotcent built in place
+third_party/hotcent/*.so
+third_party/hotcent/build/
+# per-run logs of the A-series scripts (utils/runlog.py) and their large files
+examples/*/*/data/logs/
+examples/08_accuracy/large/

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+
+usage() {
+cat << EOF
+usage: hotcent-concat [-b {sz,szp,dz,dzp}] [-d] [-h] [-q] symbols
+
+Pastes the necessary *-*_offsite2c.skf and *-*_repulsion2c.skf files
+together to form *-*.skf for all symbol pairs.
+
+positional arguments:
+  symbols               Element symbols (e.g. "Si").
+
+options:
+  -b                    Size of the main basis set (default: sz).
+  -d                    Dry run (only print info and exit).
+  -h                    Show this help message and exit.
+  -q                    Do not print info to standard output.
+EOF
+}
+
+dryrun=0
+nzeta=1
+verbose=1
+
+while getopts "b:dhq" arg; do
+  case $arg in
+    b)
+      case ${OPTARG} in
+        sz|szp)
+          nzeta=1
+          ;;
+        dz|dzp)
+          nzeta=2
+          ;;
+        *)
+          echo "Unknown basis set '${OPTARG}'"
+          exit 1
+      esac
+      ;;
+    d)
+      dryrun=1
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    q)
+      verbose=0
+      ;;
+    \?)
+      usage
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+sets=""
+for arg in "$@"; do
+  for izeta in $(seq 1 ${nzeta}); do
+    sets="${sets} ${arg}"
+    arg="${arg}+"
+  done
+done
+
+for a in ${sets}; do
+  for b in ${sets}; do
+    off2c="${a}-${b}_offsite2c.skf"
+    rep2c="${a}-${b}_repulsion2c.spl"
+    skf="${a}-${b}.skf"
+
+    if [ ${verbose} = 1 ] && [ ${dryrun} = 1 ]; then
+      echo -n "[Dry-run] "
+    fi
+
+    if [[ ${a: -1} != "+" && ${b: -1} != "+" ]]; then
+      if [ ${verbose} = 1 ]; then
+        echo "Pasting ${off2c} and ${rep2c} to ${skf}"
+      fi
+
+      if [ ${dryrun} = 0 ]; then
+        cat ${off2c} ${rep2c} > ${skf}
+      fi
+    else
+      if [ ${verbose} = 1 ]; then
+        echo "Copying ${off2c} to ${skf}"
+      fi
+
+      if [ ${dryrun} = 0 ]; then
+        cp ${off2c} ${skf}
+      fi
+    fi
+  done
+done

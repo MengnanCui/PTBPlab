@@ -24,6 +24,13 @@ no edits to the rest of the source tree.
    - On write: drop info/arrays keys that duplicate calc.results so
      ASE's collision check at write time does not raise.
 
+3. hotcent from the repository
+   ----------------------------
+   hotcent is not on PyPI.  Its source (v2.1.0) is kept in third_party/hotcent:
+   `pip install --no-build-isolation ./third_party/hotcent` installs it offline (with
+   its C extension).  When hotcent is not installed, a checkout imports it from
+   third_party/hotcent directly (slower: the C extension needs the install).
+
 Idempotent: re-importing this module is a no-op.
 """
 
@@ -99,5 +106,27 @@ def _patch_ase_io():
     ase.io.write = _write_drop_dup
 
 
+def _vendored_hotcent():
+    """Put third_party/hotcent on sys.path when hotcent is not installed (a checkout)."""
+    import importlib.util
+    import os
+    import sys
+    if importlib.util.find_spec('hotcent') is not None:
+        return
+    vendored = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'third_party', 'hotcent')
+    if not os.path.isfile(os.path.join(vendored, 'hotcent', '__init__.py')):
+        return
+    sys.path.insert(0, vendored)
+    os.environ['PYTHONPATH'] = os.pathsep.join(           # spawned workers and subprocesses
+        p for p in (vendored, os.environ.get('PYTHONPATH')) if p)
+    if importlib.util.find_spec('_hotcent') is None:
+        print("[hotcent] using third_party/hotcent without its C extension: slower, and the SKF "
+              "values differ from the C build by ~1e-7; "
+              "install it: pip install --no-build-isolation ./third_party/hotcent",
+              file=sys.stderr)
+
+
 _set_fork_start_method()
 _patch_ase_io()
+_vendored_hotcent()

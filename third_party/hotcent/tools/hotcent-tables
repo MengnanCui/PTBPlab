@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from hotcent.cli.tables import main
+
+main()
