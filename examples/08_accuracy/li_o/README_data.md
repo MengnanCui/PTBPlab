@@ -20,7 +20,7 @@ DFT settings are those of the M5c/M5d training data (`examples/07_battery_li_li2
 | `vasp_bands.py` | D1 (VASP) | cluster | per crystal `scf/` (LCHARG) + `band/` (ICHARG 11, explicit k-points, `kpath.json`); per dimer `scf/` (Γ) | rough estimate in `cost_estimate.json` (a few yuan) |
 | `collect_bands.py` | D1 | anywhere | `BandRef` JSON from finished VASP band runs (k-point order checked, Fermi level from the SCF, `n_semicore` from ZVAL); checks and copies GPAW JSON | — |
 | `make_d2.py write` | D2 | cluster | about 80 single points, unrelaxed or rattled, plus `manifest.csv` (name, family, role, k-grid, estimated core-h) | about 30–40 yuan (`--dry-run` prints the table) |
-| `make_d3.py sample` | D3 | server (mace-torch; GPU optional) | MACE-MP-0 Langevin trajectories of the 80-atom interface and two ±2 % strained variants at 300/600/900 K, in `--traj-dir` (default `$PTBP_OFFLOAD/pydftb/a1_interface`, outside the Nextcloud-synced PProjects) | GPU or CPU time only |
+| `make_d3.py sample` | D3 | server (mace-torch; GPU optional) | MACE-MP-0 Langevin trajectories of the 80-atom interface and two ±2 % strained variants at 300/600/900 K, in `--traj-dir` (default `$PTBP_OFFLOAD/pydftb/a1_interface`, a directory git ignores) | GPU or CPU time only |
 | `make_d3.py select` | D3 | anywhere | `selected.extxyz`: farthest-point sampling of 80 frames on RDF + Li–O coordination descriptors; `--extra-traj` adds DFTB collapse frames | — |
 | `make_d3.py write` | D3 | cluster | VASP single points of the selected frames, `manifest.csv`, job scripts | about 1.5 yuan per frame (M5c price), 80 frames about 120 yuan |
 

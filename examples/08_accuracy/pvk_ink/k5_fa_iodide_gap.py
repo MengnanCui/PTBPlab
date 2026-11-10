@@ -3,7 +3,7 @@ FA+ π* / I− 5p gap to the DFT value?
 
 In the M409 tests, DFTB(PTBP) gave FA+.I− a gap of about 0.09 eV, against several eV in DFT.  The
 HOMO is the free iodide's 5p and the LUMO the C–N π* of FA+, and about 0.3 e leaks from
-I− to FA+.  The protons then move within 10 fs (../Perovskite data/stage4/pitfalls.md).  If no
+I− to FA+.  The protons then move within 10 fs (the perovskite ink project, data/stage4/pitfalls.md).  If no
 choice of radii within a reasonable box opens this gap, a single SK set cannot fix the
 problem, and the on-site energies or U must change (A2 channels E1/E3).
 

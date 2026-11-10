@@ -6,8 +6,9 @@
     setup()          # PTBP's utils/ and tools/, examples/07's vasp_common on sys.path
 
 Every path can be moved with an environment variable, so the same scripts run on the remote
-server: PTBP_REPO, PTBP_EX07_DATA, PTBP_PEROVSKITE (the ../Perovskite project),
-PTBP_OFFLOAD (where large files go, ~/Documents/MyGit/PProjects-offload by default).
+server: PTBP_REPO, PTBP_EX07_DATA, PTBP_PEROVSKITE (the perovskite ink project whose stage-1
+structures and MACE trajectories the pvk_ink scripts read; no default), PTBP_OFFLOAD (where
+files of 20 MB or more go; default examples/08_accuracy/large, which git ignores).
 """
 from __future__ import annotations
 
@@ -19,10 +20,8 @@ ACCURACY = os.path.dirname(HERE)                                     # examples/
 REPO = os.environ.get("PTBP_REPO") or os.path.abspath(os.path.join(ACCURACY, "..", ".."))
 EX07 = os.path.join(REPO, "examples", "07_battery_li_li2o")
 EX07_DATA = os.environ.get("PTBP_EX07_DATA") or os.path.join(EX07, "data")
-PEROVSKITE = os.environ.get("PTBP_PEROVSKITE") or os.path.abspath(
-    os.path.join(REPO, "..", "..", "Perovskite"))                    # PProjects/Perovskite
-OFFLOAD = os.environ.get("PTBP_OFFLOAD") or os.path.expanduser(
-    "~/Documents/MyGit/PProjects-offload")
+PEROVSKITE = os.environ.get("PTBP_PEROVSKITE") or ""                # set it (or --perovskite)
+OFFLOAD = os.environ.get("PTBP_OFFLOAD") or os.path.join(ACCURACY, "large")
 
 
 def setup() -> None:

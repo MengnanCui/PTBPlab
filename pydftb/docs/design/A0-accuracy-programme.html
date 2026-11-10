@@ -30,7 +30,7 @@
         <ul>
           <li>验收线（A 级）：测试集上能量差 MAE ≤ 10 meV/原子、力 MAE ≤ 0.1 eV/Å，决定性的能量差符号全部正确，300–600 K 的 MD 稳定。</li>
           <li>能量按配平的能量差算，绝对原子化能只作诊断；拟合损失的默认仍是绝对原子化能。</li>
-          <li>钙钛矿以 <code>../Perovskite</code> 的前驱体溶液为主，晶体只作参考。</li>
+          <li>钙钛矿以钙钛矿墨水项目的前驱体溶液为主，晶体只作参考。</li>
           <li>本轮只写计划和代码，DFT 作业只写输入、不提交，本地计算可以。</li>
         </ul>
       </li>
@@ -88,7 +88,7 @@
         <li>多参数（随环境变化），描述符从配位数开始，依次是 2/3 体、SOAP、ACE（MACE）；</li>
         <li>最后才是 Δ-ML。</li>
       </ol>
-      <p>试用体系有三个：Li、Li/Li 氧化物与界面、<code>../Perovskite</code>。</p>
+      <p>试用体系有三个：Li、Li/Li 氧化物与界面、钙钛矿墨水（Pb–Sn 前驱体溶液）。</p>
       <h3>已有工作说明的起点</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Li | Li₂O（M5c、M5d）</th><th>发表的 PTBP（Li、O）</th><th>最好的单套拟合（b30、c60、b30s4、c60s4）</th><th>DFT</th></tr></thead>
@@ -108,7 +108,7 @@
           </ul>
         </li>
         <li><strong>M8（Cu 自适应参数）</strong>：上限约为几十 meV/原子，最好的模型在 MD 帧上是 41 meV/原子、0.53 eV/Å。</li>
-        <li><strong><code>../Perovskite</code></strong>：体系是 M409 墨水，Cs₀.₂₅FA₀.₇₅Pb₀.₅Sn₀.₅I₃ 溶在 DMSO/DMF 中，共 409 个原子、9 种元素（H、C、N、O、S、I、Cs、Sn、Pb），还没有 DFT 数据。DFTB(PTBP) 在这个体系上的问题：
+        <li><strong>钙钛矿墨水项目</strong>：体系是 M409 墨水，Cs₀.₂₅FA₀.₇₅Pb₀.₅Sn₀.₅I₃ 溶在 DMSO/DMF 中，共 409 个原子、9 种元素（H、C、N、O、S、I、Cs、Sn、Pb），还没有 DFT 数据。DFTB(PTBP) 在这个体系上的问题：
           <ul>
             <li>FA⁺ 的 π* 与 I⁻ 的 5p 几乎简并，带隙 0.09 eV，约 0.3 e 从 I⁻ 漏到 FA⁺；10 fs 内出现假的质子转移。</li>
             <li>Pb/Sn 对 DMSO/DMF 的选择性给反。</li>
@@ -245,15 +245,15 @@
           <tr><td>D4</td><td>溶液的分子数据，约 130 个单点加约 20 次优化：21 个分子、36 个络合物、约 15 个离子对，以及 6 条扫描 × 9 点（Pb–O、Sn–O、Pb–I、Sn–I 拉伸，FA 的 N–H→O 与 N–H→I）</td><td>VASP Γ（气相），或本机 GPAW（约 3–6 天）</td><td>约 500 核时，约 50 元</td></tr>
           <tr><td>D5</td><td>溶液的凝聚相数据：
             <ul>
-              <li>从现有 MACE-MPA M409 轨迹（已转移到 offload 目录）切出约 80 个第一、二配位层团簇（80–150 原子）；</li>
+              <li>从现有 MACE-MPA M409 轨迹切出约 80 个第一、二配位层团簇（80–150 原子）；</li>
               <li>加 10 帧完整 M409，只作测试；</li>
-              <li>与 <code>../Perovskite</code> 的 S1/S2 计划协调，避免重复花钱。</li>
+              <li>与钙钛矿墨水项目的 S1/S2 计划协调，避免重复花钱。</li>
             </ul></td><td>VASP</td><td>约 300 元</td></tr>
         </tbody>
       </table></div>
       <ul>
         <li>合计约 450–750 元。单价是粗估：A0 先用 1–2 个试算（像 <code>make_p141.py</code> 那样）校准，再写进每批的报告。</li>
-        <li>SK 网格缓存与新轨迹超过 20 MB 时，按 nexclaude-sync 的办法放到 <code>~/Documents/MyGit/PProjects-offload</code>。</li>
+        <li>SK 网格缓存与超过 20 MB 的新轨迹不进仓库，放到 <code>PTBP_OFFLOAD</code>（默认 <code>examples/08_accuracy/large/</code>，git 忽略）或服务器本地盘。</li>
       </ul>
     </section>
 
@@ -584,7 +584,7 @@
       </table></div>
       <h3><code>examples/08_accuracy/</code></h3>
       <ul>
-        <li><code>common/</code>：路径（可用环境变量 <code>PTBP_REPO</code>、<code>PTBP_EX07_DATA</code>、<code>PTBP_PEROVSKITE</code>、<code>PTBP_OFFLOAD</code> 改）。</li>
+        <li><code>common/</code>：路径（可用环境变量 <code>PTBP_REPO</code>、<code>PTBP_EX07_DATA</code>、<code>PTBP_PEROVSKITE</code>、<code>PTBP_OFFLOAD</code> 改；钙钛矿项目的位置没有默认）。</li>
         <li><code>li_o/</code>：
           <ul>
             <li><code>prepare_data.py</code>：给已有数据加 <code>family</code>/<code>role</code>/<code>kspacing</code> 标签；</li>
@@ -596,7 +596,7 @@
         </li>
         <li><code>pvk_ink/</code>：
           <ul>
-            <li><code>prepare_structures.py</code>：从 <code>../Perovskite</code> 收集分子、络合物、离子对与扫描；</li>
+            <li><code>prepare_structures.py</code>：从钙钛矿墨水项目（<code>PTBP_PEROVSKITE</code>）收集分子、络合物、离子对与扫描；</li>
             <li><code>orbitals_gpaw.py</code>：D1 中溶液部分的轨道参考；</li>
             <li><code>make_d4.py</code>、<code>collect_d4.py</code>、<code>vasp_ink.py</code>：D4 的 VASP 输入与收集；</li>
             <li><code>make_d5.py</code>：D5 的团簇；</li>

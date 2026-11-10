@@ -99,7 +99,7 @@
         <li>训练集上的 σ<sub>E</sub> 是 1.8 meV/atom。轨迹的第一帧已经是 22，因为训练集里没有团簇。M8b 训练集的 cluster 组补的就是这个。</li>
         <li>σ<sub>F</sub> 在 100–110 fs 跳了 3 倍，正是团簇开始重构、最短距离降到 2 Å 以下的时候。用 σ<sub>F</sub> 当 MD 的停止条件，可以在塌缩之前停下来。</li>
         <li>第一种委员会（按相重抽样）也把挑出的帧都放在 200–400 fs，但它的训练集 σ 已有 37 meV/atom，基线太高，不能当阈值用。</li>
-        <li>挑出的 10 帧写在 <code>/Users/mncui/Documents/PProjects/pydftb/cu_dft_m8b_active/round1</code>，与 M8b 训练集同样的设置（Γ 点、自旋极化、38 核），估计 5.3 核时。</li>
+        <li>挑出的 10 帧写在 <code>cu_dft_m8b_active/round1/</code>（不在仓库里），与 M8b 训练集同样的设置（Γ 点、自旋极化、38 核），估计 5.3 核时。</li>
       </ul>
     </section>
 

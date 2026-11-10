@@ -9,7 +9,7 @@
 
 ```
 examples/08_accuracy/
-  common/paths.py         路径（PTBP_REPO、PTBP_EX07_DATA、PTBP_PEROVSKITE、PTBP_OFFLOAD 可覆盖）
+  common/paths.py         路径（PTBP_REPO、PTBP_EX07_DATA、PTBP_PEROVSKITE、PTBP_OFFLOAD 可覆盖；钙钛矿项目的位置没有默认，大文件默认放 `large/`）
   li_o/                   Li 与 Li–O：数据、扫描配置、能带参考、K1/K4/K6/K7、MD 检验、D2/D3 输入
   pvk_ink/                钙钛矿前驱体溶液：结构、轨道参考、D4/D5 输入、K5、扫描配置（见其 README.md）
   slurm/                  Slurm 模板与 env.sh（dg83 CPU、dg50 GPU）
@@ -48,7 +48,7 @@ python -m pytest -q tests/test_cli_subcommands.py                          # 11 
 python parameterize.py scan --help
 ```
 
-然后编辑 `slurm/env.sh`：conda 环境名，以及 SK 缓存 `PTBP_SKCACHE`。缓存会很大，不要放在 Nextcloud 同步盘上。
+然后编辑 `slurm/env.sh`：conda 环境名，以及 SK 缓存 `PTBP_SKCACHE`。缓存会很大，放在本地盘或 scratch 盘上。
 
 ## 2. 日志（全程保留）
 
@@ -108,7 +108,7 @@ tar czf a1_results.tgz li_o/runs/*/report.* li_o/runs/*/losses.csv li_o/runs/*/m
 3. D4 气相单点、优化与孤立原子：`make_d4.py` 生成 201 个算例，约 508 核时、约 51 元，等批准；算完后用 `collect_d4.py` 收集。
 4. K5：`k5_fa_iodide_gap.py`，看 FA⁺ π* 与 I⁻ 5p 的间隙能不能单靠 r0 打开。
 5. 扫描：`scan_ink.yaml`。
-6. D5 团簇与 M409 帧：`make_d5.py`，需要 MACE 轨迹（在 offload 目录）。
+6. D5 团簇与 M409 帧：`make_d5.py`，需要 MACE 轨迹（钙钛矿项目里的大文件，要先拷到服务器）。
 
 ## 5. 关口（事先定好，见设计文档第三、四节）
 
@@ -124,5 +124,5 @@ tar czf a1_results.tgz li_o/runs/*/report.* li_o/runs/*/losses.csv li_o/runs/*/m
 
 - **SCC 不收敛：** 每个结构先用默认混合，失败后依次改用更慢的 Broyden 和 Anderson，仍失败就记录在 `result.json` 的 `errors` 里，这个点的损失为 NaN。扫描继续进行。
 - **中断后续跑：** 重跑同一个命令即可，已完成的点会跳过；`--force` 重算。SK 缓存按内容寻址（半径、p、xc、网格、hotcent 版本），可以跨扫描共享。
-- **大文件：** 超过 20 MB 的轨迹与缓存不放进 Nextcloud 同步的 PProjects，放到 `PTBP_OFFLOAD` 或服务器本地盘。
+- **大文件：** 超过 20 MB 的轨迹与缓存不进仓库，放到 `PTBP_OFFLOAD`（默认 `large/`，git 忽略）或服务器本地盘。
 - **hotcent 版本：** 分片驱动校验 hotcent 2.1.0 的源码哈希；其他版本自动走参考实现，结果相同，只是慢。加密积分网格（`sk.grid`）需要 hotcent ≥ 2。

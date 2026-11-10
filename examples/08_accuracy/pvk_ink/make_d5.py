@@ -4,12 +4,13 @@ VASP inputs (not submitted).  A series, A1.3.
     python make_d5.py [--every 400] [--radius 6.0] [--full-frames 10] [--out d5]
     python make_d5.py --traj /path/traj.extxyz:train --traj /path/other.extxyz:test
 
-The default trajectories are the 20 ps NVT runs of ../Perovskite (5 fs between frames):
+The default trajectories are the 20 ps NVT runs of the perovskite ink project
+($PTBP_PEROVSKITE or --perovskite; 5 fs between frames):
 
 * ``runs/M409/T02/mace_mpa_B``: start B, role train;
 * ``runs/M409/T02/mace_mpa_A2``: the clean start A, role test.
 
-These files are symlinks into the offload directory.  If none of them can be read, the script
+They are large (218 MB each) and must be copied to the machine.  If none of them can be read, the script
 lists what is missing and exits with code 2.
 
 1. **Frames.** Every ``--every``-th frame is used (400 = 2 ps).
@@ -132,7 +133,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--perovskite", default=PEROVSKITE)
     ap.add_argument("--traj", action="append", default=None,
-                    help="PATH:ROLE (repeatable; default the two T02 runs of ../Perovskite)")
+                    help="PATH:ROLE (repeatable; default the two T02 runs under $PTBP_PEROVSKITE)")
     ap.add_argument("--every", type=int, default=400, help="frame stride (5 fs per frame)")
     ap.add_argument("--radius", type=float, default=6.0, help="A around each metal")
     ap.add_argument("--vacuum", type=float, default=8.0)
@@ -152,9 +153,8 @@ def main(argv=None):
     if not readable:
         print("no trajectory can be read:")
         for p in missing:
-            print(f"  missing {p}" + ("  (a dangling symlink into the offload directory)"
-                                       if os.path.islink(p) else ""))
-        print("copy them from the machine that has them (see ../Perovskite README section 2), "
+            print(f"  missing {p}" + ("  (a dangling symlink)" if os.path.islink(p) else ""))
+        print("copy them from the machine that has them, set PTBP_PEROVSKITE, "
               "or pass --traj PATH:ROLE")
         return 2
     from utils.runlog import session

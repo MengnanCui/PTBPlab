@@ -17,11 +17,11 @@ module load parallel/201807
 
 #for i in {0..4}; do
 #  cd "aims_${i}"
-#  srun /u/mncui/software/fhiaims_code/bin/aims.201231.scalapack.mpi.x > aims.out
+#  srun ${AIMS_BIN} > aims.out
 #  cd ..
 #done
 #cd "aims_${SLURM_ARRAY_TASK_ID}"
-#srun /u/mncui/software/fhiaims_code/bin/aims.201231.scalapack.mpi.x > aims.out
+#srun ${AIMS_BIN} > aims.out
 
 #python aims_calc_v2.py tmp.test.xyz 
 export OMP_NUM_THREADS=1

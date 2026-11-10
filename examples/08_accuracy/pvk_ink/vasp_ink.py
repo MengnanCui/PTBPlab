@@ -1,6 +1,6 @@
 """VASP input writer for the Pb–Sn perovskite ink (A series, D4 and D5), not submitted.
 
-The conventions come from the ../Perovskite S1 plan.
+The conventions come from the S1 plan of the perovskite ink project.
 
 * **Functional and PAW:** PBE with Pb_d, Sn_d, I, Cs_sv, S, O, N, C, H.
 * **Basis and convergence:** ENCUT 520 eV, PREC Accurate, EDIFF 1e-6, the Γ point only

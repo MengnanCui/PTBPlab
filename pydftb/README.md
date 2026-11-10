@@ -4,7 +4,7 @@ A from-scratch, readable SCC-DFTB engine in Python, validated against DFTB+.
 It lives inside PTBPlab and installs as a package of its own, with the `pydftb` command.
 
 - **Why it exists:** [`docs/WHY.md`](docs/WHY.md)
-- **Roadmap and DFTB+ feature checklist:** [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- **Roadmap of the engine and DFTB+ feature checklist:** [`docs/ROADMAP.md`](docs/ROADMAP.md) (PTBP's parameterisation work has its own roadmap, [`../docs/ROADMAP.md`](../docs/ROADMAP.md); both tracks: [`../PLAN.md`](../PLAN.md))
 - **Learning map** (each module next to the DFTB+ source file that implements the same physics): [`docs/dftbplus_map.md`](docs/dftbplus_map.md)
 - **Development docs (HTML, open in a browser):** [`docs/index.html`](docs/index.html): every stage's design notes and report, key results first, development details folded
 - **Glossary** (Chinese, plain language): [`docs/glossary.md`](docs/glossary.md)

@@ -1,4 +1,5 @@
 import math
+import os
 # from cv2 import dft
 from pathlib import Path
 
@@ -41,9 +42,10 @@ def monkhorstpack2kptdensity(atoms, k_density):
 
 # %%
 def calc_fhiaims(kpts):
-    calc = Aims(aims_command = "mpirun -n 5 /u/mncui/software/fhiaims_code/bin/aims.201231.scalapack.mpi.x > aims.out",
+    # FHI-aims binary and species directory: environment variables AIMS_BIN, AIMS_SPECIES_DIR
+    calc = Aims(aims_command = f"mpirun -n 5 {os.environ.get('AIMS_BIN', 'aims.x')} > aims.out",
                 outfilename = "aims.out",
-                species_dir = "/u/mncui/software/FHIAIMS/fhiaims_code/species_defaults/really_tight",
+                species_dir = os.environ.get("AIMS_SPECIES_DIR", "species_defaults/really_tight"),
                 xc='PBE',
                 spin='none',
                 relativistic='atomic_zora scalar', # default

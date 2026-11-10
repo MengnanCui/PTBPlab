@@ -1,9 +1,9 @@
 """Structures of the Pb–Sn perovskite ink data set (A series, A1.3): molecules, MI2(L)n complexes,
 neutral ion clusters and bond / proton-transfer scans, all neutral and boxed.
 
-    python prepare_structures.py [--out data] [--perovskite ../../../../Perovskite]
+    python prepare_structures.py [--out data] [--perovskite PATH]   # or PTBP_PEROVSKITE=PATH
 
-The inputs come from the ../Perovskite project (stage 1 of its tests):
+The inputs come from the perovskite ink project (stage 1 of its tests; PTBP_PEROVSKITE):
 
 * **Molecules.**  These are ``data/stage1/molecule_list.csv`` with their files.  The
   MACE-OMOL relaxed geometry (``molecules/mace_omol``) is used when it exists, else the starting
@@ -383,7 +383,7 @@ def scans(col, root, mols, cplx, ions, args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--perovskite", default=PEROVSKITE, help="the ../Perovskite project")
+    ap.add_argument("--perovskite", default=PEROVSKITE, help="the perovskite ink project (default $PTBP_PEROVSKITE)")
     ap.add_argument("--out", default=os.path.join(HERE, "data"))
     ap.add_argument("--elements", nargs="+", default=MODEL_ELEMENTS)
     ap.add_argument("--vacuum", type=float, default=8.0, help="A on every side")

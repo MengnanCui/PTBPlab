@@ -7,8 +7,8 @@ Stages:
   the 80-atom Li64O16 superlattice of examples/07 (make_interface.interface at the relaxed
   lattice constants) and of 2 variants strained +-2 % in-plane, at 300 / 600 / 900 K.
   Trajectories (extxyz, one frame every ``--every`` fs) go to ``--traj-dir``, by default
-  ``$PTBP_OFFLOAD/pydftb/a1_interface`` (~/Documents/MyGit/PProjects-offload/...), because
-  files of 20 MB or more must not land in the Nextcloud-synced PProjects;
+  ``$PTBP_OFFLOAD/pydftb/a1_interface`` (the directory for files of 20 MB or more, which
+  git ignores);
 * ``select``: farthest-point sampling of ``--n`` frames (default 80) on a descriptor of
   element-resolved RDFs (Li-Li, Li-O, O-O, 1-6 A) and the histogram of the O coordination of
   Li.  The first ``--burn`` fs of every MACE trajectory are skipped.  ``--extra-traj`` adds
@@ -269,9 +269,6 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     args.out = os.path.abspath(args.out)
     args.traj_dir = args.traj_dir or default_traj_dir()
-    if "Documents/PProjects" in os.path.abspath(args.traj_dir):
-        print("[d3] warning: the trajectories go into the Nextcloud-synced PProjects; "
-              "use --traj-dir under PTBP_OFFLOAD for files of 20 MB or more")
     if args.stage == "sample" and args.dry_run:
         for variant, at in structures(args.structure).items():
             print(f"  {variant:10s} {at.get_chemical_formula():8s} {len(at)} atoms, cell "

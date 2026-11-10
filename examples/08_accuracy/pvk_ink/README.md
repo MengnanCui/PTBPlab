@@ -2,7 +2,7 @@
 
 The design is `pydftb/docs/design/A0-accuracy-programme.html`, sections 2–3 and 7.
 
-The system is the ../Perovskite M409 ink: Cs₀.₂₅FA₀.₇₅Pb₀.₅Sn₀.₅I₃ in DMSO/DMF, with the elements H C N O S I Cs Sn Pb.  By the user's decision (2026-11-09) the precursor solution comes first.  Its "bands" are the orbital energies of molecules and clusters from HOMO − 3 eV to LUMO + 1 eV.
+The system is the M409 ink of the perovskite ink project (`PTBP_PEROVSKITE`): Cs₀.₂₅FA₀.₇₅Pb₀.₅Sn₀.₅I₃ in DMSO/DMF, with the elements H C N O S I Cs Sn Pb.  By the user's decision (2026-11-09) the precursor solution comes first.  Its "bands" are the orbital energies of molecules and clusters from HOMO − 3 eV to LUMO + 1 eV.
 
 Nothing here submits a job.  Every script logs to `<out>/logs/<script>/<time>-<host>-<pid>/` (run.log, meta.json with the git commit and package versions, events.jsonl, status.json).
 
@@ -63,4 +63,4 @@ The scan has these settings:
 
 - The ion clusters and the proton-transfer scans are hand-built (N–H···I 2.6 Å, linear proton paths with N and X fixed).  D4's relaxations give their relaxed versions (`*_relaxed`), and the reactions take the lowest structure of each family.
 - The cost model (3 core-h per 40 atoms, ∝ N²) is a guess: run one complex and one cluster first.
-- D5 needs `runs/M409/T02/{mace_mpa_B,mace_mpa_A2}/traj.extxyz`.  They are 218 MB each and live in the offload directory, so they must be copied to the server.
+- D5 needs `runs/M409/T02/{mace_mpa_B,mace_mpa_A2}/traj.extxyz`.  They are 218 MB each and are not in the repository, so they must be copied to the server.

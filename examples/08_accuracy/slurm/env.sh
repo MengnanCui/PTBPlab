@@ -2,7 +2,7 @@
 # Sourced by every template: the remote environment.  Edit once for your server.
 #   PTBP_REPO        the PTBPlab checkout (default: two levels above this file)
 #   PTBP_CONDA_ENV   conda environment with numpy/scipy/ase/hotcent/pyyaml + `pip install -e pydftb`
-#   PTBP_SKCACHE     the shared SK cache (large: keep it off Nextcloud-synced disks)
+#   PTBP_SKCACHE     the shared SK cache (large: put it on a local or scratch disk)
 #   PTBP_LOG_ROOT    optional: one place for all run logs
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PTBP_REPO="${PTBP_REPO:-$(cd "$HERE/../../.." && pwd)}"
