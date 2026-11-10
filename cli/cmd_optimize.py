@@ -38,12 +38,16 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     p.add_argument('dataset', metavar='DATASET',
                    help="Path to the DFT reference (xyz/traj/extxyz/json).")
     p.add_argument('--mode', default='auto',
-                   choices=['auto', 'energygeometry', 'dataset', 'reaction', 'bandstructure'],
+                   choices=['auto', 'energygeometry', 'dataset', 'reaction', 'bandstructure',
+                            'bands'],
                    help="Which loss to optimise. Default: auto — picks "
                         "bandstructure for .json input, energygeometry when a "
                         "fit.json sits next to the dataset, reaction when the "
                         "dataset spans multiple chemical formulas, and dataset "
-                        "otherwise. Override explicitly to skip detection.")
+                        "otherwise. Override explicitly to skip detection. 'bands' (A "
+                        "series): the band loss of pydftb.bandloss alone, mu = L_band x penalty, "
+                        "over (r0_w, r0_d), no repulsive; needs --band-refs (the structures come "
+                        "from the references, DATASET only names the run's reference folder).")
     p.add_argument('--optimizer', default='bo',
                    choices=['bo', 'parallel_bo', 'pso', 'gradient', 'bo_grad'],
                    help="Outer-loop optimiser. Default: bo. 'gradient' (projected BFGS on "
@@ -147,6 +151,63 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    metavar=('LABEL', 'R0_W', 'R0_D'), dest='type_start',
                    help="Starting point of a type's radii (Bohr). Default: PTBP's table, else "
                         "r_cov x (3, 5). Repeatable.")
+    a = p.add_argument_group(
+        "A series (pydftb/docs/design/A0-accuracy-programme.html, section 8)",
+        "Loss and engine options of the accuracy programme. Every default is the loss and the "
+        "calculation of before, bit for bit.")
+    a.add_argument('--energy-reduction', default='sum', choices=['sum', 'mean', 'group'],
+                   dest='energy_reduction',
+                   help="dataset/reaction: mu_E = sum_i w_i |dE_i| with w_i = 1 (sum, default), "
+                        "1/n (mean) or 1/(G n_g) (group: every group counts the same; a "
+                        "structure's group is its info 'family', 'config_type' or 'group', else "
+                        "its chemical formula).")
+    a.add_argument('--force-weight', type=float, default=None, metavar='C', dest='force_weight',
+                   help="dataset/reaction: c in mu = ((1 - c) mu_E + c mu_F) x penalty "
+                        "(default 0.1).")
+    a.add_argument('--energy-offset', default='none', choices=['none', 'per-element'],
+                   dest='energy_offset',
+                   help="dataset/reaction: per-element removes per-element energy offsets "
+                        "(eV/atom, weighted least squares) from the formation-energy errors "
+                        "before mu_E. Default: none (absolute errors).")
+    a.add_argument('--band-weight', type=float, default=0.0, metavar='W', dest='band_weight',
+                   help="Add W x L_band inside the penalty (every mode): the band loss "
+                        "(pydftb.bandloss, eV) of --band-refs at the step's SK files, computed "
+                        "with pydftb. Default: 0 (no band term).")
+    a.add_argument('--band-refs', nargs='+', default=None, metavar='GLOB', dest='band_refs',
+                   help="BandRef JSON files or glob patterns (pydftb.bandref) for --band-weight "
+                        "and --mode bands.")
+    a.add_argument('--band-settings', default=None, metavar='JSON', dest='band_settings',
+                   help="pydftb.bandloss.BandSettings as JSON, e.g. '{\"levels\": [1, 2]}'. "
+                        "Default: the A-series settings (VBM-3 to CBM+1 eV, level 1).")
+    a.add_argument('--fixed-r0', nargs='+', type=float, default=None, metavar='R0',
+                   dest='fixed_r0',
+                   help="Freeze the electronic part at these radii (Bohr; r0_w r0_d of every "
+                        "parameter set, in the order of the run's parameter sets) and fit "
+                        "sigma_rep only: one evaluation, no optimiser (the S3 route).")
+    a.add_argument('--sigma-finish', action='store_true', default=None, dest='sigma_finish',
+                   help="After the optimiser: a finer sigma_rep search at the best point on "
+                        "its step files (no new hotcent or DFTB runs); sigma_finish.json, and "
+                        "the best folder's SKF files get the new sigma if the loss is lower.")
+    a.add_argument('--kspacing', type=float, default=None, metavar='K',
+                   help="Every periodic structure gets VASP's Gamma-centred KSPACING grid, "
+                        "N_i = max(1, ceil(2 pi |b_i| / K)) (K in 1/A, e.g. 0.15 as the A-series "
+                        "data), instead of the --kpts density rule. Both engines. Default: off.")
+    a.add_argument('--smearing-width', type=float, default=None, metavar='EV',
+                   dest='smearing_width',
+                   help="Smearing width in eV for --smearing (sets --smearing-temperature to "
+                        "EV / k_B; the A-series data: --smearing gaussian --smearing-width 0.05).")
+    a.add_argument('--energy-kind', default='total', choices=['total', 'sigma0'],
+                   dest='energy_kind',
+                   help="Energy of the DFTB structures: total (default, DFTB+'s Total energy) "
+                        "or sigma0 (Total - TS/2, VASP's energy(sigma->0); pydftb engine).")
+    a.add_argument('--third-order', default=None, choices=['full', 'onsite'],
+                   dest='third_order',
+                   help="DFTB3 (pydftb engine); needs --hubbard-derivs.")
+    a.add_argument('--hubbard-derivs', default=None, metavar='JSON', dest='hubbard_derivs',
+                   help="Hubbard derivatives for --third-order, JSON {element: Ud (Hartree/e)}.")
+    a.add_argument('--hubbard', default=None, metavar='JSON',
+                   help="Hubbard values replacing the SKF's, JSON {element: U (Hartree)} "
+                        "(pydftb engine).")
     p.add_argument('--superposition', default='density',
                    choices=['density', 'potential'],
                    help="Density vs potential superposition. Default: density.")
@@ -219,6 +280,51 @@ def _write_summary(run_dir: Path, args: argparse.Namespace,
               file=sys.stderr)
 
 
+KB_EV = 8.617333262e-5        # Boltzmann constant, eV/K (CODATA 2018, as ASE and utils.accuracy)
+
+
+def _a_series_argv(args: argparse.Namespace) -> list:
+    """The legacy flags of the A-series options; [] when every one is at its default, so that a
+    default run gets exactly the command line of before.  Relative --band-refs patterns are
+    made absolute here: the legacy run works in the output folder."""
+    out = []
+    if getattr(args, 'energy_reduction', 'sum') not in (None, 'sum'):
+        out += ['--energy_reduction', args.energy_reduction]
+    if getattr(args, 'force_weight', None) is not None:
+        out += ['--force_weight', repr(float(args.force_weight))]
+    if getattr(args, 'energy_offset', 'none') not in (None, 'none'):
+        out += ['--energy_offset', args.energy_offset]
+    if getattr(args, 'band_weight', 0.0):
+        out += ['--band_weight', repr(float(args.band_weight))]
+    if getattr(args, 'band_refs', None):
+        refs = [args.band_refs] if isinstance(args.band_refs, str) else list(args.band_refs)
+        out += ['--band_refs', *[os.path.abspath(os.path.expanduser(str(p))) for p in refs]]
+    if getattr(args, 'band_settings', None):
+        spec = args.band_settings
+        if not isinstance(spec, str):
+            import json
+            spec = json.dumps(spec)
+        out += ['--band_settings', spec]
+    if getattr(args, 'fixed_r0', None):
+        out += ['--fixed_r0', *[repr(float(v)) for v in args.fixed_r0]]
+    if getattr(args, 'sigma_finish', None):
+        out += ['--sigma_finish']
+    if getattr(args, 'kspacing', None) is not None:
+        out += ['--kspacing', repr(float(args.kspacing))]
+    if getattr(args, 'energy_kind', 'total') not in (None, 'total'):
+        out += ['--energy_kind', args.energy_kind]
+    if getattr(args, 'third_order', None):
+        out += ['--third_order', args.third_order]
+    for key in ('hubbard_derivs', 'hubbard'):
+        value = getattr(args, key, None)
+        if value:
+            if not isinstance(value, str):
+                import json
+                value = json.dumps(value)
+            out += [f'--{key}', value]
+    return out
+
+
 def _type_declarations(args: argparse.Namespace) -> list:
     """Switched types (M5b) from --switch and the YAML key ``types``, as declarations."""
     from utils.typemodel import load_declarations, parse_switch_args
@@ -244,6 +350,13 @@ def run(args: argparse.Namespace) -> int:
         yaml_dict = _config.load_yaml(args.config)
         defaults = _config.get_parser_defaults(_PARSER) if _PARSER else {}
         _config.merge_into_namespace(args, yaml_dict, defaults)
+
+    if getattr(args, 'smearing_width', None) is not None:       # A series: width in eV
+        if args.smearing == 'none':
+            print("error: --smearing-width needs --smearing fermi, gaussian or mp",
+                  file=sys.stderr)
+            return 2
+        args.smearing_temperature = float(args.smearing_width) / KB_EV
 
     dataset = Path(args.dataset).resolve()
     if not dataset.exists():
@@ -321,6 +434,7 @@ def run(args: argparse.Namespace) -> int:
         legacy_argv += ['--grad_maxiter', str(args.grad_maxiter)]
     if getattr(args, 'hotcent_fd_step', None):
         legacy_argv += ['--hotcent_fd_step', *[str(h) for h in args.hotcent_fd_step]]
+    legacy_argv += _a_series_argv(args)
 
     sys.argv = legacy_argv
     started_at = time.time()

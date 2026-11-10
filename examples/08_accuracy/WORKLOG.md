@@ -118,12 +118,12 @@ PTBP 发表的 Li、O 半径，hotcent 积分网格 nr 100、ntheta 300。
 ### 7. 与计划不同之处
 
 - **PTBP 的 loss.py 新选项推迟：** 指 `--energy-reduction`、`--force-weight`、`--energy-offset`、`--band-weight`、`--fixed-r0`。A1 全部通过 `ptbp scan` 在同一批点上计算，PTBP 的 `optimize` 路径一行没改，所以逐字节不变。
-- **界面的 k 网格显式写成 4×4×1：** M5c 的记录是 4×4×1，而 KSPACING 规则沿 c 给出 2（2π|b₃|/0.25 = 1.013）。数据里 `info['kpts']` 优先。
+- **界面的 k 网格显式写成 4×4×1：** M5c 的记录是 4×4×1，而 KSPACING 规则沿 c 给出 2（2π|b₃|/0.25 = 1.013）。数据里 `info['kpts']` 优先。（这条后来证明是错的，已改正，见下一轮。）
 
 ### 8. 尚未解决的问题
 
 1. GPAW 26.7 的 `fixed_density` 调用（`bands_gpaw.py`、`orbitals_gpaw.py`）还没实跑。远程先 `--only li_bcc` 试一个。
-2. KSPACING 规则需要用一个 OUTCAR 核对一次：`grep "generate k-points"`。
+2. KSPACING 规则需要用一个 OUTCAR 核对一次：`grep "generate k-points"`。（已解决，见下一轮：界面的 OUTCAR 是 4×4×2，与规则一致。）
 3. D2 里 53 和 54 原子的空位晶胞约 127 核时，是 D2 中最贵的部分。批准时可以先不算，`make_d2.py` 目前还没有 `--only`。
 4. 前驱体溶液的离子簇与质子转移路径是手搭的结构。D4 会先优化它们；反应取每个家族最低的结构。
 5. 前驱体溶液的 R₂b 要列出出现的全部 40 个原子对。“physrep 打底加少数对的样条修正”可以以后再加。
@@ -132,3 +132,115 @@ PTBP 发表的 Li、O 半径，hotcent 积分网格 nr 100、ntheta 300。
 ### 9. 下一步（远程）
 
 按 `README.md` 第 3 节的步骤 1–7：D1 → K1(b) → Li 网格（K2）→ Li–O Sobol（K3）→ K4/K6/K7 → 精修、导出、MD → 传回结果，然后写 G1 报告。D2–D5 等用户批准费用后再算。
+
+## 2026-11-10 代码准备（二）：A2–A4 与其余部分
+
+用户要求：“继续跑完补全剩下的计算部分，然后 push（不做计算哦）”。即写完计划里剩下的全部代码，只做小规模冒烟测试，不提交作业，不做正式计算。
+
+### 1. 做法
+
+- 先写了三个共用接口并测过：
+  - `pydftb/descriptors.py`：`Features` 带“中心–邻居”向量对的梯度，`Features.chain` 给出力和维里；
+  - `pydftb/regressors.py`：线性回归器；
+  - `pydftb/envmodel.py`：环境模型的统一协议，含 `engine_kwargs`、`model_gradient` 和保存/读取。
+- 然后分五个分支并行写，每个分支只改自己的文件。这一轮的 A2 驱动、整合、文档和测试由主线程写。
+
+### 2. pydftb（A2 引擎）
+
+| 部分 | 内容 | 测试 |
+|---|---|---|
+| 描述符 | `Radial`、`Angular`（G4/G5）、`Expand`、`Affine.standardize`/`pca`、`SOAP`（dscribe）、`MACEFeatures`（mace-torch，无导数）；可按邻居元素分开 | `test_descriptors.py`：22 项通过，2 项因缺 dscribe/mace 跳过 |
+| 回归器 | `Kernel`（GPR 式，对系数线性，`from_features` 用最远点取诱导点）、`MLP`（tanh，解析导数） | `test_regressors.py`：17 项 |
+| 能带导数 | `bands.eigenstates(vectors=True)`；`banddiff`：冻结电荷下的 H、S，通用的 Hellmann–Feynman 差分（简并子空间单独处理），adaptive 的解析式 | `test_banddiff.py`：8 项 |
+| E3 | `AdaptiveParams(descriptor=, regressor=, channels=)`：力与应力经 `Features.chain`；`AdaptiveResult.dedp` 让非线性回归器也有 dF/dθ | `test_adaptive.py`：29 项，新增 6 项 |
+| 拟合器 | `fit_adaptive`：`BandSample`、`band_weight`、`band_settings`、`offsets=global\|none\|per_element`、`band_jacobian=frozen\|scc`；可只拟合能带（`samples=[]`）；k 点接受 Γ 心网格；其他模型的能量梯度可用时取解析值，否则用差分 | `test_adaptive_fit_bands.py`：6 项 |
+| E2 | `r0mix.R0Switch`：r0 节点之间三次 B 样条（C²）混合，`around()` 以 A1 点为中心建节点；力、应力、dF/dθ 精确 | `test_r0mix.py`：10 项 |
+| E1 | `typeswitch.OnsiteSwitch`：按类型的 on-site 与 U 平移，可拟合；`Coulomb.hubbard_gradient`（E3 以后的 U 通道也可以用） | `test_typeswitch_unequal.py`：12 项 |
+| 其他 | `active.write_candidates(writer=)`；`active.py` 的 threadpoolctl 改为可选（原来在没有它的机器上 2 项测试失败） | `test_active.py`：7 项 |
+
+- **与差分的一致性：** 力、应力、dF/dθ、dF/d(平移) 与差分一致到 2e-9 以内，应力到 5e-8 以内。
+- **逐位相同：** 以下与 66a6498 的引擎逐位相同：
+  - `eigenstates` 的重构；
+  - CN 模式的 adaptive；
+  - 默认参数的 `fit_adaptive`；
+  - 普通 SCC、M5a、M5a + DFTB3 + 自旋、M5a + DFTB+U、周期体系的应力。
+- **冻结电荷的能带雅可比不含电荷响应：** 去掉平移后，水分子差约 21%，Cu 金属差约 0.5%。需要精确值时用 `band_jacobian="scc"`。
+
+### 3. PTBP
+
+- **`ptbp optimize` 的新选项**（A0 第八节，上一轮推迟的）：
+  - 能量与力：`--energy-reduction`、`--force-weight`、`--energy-offset`；
+  - 能带：`--band-weight` 加 `--band-refs`，新的 `--mode bands`；
+  - `--fixed-r0`、`--sigma-finish`；
+  - 对齐 DFT：`--kspacing`、`--smearing-width`、`--energy-kind sigma0`、`--third-order`、`--hubbard`。
+  - 默认时与 66a6498 逐位相同。`tests/test_loss_options.py`（31 项）把 66a6498 的 `loss.py`/`loss_grad.py` 与现在的代码放在一起比较；另用 `tools/engine_parity` 做了端到端核对，μ 与写出的文件都逐字节相同。
+- **`ptbp scan refine --method bo --seeds 3`：** 用 scikit-optimize，可选依赖；Nelder–Mead 仍是默认。测试 `tests/test_scan_refine.py`。
+- **`utils/skgrid.TypedSKCache`：** E2 的 r0 节点 SK 表，按标签对写出全部文件，同元素不同标签用异核格式，`plan()` 给出费用。测试 `tests/test_skgrid_typed.py`，含一次 2 个标签的真实 hotcent 运行，约 25 s。
+
+### 4. `examples/08_accuracy/`
+
+- **`a2/a2.py`（主线程写）：** 阶段有 `plan`、`prepare`、`fit`、`transfer`、`summary`、`status`，配置是 `a2_li.yaml`、`a2_li_o.yaml`、`a2_ink.yaml`。
+  - 拟合只用能带，没有排斥势。
+  - 每次运行都做一次全量拟合，再让每个能带组轮流留出一次。
+  - 传递检验：把 A2 模型在全部结构上的电子能量与力写成一个“伪扫描点”，再用扫描本身的 `score_point` 打分（physrep σ、R₂b、oracle）。这个做法先核对过：把一个扫描点复制到别处重新打分，损失逐位相同。
+  - 输出 `a2-result/1` 文件，交给 G2。
+  - Slurm 模板：`a2_prepare.sh`、`a2_fit.sh`（数组）、`a2_post.sh`。
+- **其他分支写的：**
+  - `common/models.py`：模型目录 `a-series-model/1`，含 D3(BJ) 选项与 DFTB 层的选项；
+  - `common/baselines.py`：发表的 PTBP、GFN1-xTB、MACE-MP-0/OFF/OMOL；
+  - `common/gates.py`：G0–G4；
+  - `a3/a3_repulsive.py`：R1–R4，加 MD；
+  - `a4/delta_ml.py`：Δ1、Δ3 与学习曲线；
+  - `pvk_ink/md_topology.py`；
+  - `li_o/d0_ibz_bands.py`；
+  - `li_o/s5_sk_tables.py`：S5，梯度用 pydftb.autodiff 的 implicit 模式，需要 torch；
+  - Slurm 模板 `a3_node.sh`、`a4_delta_gpu.sh`、`baselines.sh`、`s5.sh`。
+
+### 5. 本轮发现并改正的问题
+
+- **界面的 k 网格：** 3 个界面 OUTCAR 的 KSPACING 都是 0.25，生成的网格都是 “4 4 2”（20 个 k 点），与 `kpoints_for` 的规则一致。M5c 记的 4×4×1 是错的。
+  - `prepare_data.py` 不再写 `kpts`，`li_o_ood.xyz` 已重新生成，只有这一个文件变了。
+  - 同时改了 `make_iface_dft.py` 和 `k4_dftb3_u.py` 的注释。
+  - M5c 报告里加了一条勘误。
+- **Slurm 模板：** `sbatch` 运行的是脚本的暂存副本，所以上一轮的 6 个模板里 `source "$(dirname "$0")/env.sh"` 在作业里找不到文件。现在所有模板都依次在 `$SLURM_SUBMIT_DIR/slurm`、`$SLURM_SUBMIT_DIR`、`$PTBP_REPO/examples/08_accuracy/slurm` 里找，也可以用 `PTBP_ENV_SH` 直接指定。
+  - 另外加了 `logs/.gitkeep`：`#SBATCH -o logs/...` 指向的目录必须已经存在，Slurm 不会自己创建。
+- **远程环境的依赖：** 补上 `pylibxc`、`scikit-optimize`。可选依赖见 README 第 1 节。
+- **只拟合能带时的进度行：** 原来打印 `rmse nan meV/atom`，现在不打印这一项。
+
+### 6. 冒烟测试（本机，只验证代码）
+
+- **A2：** 数据是上一轮的 Li 冒烟扫描。参考能带用 DFTB 在另一个 r0 点造（bcc、fcc、Li₂），从发表点出发去拟合。
+  - E3 L1 linear：只拟合 bcc 与 Li₂ 两组，能带损失从 26 meV 降到 0.02 meV。
+  - 留一组拟合也跑通。E1 留出的组没有拟合过自己的类型，所以它的误差等于起点，符合预期。
+  - E2 的 5 节点 SK 表 hotcent 用 136 s。E2 只沿 r0_w 移动，而目标点主要差在 r0_d，所以降不到 0（19 meV），也符合预期。
+  - E3 L2 kernel/mlp、传递检验（9 个结构，无失败）、汇总和 G2 判定都跑通。
+- **A3：** R3（`--offsets none`）、R4（带能带正则）都跑通。
+- **其他分支报告：**
+  - A4 用 2 轮训练的 MACE 跑通全程；
+  - 基线：PTBP、xTB、MACE-MP 加 D3；
+  - 关口在 K1 结果和假 A2–A4 文件上跑通；
+  - `md_topology.py` 在发表的 PTBP 下 20 fs 内抓到 FA⁺·I⁻ 的 N→I 质子转移，与 M409 上看到的一致；
+  - S5：梯度与差分相差 ≤ 5e-9，导出的表与内存中的修正相差 1.8e-15 eV。
+
+### 7. 测试（2026-11-10，本机）
+
+- **pydftb：** 新增与受影响的 21 个测试文件，228 项通过，3 项因缺 dscribe/mace/torch 跳过。另有 2 项失败，原因是缺 threadpoolctl，改了 `active.py` 之后 `test_active.py` 7 项全过。
+- **PTBP `tests/`：** 在有 skopt 的环境里，271 项通过，60 项跳过，4 项失败。这 4 项都因为缺 torch，66a6498 上也是这 4 项。
+
+### 8. 尚未解决的问题
+
+1. 冻结电荷的能带雅可比是近似值，拟合不收敛时改用 `band_jacobian: scc`。
+2. E2 的 B 样条不插值：θ = 0 时不完全等于 A1 点，所以节点间距要小。
+3. 引擎仍拒绝 E2 与 E3 同时使用，等 G2 显示两者各自有用时再做。
+4. L4（MACE 特征）没有导数，只能拟合能带；周期体系的 SOAP 没有应力。
+5. 本机没有 dscribe 和 mace，SOAP 与 MACE 特征的封装还没实跑。
+6. E3 的 U 平移通道还没做。`Coulomb.hubbard_gradient` 已经可以用。
+7. `TypedSKCache` 不复用 A1 缓存里相同的表。
+8. D0 的下载、D2–D5 的计算都要你批准。费用都是粗估。
+9. S5 远程需要 torch，CPU 版即可。
+
+### 9. 下一步（远程）
+
+1. 先按 README 第 3 节完成 A1，跑完基线和 `common/gates.py`，传回结果写 G1 报告。
+2. 再按 G1 的结论走 A2（`a2/README.md`）或 A3（`a3/README.md`）。
+3. A4 和 S5 在需要时做。

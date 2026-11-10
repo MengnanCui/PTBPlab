@@ -1,0 +1,77 @@
+# A2 for the Pb-Sn perovskite precursor ink (A0 section 4): molecular orbital references
+# (HOMO-3 to LUMO+1 eV, pvk_ink/orbitals_gpaw.py) instead of bands; I, Pb, Sn follow their
+# environment, H C N O S Cs keep the A1 point's parameters.  K5 asks first whether the FA+ pi* /
+# I- 5p gap can open at all; E1 on I (free iodide vs metal-bound) is the direct test of that.
+#   python a2/a2.py plan a2/a2_ink.yaml
+#   python a2/a2.py fit a2/a2_ink.yaml --run E3-L1-linear --holdout all
+# Distances in Bohr: Pb-I 3.2 A = 6.0, Sn-I 3.0 A = 5.7, Pb-O 2.5 A = 4.7, N-H...I 2.6 A = 4.9.
+name: a2_ink
+system: pvk_ink
+scan: ../pvk_ink/scan_ink.yaml
+base: best:S3
+out: ../pvk_ink/runs/a2_ink
+k6: ../pvk_ink/runs/k6/k6_results.json
+bands:
+  settings: {}
+  test_roles: [test, ood]         # the orbital references carry the data's roles (n = 3 complexes, ...)
+fit:
+  l2: 1.0e-3
+  max_evaluations: 40
+  processes: 16
+  band_jacobian: frozen
+  offsets: global
+typed_sk:
+  workers: 16                     # hotcent processes for a typed set (slurm/a2_prepare.sh)
+  cache: ../pvk_ink/runs/typed_skcache
+descriptors:
+  L1:
+    transform: standardize
+    I: [{kind: cn, neighbours: [Pb, Sn, H, Cs], split: true}]
+    Pb: [{kind: cn, neighbours: [I, O, S], split: true}]
+    Sn: [{kind: cn, neighbours: [I, O, S], split: true}]
+  L2:
+    transform: standardize
+    I:
+      - {kind: cn, neighbours: [Pb, Sn, H, Cs], split: true}
+      - {kind: radial, centres: [4.5, 5.25, 6.0, 7.0, 8.0], width: 0.7, cutoff: 10.0, neighbours: [Pb, Sn, H, N], split: true}
+    Pb:
+      - {kind: cn, neighbours: [I, O, S], split: true}
+      - {kind: radial, centres: [4.5, 5.25, 6.0, 7.0], width: 0.7, cutoff: 10.0, neighbours: [I, O, S], split: true}
+      - {kind: angular, zetas: [1.0, 4.0], lambdas: [-1.0, 1.0], etas: [0.0], cutoff: 9.0}
+    Sn:
+      - {kind: cn, neighbours: [I, O, S], split: true}
+      - {kind: radial, centres: [4.5, 5.25, 6.0, 7.0], width: 0.7, cutoff: 10.0, neighbours: [I, O, S], split: true}
+      - {kind: angular, zetas: [1.0, 4.0], lambdas: [-1.0, 1.0], etas: [0.0], cutoff: 9.0}
+  L3:
+    transform: pca
+    variance: 0.99
+    I: [{kind: soap, species: [H, C, N, O, S, I, Cs, Sn, Pb], r_cut: 10.0, n_max: 4, l_max: 3, sigma: 0.95}]
+    Pb: [{kind: soap, species: [H, C, N, O, S, I, Cs, Sn, Pb], r_cut: 10.0, n_max: 4, l_max: 3, sigma: 0.95}]
+    Sn: [{kind: soap, species: [H, C, N, O, S, I, Cs, Sn, Pb], r_cut: 10.0, n_max: 4, l_max: 3, sigma: 0.95}]
+  L4:                             # MACE-OFF/OMOL features suit molecules better than MP-0 (check the family names of your mace-torch)
+    transform: pca
+    variance: 0.99
+    I: [{kind: mace, model: small, family: mp}]
+    Pb: [{kind: mace, model: small, family: mp}]
+    Sn: [{kind: mace, model: small, family: mp}]
+regressors:
+  linear: {kind: linear}
+  kernel: {kind: kernel, n_inducing: 32, length_scale: median}
+  mlp: {kind: mlp, hidden: [8]}
+channels:
+  E3:                             # p shells carry the FA+/I- problem and the metal-ligand bonding
+    I: [onsite.s, onsite.p, hopping.p]
+    Pb: [onsite.s, onsite.p, hopping.p]
+    Sn: [onsite.s, onsite.p, hopping.p]
+  E2:                             # I only: 7 I nodes + 8 other elements = 15 labels, 120 tables
+    I: {n: 7, spacing: [0.3, 0.0]}
+  E1:                             # free iodide (no Pb/Sn within ~3.4 A) vs metal-bound iodine
+    I: {centre: 0.5, width: 1.0, cutoff: {Pb: [6.5, 7.5], Sn: [6.2, 7.2]}, shells: [s, p], hubbard: true}
+runs:
+  - {channel: E1}
+  - {channel: E3, level: L1, regressor: linear}
+  - {channel: E3, level: L1, regressor: kernel}
+  - {channel: E2, level: L1, regressor: linear}
+  - {channel: E3, level: L2, regressor: linear}
+  - {channel: E3, level: L2, regressor: mlp}
+  - {channel: E3, level: L3, regressor: linear}

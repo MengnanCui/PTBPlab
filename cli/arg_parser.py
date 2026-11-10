@@ -41,12 +41,15 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
 
 
     parser.add_argument(
-        '--optimization_option', help="Options: EnergyGeometry, BandStructure, Dataset, Reaction",
+        '--optimization_option', help="Options: EnergyGeometry, BandStructure, Dataset, Reaction, "
+                                      "Bands (the A-series band loss alone, pydftb; needs "
+                                      "--band_refs)",
         type=str,
         choices=["EnergyGeometry", "energygeometry",
                  "BandStructure",  "bandstructure",
                  "Dataset"      ,  "dataset",
                  "Reaction"     ,  "reaction",
+                 "Bands"        ,  "bands",
         ],
         default=None,
     )
@@ -320,6 +323,93 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         '--eos_points', help="The number of points for EOS fitting",
         type=int,
         default=11,
+    )
+
+    # A series (pydftb/docs/design/A0-accuracy-programme.html, section 8); every default is
+    # the loss and the calculation of before, bit for bit
+    parser.add_argument(
+        '--energy_reduction', help="dataset/reaction: mu_E = sum_i w_i |dE_i| with w_i = 1 "
+                                   "('sum', default, as before), 1/n ('mean') or 1/(G n_g) "
+                                   "('group': every group counts the same; the group of a "
+                                   "structure is its info 'family', 'config_type' or 'group', "
+                                   "else its formula)",
+        choices=['sum', 'mean', 'group'],
+        default='sum',
+    )
+    parser.add_argument(
+        '--force_weight', help="dataset/reaction: c in mu = ((1 - c) mu_E + c mu_F) P "
+                               "(default 0.1, as before)",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        '--energy_offset', help="dataset/reaction: 'per-element' removes per-element energy "
+                                "offsets (eV/atom, weighted least squares) from the "
+                                "formation-energy errors before mu_E; 'none' (default) keeps "
+                                "the absolute errors",
+        choices=['none', 'per-element'],
+        default='none',
+    )
+    parser.add_argument(
+        '--band_weight', help="Adds W L_band inside the penalty (every mode): the band loss of "
+                              "pydftb.bandloss on --band_refs at the step's SK files, pydftb "
+                              "engine (default 0: no band term)",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        '--band_refs', help="BandRef JSON files or glob patterns (pydftb.bandref) for "
+                            "--band_weight and --optimization_option bands",
+        nargs='+', type=str, default=None,
+    )
+    parser.add_argument(
+        '--band_settings', help="pydftb.bandloss.BandSettings as JSON, e.g. '{\"levels\": [1, 2], "
+                                "\"conduction_weight\": 0.4}' (default: the A-series settings)",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--fixed_r0', help="Freeze the electronic part at these radii (Bohr: r0_w r0_d of every "
+                           "parameter set) and fit sigma_rep only (the S3 route of the A series)",
+        nargs='+', type=float, default=None,
+    )
+    parser.add_argument(
+        '--sigma_finish', help="After the optimiser, a finer sigma_rep search at the best point "
+                               "on its step files (sigma_finish.json; the best folder's SKF "
+                               "files get the new sigma if the loss is lower)",
+        action='store_true',
+        default=None,
+    )
+    parser.add_argument(
+        '--kspacing', help="Every periodic structure gets VASP's Gamma-centred KSPACING grid "
+                           "N_i = max(1, ceil(2 pi |b_i| / KSPACING)) (1/A) instead of the "
+                           "--kpt_density rule (default: off)",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        '--energy_kind', help="'total' (default): DFTB+'s Total energy; 'sigma0': Total - TS/2, "
+                              "VASP's energy(sigma->0) (pydftb engine)",
+        choices=['total', 'sigma0'],
+        default='total',
+    )
+    parser.add_argument(
+        '--third_order', help="DFTB3 (pydftb engine): 'full' (ThirdOrderFull) or 'onsite'; "
+                              "needs --hubbard_derivs",
+        choices=['full', 'onsite'],
+        default=None,
+    )
+    parser.add_argument(
+        '--hubbard_derivs', help="Hubbard derivatives for --third_order as JSON {element: Ud "
+                                 "(Hartree/e)}",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--hubbard', help="Hubbard values replacing the SKF ones as JSON {element: U (Hartree)} "
+                          "(pydftb engine)",
+        type=str,
+        default=None,
     )
 
     # args_input = parser.parse_args()

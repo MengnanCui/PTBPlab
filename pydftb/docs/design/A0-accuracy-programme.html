@@ -16,7 +16,7 @@
     <p class="eyebrow">A0 · 设计文档</p>
     <h1>DFTB 能做到多准（总计划）：一套参数，随环境变化的参数，最后才是 Δ-ML</h1>
     <dl class="meta">
-      <div><dt>状态</dt><dd><span class="chip wip">代码已备好，计算未开始</span></dd></div>
+      <div><dt>状态</dt><dd><span class="chip wip">A1–A4 的代码已备好，计算未开始</span></dd></div>
       <div><dt>日期</dt><dd>2026-11-10</dd></div>
       <div><dt>配套</dt><dd><a href="../../../examples/08_accuracy/README.md">执行手册</a> · <a href="M5d-switching-landscape.html">M5d 设计</a> · <a href="../reports/M5d-short-range-switching.html">M5d 报告</a> · <a href="../reports/M5c-battery-demo.html">M5c 报告</a> · <a href="M8a-adaptive-params.html">M8a 设计</a></dd></div>
     </dl>
@@ -49,6 +49,13 @@
           <li>PTBP 新增 <code>ptbp scan</code>。</li>
           <li><code>examples/08_accuracy/</code> 里有数据、检验与 DFT 输入的脚本和执行手册。</li>
           <li>每个命令都写日志（第十二节）。</li>
+          <li>第二轮（2026-11-10）补全了其余代码：
+            <ul>
+              <li>A2 的引擎：描述符阶梯、回归器、能带本征值导数、E1/E2/E3 三个通道、拟合器的能带目标；</li>
+              <li>PTBP <code>optimize</code> 的新选项，默认与 66a6498 逐位相同；</li>
+              <li>A2、A3、A4、S5 的驱动，基线，以及 G0–G4 的自动判定。</li>
+            </ul>
+            另外改正了界面帧的 k 网格（OUTCAR 是 4×4×2）和 Slurm 模板找不到 <code>env.sh</code> 的问题。</li>
         </ul>
       </li>
     </ul>
@@ -519,7 +526,7 @@
 
     <section id="done">
       <h2>十一、已实现的代码与执行顺序</h2>
-      <div class="callout note"><strong>与第八节的不同：</strong>PTBP 的 loss.py 新选项（<code>--energy-reduction</code> 等）推迟。A1 用 <code>ptbp scan</code> 在同一批点上算所有策略，PTBP 的 optimize 路径不动，结果逐字节不变。A2 时要改的部分也还没有做：<code>adaptive_fit</code> 的能带目标与按元素偏移、<code>active.write_candidates</code> 的 writer、<code>bands.py</code> 保留本征向量、按类型的 on-site 与 U、<code>descriptors.py</code>、<code>r0mix.py</code>。S5 也还没有实现。</div>
+      <div class="callout note"><strong>与第八节的不同：</strong>第一轮推迟的部分（PTBP 的 loss.py 新选项，以及 A2 的引擎改动），第二轮（2026-11-10，见本节末）都已完成。仍未做的有三项：E2 与 E3 同时使用（引擎拒绝）、E3 的 U 平移通道（<code>Coulomb.hubbard_gradient</code> 已可用），以及带类型的 SK 表复用 A1 缓存。A1 的主路径仍是 <code>ptbp scan</code>。</div>
       <h3>pydftb 的新模块（只依赖 NumPy、SciPy、ASE）</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>文件</th><th>作用</th></tr></thead>
@@ -614,6 +621,82 @@
         <li><code>interface.xyz</code>：3 个 80 原子的界面结构（初始、md02、md04）。</li>
         <li>两者都附说明 <a href="../../../examples/07_battery_li_li2o/data/README.md"><code>data/README.md</code></a>。</li>
       </ul>
+      <h3>第二轮（2026-11-10）：A2–A4 与其余部分</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>部分</th><th>文件</th><th>要点</th></tr></thead>
+        <tbody>
+          <tr><td>共用接口</td><td><code>pydftb/descriptors.py</code>、<code>regressors.py</code>、<code>envmodel.py</code></td><td>
+            <ul>
+              <li>描述符的梯度按“中心–邻居”向量对给出，<code>Features.chain</code> 由它得到力和维里。</li>
+              <li>回归器把描述符映射到参数，给出对系数和对输入的导数。</li>
+              <li>环境模型的统一协议：<code>vector</code>、<code>with_vector</code>、<code>gradient_from</code>、<code>to_dict</code>，以及保存/读取。</li>
+            </ul></td></tr>
+          <tr><td>描述符阶梯</td><td><code>descriptors.py</code></td><td>L1 <code>cn</code>（可按邻居元素分开）；L2 <code>radial</code>、<code>angular</code>（G4/G5）；L3 <code>soap</code>（dscribe）；L4 <code>mace</code>（无导数）；<code>Expand</code>、<code>Affine.standardize</code>/<code>pca</code></td></tr>
+          <tr><td>回归器</td><td><code>regressors.py</code></td><td><code>Linear</code>、<code>Kernel</code>（GPR 式，对系数线性，诱导点用最远点采样）、<code>MLP</code>（tanh）</td></tr>
+          <tr><td>能带导数</td><td><code>bands.py</code>、<code>banddiff.py</code>、<code>bandloss.py</code></td><td>
+            <ul>
+              <li><code>eigenstates(vectors=True)</code>。</li>
+              <li>冻结电荷下的 Hellmann–Feynman 导数，简并子空间单独处理；adaptive 有解析式。</li>
+              <li>最小二乘用的能带残差与雅可比。</li>
+              <li>不含电荷响应：去掉平移后，水分子差约 21%，Cu 金属差约 0.5%；需要精确值时用 <code>band_jacobian="scc"</code>。</li>
+            </ul></td></tr>
+          <tr><td>E3</td><td><code>adaptive.py</code>、<code>adaptive_fit.py</code></td><td>
+            <ul>
+              <li><code>AdaptiveParams(descriptor=, regressor=, channels=)</code>。</li>
+              <li><code>fit_adaptive</code> 的新参数：<code>BandSample</code>、<code>band_weight</code>、<code>offsets=global|none|per_element</code>、<code>band_jacobian</code>。</li>
+              <li>可以只拟合能带，k 点可以是 Γ 心网格。</li>
+            </ul></td></tr>
+          <tr><td>E2</td><td><code>r0mix.py</code>、<code>utils/skgrid.TypedSKCache</code></td><td>
+            <ul>
+              <li><code>R0Switch.around(元素, A1 的 r0, 间距, n)</code>：r0 节点之间三次 B 样条混合；力、应力、dF/dθ 精确。</li>
+              <li>带类型标签的 SK 表：同元素不同标签用异核格式，<code>plan()</code> 给出费用。</li>
+              <li>B 样条不插值，θ = 0 时不完全等于 A1 点。</li>
+            </ul></td></tr>
+          <tr><td>E1</td><td><code>typeswitch.OnsiteSwitch</code>、<code>coulomb.py</code></td><td>按类型的 on-site 与 U 平移，可拟合，力与应力精确；<code>Coulomb.hubbard_gradient</code>。不支持 DFTB3、两分量自旋、DFTB+U 和稀疏求解器</td></tr>
+          <tr><td>PTBP <code>optimize</code></td><td><code>utils/loss.py</code>、<code>loss_grad.py</code>、<code>engines.py</code>、<code>cli/</code></td><td>
+            <ul>
+              <li>能量与力：<code>--energy-reduction</code>、<code>--force-weight</code>、<code>--energy-offset</code>。</li>
+              <li>能带：<code>--band-weight</code>/<code>--band-refs</code>、<code>--mode bands</code>。</li>
+              <li><code>--fixed-r0</code>、<code>--sigma-finish</code>。</li>
+              <li>对齐 DFT：<code>--kspacing</code>、<code>--smearing-width</code>、<code>--energy-kind sigma0</code>、<code>--third-order</code>/<code>--hubbard</code>。</li>
+              <li>默认时与 66a6498 逐位相同：<code>tests/test_loss_options.py</code> 并排比较，另有端到端核对。</li>
+            </ul></td></tr>
+          <tr><td>A1 补充</td><td><code>cli/cmd_scan.py</code>、<code>common/baselines.py</code>、<code>common/gates.py</code>、<code>common/models.py</code></td><td>
+            <ul>
+              <li><code>ptbp scan refine --method bo --seeds 3</code>。</li>
+              <li>基线：发表的 PTBP、GFN1-xTB、MACE-MP-0/OFF/OMOL。</li>
+              <li>G0–G4 按事先定好的规则自动判定，写 <code>gates.md</code>。</li>
+              <li>模型目录 <code>a-series-model/1</code>，可选 D3(BJ)。</li>
+            </ul></td></tr>
+          <tr><td>A2 驱动</td><td><code>a2/a2.py</code>，配置 <code>a2_li.yaml</code>、<code>a2_li_o.yaml</code>、<code>a2_ink.yaml</code></td><td>
+            <ul>
+              <li>只用能带拟合，排斥势不参与。</li>
+              <li>每次运行都做一次全量拟合，再让每个能带组轮流留出一次。</li>
+              <li>传递检验：把 A2 的电子部分写成伪扫描点，用 A1 自己的打分重拟合 physrep σ、R₂b 和 oracle。</li>
+              <li>输出 <code>a2-result/1</code>，交给 G2。</li>
+            </ul></td></tr>
+          <tr><td>A3、A4、S5</td><td><code>a3/a3_repulsive.py</code>、<code>a4/delta_ml.py</code>、<code>li_o/s5_sk_tables.py</code></td><td>
+            <ul>
+              <li>R1–R4 加 MD；R4 是电子部分与排斥势一起精调，带能带正则。</li>
+              <li>Δ1、Δ3 与学习曲线（N = 25/50/100/全部），对照是纯 MACE。</li>
+              <li>S5 直接拟合 SK 的 H、S 表，梯度用 pydftb.autodiff，需要 torch。</li>
+            </ul></td></tr>
+          <tr><td>其他</td><td><code>pvk_ink/md_topology.py</code>、<code>li_o/d0_ibz_bands.py</code>、<code>slurm/a2_*.sh</code>、<code>a3_node.sh</code>、<code>a4_delta_gpu.sh</code>、<code>baselines.sh</code>、<code>s5.sh</code></td><td>溶液 MD 的键拓扑与质子转移检查；把已有 VASP 结果转成能带参考（下载要用户同意）</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>改正</strong>：
+          <ul>
+            <li>界面的 3 个 OUTCAR 都是 KSPACING 0.25 → 4×4×2，与 <code>kpoints_for</code> 的规则一致；M5c 记的 4×4×1 是错的。数据里不再显式写网格，<code>li_o_ood.xyz</code> 已重新生成。</li>
+            <li><code>sbatch</code> 运行的是暂存副本，原来的模板用 <code>$(dirname "$0")</code> 找 <code>env.sh</code>，在作业里找不到。现在全部改为先从提交目录找。</li>
+          </ul></li>
+        <li><strong>测试（本机）</strong>：
+          <ul>
+            <li>pydftb 新增与受影响的测试文件：228 + 7 项通过，3 项因缺可选依赖跳过。</li>
+            <li>PTBP <code>tests/</code>：271 项通过，4 项因缺 torch 失败，与 66a6498 相同。</li>
+            <li>A2（E1/E2/E3）、A3（R3/R4）、A4、S5 都在小数据上跑通。</li>
+          </ul></li>
+      </ul>
       <h3>执行顺序</h3>
       <ol>
         <li><strong>准备数据</strong>：<code>li_o/prepare_data.py</code> 写出带标签的训练、测试与家族外集合。</li>
@@ -622,7 +705,10 @@
         <li><strong>Li 的扫描（K2）</strong>：<code>ptbp scan points</code>、<code>run --jobs N</code>（或用 Slurm 阵列 <code>--index</code>/<code>--stride</code>）、<code>losses</code>、<code>report</code>，配置是 <code>li_o/scan_li.yaml</code> 与 <code>scan_li_sp.yaml</code>。</li>
         <li><strong>Li–O 的扫描（K3）</strong>：<code>scan_li_o.yaml</code>、<code>scan_li_o_sp.yaml</code>，同样的四步，看 oracle 行。</li>
         <li><strong>K4、K6、K7</strong>：<code>k4_dftb3_u.py</code>、<code>k6_per_structure_r0.py</code>、<code>k7_mace.py</code>；再对最好的模型做 <code>ptbp scan export</code> 与 <code>md_check.py</code>。</li>
+        <li><strong>基线与关口</strong>：<code>common/baselines.py</code>（<code>slurm/baselines.sh</code>），然后 <code>common/gates.py</code> 判 G0、G1。</li>
         <li><strong>G1 报告</strong>：A1 的完成报告，按关口决定下一步。</li>
+        <li><strong>A2 或 A3</strong>（按 G1）：<code>a2/a2.py plan → prepare → fit --holdout all → transfer → summary</code>，或 <code>a3/a3_repulsive.py r3/r4</code>；用 G2、G3 判定。</li>
+        <li><strong>A4 与 S5</strong>（需要时）：<code>a4/delta_ml.py</code>（G4）、<code>li_o/s5_sk_tables.py</code>。</li>
         <li><strong>D2–D5</strong>：只在用户批准费用后提交；各脚本只写输入、作业脚本与费用估计。</li>
       </ol>
       <p>命令可以写成 <code>ptbp scan …</code>，也可以写成 <code>python parameterize.py scan …</code>。完整的命令、环境与预期输出见 <a href="../../../examples/08_accuracy/README.md">执行手册</a>。</p>

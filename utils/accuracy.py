@@ -16,7 +16,8 @@ Stages (``ptbp scan``, :mod:`cli.cmd_scan`):
 4. ``report`` picks the best point of each strategy and writes ``report.md`` and
    ``report.json`` (metrics on train/test/ood, EOS, dimers, reactions, tier, Spearman of band
    loss vs R₂b), plus loss maps for a 2-D space;
-5. ``refine`` locally optimises one strategy (Nelder–Mead on the radii from its best point);
+5. ``refine`` locally optimises one strategy from its best point: Nelder–Mead on the radii,
+   or Bayesian optimisation with several seeds (``--method bo``, scikit-optimize);
 6. ``export`` writes a model's full SK files (electronic tables + physrep or R₂b spline).
 
 Strategies (A0 section 3).  ``L_EF`` is the mean over groups of
@@ -970,9 +971,22 @@ def _maps(cfg, scored):
 
 
 # ---- refine and export ----------------------------------------------------------------------
-def refine(cfg, strategy: str = "S1", start: int | None = None, maxfev: int = 30, log=print) -> dict:
-    """Nelder–Mead on the radii of ``strategy`` from its best scored point (or ``start``);
-    each evaluation is a new point (index 100000 + n) with its own SK set, run and score."""
+def refine(cfg, strategy: str = "S1", start: int | None = None, maxfev: int = 30, log=print,
+           method: str = "nm", seeds: int = 3, box: float = 0.15) -> dict:
+    """Local optimisation of the radii of ``strategy`` from its best scored point (or ``start``);
+    each evaluation is a new point (index 100000 + n, unique over all refinements) with its own
+    SK set, run and score.
+
+    * ``method="nm"`` (default): Nelder–Mead, ``maxfev`` evaluations -> ``refine_<S>.json``;
+    * ``method="bo"``: Bayesian optimisation (scikit-optimize's ``gp_minimize``, an optional
+      dependency) in a box of half-width ``box`` x the space's range around the start, once per
+      seed 0 .. ``seeds`` - 1 (``maxfev`` evaluations each, the start point's known loss given
+      to every seed) -> ``refine_<S>_bo.json`` with each seed's record and the best over seeds.
+      A0 section 3: the refinement checks that the grid's resolution is not the limit."""
+    if method == "bo":
+        return _refine_bo(cfg, strategy, start, maxfev, log, seeds, box)
+    if method != "nm":
+        raise ValueError(f"refine method must be 'nm' or 'bo', not {method!r}")
     from scipy.optimize import minimize
     sp = space_of(cfg)
     lo, hi = sp.lower_upper()
@@ -1008,6 +1022,72 @@ def refine(cfg, strategy: str = "S1", start: int | None = None, maxfev: int = 30
            "radii": sp.radii(np.clip(res.x, lo, hi))}
     with open(os.path.join(cfg["out"], f"refine_{strategy}.json"), "w") as fh:
         json.dump(out, fh, indent=1)
+    return out
+
+
+def _first_refine_index(cfg) -> int:
+    used = [int(os.path.basename(p)[1:]) for p in glob.glob(os.path.join(cfg["out"], "points", "p*"))]
+    return max([100000] + [u + 1 for u in used if u >= 100000])
+
+
+def _refine_bo(cfg, strategy, start, maxfev, log, seeds, box) -> dict:
+    """``refine(method="bo")``: see :func:`refine`."""
+    try:
+        from skopt import gp_minimize
+    except ImportError as exc:
+        raise RuntimeError("refine --method bo needs scikit-optimize "
+                           "(pip install scikit-optimize); --method nm needs nothing extra") from exc
+    sp = space_of(cfg)
+    lo, hi = sp.lower_upper()
+    scored = _scored(cfg)
+    if start is None:
+        b = best_points(scored, [strategy]).get(strategy)
+        if b is None:
+            raise RuntimeError(f"no scored point for {strategy}")
+        x0, y0 = sp.vector(b["radii"]), float(b["strategies"][strategy]["loss"])
+        start_index = int(b["index"])
+    else:
+        x0 = read_points(cfg)[start]
+        start_index = int(start)
+        sc = next((s for s in scored if s["index"] == start_index), None)
+        y0 = (None if sc is None or sc["strategies"].get(strategy, {}).get("loss") is None
+              else float(sc["strategies"][strategy]["loss"]))
+    half = float(box) * (hi - lo)
+    blo, bhi = np.maximum(lo, x0 - half), np.minimum(hi, x0 + half)
+    first = _first_refine_index(cfg)
+    counter = {"n": 0}
+    runs = []
+    for seed in range(int(seeds)):
+        history = []
+
+        def f(x, seed=seed, history=history):
+            x = np.clip(np.asarray(x, float), lo, hi)
+            idx = first + counter["n"]
+            counter["n"] += 1
+            evaluate_point(cfg, idx, x=x, log=log)
+            sc = score_point(cfg, idx, force=True)
+            v = sc["strategies"].get(strategy, {}).get("loss")
+            v = 1e12 if v is None or not np.isfinite(v) else float(v)
+            history.append({"index": idx, "x": x.tolist(), "loss": v, "seed": seed})
+            log(f"[refine-bo] {strategy} seed {seed} eval {len(history)}: loss {v:.5g} at "
+                f"{np.round(x, 4).tolist()}")
+            return v
+
+        kw = dict(n_calls=int(maxfev), n_initial_points=max(1, min(5, int(maxfev) // 3)),
+                  random_state=seed, acq_func="EI", x0=[x0.tolist()])
+        if y0 is not None:
+            kw["y0"] = [y0]
+        res = gp_minimize(f, [(float(a), float(b)) for a, b in zip(blo, bhi)], **kw)
+        runs.append({"seed": seed, "x": [float(v) for v in res.x], "loss": float(res.fun),
+                     "radii": sp.radii(np.asarray(res.x, float)), "nfev": len(history),
+                     "history": history})
+    best = min(runs, key=lambda r: r["loss"])
+    out = {"strategy": strategy, "method": "bo", "start_index": start_index, "x0": x0.tolist(),
+           "loss0": y0, "box": float(box), "bounds": [blo.tolist(), bhi.tolist()],
+           "seeds": runs, "best": {k: best[k] for k in ("seed", "x", "loss", "radii")},
+           "spread": float(max(r["loss"] for r in runs) - best["loss"]) if runs else None}
+    with open(os.path.join(cfg["out"], f"refine_{strategy}_bo.json"), "w") as fh:
+        json.dump(_clean(out), fh, indent=1)
     return out
 
 

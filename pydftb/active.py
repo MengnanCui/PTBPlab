@@ -131,11 +131,11 @@ def fit_committee(models, samples, sk, options=None, n: int = 4, seed: int = 0, 
 
 
 def _work(job):
-    from threadpoolctl import threadpool_limits
+    from .adaptive_fit import _blas_one
     m, k = job
     w = _WORK
     sample = Sample(w["frames"][k], 0.0, kpts=w["kpts"][k], name=f"frame {k}")
-    with threadpool_limits(1, user_api="blas"):
+    with _blas_one():
         try:
             e, _, f = evaluate_sample(w["members"][m], sample, w["sk"], w["options"],
                                       forces=w["forces"])
@@ -228,10 +228,17 @@ def select(score, fp, n: int, threshold: float = 0.0, reference=None,
     return out
 
 
-def write_candidates(out_dir, frames, names, group: str = "active", time_limit=None):
+def write_candidates(out_dir, frames, names, group: str = "active", time_limit=None,
+                     writer=None):
     """The chosen frames as VASP single points (:func:`pydftb.bench.cu_dft_dataset.write_set`):
     a frame without periodicity is boxed in vacuum, Gamma only and spin-polarised.  Writes only;
-    nothing is submitted."""
+    nothing is submitted.
+
+    ``writer``: another input writer, ``writer(out_dir, frames, names, group=..., time_limit=...)``
+    returning its manifest (another DFT code or other settings, e.g. the A series' batches,
+    A0 section 8); the frames are passed unchanged (no boxing)."""
+    if writer is not None:
+        return writer(out_dir, list(frames), list(names), group=group, time_limit=time_limit)
     from .bench.cu_dft_dataset import _boxed, write_set
     items = []
     for at, name in zip(frames, names):

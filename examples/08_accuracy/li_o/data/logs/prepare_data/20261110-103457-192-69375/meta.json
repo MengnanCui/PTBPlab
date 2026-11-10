@@ -1,0 +1,70 @@
+{
+  "name": "prepare_data",
+  "start": "2026-11-10T10:34:57",
+  "argv": [
+    "li_o/prepare_data.py"
+  ],
+  "cwd": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy",
+  "args": {
+    "out": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data",
+    "src": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/07_battery_li_li2o/data",
+    "d2": []
+  },
+  "git": {
+    "commit": "66a649837c2837d70044de0114fb966bb3ddda7d",
+    "branch": "claude/inspiring-ride-zax2o7",
+    "dirty": true,
+    "dirty_files": [
+      "M cli/arg_parser.py",
+      " M cli/cmd_optimize.py",
+      " M cli/cmd_scan.py",
+      " M cli/config.py",
+      " M cli/run.py",
+      " M examples/07_battery_li_li2o/make_iface_dft.py",
+      " M examples/08_accuracy/li_o/k4_dftb3_u.py",
+      " M examples/08_accuracy/li_o/prepare_data.py",
+      " M examples/08_accuracy/slurm/README.md",
+      " M pydftb/active.py",
+      " M pydftb/adaptive.py",
+      " M pydftb/adaptive_fit.py",
+      " M pydftb/bandloss.py",
+      " M pydftb/bands.py",
+      " M pydftb/calculator.py",
+      " M pydftb/coulomb.py",
+      " M pydftb/docs/reports/M5c-battery-demo.html",
+      " M pydftb/hamiltonian.py",
+      " M pydftb/tests/test_active.py",
+      " M pydftb/tests/test_adaptive.py",
+      " M pydftb/typeswitch.py",
+      " M utils/accuracy.py",
+      " M utils/engines.py",
+      " M utils/loss.py",
+      " M utils/loss_grad.py",
+      " M utils/skgrid.py"
+    ]
+  },
+  "host": "192.168.1.17",
+  "platform": "macOS-15.5-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu_count": 10,
+  "python": "3.12.10",
+  "executable": "/Users/mncui/Software/miniforge3/bin/python",
+  "packages": {
+    "numpy": "2.2.6",
+    "scipy": "1.15.3",
+    "ase": "3.26.0b1",
+    "pydftb": "0.1.0.dev0",
+    "hotcent": "2.0.1",
+    "skopt": null,
+    "torch": null,
+    "mace": null,
+    "gpaw": null,
+    "tblite": null,
+    "dftd3": null,
+    "dscribe": null
+  },
+  "env": {
+    "CONDA_DEFAULT_ENV": "base",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  }
+}

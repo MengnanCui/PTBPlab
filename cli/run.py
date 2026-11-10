@@ -87,6 +87,67 @@ print("[engine]", _configure_engine(
 from utils.hotpy import set_confinement as _set_confinement
 _set_confinement(getattr(ptbp_args, 'confinement', None) or 'selfconsistent')
 print(f"[hotcent] confinement {getattr(ptbp_args, 'confinement', None) or 'selfconsistent'}")
+def _a_series_setup():
+    """A series (A0 plan, section 8): the DFT-alignment options of the engines and the checks of
+    the new loss options.  Nothing happens (and nothing is printed) when all are at their
+    defaults, so a run without them is the run of before."""
+    import json as _json
+    from utils import engines as _eng
+    from utils.loss import band_weight as _band_weight, dataset_options as _dataset_options
+
+    def _json_arg(value, name):
+        if value is None or isinstance(value, dict):
+            return value
+        try:
+            return _json.loads(value)
+        except ValueError as err:
+            raise SystemExit(f"--{name}: not JSON ({err})")
+
+    opt = str(ptbp_args.optimization_option or '').lower()
+    engine = getattr(ptbp_args, 'engine', None) or 'dftbplus'
+    optimizer = getattr(ptbp_args, 'optimizer', 'bo')
+    align = dict(kspacing=getattr(ptbp_args, 'kspacing', None),
+                 energy_kind=getattr(ptbp_args, 'energy_kind', None),
+                 third_order=getattr(ptbp_args, 'third_order', None),
+                 hubbard_derivs=_json_arg(getattr(ptbp_args, 'hubbard_derivs', None), 'hubbard_derivs'),
+                 hubbard=_json_arg(getattr(ptbp_args, 'hubbard', None), 'hubbard'))
+    try:
+        _eng.set_alignment(**align)
+        _eng.check_alignment_engine(engine)
+        reduction, offset, c = _dataset_options(ptbp_args)
+        w_band = _band_weight(ptbp_args)
+    except (ValueError, KeyError) as err:
+        raise SystemExit(f"A-series options: {err}")
+    if _eng.aligned():
+        print("[engine] DFT alignment (A series):", _eng.alignment())
+        if optimizer in ('gradient', 'bo_grad'):
+            raise SystemExit("--optimizer gradient/bo_grad: the DFT-alignment options "
+                             "(--kspacing, --energy-kind, --third-order, --hubbard) are not in "
+                             "the gradient passes; use bo, parallel_bo or pso")
+    dataset_like = (reduction, offset) != ('sum', 'none') or getattr(ptbp_args, 'force_weight', None) is not None
+    if dataset_like and opt not in ('dataset', 'reaction'):
+        raise SystemExit("--energy-reduction, --energy-offset and --force-weight are options of "
+                         "the dataset and reaction losses")
+    if (w_band or opt == 'bands') and not getattr(ptbp_args, 'band_refs', None):
+        raise SystemExit("--band-weight and --mode bands need --band-refs")
+    if (w_band or opt == 'bands') and optimizer in ('gradient', 'bo_grad'):
+        raise SystemExit("--optimizer gradient/bo_grad: the band loss has no r0 gradient here; "
+                         "use bo, parallel_bo or pso")
+    if opt == 'bands' and w_band:
+        raise SystemExit("--mode bands is the band loss alone: drop --band-weight")
+    if opt in ('bands', 'bandstructure') and (getattr(ptbp_args, 'fixed_r0', None)
+                                              or getattr(ptbp_args, 'sigma_finish', None)):
+        raise SystemExit("--fixed-r0 and --sigma-finish fit sigma_rep: not with --mode "
+                         "bands/bandstructure (no repulsive)")
+    if getattr(ptbp_args, 'fixed_r0', None) and optimizer != 'bo':
+        print(f"[fixed_r0] one evaluation at the given radii: --optimizer {optimizer} is not used")
+    if w_band:
+        print(f"[bands] loss + {w_band:g} x L_band (pydftb.bandloss) of "
+              f"{len(ptbp_args.band_refs)} pattern(s): {ptbp_args.band_refs}")
+
+
+_a_series_setup()
+
 from utils.engines import is_gpu as _is_gpu
 if _is_gpu() and getattr(ptbp_args, 'optimizer', 'bo') in ('parallel_bo', 'pso'):
     raise SystemExit("--optimizer parallel_bo/pso evaluate BO points in parallel processes; "
@@ -212,6 +273,56 @@ def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None, n_calls=None):
     return plan
 
 
+def _band_structures():
+    """--mode bands: the structures of the band references (they set the elements, the
+    parameter sets and the penalty radius)."""
+    from pydftb.bandref import load_refs
+    refs = load_refs(list(ptbp_args.band_refs))
+    atoms = [r.atoms() for r in refs]
+    missing = [r.name for r, a in zip(refs, atoms) if a is None]
+    if missing:
+        raise SystemExit(f"--band_refs: references without a structure: {missing[:5]}")
+    print(f"[bands] {len(refs)} band references: " + ", ".join(r.name for r in refs[:12])
+          + (" ..." if len(refs) > 12 else ""))
+    return atoms
+
+
+def _fixed_r0_result(loss, types, typed):
+    """--fixed_r0: one evaluation at these radii (hotcent, the DFTB stage, the sigma_rep search),
+    as an optimiser result with a single point."""
+    from types import SimpleNamespace as _SN
+    x = [float(v) for v in ptbp_args.fixed_r0]
+    need = types.n_params if typed else 2
+    if len(x) != need:
+        names = types.dimension_names() if typed else ['r0_w', 'r0_d']
+        raise SystemExit(f"--fixed_r0 needs {need} values ({' '.join(names)}), got {len(x)}")
+    print(f"[fixed_r0] electronic part frozen at {x}: sigma_rep only")
+    mu = float(loss.Loss_EnergyGeometry(x))
+    res = _SN(x=x, fun=mu, x_iters=[list(x)], func_vals=[mu], optimizer='fixed_r0')
+    import pickle as _pickle                      # result.pkl, as after an optimiser
+    with open(path / 'result.pkl', 'wb') as fh:
+        _pickle.dump(_SN(x=list(x), fun=mu, x_iters=[list(x)], func_vals=[mu],
+                         optimizer='fixed_r0'), fh)
+    print(f"[result.pkl] Snapshot of the fixed-radii evaluation written to {path / 'result.pkl'}")
+    return res
+
+
+def _sigma_finish(loss, res, best_folder):
+    """--sigma_finish: the finer sigma_rep search at the best point (Loss.sigma_finish), saved
+    as sigma_finish.json in the run folder."""
+    import json as _json
+    if loss.is_failure(res.x):
+        print("[sigma_finish] skipped: the best point is a failed evaluation")
+        return None
+    out = loss.sigma_finish(res.x, best_folder, mu_before=float(res.fun))
+    with open(path / 'sigma_finish.json', 'w') as fh:
+        _json.dump(out, fh, indent=1)
+    print(f"[sigma_finish] sigma_rep {out['sigma_before']} -> {out['sigma']}, mu "
+          f"{out['mu_before']} -> {out['mu']} ({out['evaluations']} evaluations"
+          + ("; the best folder's files rewritten" if out.get('written') else "") + ")")
+    return out
+
+
 # Define the OptimizationScheme
 # (1) Elementary system 
 # opt_elem = []
@@ -237,7 +348,11 @@ if ptbp_args.optimization_option is not None:
     # 'reaction' shares the same plumbing as 'dataset' (per-structure energy +
     # forces loss); it differs in expected dataset shape (multiple chemical
     # formulas) and gets per-formula reporting via the Loss class.
-    if _opt in ('energygeometry', 'dataset', 'reaction'):
+    if _opt in ('energygeometry', 'dataset', 'reaction', 'bands'):
+
+        # A series (--mode bands): the band loss alone; the structures are the band references'
+        if _opt == 'bands':
+            ptbp_args.eos_points = 1
 
         # In dataset / reaction mode each Atoms object is its own data point —
         # there is no phase / volume scan, so eos_points defaults to 1 unless
@@ -274,7 +389,10 @@ if ptbp_args.optimization_option is not None:
         if ptbp_args.parameters == ["r0_w", "r0_d", "sigma_rep"]:
             print("Optimizing the Confinement potential and Repulsion part together! ")
             dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
-            dft_input = ase.io.read(dft_infile, ':') if dft_infile.exists() else None
+            if _opt == 'bands':                 # A series: the band references' structures
+                dft_input = _band_structures()
+            else:
+                dft_input = ase.io.read(dft_infile, ':') if dft_infile.exists() else None
             types = _type_model(dft_input) if dft_input is not None else None
             typed = types is not None and not types.legacy        # M5b: parameters per type
             n_calls = _resolve_n_calls(types)                     # M5b-2: default by dimensions
@@ -285,12 +403,15 @@ if ptbp_args.optimization_option is not None:
                     output.write(types.log_header(_opt) if typed else
                                  '#r0_w,r0_d,c_rep,kxc,cov_radius,mu_E,mu_V,mu_B,penalty,mu\n')
 
-            assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
+            assert _opt == 'bands' or dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
             dft_center = dft_input[floor(ptbp_args.eos_points/2)::ptbp_args.eos_points]
             num_center_atoms = len(dft_center)
 
 
-            if _opt in ('dataset', 'reaction'):
+            if _opt == 'bands':
+                print("Set boltzmann factor for Bands Mode (identical weights; not used)!")
+                bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
+            elif _opt in ('dataset', 'reaction'):
                 print(f"Set boltzmann factor for {_opt.title()} Mode (identical weights)!")
                 bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
                 if _opt == 'reaction':
@@ -352,6 +473,8 @@ Boltzmann factor: {bolt_f.tolist()}
                 print(f"[postprocess] Loaded prior result from {_result_pkl}: "
                       f"best x={res.x}, fun={res.fun}, "
                       f"{len(getattr(res, 'x_iters', [])) or 0} evaluation(s).")
+            elif getattr(ptbp_args, 'fixed_r0', None):     # A series: sigma_rep only (S3)
+                res = _fixed_r0_result(loss, types, typed)
             else:
                 res = loss.optimize(cov_radius=cov_radius,
                                     checkpoint_saver=checkpoint_saver,
@@ -364,7 +487,8 @@ Boltzmann factor: {bolt_f.tolist()}
                     'fun':       float(res.fun),
                     'x_iters':   [list(map(float, p)) for p in getattr(res, 'x_iters', [])],
                     'func_vals': list(map(float, getattr(res, 'func_vals', []))),
-                    'optimizer': ptbp_args.optimizer,
+                    'optimizer': ('fixed_r0' if getattr(res, 'optimizer', None) == 'fixed_r0'
+                                  else ptbp_args.optimizer),
                 }
                 if getattr(res, 'best_dir', None):       # gradient optimisers (M4c)
                     _snapshot['best_dir'] = res.best_dir
@@ -393,7 +517,7 @@ Boltzmann factor: {bolt_f.tolist()}
             # objects; PSO and parallel_bo paths return lightweight stand-ins,
             # so we draw a plain matplotlib convergence curve from
             # res.func_vals instead.
-            if ptbp_args.optimizer == 'bo':
+            if ptbp_args.optimizer == 'bo' and getattr(res, 'optimizer', None) != 'fixed_r0':
                 plot_convergence(res)
                 plt.savefig('convergence.png', dpi=300)
                 plt.clf()
@@ -428,6 +552,9 @@ Boltzmann factor: {bolt_f.tolist()}
                 types.directory_name(res.x) if typed else f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}")
             best_folder = path / ptbp_args.results_dir / best_name
             backup_dir  = path / best_name
+
+            if getattr(ptbp_args, 'sigma_finish', None):     # A series: finer sigma at the best
+                _sigma_finish(loss, res, best_folder)
 
             os.system(f"cp -r {best_folder} {backup_dir}")
             os.system("tar -zcvf results.tgz results && rm -r results")

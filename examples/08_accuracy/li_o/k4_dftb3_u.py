@@ -15,7 +15,7 @@ minima per atom.  The minima use the same seven volumes, so they change consiste
 
     python k4_dftb3_u.py --config scan_li_o.yaml --out runs/k4 [--point INDEX]
 
-Light: 3 interface single points (80 atoms, 4x4x1) and 14 bulk points per variant.
+Light: 3 interface single points (80 atoms, 4x4x2 as the DFT's) and 14 bulk points per variant.
 """
 import argparse
 import json

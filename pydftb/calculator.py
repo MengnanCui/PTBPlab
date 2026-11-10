@@ -171,6 +171,9 @@ class DFTBResult:
     # M8a: environment-adaptive parameters, pydftb.adaptive.AdaptiveResult (the coordination
     # numbers, every atom's parameters, dF/d(the model coefficients))
     adaptive: object | None = None
+    # A series (E1, E2): {element: pydftb.typeswitch.SwitchTerms} of the fitted type switches
+    # (OnsiteSwitch, r0mix.R0Switch): their weights, dF/dw and dF/d(the switch's vector)
+    switching: dict | None = None
 
     @property
     def e_total(self) -> float:
@@ -538,7 +541,12 @@ class DFTB:
                           ``DFTBResult.type_weights`` holds the weights.  All types must be in
                           ``sk`` with equal basis, on-site energies, Hubbard values, occupations
                           and masses (and equal per-label options); NumPy only, not with Casida,
-                          XL-BOMD or the analysis outputs.
+                          XL-BOMD or the analysis outputs.  A series: a
+                          :class:`pydftb.typeswitch.OnsiteSwitch` lets the types differ in on-site
+                          energies and U (mixed per atom, fitted shifts; channel E1), a
+                          :class:`pydftb.r0mix.R0Switch` takes its weights from a descriptor (SK
+                          tables of r0 nodes; channel E2); fitted switches put dF/d(their vector)
+                          in ``DFTBResult.switching``.
     hybrid : "lc" | "cam" | dict | Hybrid  a range-separated hybrid functional (DFTB+
                           ``Hybrid``, milestone M6h-1; molecules, periodic systems at the Gamma
                           point, M6h-3a, and at the k-points of a supercell folding, M6h-3b):
@@ -834,6 +842,32 @@ class DFTB:
         self.adaptive = _adaptive.make_models(adaptive)                # M8a
         if self.adaptive:
             self._check_adaptive()
+        if self.type_switching is not None:                            # A series: E1, E2
+            self._check_fitted_switches()
+
+    def _check_fitted_switches(self):
+        """What the per-type on-site energies and Hubbard U (A2 channel E1: OnsiteSwitch, an
+        R0Switch with mix_onsite) and the descriptor-driven switches (E2) do not support."""
+        e1 = [sw for sw in self.type_switching if getattr(sw, "mixes_onsite", False)]
+        why = []
+        if e1:
+            if self.third_order:
+                why.append("third order (DFTB3, its Gamma depends on U)")
+            if self.pauli:
+                why.append("two-component spin")
+            if self.block_terms:
+                why.append("DFTB+U or onsite corrections")
+            if self.h_damping is not None or self.h5 is not None:
+                why.append("the H-X damping or H5 (they depend on U)")
+            if getattr(self.solver, "sparse", False) or getattr(self.solver, "subsystems", False):
+                why.append("the sparse and divide-and-conquer solvers")
+            if why:
+                raise ValueError("per-type on-site energies and Hubbard U (A2 channel E1) do not "
+                                 "support " + ", ".join(why))
+        if any(hasattr(sw, "mixing") for sw in self.type_switching):
+            if getattr(self.solver, "sparse", False) or getattr(self.solver, "subsystems", False):
+                raise ValueError("descriptor-driven type switching (r0mix) does not support the "
+                                 "sparse and divide-and-conquer solvers")
 
     def _check_adaptive(self):
         """What the environment-adaptive parameters (M8a) do not support."""
@@ -1331,10 +1365,13 @@ class DFTB:
                                  "(milestone M6f)")
             q_init = self.populations_from_file(species, q_init, positions=positions,
                                                  cell=cell if periodic else None)
+        # a fitted switch whose weights depend on its coefficients needs dF/dw, which needs the
+        # energy-weighted density (A series, r0mix)
+        need_w = need_derivs or (setup.switching is not None and setup.switching.needs_dedw)
         if scc_control is None:
-            state = self._scc(setup, q_init, need_derivs, timings)
+            state = self._scc(setup, q_init, need_w, timings)
         else:
-            state = self._scc(setup, q_init, need_derivs, timings, scc_control)
+            state = self._scc(setup, q_init, need_w, timings, scc_control)
         res = self._energies(setup, state) if not xl else self._energies_xl(setup, state)
         if (self.scc and self.convergent_scc_only and scc_control is None
                 and not state.converged):
@@ -1354,6 +1391,8 @@ class DFTB:
         if self.type_switching is not None:                             # M5a
             res.type_weights = _typeswitch.result_weights(self.type_switching, setup.switching,
                                                           len(setup.species))
+            if setup.switching is not None and setup.switching.gradient_switches:   # E1, E2
+                res.switching = self._switching_terms(setup, state)
         if setup.adaptive is not None:                                  # M8a
             # only the density at the pair elements is needed (wdm is None without forces)
             st_rho = state if state.wdm is not None else dataclasses.replace(state, wdm=state.rho)
@@ -1878,9 +1917,12 @@ class DFTB:
         basis = Basis.build(species, sk)
         norb = basis.norb
         if mix is not None:                          # M5a: mixed H0/S blocks
+            # the raw type-pair blocks of the active atoms: for the forces, and for dF/dw of a
+            # fitted switch (r0mix)
+            keep = mix.active if (forces or (matrices and mix.needs_dedw)) else None
             pb, mix.blocks = build_mixed_pairs(species, pos, cell, pbc, sk, basis, mix.candidates,
                                                mix.column, mix.weights, derivatives=forces,
-                                               fd_delta=self.fd_delta, keep=mix.active)
+                                               fd_delta=self.fd_delta, keep=keep)
             if matrices:
                 mix.rep = _typeswitch.mixed_repulsive(sk, self.repulsive, mix, pos, cell, pbc,
                                                       grad=forces)
@@ -1895,6 +1937,12 @@ class DFTB:
             _adaptive.scale_pairs(adaptive, pb)
             eps0 = eps0 + adaptive.onsite_shift
         site_of_orb, site_atom, hub, q0 = self._sites(basis)
+        hub_cut = None
+        if mix is not None:                          # A2 channel E1: per-atom on-site energies, U
+            mix.onsite = _typeswitch.onsite_mixing(self.type_switching, mix, basis, sk, eps0, hub,
+                                                   site_atom)
+            if mix.onsite is not None:
+                eps0, hub, hub_cut = mix.onsite.eps, mix.onsite.hub, mix.onsite.hub_cut
         periodic = cell is not None and np.any(pbc)
         if periodic and self.kpts is not None:
             kpts, kw = self.kpts
@@ -1935,7 +1983,7 @@ class DFTB:
             h5 = None if self.h5 is None else self.h5.atom_parameters(species)   # M6f-3
             coul = Coulomb(pos, site_atom, hub, cell if periodic else None,
                            pbc if periodic else None, damped=damped,
-                           damp_exp=self.h_damping or 0.0, h5=h5)
+                           damp_exp=self.h_damping or 0.0, h5=h5, cutoff_hubbard=hub_cut)
             if self.third_order:
                 third = ThirdOrder(coul, self._site_hubbard_derivs(basis),
                                    onsite_only=self.third_order == "onsite")
@@ -3094,31 +3142,15 @@ class DFTB:
         addForceDcXlbomd, addGradientDcXlbomd).
         """
         pb = st.pairs
-        v_orb, vs_orb = self._potentials(st, sc.q_in if xl else sc.q_out)
         grad, w_rep = self._repulsive_gradient(st)
-        if st.pauli is not None:
-            p_e, w_e, p_m, c_soc = self._pauli_pair_densities(st, sc)
-        else:
-            p_e, w_e, p_m = self._pair_densities(st, sc)
-        vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
-        coef_s = p_e * vsum - w_e
-        if st.pauli is not None:
-            # spin potentials of the three directions; the dual spin-orbit term's dS part
-            if p_m is not None:
-                for a in range(3):
-                    coef_s = coef_s + p_m[a] * 0.5 * (vs_orb[a][pb.rows] + vs_orb[a][pb.cols])
-            if c_soc is not None:
-                coef_s = coef_s + c_soc
-        elif p_m is not None:
-            coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
-        if st.block is not None:                         # block potentials' dS part (M6b)
-            coef_s = coef_s + self._block_force_coefficient(st, sc)
-        if st.hybrid is not None:                        # the exchange's dS part (M6h-1)
-            coef_s = coef_s + st.hybrid.pair_coefficient(sc.hybrid.dp_out, pb)
+        p_e, coef_s = self._pair_coefficients(st, sc, xl)
         grad, gp = self._add_pair_terms(st, grad, p_e, coef_s)
         sw = None
         if st.switching is not None and st.switching.active.any():    # M5a: weights' gradient
-            sw = _typeswitch.weight_gradient(st.switching, pb, p_e, coef_s, virial)
+            extra = (self._onsite_dedw(st, sc) if st.switching.onsite is not None
+                     else None)                                       # E1: on-site energies, U
+            sw = _typeswitch.weight_gradient(st.switching, pb, p_e, coef_s, virial,
+                                             extra_dedw=extra)
             grad = grad + sw[0]
         ad = None
         if st.adaptive is not None:                                  # M8a: parameters' gradient
@@ -3180,6 +3212,62 @@ class DFTB:
         if ad is not None:                                           # M8a
             w = w + ad[1]
         return grad, 0.5 * (w + w.T)
+
+    def _pair_coefficients(self, st: _Setup, sc: _SCCState, xl: bool = False):
+        """The coefficients of dH0 (the density P_e) and of dS at every pair element: the SCC
+        (and spin, spin-orbit, block, exchange) shifts times the density minus the
+        energy-weighted density.  The force code's, and those of dF/dw of a type switch."""
+        pb = st.pairs
+        v_orb, vs_orb = self._potentials(st, sc.q_in if xl else sc.q_out)
+        if st.pauli is not None:
+            p_e, w_e, p_m, c_soc = self._pauli_pair_densities(st, sc)
+        else:
+            p_e, w_e, p_m = self._pair_densities(st, sc)
+        vsum = 0.5 * (v_orb[pb.rows] + v_orb[pb.cols])
+        coef_s = p_e * vsum - w_e
+        if st.pauli is not None:
+            # spin potentials of the three directions; the dual spin-orbit term's dS part
+            if p_m is not None:
+                for a in range(3):
+                    coef_s = coef_s + p_m[a] * 0.5 * (vs_orb[a][pb.rows] + vs_orb[a][pb.cols])
+            if c_soc is not None:
+                coef_s = coef_s + c_soc
+        elif p_m is not None:
+            coef_s = coef_s + p_m * 0.5 * (vs_orb[pb.rows] + vs_orb[pb.cols])
+        if st.block is not None:                         # block potentials' dS part (M6b)
+            coef_s = coef_s + self._block_force_coefficient(st, sc)
+        if st.hybrid is not None:                        # the exchange's dS part (M6h-1)
+            coef_s = coef_s + st.hybrid.pair_coefficient(sc.hybrid.dp_out, pb)
+        return p_e, coef_s
+
+    def _onsite_terms(self, st: _Setup, sc: _SCCState):
+        """E1: the on-site density D_mu,mu (n_orb,) and dE/dU per site (n_site,) at the output
+        charges (zero without SCC)."""
+        d_on = self._onsite_density(st, sc)
+        if not self.scc:
+            return d_on, np.zeros(len(st.site_atom))
+        dq, _ = self._charge_and_magnetisation(st, sc.q_out)
+        return d_on, st.coulomb.hubbard_gradient(dq)
+
+    def _onsite_dedw(self, st: _Setup, sc: _SCCState) -> np.ndarray:
+        """E1's part of dE/dw (n_atom, n_labels)."""
+        d_on, dedu = self._onsite_terms(st, sc)
+        return _typeswitch.onsite_dedw(st.switching.onsite, st.switching, d_on, dedu)
+
+    def _switching_terms(self, st: _Setup, sc: _SCCState) -> dict:
+        """``DFTBResult.switching``: dF/d(vector) of the fitted switches (E1 shifts, r0mix
+        coefficients) at fixed density, i.e. exact for the Mermin free energy."""
+        mix = st.switching
+        d_on = dedu = None
+        if mix.onsite is not None:
+            d_on, dedu = self._onsite_terms(st, sc)
+        dedw = None
+        if mix.needs_dedw:
+            p_e, coef_s = self._pair_coefficients(st, sc)
+            extra = (None if mix.onsite is None
+                     else _typeswitch.onsite_dedw(mix.onsite, mix, d_on, dedu))
+            dedw = _typeswitch.weight_derivatives(mix, st.pairs, p_e, coef_s, extra)
+        return _typeswitch.switch_terms(mix, dedw, d_on, dedu)
 
     @staticmethod
     def _onsite_density(st: _Setup, sc: _SCCState) -> np.ndarray:

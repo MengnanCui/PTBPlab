@@ -282,3 +282,81 @@ def evaluate_refs(refs, make_calc, settings: BandSettings | None = None) -> list
             out.append({"name": ref.name, "group": ref.meta.get("group") or ref.name,
                         "kind": ref.kind, "loss": np.nan, "error": f"{type(exc).__name__}: {exc}"})
     return out
+
+
+# ---- least-squares form (fitting, A series A2) ------------------------------------------------------
+def residuals(ref: BandRef, dftb: DFTBBands, settings: BandSettings | None = None) -> dict:
+    """:func:`compare` as least-squares residuals, for fits with a Jacobian.
+
+    With compare's window, matching and shift Δ, every valence and conduction pair gives
+    sqrt(w_i / Σw) (ε_DFTB,i − ε_DFT,i − Δ) (their squares sum to rms²), followed by the gap
+    term ``gap_weight`` · gap error (insulators and molecules).  Returns
+    ``{"r": (m,) eV, "states": (m_pairs, 3) (spin, k, DFTB state) of every pair, "sqrt_w":
+    (m_pairs,), "gap": None or {"cbm": (s, k, n), "vbm": (s, k, n), "weight"}, "free": shift
+    is free, "compare": the compare dict}``; :func:`residual_jacobian` turns eigenvalue
+    derivatives into the Jacobian of ``r``."""
+    s = settings or BandSettings()
+    comp = compare(ref, dftb, s)
+    e_d, _ = ref.valence()
+    e_b = np.asarray(dftb.energies, float)
+    nv = int(dftb.n_valence)
+    lo, hi = comp["window"]
+    delta = comp["shift"]
+    sel = ref.select(s.levels)
+    kw_all = ref.kweights if ref.kind != "path" else np.ones(len(ref.kpts))
+    w = kw_all[sel]
+    ld, lb, lw = e_d[:, sel], e_b[:, sel], w / w.sum()
+    rv, wv, rc, wc = _pairs(ld, lb, nv, lw, lo, hi, s, delta)
+    sw = wv.sum() + wc.sum()
+    ns = e_b.shape[0]
+    st_v = np.array([(sp, sel[k], n) for sp in range(ns) for k in range(len(sel))
+                     for n in range(nv)], int).reshape(-1, 3)
+    st_c = np.array([(sp, sel[k], nv + m) for sp in range(ns) for k in range(len(sel))
+                     for m in range(rc.shape[2])], int).reshape(-1, 3)
+    if sw > 0:
+        wh = np.concatenate([wv.ravel(), wc.ravel()]) / sw
+        raw = np.concatenate([rv.ravel(), rc.ravel()])
+    else:
+        wh = raw = np.zeros(0)
+        st_v = st_v[:0]
+        st_c = st_c[:0]
+    keep = wh > 0
+    states = np.vstack([st_v, st_c])[keep] if sw > 0 else np.zeros((0, 3), int)
+    sqrt_w = np.sqrt(wh[keep])
+    r = sqrt_w * raw[keep]
+    gap = None
+    if not comp["metal"] and np.isfinite(comp["gap_err"]) and e_b.shape[2] > nv and s.gap_weight:
+        iv = np.unravel_index(np.argmax(e_b[:, :, :nv]), e_b[:, :, :nv].shape)
+        ic = np.unravel_index(np.argmin(e_b[:, :, nv:]), e_b[:, :, nv:].shape)
+        gap = {"vbm": (int(iv[0]), int(iv[1]), int(iv[2])),
+               "cbm": (int(ic[0]), int(ic[1]), int(nv + ic[2])), "weight": float(s.gap_weight)}
+        r = np.append(r, s.gap_weight * comp["gap_err"])
+    return {"r": r, "states": states, "sqrt_w": sqrt_w, "gap": gap, "free": s.shift == "free",
+            "compare": comp}
+
+
+def residual_states(res: dict) -> np.ndarray:
+    """The DFTB state indices whose derivatives :func:`residual_jacobian` needs."""
+    idx = [res["states"][:, 2]]
+    if res["gap"] is not None:
+        idx.append(np.array([res["gap"]["vbm"][2], res["gap"]["cbm"][2]]))
+    return np.unique(np.concatenate(idx)).astype(int) if idx else np.zeros(0, int)
+
+
+def residual_jacobian(res: dict, deps) -> np.ndarray:
+    """Jacobian (m, n_x) of :func:`residuals`' ``r`` from eigenvalue derivatives ``deps``
+    (n_spin, n_k, n_state, n_x) in eV per unit x.  The free shift is eliminated (its
+    derivative is the weighted mean); window weights and matching are held fixed (they change
+    only where a state crosses a window edge or another state)."""
+    deps = np.asarray(deps, float)
+    st = res["states"]
+    d = deps[st[:, 0], st[:, 1], st[:, 2]] if len(st) else np.zeros((0, deps.shape[-1]))
+    sw = res["sqrt_w"]
+    if res["free"] and len(st):
+        d = d - (sw ** 2) @ d
+    jac = sw[:, None] * d
+    if res["gap"] is not None:
+        g = res["gap"]
+        row = g["weight"] * (deps[g["cbm"]] - deps[g["vbm"]])
+        jac = np.vstack([jac, row[None, :]])
+    return jac

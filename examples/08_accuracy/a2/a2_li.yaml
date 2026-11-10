@@ -1,0 +1,66 @@
+# A2 for Li (A0 section 4): the electronic part follows the environment, fitted to the D1 bands
+# with the repulsive absent, starting from the A1 scan's best band point (S3).
+#   python a2/a2.py plan a2/a2_li.yaml
+#   python a2/a2.py prepare a2/a2_li.yaml            # E1 copies; E2 typed SK set (hotcent, server)
+#   python a2/a2.py fit a2/a2_li.yaml --run E3-L1-linear --holdout all
+#   python a2/a2.py transfer a2/a2_li.yaml --run E3-L1-linear --jobs 16
+#   python a2/a2.py summary a2/a2_li.yaml && python common/gates.py --root li_o/runs --a2 'li_o/runs/a2_li/result_*.json'
+# Paths are relative to this file; distances in Bohr (pydftb's units), energies in Hartree.
+name: a2_li
+system: li
+scan: ../li_o/scan_li.yaml        # A1.1: data, DFTB settings, band references, physrep, repfit
+base: best:S3                     # the A1 point the models start from (best:<strategy> or an index)
+out: ../li_o/runs/a2_li
+k6: ../li_o/runs/k6_li/k6_results.json    # li_o/k6_per_structure_r0.py --config li_o/scan_li.yaml --out li_o/runs/k6_li
+bands:
+  settings: {}                    # overrides of the scan's band settings (window -3/+1 eV, level 1)
+  test_groups: [li_hcp]           # never fitted (hcp is the family-out test of A1 as well)
+fit:
+  l2: 1.0e-3                      # ridge towards no environment dependence (all coefficients 0)
+  max_evaluations: 40
+  processes: 8                    # band references in parallel (fork, Linux)
+  band_jacobian: frozen           # Hellmann-Feynman at frozen charges; "scc": exact, 2 n_x SCCs per reference
+  offsets: global
+typed_sk:
+  workers: 16                     # hotcent processes for a typed set (slurm/a2_prepare.sh)
+  cache: ../li_o/runs/typed_skcache   # $PTBP_SKCACHE_TYPED overrides; the scan's sk settings are used
+descriptors:                      # the ladder (pydftb.descriptors kinds); transform: standardize | pca | none
+  L1:
+    transform: standardize
+    Li: [{kind: cn}]
+  L2:
+    transform: standardize
+    Li:
+      - {kind: cn}
+      - {kind: radial, centres: [4.5, 5.25, 6.0, 6.75, 7.5], width: 0.6, cutoff: 9.5}
+      - {kind: angular, zetas: [1.0, 2.0, 4.0], lambdas: [-1.0, 1.0], etas: [0.0], cutoff: 9.0}
+  L3:                             # SOAP (dscribe, optional), PCA to 99 % of the variance
+    transform: pca
+    variance: 0.99
+    Li: [{kind: soap, species: [Li], r_cut: 9.45, n_max: 4, l_max: 3, sigma: 0.95}]
+  L4:                             # MACE-MP-0 invariant node features (mace-torch, optional; no forces)
+    transform: pca
+    variance: 0.99
+    Li: [{kind: mace, model: small, family: mp}]
+regressors:
+  linear: {kind: linear}
+  kernel: {kind: kernel, n_inducing: 24, length_scale: median}
+  mlp: {kind: mlp, hidden: [8]}
+channels:
+  E3:                             # AdaptiveParams channels per element (Li has an s shell only here)
+    Li: [onsite.s, hopping.s]
+  E2:                             # r0 nodes around the base point: r0_w +- 3 x 0.3 Bohr, r0_d fixed
+    Li: {n: 7, spacing: [0.3, 0.0]}
+  E1:                             # two Li types by coordination number (M5a window), shifted on-site and U
+    Li: {centre: 3.5, width: 4.0, shells: [s], hubbard: true}
+runs:                             # the ladder in order; G2 (common/gates.py) decides whether to climb
+  - {channel: E3, level: L1, regressor: linear}
+  - {channel: E3, level: L1, regressor: kernel}
+  - {channel: E2, level: L1, regressor: linear}
+  - {channel: E1}
+  - {channel: E3, level: L2, regressor: linear}
+  - {channel: E3, level: L2, regressor: kernel}
+  - {channel: E3, level: L2, regressor: mlp}
+  - {channel: E2, level: L2, regressor: linear}
+  - {channel: E3, level: L3, regressor: linear}
+  - {channel: E3, level: L4, regressor: linear}

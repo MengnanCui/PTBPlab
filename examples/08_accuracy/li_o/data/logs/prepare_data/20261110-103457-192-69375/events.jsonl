@@ -1,0 +1,6 @@
+{"t": 0.055, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_o_train", "n": 111, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_train.xyz"}
+{"t": 0.056, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_o_test", "n": 8, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_test.xyz"}
+{"t": 0.057, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_o_ood", "n": 3, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_o_ood.xyz"}
+{"t": 0.059, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_train", "n": 38, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_train.xyz"}
+{"t": 0.06, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_test", "n": 2, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_test.xyz"}
+{"t": 0.06, "time": "2026-11-10T10:34:57", "kind": "wrote", "set": "li_ood", "n": 4, "path": "/Users/mncui/Documents/PProjects/pydftb/PTBPlab/examples/08_accuracy/li_o/data/li_ood.xyz"}

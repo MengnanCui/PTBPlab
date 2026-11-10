@@ -1,0 +1,41 @@
+# S5 (A0 section 3, optional diagnostic): the H and S tables of the best S1 point of the Li–O scan
+# refitted directly (two-centre form kept), with the repulsive refitted at every step.
+#   python s5_sk_tables.py dry-run   s5_li_o.yaml --jobs 64     # channels, parameter count, cost
+#   python s5_sk_tables.py gradcheck s5_li_o.yaml               # autodiff against central differences
+#   python s5_sk_tables.py fit       s5_li_o.yaml --jobs 64     # resumable: rerun to continue
+#   python s5_sk_tables.py report    s5_li_o.yaml --jobs 64
+#   python s5_sk_tables.py export    s5_li_o.yaml --dest models/S5
+# Needs a scored scan (ptbp scan run + losses on scan_li_o.yaml).  For the Li grid, point `scan` at
+# scan_li.yaml and keep only the Li-Li range.  See README_s5.md.
+name: s5_li_o
+scan: scan_li_o.yaml               # data, roles, DFTB settings, L_EF, repfit pairs, band refs
+out: runs/s5_li_o
+start: best:S1                     # or a point index of the scan
+corrections:
+  form: multiplicative             # T(r) (1 + c(r)); additive: T(r) + c(r) max|T|
+  kinds: [H, S]                    # [H] keeps the overlaps of the start point
+  n_coef: 4                        # cubic B-splines per channel (supports inside the range)
+  ranges:                          # Angstrom; c(r) is zero (and C2) outside.  "auto": from the data
+    Li-Li: [1.1, 6.5]              # Li2 down to 1.2 A; bcc 3.0/3.5/4.9 A shells
+    Li-O: [1.1, 5.0]               # LiO down to 1.2 A; Li2O 2.0 A, second shell 3.8 A
+    O-O: [0.9, 4.5]                # O2 down to 1.0 A; peroxide 1.55 A, Li2O 3.26 A
+  channels: all                    # or e.g. [ss0, sp0], [Li-O], [Li-O.H.sp0]
+  beta_max: 0.5                    # |beta| bound: tables change by at most 50 %
+penalties:
+  ridge: 1.0e-3                    # on beta (dimensionless)
+  smooth: 1.0e-2                   # on second differences of beta within a channel
+repulsive:
+  kind: r2b                        # r2b: the scan's repfit pairs, refitted on train (as its R2b row)
+                                   # physrep: one sigma per fitted element by L_EF (as S1)
+optimizer:
+  gradient: autodiff               # autodiff (torch: pydftb.autodiff "implicit"), fd, none (Powell)
+  outer: 20                        # repulsive refits; each followed by `inner` L-BFGS-B iterations
+  inner: 5
+  trust: 0.2                       # |beta - beta_k| per outer step; x1.5 on accept, x0.5 on reject
+  trust_max: 0.5
+  trust_min: 1.0e-3                # stop below this
+  fd_step: 1.0e-3                  # gradient fd only
+  abs_smoothing: 1.0e-4            # eV/atom: |x| -> sqrt(x^2 + d^2) - d in the optimised L_EF
+  accept_tol: 1.0e-6
+bands:
+  weight: 0.0                      # > 0: + weight x L_band (value only) in the accept/reject objective

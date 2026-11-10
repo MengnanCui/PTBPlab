@@ -428,3 +428,142 @@ def test_joint_repulsive_monotonic_solve():
     assert np.all(np.diff(c) <= 1e-9) and np.all(c >= -1e-9)
     c2, k = cj.solve(a, y, None, None, 6, 1e-12, False)
     assert np.allclose(c2, [3.0, 1.0, 2.0, 0.5, -0.2, 0.1], atol=1e-4) and abs(k - 0.3) < 1e-4
+
+
+# ---- descriptor models (A series, A0 section 4) ----------------------------------------------------
+def _desc_models(regressor="linear"):
+    """O: radial + angular functions, H: its coordination number, with a linear, kernel or MLP
+    regressor driving on-site, hopping and repulsive channels."""
+    from pydftb.descriptors import Angular, CoordinationNumber, Radial, Stack
+    from pydftb.regressors import MLP, Kernel, Linear
+    d_o = Stack((Radial("O", centres=(1.6, 2.4), width=0.6, cutoff=6.0),
+                 Angular("O", zetas=(1.0, 2.0), lambdas=(1.0,), cutoff=6.0)))
+    d_h = CoordinationNumber("H", window=(0.6, 1.6))
+    ch_o = ("onsite.s", "onsite.p", "hopping.p", "repulsive")
+    ch_h = ("onsite.s", "hopping.s")
+    rng = np.random.default_rng(7)
+    if regressor == "linear":
+        r_o, r_h = Linear(d_o.size, len(ch_o)), Linear(1, len(ch_h))
+    elif regressor == "kernel":
+        r_o = Kernel(tuple(map(tuple, rng.normal(size=(3, d_o.size)))), 1.5, len(ch_o))
+        r_h = Kernel(((0.5,), (1.0,)), 0.5, len(ch_h))
+    else:
+        r_o, r_h = MLP(d_o.size, len(ch_o), hidden=(3,), seed=1), MLP(1, len(ch_h), (2,), seed=2)
+    t_o = 0.02 * rng.normal(size=r_o.size)
+    t_h = 0.02 * rng.normal(size=r_h.size)
+    if regressor == "mlp":                       # keep the hidden layers of initial()
+        t_o = r_o.initial() + t_o
+        t_h = r_h.initial() + t_h
+    o = AdaptiveParams("O", descriptor=d_o, regressor=r_o, channels=ch_o, theta=tuple(t_o),
+                       pair_repulsive={"H": PairRepulsive(3.0, (0.02, -0.01))})
+    h = AdaptiveParams("H", descriptor=d_h, regressor=r_h, channels=ch_h, theta=tuple(t_h))
+    return [o, h]
+
+
+def test_zero_descriptor_model_is_the_plain_calculation(params):
+    lab, pos, plain = _water(params)
+    zero = [m.with_vector(np.zeros(len(m.vector()))) for m in _desc_models()]
+    _, _, calc = _water(params, adaptive=zero)
+    a, b = plain.calculate(lab, pos, forces=True), calc.calculate(lab, pos, forces=True)
+    assert a.energy == b.energy and np.array_equal(a.forces, b.forces)
+
+
+@pytest.mark.parametrize("regressor", ["linear", "kernel", "mlp"])
+def test_descriptor_model_forces_and_coefficient_derivatives(params, regressor):
+    models = _desc_models(regressor)
+    lab, pos, calc = _water(params, adaptive=models)
+    r = calc.calculate(lab, pos, forces=True)
+    fd = -_fd(lambda p: calc.calculate(lab, p, forces=False).free_energy, pos, 1e-5)
+    assert np.abs(r.forces - fd).max() < 2e-9 and np.abs(r.forces).max() > 1e-3
+    g = r.adaptive.gradient(models)
+    x0 = np.concatenate([m.vector() for m in models])
+
+    def free(x):
+        ms = [models[0].with_vector(x[:len(models[0].vector())]),
+              models[1].with_vector(x[len(models[0].vector()):])]
+        return _water(params, adaptive=ms)[2].calculate(lab, pos, forces=False).free_energy
+
+    num = _fd(free, x0, 1e-6)
+    assert np.abs(g - num).max() < 1e-7 * max(1.0, np.abs(num).max())
+    assert set(r.adaptive.dedp) >= {("onsite", "O", "s"), ("hopping", "H", "s"), ("repulsive", "O")}
+
+
+def test_descriptor_model_forces_and_stress_of_a_metal():
+    from pydftb.descriptors import Angular, Radial, Stack
+    from pydftb.regressors import Kernel
+    at = _cu3()
+    sk = ParamSet(SK, max_l={"Cu": 2}, shell_resolved=True).skset(["Cu"])
+    lab, pos, cell = at.get_chemical_symbols(), at.positions / BOHR, at.cell.array / BOHR
+    d = Stack((Radial("Cu", centres=(4.5, 6.0), width=1.0, cutoff=9.0),
+               Angular("Cu", zetas=(1.0,), lambdas=(1.0, -1.0), cutoff=8.0)))
+    reg = Kernel(tuple(map(tuple, np.random.default_rng(3).normal(1.0, 0.5, (3, d.size)))), 2.0, 3)
+    m = AdaptiveParams("Cu", descriptor=d, regressor=reg, channels=("onsite.d", "hopping.s",
+                                                                    "repulsive"),
+                       theta=tuple(0.03 * np.random.default_rng(4).normal(size=reg.size)))
+
+    def calc():
+        return DFTB(sk, kpts=make_kpoints((2, 2, 2)), temperature=1000.0, scc_tol=1e-12,
+                    adaptive=m)
+
+    def free(p=pos, c=cell):
+        return calc().calculate(lab, p, c, np.ones(3, bool), forces=False).free_energy
+
+    r = calc().calculate(lab, pos, cell, np.ones(3, bool), forces=True, stress=True)
+    fd = -_fd(lambda p: free(p), pos, 1e-5)
+    assert np.abs(r.forces - fd).max() < 1e-8
+    vol = abs(np.linalg.det(cell))
+
+    def strained(eps):
+        f = np.eye(3) + eps
+        return free(pos @ f.T, cell @ f.T)
+
+    sfd = -_fd(strained, np.zeros((3, 3)), 1e-6) / vol
+    assert np.abs(r.stress - 0.5 * (sfd + sfd.T)).max() < 1e-9
+
+
+def test_descriptor_model_vectors_json_and_refusals(params):
+    import json
+    from dataclasses import dataclass
+    from pydftb import envmodel
+    from pydftb.adaptive import channel_jacobians
+    from pydftb.descriptors import CoordinationNumber
+    from pydftb.regressors import Linear
+    models = _desc_models("mlp")
+    for m in models:
+        x = np.arange(len(m.vector()), dtype=float) * 0.01
+        assert np.array_equal(m.with_vector(x).vector(), x)
+        assert len(m.parameter_names()) == len(x)
+        back = envmodel.model_from_dict(json.loads(json.dumps(m.to_dict())))
+        assert np.array_equal(back.vector(), m.vector()) and back.channels == m.channels
+    # dF/dtheta = sum over channels of dF/dp_A dp_A/dtheta (channel_jacobians)
+    lab, pos, calc = _water(params, adaptive=models)
+    r = calc.calculate(lab, pos, forces=False)
+    st = calc._setup(lab, pos, None, None, False, {}, matrices=False)
+    for m in models:
+        jac = channel_jacobians(m, st.adaptive)
+        g = sum(r.adaptive.dedp[key] @ jm for key, (_, jm) in jac.items())
+        n = len(m.regressor.names)
+        assert np.allclose(g[:n], r.adaptive.gradients[m.element][:n], rtol=1e-10, atol=1e-14)
+
+    @dataclass(frozen=True)
+    class NoDerivatives(CoordinationNumber):
+        has_derivatives = False
+
+    m = AdaptiveParams("O", descriptor=NoDerivatives("O"), channels=("onsite.p",),
+                       theta=(0.01, 0.02))
+    lab, pos, calc = _water(params, adaptive=[m])
+    calc.calculate(lab, pos, forces=False)                     # energies are fine
+    with pytest.raises(ValueError, match="no position derivatives"):
+        calc.calculate(lab, pos, forces=True)
+    with pytest.raises(ValueError, match="channels"):
+        AdaptiveParams("O", descriptor=CoordinationNumber("O"))
+    with pytest.raises(ValueError, match="channel"):
+        AdaptiveParams("O", descriptor=CoordinationNumber("O"), channels=("onsite.x",))
+    with pytest.raises(ValueError, match="inputs"):
+        AdaptiveParams("O", descriptor=CoordinationNumber("O"), regressor=Linear(2),
+                       channels=("onsite.p",))
+    with pytest.raises(ValueError, match="describes"):
+        AdaptiveParams("H", descriptor=CoordinationNumber("O"), channels=("onsite.s",))
+    with pytest.raises(ValueError, match="not onsite"):
+        AdaptiveParams("O", descriptor=CoordinationNumber("O"), channels=("onsite.p",),
+                       onsite={"p": (0.0,)})

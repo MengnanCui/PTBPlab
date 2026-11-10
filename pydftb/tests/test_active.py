@@ -177,3 +177,20 @@ def test_anchored_members_spread_where_no_data_constrains(sk, data, committee):
         assert abs(mem[0].vector()[b] - x_base[b]) < 1e-8
     v = [mem[0].vector()[b] for mem in spread.members]
     assert abs(v[0] - v[1]) > 1e-3
+
+
+def test_write_candidates_with_another_writer(tmp_path):
+    """writer= replaces the VASP writer (A0 section 8); the default is unchanged."""
+    from ase.build import bulk
+    calls = []
+
+    def writer(out_dir, frames, names, group, time_limit):
+        calls.append((out_dir, len(frames), names, group, time_limit))
+        return {"written": names}
+
+    cell = bulk("Cu", "fcc", a=3.6)
+    man = write_candidates(str(tmp_path), [cell], ["fcc1"], group="a1", time_limit="02:00:00",
+                           writer=writer)
+    assert man == {"written": ["fcc1"]}
+    assert calls == [(str(tmp_path), 1, ["fcc1"], "a1", "02:00:00")]
+    assert not any(tmp_path.iterdir())               # the default writer did not run

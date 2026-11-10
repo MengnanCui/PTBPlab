@@ -26,10 +26,24 @@ types, as a smooth function of its coordination number:
   terms); the virial gets sum over CN pairs of dE/dCN_A f'(r)/r r (x) r.
 
 The parameters of a switch (windows and cut-offs) are hyperparameters, never fitted.
+
+A series (A0 plan, section 4), two generalisations, both opt-in (M5a's results are unchanged):
+
+* descriptor-driven weights (channel E2, :mod:`pydftb.r0mix`): a switch with a ``mixing``
+  method supplies the weights of its element's atoms from any descriptor
+  (:class:`pydftb.descriptors.Features`), and their gradient through ``state.chain``;
+* per-type on-site energies and Hubbard U (channel E1, :class:`OnsiteSwitch`, or an R0Switch
+  with ``mix_onsite``): eps_A,l = sum_t w_A,t eps^t_l and U_A,l = sum_t w_A,t U^t_l per atom,
+  the SKF values plus fitted shifts; dE/dw then also has sum_mu D_mu,mu eps^t (the on-site
+  density) and sum_sites dE/dU U^t (:meth:`pydftb.coulomb.Coulomb.hubbard_gradient`).
+
+Switches that are fitted models (:mod:`pydftb.envmodel` protocol, engine keyword
+``type_switching``) get dF/d(their vector) in ``DFTBResult.switching`` (:class:`SwitchTerms`).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields, replace
+from typing import ClassVar
 
 import numpy as np
 from ase.data import atomic_numbers, covalent_radii
@@ -40,6 +54,7 @@ from .system import LABEL_FORBIDDEN, element_of_label
 
 DEFAULT_RADIUS_SCALE = (1.1, 1.3)    # (r_on, r_off) / (R_cov,A + R_cov,B)
 _ONSITE_LINE_SIZES = (10, 13)        # values of an SKF on-site line (simple, extended format)
+SHELL_LETTERS = "spdf"
 
 
 def smoothstep(x):
@@ -136,11 +151,16 @@ class TypeSwitch:
 
     @classmethod
     def make(cls, spec) -> "TypeSwitch":
-        """A TypeSwitch, or a dict of its fields."""
-        if isinstance(spec, TypeSwitch):
+        """A TypeSwitch, a dict of its fields, another switch object (a subclass, or one with a
+        ``mixing`` method such as :class:`pydftb.r0mix.R0Switch`), or a model dict with a
+        ``kind`` (:func:`pydftb.envmodel.model_from_dict`)."""
+        if isinstance(spec, TypeSwitch) or hasattr(spec, "mixing"):
             return spec
         if isinstance(spec, dict):
-            unknown = set(spec) - {"element", "types", "centre", "width", "cutoff"}
+            if "kind" in spec:
+                from .envmodel import model_from_dict
+                return model_from_dict(spec)
+            unknown = set(spec) - {f.name for f in fields(cls)}
             if unknown:
                 raise ValueError(f"type switch: unknown keys {sorted(unknown)} (use 'element', "
                                  "'types', 'centre', 'width', 'cutoff')")
@@ -220,6 +240,177 @@ class TypeSwitch:
         return cn, (i, j, vec, -ds / span / d)
 
 
+# ---- per-type on-site energies and Hubbard U (A2 channel E1) -----------------------------------
+def shift_table(spec, types, name: str) -> tuple:
+    """Shifts ``{type label: {shell letter: Hartree}}`` (or ((label, letter, value), ...)) as a
+    tuple ((label, letter, value), ...) in the order of ``types`` and of s, p, d, f."""
+    if spec is None:
+        return ()
+    if isinstance(spec, dict):
+        items = []
+        for lab, shells in spec.items():
+            if not isinstance(shells, dict):
+                raise ValueError(f"{name}[{lab!r}] must be a dict {{shell letter: Hartree}}")
+            items += [(str(lab), str(letter), float(v)) for letter, v in shells.items()]
+    else:
+        items = [(str(a), str(b), float(c)) for a, b, c in spec]
+    for lab, letter, v in items:
+        if lab not in types:
+            raise ValueError(f"{name}: {lab!r} is not one of the types {tuple(types)}")
+        if letter not in SHELL_LETTERS:
+            raise ValueError(f"{name}[{lab!r}]: shells are letters s, p, d, f, not {letter!r}")
+        if not np.isfinite(v):
+            raise ValueError(f"{name}[{lab!r}][{letter!r}] must be finite")
+    keys = [(lab, letter) for lab, letter, _ in items]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"{name}: a (type, shell) is given twice")
+    order = {t: k for k, t in enumerate(types)}
+    return tuple(sorted(items, key=lambda x: (order[x[0]], SHELL_LETTERS.index(x[1]))))
+
+
+def shift_dict(table) -> dict:
+    """The dict form {label: {letter: value}} of a :func:`shift_table`."""
+    out = {}
+    for lab, letter, v in table:
+        out.setdefault(lab, {})[letter] = v
+    return out
+
+
+class ShiftedOnsite:
+    """The per-type shifts of the on-site energies and Hubbard U of a switch whose types may
+    differ in both (A2 channel E1): ``onsite_shift`` and ``hubbard_shift`` tables
+    (:func:`shift_table`) added to the SKF values.  Mixed into :class:`OnsiteSwitch` and
+    :class:`pydftb.r0mix.R0Switch`."""
+
+    def gradient_from(self, result):
+        """dF/d(:meth:`vector`) in Hartree from a calculation with this switch
+        (``DFTBResult.switching``); zeros for a structure without the element; None when the
+        result has no gradient (``gradient`` off, or another engine)."""
+        n = len(self.vector())
+        terms = (getattr(result, "switching", None) or {}).get(self.element)
+        if terms is not None and terms.gradient is not None and len(terms.gradient) == n:
+            return np.asarray(terms.gradient, float)
+        tw = getattr(result, "type_weights", None) or {}
+        if self.types and all(t in tw for t in self.types) \
+                and not any(np.any(tw[t]) for t in self.types):
+            return np.zeros(n)                   # no atom of the element in this structure
+        return None
+
+    def shift_names(self) -> list:
+        return ([f"{t}.onsite.{letter}" for t, letter, _ in self.onsite_shift]
+                + [f"{t}.hubbard.{letter}" for t, letter, _ in self.hubbard_shift])
+
+    def shift_vector(self) -> np.ndarray:
+        return np.array([v for *_, v in self.onsite_shift] + [v for *_, v in self.hubbard_shift],
+                        float)
+
+    def shifts_from_vector(self, x) -> dict:
+        """{onsite_shift, hubbard_shift} tables with the values of x (the order of
+        :meth:`shift_vector`)."""
+        x = np.asarray(x, float)
+        n = len(self.onsite_shift)
+        if len(x) != n + len(self.hubbard_shift):
+            raise ValueError(f"needs {n + len(self.hubbard_shift)} shift values, not {len(x)}")
+        return {"onsite_shift": tuple((t, l, float(v)) for (t, l, _), v in zip(self.onsite_shift, x[:n])),
+                "hubbard_shift": tuple((t, l, float(v))
+                                       for (t, l, _), v in zip(self.hubbard_shift, x[n:]))}
+
+    def onsite_values(self, sk, label: str) -> np.ndarray:
+        """On-site energies (per l, Hartree) of a type: the SKF's plus its shifts."""
+        v = np.array(sk.onsite[label], float)
+        for t, letter, x in self.onsite_shift:
+            if t != label:
+                continue
+            l = SHELL_LETTERS.index(letter)
+            if l >= len(v):
+                raise ValueError(f"onsite_shift[{t!r}][{letter!r}]: {t} has no {letter} shell in "
+                                 "this basis")
+            v[l] += x
+        return v
+
+    def hubbard_values(self, sk, label: str) -> np.ndarray:
+        """Hubbard U (per l, Hartree) of a type: the SKF's (or the customised) plus its shifts;
+        with atom-resolved SCC (one U per atom) one shift of any letter moves that U."""
+        v = np.array(sk.hubbard[label], float)
+        given = [(letter, x) for t, letter, x in self.hubbard_shift if t == label]
+        if not sk.shell_resolved:
+            if len(given) > 1:
+                raise ValueError(f"hubbard_shift[{label!r}]: atom-resolved SCC has one U per atom: "
+                                 "give one shift")
+            for _, x in given:
+                v = v + x
+            return v
+        for letter, x in given:
+            l = SHELL_LETTERS.index(letter)
+            if l >= len(v):
+                raise ValueError(f"hubbard_shift[{label!r}][{letter!r}]: {label} has no {letter} "
+                                 "shell in this basis")
+            v[l] += x
+        return v
+
+
+@dataclass(frozen=True)
+class OnsiteSwitch(ShiftedOnsite, TypeSwitch):
+    """M5a's coordination-number switch whose types may differ in on-site energies and Hubbard U
+    (A2 channel E1): every atom gets eps_l = sum_t w_t (eps^t_l + onsite_shift[t][l]) and
+    U_l = sum_t w_t (U^t_l + hubbard_shift[t][l]), with exact forces and stress.  The shifts
+    (Hartree) are the fitted parameters (:mod:`pydftb.envmodel` protocol: ``vector()`` in the
+    order of the types and s, p, d, f, names like ``Li2.onsite.s``); dF/d(shifts) comes with
+    every calculation (``DFTBResult.switching``).  The windows and cut-offs stay
+    hyperparameters.  Not with DFTB3, two-component spin, DFTB+U/onsite corrections, the H-X
+    damping or H5, or the sparse solvers."""
+    onsite_shift: object = ()
+    hubbard_shift: object = ()
+    gradient: bool = True                 # dF/d(shifts) in DFTBResult.switching
+    engine_keyword: ClassVar[str] = "type_switching"
+    mixes_onsite: ClassVar[bool] = True
+    needs_dedw: ClassVar[bool] = False
+    kind: ClassVar[str] = "typeswitch"
+
+    def __post_init__(self):
+        TypeSwitch.__post_init__(self)
+        object.__setattr__(self, "onsite_shift",
+                           shift_table(self.onsite_shift, self.types, "onsite_shift"))
+        object.__setattr__(self, "hubbard_shift",
+                           shift_table(self.hubbard_shift, self.types, "hubbard_shift"))
+
+    @property
+    def wants_gradient(self) -> bool:
+        return bool(self.gradient) and bool(self.onsite_shift or self.hubbard_shift)
+
+    # -- pydftb.envmodel protocol ------------------------------------------------------------
+    def vector(self) -> np.ndarray:
+        return self.shift_vector()
+
+    def parameter_names(self) -> list:
+        return self.shift_names()
+
+    def with_vector(self, x) -> "OnsiteSwitch":
+        return replace(self, **self.shifts_from_vector(x))
+
+    def to_dict(self) -> dict:
+        cutoff = self.cutoff
+        if isinstance(cutoff, dict):
+            cutoff = {el: list(w) for el, w in cutoff.items()}
+        elif cutoff is not None:
+            cutoff = list(cutoff)
+        return {"kind": self.kind, "element": self.element, "types": list(self.types),
+                "centre": list(self.centre), "width": list(self.width), "cutoff": cutoff,
+                "onsite_shift": shift_dict(self.onsite_shift),
+                "hubbard_shift": shift_dict(self.hubbard_shift), "gradient": self.gradient}
+
+
+def onsite_switch_from_dict(d: dict) -> OnsiteSwitch:
+    d = {k: v for k, v in d.items() if k != "kind"}
+    c = d.get("cutoff")
+    if isinstance(c, dict):
+        d["cutoff"] = {el: tuple(w) for el, w in c.items()}
+    elif c is not None:
+        d["cutoff"] = tuple(c)
+    d["types"] = tuple(d["types"])
+    return OnsiteSwitch(**d)
+
+
 def check_switches(switches) -> list:
     """The switches as TypeSwitch objects: at most one per element, no label in two."""
     out = [TypeSwitch.make(s) for s in switches]
@@ -255,15 +446,18 @@ def onsite_line_files(sk, switches) -> list:
 
 def unequal_type_quantities(sk, switches) -> list:
     """What differs between the types of a switch in an SK set: basis, on-site energies,
-    Hubbard values, occupations, masses (all must be equal)."""
+    Hubbard values, occupations, masses (all must be equal; a switch that mixes on-site
+    energies and U per atom, channel E1, allows those two to differ)."""
     problems = []
     for sw in switches:
         ref = sw.reference
+        names = (("occupation",) if getattr(sw, "mixes_onsite", False)
+                 else ("onsite", "hubbard", "occupation"))
         for t in (x for x in sw.types if x != ref):
             if sk.max_l[t] != sk.max_l[ref]:
                 problems.append(f"basis (l_max) of {t} and {ref}")
                 continue
-            for name in ("onsite", "hubbard", "occupation"):
+            for name in names:
                 if not np.array_equal(getattr(sk, name)[t], getattr(sk, name)[ref]):
                     problems.append(f"{name} of {t} and {ref}")
             if sk.mass[t] != sk.mass[ref]:
@@ -313,11 +507,27 @@ class TypeMixing:
     cn_pairs: tuple | None = None  # (i, j, vec, f'(r)/r) of every switched atom's CN
     blocks: list | None = None    # raw type-pair blocks of the pairs of active atoms
     rep: RepulsiveTerms | None = None
+    # A series: descriptor-driven switches (r0mix) and fitted switches (E1, E2)
+    states: list = field(default_factory=list)     # (switch, weight columns, state) per switch
+    extra_active: np.ndarray | None = None         # (n_atom,) bool: weights moved by a state
+    gradient_switches: list = field(default_factory=list)   # switches that want dF/d(vector)
+    atoms_of: dict = field(default_factory=dict)   # element -> atom indices of its switch
+    onsite: "OnsiteMixing | None" = None           # E1: per-atom on-site energies and U
 
     @property
     def active(self) -> np.ndarray:
-        """Atoms whose weights change with the geometry here (dw/dCN != 0)."""
-        return np.any(self.dweights != 0.0, axis=1)
+        """Atoms whose weights change with the geometry here (dw/dCN != 0), or with the
+        coefficients of a descriptor-driven switch."""
+        a = np.any(self.dweights != 0.0, axis=1)
+        if self.extra_active is not None:
+            a = a | self.extra_active
+        return a
+
+    @property
+    def needs_dedw(self) -> bool:
+        """Whether dF/dw of every active atom is needed after the SCC (a fitted switch whose
+        weights depend on its coefficients)."""
+        return any(getattr(sw, "needs_dedw", False) for sw in self.gradient_switches)
 
     @property
     def column(self) -> dict:
@@ -361,16 +571,27 @@ def setup(switches, species, pos, cell, pbc, derivatives: bool):
     w = np.zeros((natom, len(labels)))
     dw = np.zeros_like(w)
     cn = np.full(natom, np.nan)
-    pairs = []
+    pairs, states, atoms_of = [], [], {}
+    extra = np.zeros(natom, bool)
     for a, (lab, s) in enumerate(zip(species, switched)):
         if not s:
             w[a, col[lab]] = 1.0
     for sw in present:
         atoms = np.flatnonzero(np.array(elements) == sw.element)
+        atoms_of[sw.element] = atoms
+        cols = [col[t] for t in sw.types]
+        if hasattr(sw, "mixing"):               # descriptor-driven weights (r0mix, E2)
+            st = sw.mixing(elements, pos, cell, pbc, derivatives)
+            if not np.array_equal(np.asarray(st.atoms), atoms):
+                raise ValueError(f"the switch of {sw.element} must give weights to every "
+                                 f"{sw.element} atom")
+            w[np.ix_(atoms, cols)] = st.weights
+            extra[atoms] |= np.asarray(st.active, bool)
+            states.append((sw, cols, st))
+            continue
         out = sw.coordination_numbers(elements, pos, cell, pbc, derivatives=derivatives)
         c = out[0] if derivatives else out
         ww, dd = sw.weights(c[atoms])
-        cols = [col[t] for t in sw.types]
         w[np.ix_(atoms, cols)] = ww
         dw[np.ix_(atoms, cols)] = dd
         cn[atoms] = c[atoms]
@@ -378,8 +599,14 @@ def setup(switches, species, pos, cell, pbc, derivatives: bool):
             pairs.append(out[1])
     cn_pairs = None
     if derivatives:
-        cn_pairs = tuple(np.concatenate([p[k] for p in pairs]) for k in range(4))
-    return internal, TypeMixing(labels, w, dw, cn, switched, candidates, cn_pairs)
+        if pairs:
+            cn_pairs = tuple(np.concatenate([p[k] for p in pairs]) for k in range(4))
+        else:
+            cn_pairs = (np.zeros(0, int), np.zeros(0, int), np.zeros((0, 3)), np.zeros(0))
+    grad_sw = [sw for sw in present if getattr(sw, "wants_gradient", False)]
+    return internal, TypeMixing(labels, w, dw, cn, switched, candidates, cn_pairs,
+                                states=states, extra_active=extra if states else None,
+                                gradient_switches=grad_sw, atoms_of=atoms_of)
 
 
 def result_weights(switches, mix: TypeMixing | None, natom: int) -> dict:
@@ -439,13 +666,14 @@ def mixed_repulsive(sk, mode: str, mix: TypeMixing, pos, cell, pbc, grad: bool) 
     return RepulsiveTerms(e_tot, gradient, virial, dedw)
 
 
-def weight_gradient(mix: TypeMixing, pb, p_e, coef_s, virial: bool):
-    """The part of dE/dR (n_atom, 3) and of the virial (3, 3, or None) that comes from the
-    weights' dependence on the geometry: sum_A dE/dCN_A dCN_A/dR, with dE/dw from the raw
-    type-pair blocks contracted with the force code's coefficients (``p_e`` of dH0, ``coef_s``
-    of dS) and the repulsive's dE/dw."""
-    natom = len(mix.weights)
+def weight_derivatives(mix: TypeMixing, pb, p_e, coef_s, extra_dedw=None) -> np.ndarray:
+    """dE/dw (n_atom, n_labels) at fixed density: the raw type-pair blocks contracted with the
+    force code's coefficients (``p_e`` of dH0, ``coef_s`` of dS), the repulsive's dE/dw and
+    ``extra_dedw`` (E1: :func:`onsite_dedw`).  Complete for the atoms of ``mix.active`` (the
+    blocks of pairs without such an atom are not kept)."""
     dedw = mix.rep.dedw.copy() if mix.rep is not None else np.zeros_like(mix.weights)
+    if extra_dedw is not None:
+        dedw = dedw + extra_dedw
     w = mix.weights
     for it, iu, pairs, elems, hb, sb in mix.blocks or ():
         n = len(pairs)
@@ -453,10 +681,163 @@ def weight_gradient(mix: TypeMixing, pb, p_e, coef_s, virial: bool):
         i, j = pb.i[pairs], pb.j[pairs]
         np.add.at(dedw[:, it], i, w[j, iu] * e_p)
         np.add.at(dedw[:, iu], j, w[i, it] * e_p)
+    return dedw
+
+
+def weight_gradient(mix: TypeMixing, pb, p_e, coef_s, virial: bool, extra_dedw=None):
+    """The part of dE/dR (n_atom, 3) and of the virial (3, 3, or None) that comes from the
+    weights' dependence on the geometry: sum_A dE/dCN_A dCN_A/dR with dE/dw of
+    :func:`weight_derivatives`, plus the descriptor-driven switches' chains (``state.chain``)."""
+    natom = len(mix.weights)
+    dedw = weight_derivatives(mix, pb, p_e, coef_s, extra_dedw)
     dedcn = (dedw * mix.dweights).sum(1)
     i, j, vec, fr = mix.cn_pairs
     g = (dedcn[i] * fr)[:, None] * vec           # dE/dvec of every CN pair
     grad = np.zeros((natom, 3))
     np.add.at(grad, j, g)
     np.add.at(grad, i, -g)
-    return grad, (g.T @ vec if virial else None), dedw
+    vir = g.T @ vec if virial else None
+    for _, cols, st in mix.states:
+        gs, ws = st.chain(dedw[np.asarray(st.atoms)][:, cols], natom, virial)
+        grad = grad + gs
+        if virial:
+            vir = vir + ws
+    return grad, vir, dedw
+
+
+# ---- E1: the per-atom on-site energies and Hubbard U, and the fitted switches' gradients -------
+@dataclass
+class OnsiteMixing:
+    """Per-atom on-site energies and Hubbard U of the atoms of the switches that mix them (E1)."""
+    eps: np.ndarray               # (n_orb,) on-site energies of every orbital
+    hub: np.ndarray               # (n_site,) Hubbard U of every charge site
+    hub_cut: np.ndarray           # (n_site,) U for the short-range cut-offs: min over the types
+    parts: list                   # (switch, atoms, cols, eps_t (n_types, n_l), u_t (n_types, n_l))
+    orb_l: np.ndarray             # (n_orb,) angular momentum of every orbital
+    orb_atom: np.ndarray          # (n_orb,)
+    site_l: np.ndarray | None     # (n_site,) l of every site (shell-resolved), None: atom sites
+    site_atom: np.ndarray         # (n_site,)
+
+
+def onsite_mixing(switches, mix: TypeMixing, basis, sk, eps0, hub, site_atom):
+    """The on-site energies (n_orb,) and site U (n_site,) with the switched atoms of the E1
+    switches mixed (``eps0``, ``hub``: the engine's values of the reference labels), or None
+    when no present switch mixes them."""
+    parts_sw = [sw for sw in switches if getattr(sw, "mixes_onsite", False)
+                and sw.element in mix.atoms_of]
+    if not parts_sw:
+        return None
+    orb_l = np.asarray(basis.shell_l)[np.asarray(basis.orb_shell)]
+    orb_atom = np.asarray(basis.orb_atom)
+    site_atom = np.asarray(site_atom)
+    site_l = np.asarray(basis.shell_l) if sk.shell_resolved else None
+    eps, u, ucut = np.array(eps0, float), np.array(hub, float), np.array(hub, float)
+    parts = []
+    for sw in parts_sw:
+        atoms = mix.atoms_of[sw.element]
+        cols = [mix.column[t] for t in sw.types]
+        eps_t = np.array([sw.onsite_values(sk, t) for t in sw.types])
+        u_t = np.array([sw.hubbard_values(sk, t) for t in sw.types])
+        wts = mix.weights[np.ix_(atoms, cols)]
+        orbs = np.flatnonzero(np.isin(orb_atom, atoms))
+        eps[orbs] = np.einsum("ot,to->o", wts[_rows(atoms, orb_atom[orbs])], eps_t[:, orb_l[orbs]])
+        sites = np.flatnonzero(np.isin(site_atom, atoms))
+        sl = site_l[sites] if site_l is not None else np.zeros(len(sites), int)
+        u[sites] = np.einsum("st,ts->s", wts[_rows(atoms, site_atom[sites])], u_t[:, sl])
+        ucut[sites] = u_t[:, sl].min(0)
+        parts.append((sw, atoms, cols, eps_t, u_t))
+    return OnsiteMixing(eps, u, ucut, parts, orb_l, orb_atom, site_l, site_atom)
+
+
+def _rows(atoms, idx_atom):
+    row = np.full(int(max(np.max(atoms, initial=-1), np.max(idx_atom, initial=-1))) + 1, -1)
+    row[atoms] = np.arange(len(atoms))
+    return row[idx_atom]
+
+
+def onsite_dedw(om: OnsiteMixing, mix: TypeMixing, d_onsite, dedu) -> np.ndarray:
+    """E1's part of dE/dw (n_atom, n_labels): sum over the atom's orbitals of D_mu,mu eps^t
+    plus sum over its sites of dE/dU U^t (``d_onsite`` (n_orb,), ``dedu`` (n_site,))."""
+    out = np.zeros_like(mix.weights)
+    for _, atoms, cols, eps_t, u_t in om.parts:
+        c = np.zeros((len(atoms), len(cols)))
+        orbs = np.flatnonzero(np.isin(om.orb_atom, atoms))
+        np.add.at(c, _rows(atoms, om.orb_atom[orbs]),
+                  np.asarray(d_onsite)[orbs][:, None] * eps_t[:, om.orb_l[orbs]].T)
+        sites = np.flatnonzero(np.isin(om.site_atom, atoms))
+        sl = om.site_l[sites] if om.site_l is not None else np.zeros(len(sites), int)
+        np.add.at(c, _rows(atoms, om.site_atom[sites]),
+                  np.asarray(dedu)[sites][:, None] * u_t[:, sl].T)
+        out[np.ix_(atoms, cols)] += c
+    return out
+
+
+def shift_gradient(sw, om: OnsiteMixing, mix: TypeMixing, d_onsite, dedu) -> np.ndarray:
+    """dF/d(the switch's shifts) in the order of ``sw.shift_vector()``: an on-site shift of
+    (t, l) gives sum_A w_A,t sum_{mu of shell l} D_mu,mu, a U shift sum_A w_A,t dE/dU of the
+    atom's sites of shell l (atom-resolved SCC: its one site)."""
+    atoms = mix.atoms_of[sw.element]
+    wts = mix.weights[np.ix_(atoms, [mix.column[t] for t in sw.types])]
+    k_of = {t: k for k, t in enumerate(sw.types)}
+    orbs = np.flatnonzero(np.isin(om.orb_atom, atoms))
+    orow = _rows(atoms, om.orb_atom[orbs])
+    sites = np.flatnonzero(np.isin(om.site_atom, atoms))
+    srow = _rows(atoms, om.site_atom[sites])
+    d_onsite, dedu = np.asarray(d_onsite), np.asarray(dedu)
+    out = []
+    for t, letter, _ in sw.onsite_shift:
+        sel = om.orb_l[orbs] == SHELL_LETTERS.index(letter)
+        out.append(float((wts[orow[sel], k_of[t]] * d_onsite[orbs[sel]]).sum()))
+    for t, letter, _ in sw.hubbard_shift:
+        if om.site_l is None:
+            sel = np.ones(len(sites), bool)
+        else:
+            sel = om.site_l[sites] == SHELL_LETTERS.index(letter)
+        out.append(float((wts[srow[sel], k_of[t]] * dedu[sites[sel]]).sum()))
+    return np.array(out, float)
+
+
+@dataclass
+class SwitchTerms:
+    """``DFTBResult.switching[element]``: what a fitted switch (E1, E2) needs from a calculation."""
+    element: str
+    atoms: np.ndarray                  # (n_c,) the element's atoms
+    labels: list                       # the switch's types (weight columns below)
+    weights: np.ndarray                # (n_c, n_types)
+    gradient: np.ndarray | None        # dF/d(switch.vector()) (Hartree)
+    dedw: np.ndarray | None = None     # (n_c, n_types) dF/dw at fixed density (Hartree)
+    u: np.ndarray | None = None        # (n_c, n_axes) node coordinates (r0mix)
+    r0: np.ndarray | None = None       # (n_c, 2) sum_t w_t (r0_w, r0_d)_t (r0mix, Bohr)
+
+
+def switch_terms(mix: TypeMixing, dedw, d_onsite, dedu) -> dict:
+    """{element: SwitchTerms} of the fitted switches: their gradients in the order of their
+    ``vector()`` (descriptor-driven coefficients first, then the E1 shifts)."""
+    out = {}
+    by_switch = {id(sw): st for sw, _, st in mix.states}
+    for sw in mix.gradient_switches:
+        atoms = mix.atoms_of[sw.element]
+        cols = [mix.column[t] for t in sw.types]
+        st = by_switch.get(id(sw))
+        parts = []
+        rows = None
+        if dedw is not None:
+            rows = dedw[np.ix_(atoms, cols)]
+        if st is not None and hasattr(st, "theta_gradient"):
+            parts.append(st.theta_gradient(rows) if getattr(sw, "fit_theta", True)
+                         else np.zeros(0))
+        if getattr(sw, "onsite_shift", ()) or getattr(sw, "hubbard_shift", ()):
+            parts.append(shift_gradient(sw, mix.onsite, mix, d_onsite, dedu))
+        grad = np.concatenate(parts) if parts else np.zeros(0)
+        out[sw.element] = SwitchTerms(sw.element, atoms, list(sw.types),
+                                      mix.weights[np.ix_(atoms, cols)].copy(), grad, rows,
+                                      getattr(st, "u", None), getattr(st, "r0", None))
+    return out
+
+
+def _register():
+    from . import envmodel
+    envmodel.register("typeswitch", onsite_switch_from_dict)
+
+
+_register()

@@ -6,6 +6,7 @@
     ptbp scan losses CONFIG [--jobs N]       # every strategy, the R2b control and the oracle
     ptbp scan report CONFIG                  # best point per strategy, report.md / report.json
     ptbp scan refine CONFIG --strategy S1    # Nelder-Mead from the strategy's best point
+    ptbp scan refine CONFIG --strategy S1 --method bo --seeds 3   # BO (scikit-optimize), 3 seeds
     ptbp scan export CONFIG --point I --strategy S1 --out DIR [--repulsive R2b]
     ptbp scan status CONFIG
 
@@ -47,7 +48,12 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     q = stage("refine", "local optimisation of one strategy")
     q.add_argument("--strategy", default="S1")
     q.add_argument("--start", type=int, default=None, help="start point (default: best)")
-    q.add_argument("--maxfev", type=int, default=30)
+    q.add_argument("--maxfev", type=int, default=30, help="evaluations (per seed with bo)")
+    q.add_argument("--method", default="nm", choices=["nm", "bo"],
+                   help="nm: Nelder-Mead (default); bo: Bayesian optimisation (scikit-optimize)")
+    q.add_argument("--seeds", type=int, default=3, help="bo: independent seeds 0..N-1")
+    q.add_argument("--box", type=float, default=0.15,
+                   help="bo: half-width of the local box, fraction of the space's range")
     q = stage("export", "full SK files of a point")
     q.add_argument("--point", type=int, required=True)
     q.add_argument("--strategy", default="S1")
@@ -105,8 +111,15 @@ def run(args: argparse.Namespace) -> int:
             path = acc.report(cfg)
             log.event("report", report=path)
         elif args.scan_cmd == "refine":
-            out = acc.refine(cfg, args.strategy, args.start, args.maxfev)
-            log.event("refine", strategy=args.strategy, loss=out["loss"], nfev=out["nfev"])
+            out = acc.refine(cfg, args.strategy, args.start, args.maxfev, method=args.method,
+                             seeds=args.seeds, box=args.box)
+            if args.method == "bo":
+                log.event("refine", strategy=args.strategy, method="bo", loss=out["best"]["loss"],
+                          seed=out["best"]["seed"], seeds=len(out["seeds"]),
+                          nfev=sum(r["nfev"] for r in out["seeds"]))
+            else:
+                log.event("refine", strategy=args.strategy, method="nm", loss=out["loss"],
+                          nfev=out["nfev"])
         elif args.scan_cmd == "export":
             out = acc.export_model(cfg, args.point, args.strategy, os.path.abspath(args.out),
                                    repulsive=args.repulsive)

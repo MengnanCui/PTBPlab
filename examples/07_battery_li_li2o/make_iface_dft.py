@@ -1,6 +1,6 @@
 """VASP inputs for the interface check of M5c (design section 5): one single point per MD
 snapshot (snap_XX.vasp from md_interface.py), the settings of the training data except
-KSPACING 0.25 (4 x 4 x 1 here instead of 7 x 7 x 2; P141: 1.8 meV/atom on bcc Li, which
+KSPACING 0.25 (VASP generates 4 x 4 x 2 here -- OUTCAR, checked 2026-11-10 -- instead of 7 x 7 x 2; P141: 1.8 meV/atom on bcc Li, which
 cancels in the energies relative to the first snapshot) and no symmetry (rattled frames).
 
     python make_iface_dft.py MD_DIR OUT_DIR [NCORES] [BUDGET_YUAN]
@@ -41,7 +41,7 @@ bash ~/m5c/run_all.sh iface_*
 """)
 # cost: rattled Li16 bcc (16 atoms, 7x7x7 -> ~172 k after time reversal) took ~4.3 core-h each
 # at ENCUT 800; plane-wave cost ~ N_k * N_atoms^2.3 (FFT + subspace); interface: 80 atoms,
-# 4x4x1 -> 8 k (time reversal).
+# KSPACING 0.25 -> 4x4x2 in the OUTCARs (20 k-points with ISYM 0); not 4x4x1 as first noted.
 n_at = len(ase.io.read(snaps[0]))
 per = 4.3 * (8 / 172) * (n_at / 16) ** 2.3
 print(f"{len(snaps)} snapshots of {n_at} atoms; estimate {per:.1f} core-h each, "

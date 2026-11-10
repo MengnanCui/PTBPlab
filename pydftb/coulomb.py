@@ -128,6 +128,50 @@ def _gamma0(ta, tb):
     return xp.where(same, (ta + tb) / 6.4, general)   # = (U_a + U_b) / 2
 
 
+def _short_dta(r, ta, tb):
+    """dS/dtau_a of :func:`_short` (S is symmetric: dS/dtau_b(r, a, b) = dS/dtau_a(r, b, a)),
+    branch by branch as _short evaluates S (A2 channel E1: per-atom Hubbard U).  NumPy."""
+    r, ta, tb = np.broadcast_arrays(np.asarray(r, float), np.asarray(ta, float),
+                                    np.asarray(tb, float))
+    out = np.zeros(r.shape)
+    same = np.abs(ta - tb) < SAME_TAU
+    if same.any():
+        # S = exp(-t x) p(t, x) with t = (tau_a + tau_b) / 2: dS/dtau_a = 1/2 dS/dt
+        t, x = 0.5 * (ta[same] + tb[same]), r[same]
+        e = np.exp(-t * x)
+        p = 1.0 / x + 11.0 * t / 16.0 + 3.0 * t * t * x / 16.0 + t ** 3 * x * x / 48.0
+        dpt = 11.0 / 16.0 + 3.0 * t * x / 8.0 + t * t * x * x / 16.0
+        out[same] = 0.5 * e * (dpt - x * p)
+    near = ~same & (np.abs(ta - tb) < NEAR_TAU * 0.5 * (ta + tb))
+    if near.any():
+        out[near] = _short_near(r[near], ta[near], tb[near], tau_derivs=True)[2]
+    nd = ~same & ~near
+    if nd.any():
+        a, b, x = ta[nd], tb[nd], r[nd]
+        # the closed form sum over (t1, t2) = (a, b), (b, a) of exp(-t1 x) (k - l / x)
+        d = a * a - b * b                                       # t1 = a, t2 = b
+        k = b ** 4 * a / (2.0 * d * d)
+        l = (b ** 6 - 3.0 * b ** 4 * a * a) / d ** 3
+        dk = b ** 4 / (2.0 * d * d) - 2.0 * a * a * b ** 4 / d ** 3
+        dl = -6.0 * a * b ** 4 / d ** 3 - 6.0 * a * (b ** 6 - 3.0 * b ** 4 * a * a) / d ** 4
+        val = np.exp(-a * x) * (-x * (k - l / x) + dk - dl / x)
+        d2 = b * b - a * a                                      # t1 = b, t2 = a
+        dk2 = 2.0 * b * a ** 3 / (d2 * d2) + 2.0 * b * a ** 5 / d2 ** 3
+        dl2 = ((6.0 * a ** 5 - 12.0 * a ** 3 * b * b) / d2 ** 3
+               + 6.0 * a * (a ** 6 - 3.0 * a ** 4 * b * b) / d2 ** 4)
+        val += np.exp(-b * x) * (dk2 - dl2 / x)
+        out[nd] = val
+    return out
+
+
+def _gamma0_dta(ta, tb):
+    """d gamma0 / d tau_a of :func:`_gamma0` (sites on one atom)."""
+    ta, tb = np.broadcast_arrays(np.asarray(ta, float), np.asarray(tb, float))
+    s = ta + tb
+    general = 0.5 * (tb * tb / (s * s) + (2.0 * ta * tb * tb * s - 3.0 * ta * ta * tb * tb) / s ** 4)
+    return np.where(np.abs(ta - tb) < SAME_TAU, 1.0 / 6.4, general)
+
+
 def short_cutoff(ta: float, tb: float) -> float:
     """DFTB+ ``expGammaCutoff`` for tau = 3.2 U: the distance where S drops below
     MIN_SHORT_GAMMA, by doubling and then bisection to TOL_SHORT_GAMMA in S.  The same
@@ -164,10 +208,14 @@ class Coulomb:
     h5 : (is_h, k, R, r_scaling, w_scaling), the per-atom H5 parameters of
          :meth:`pydftb.corrections.H5.atom_parameters`: DFTB+'s ``HCorrection = H5`` on pairs
          of one H and an atom with k > 0, S -> S (1 + g) - g / r (milestone M6f-3)
+    cutoff_hubbard : (n_site,) the U values that set the short-range cut-offs (default: the
+         sites' own).  Per-atom mixed U (A2 channel E1) passes the smallest U of every site's
+         types: a few cut-off values, fixed while the weights move, and never shorter than the
+         cut-off of the site's own U.
     """
 
     def __init__(self, atom_pos, site_atom, hubbard, cell=None, pbc=None, damped=None,
-                 damp_exp: float = 0.0, h5=None):
+                 damp_exp: float = 0.0, h5=None, cutoff_hubbard=None):
         self.pos = np.asarray(atom_pos, float)
         self.site_atom = np.asarray(site_atom)
         self.natom = len(self.pos)
@@ -189,7 +237,11 @@ class Coulomb:
             self.atom_sites[a, fill[a]] = s
             fill[a] += 1
         # per-(tau_a, tau_b) short-range cut-offs
-        self._utau = np.unique(self.tau)
+        self._tau_cut = (self.tau if cutoff_hubbard is None
+                         else 3.2 * np.asarray(cutoff_hubbard, float))
+        if self._tau_cut.shape != self.tau.shape:
+            raise ValueError("cutoff_hubbard needs one value per site")
+        self._utau = np.unique(self._tau_cut)
         self._cut = np.array([[short_cutoff(a, b) for b in self._utau] for a in self._utau])
         self.rcut_short = float(self._cut.max())
         if self.periodic:
@@ -237,7 +289,7 @@ class Coulomb:
         sa = self.atom_sites[i][:, :, None]              # (np, ms, 1)
         sb = self.atom_sites[j][:, None, :]              # (np, 1, ms)
         valid = (sa >= 0) & (sb >= 0)
-        ia = np.searchsorted(self._utau, self.tau)       # tau -> index into the cut-off table
+        ia = np.searchsorted(self._utau, self._tau_cut)  # tau -> index into the cut-off table
         ka = np.where(sa >= 0, ia[np.maximum(sa, 0)], 0)
         kb = np.where(sb >= 0, ia[np.maximum(sb, 0)], 0)
         within = valid & (d[:, None, None] < self._cut[ka, kb])
@@ -348,6 +400,32 @@ class Coulomb:
     def energy_shift(self, dq):
         v = self.gamma @ dq
         return 0.5 * dq @ v, v
+
+    def hubbard_gradient(self, dq) -> np.ndarray:
+        """dE/dU (n_site,) of E = 1/2 dq.gamma.dq at fixed charges dq (per site): the on-site
+        gamma0 of the sites of one atom and the short-range S of every site pair (periodic
+        images included); the 1/R and Ewald terms do not depend on U (A2 channel E1, and an
+        E3 U-shift channel: dE/dp = sum over the atom's sites of dE/dU).  Not with the H-X
+        damping or H5, which also depend on U."""
+        if self.damped.any() or self.h5 is not None:
+            raise NotImplementedError("dE/dU with the H-X damping or H5 corrections")
+        dq = np.asarray(dq, float)
+        g = np.zeros(self.nsite)
+        sa = self.atom_sites
+        a = np.repeat(sa, sa.shape[1], axis=1).ravel()
+        b = np.tile(sa, (1, sa.shape[1])).ravel()
+        ok = (a >= 0) & (b >= 0)
+        a, b = a[ok], b[ok]
+        np.add.at(g, a, dq[a] * dq[b] * _gamma0_dta(self.tau[a], self.tau[b]))
+        if self._step is None:
+            parts = [(self.sp_a, self.sp_b, self.sp_d)]
+        else:
+            parts = ((sp[1], sp[2], sp[3]) for *_, sp in self._blocks())
+        for spa, spb, spd in parts:
+            if len(spa):
+                ds = _short_dta(spd, self.tau[spa], self.tau[spb])
+                np.add.at(g, spa, -dq[spa] * dq[spb] * ds)
+        return 3.2 * g
 
     def gradient(self, dq, virial: bool = False, other=None):
         """dE_SCC/dR per **atom** (n_atom, 3) with E = 1/2 dq.gamma.dq (dq per site).
