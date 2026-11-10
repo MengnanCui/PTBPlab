@@ -462,7 +462,7 @@ def test_capped_scc_with_reused_charges_follows_dftbplus():
         a.rattle(0.05, seed=3)
         a.set_velocities(np.zeros((3, 3)))
         a.calc = make_calculator(SKF_HCOCU, e, scc_tol=1e-10, max_scc=3, reuse_charges=True,
-                                 fd_delta=2 ** -13, dftbplus={"convergent_scc_only": False})
+                                 fd_delta=2 ** -13, convergent_scc_only=False)
         rec = steps[e] = []
         md = VelocityVerlet(a, timestep=0.5 * units.fs, logfile=None)
         md.attach(lambda a=a, rec=rec: rec.append((a.get_potential_energy(),
@@ -521,7 +521,8 @@ def test_stopped_scc_writes_the_last_input(tmp_path):
         d = dc.DFTBPlus(SKF_HCOCU, max_scc=n, scc_tol=1e-12, convergent_scc_only=False)
         d.get_potential_energy(plain_water())
         d.write_charges(tmp_path / f"charges_{n}.bin")
-        p = PyDFTB(SKF_HCOCU, max_scc=n, scc_tol=1e-12, warn_unconverged=False)
+        p = PyDFTB(SKF_HCOCU, max_scc=n, scc_tol=1e-12, convergent_scc_only=False,
+                   warn_unconverged=False)
         a = plain_water()
         p.get_potential_energy(a)
         engine, labels, _ = p._engine(a)

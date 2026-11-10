@@ -100,7 +100,7 @@ def test_restart_from_q_in_repeats_the_last_iteration(name):
 
 
 def test_unconverged_warning_reports_the_last_error():
-    calc, geo = _engine("h2o", max_scc=3)
+    calc, geo = _engine("h2o", max_scc=3, convergent_scc_only=False)
     with pytest.warns(RuntimeWarning, match="SCC not converged after 3 iterations") as rec:
         r = calc.calculate(*geo, forces=False)
     assert r.scc_error == r.scc_errors[-1]
@@ -112,7 +112,8 @@ def test_reused_charges_continue_from_the_last_hamiltonian(monkeypatch):
     """PyDFTB(reuse_charges=True) with a capped SCC: every geometry step starts from the
     populations of the step before's last Hamiltonian, as DFTB+'s drivers (they keep qInput)."""
     w = molecule("H2O")
-    w.calc = PyDFTB(SKF_HCOCU, max_scc=3, scc_tol=1e-10, reuse_charges=True)
+    w.calc = PyDFTB(SKF_HCOCU, max_scc=3, scc_tol=1e-10, reuse_charges=True,
+                    convergent_scc_only=False)
     inputs, _ = _record(monkeypatch)
     w.get_potential_energy()
     for step in range(1, 3):
