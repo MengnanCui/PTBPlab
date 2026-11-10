@@ -498,21 +498,29 @@ Boltzmann factor: {bolt_f.tolist()}
     if ptbp_args.optimization_option.lower() == "bandstructure":
             
             # Data preparation
-            DEFAULT_DFT_BAND_FILE = ptbp_args.dft_file #= 'dft.json'
-            with open(ptbp_args.parameter_file, 'w') as para:
+            # hotcent needs the superposition; without it every SKF fails silently
+            if ptbp_args.superposition is None:
+                ptbp_args.superposition = 'density'
+                print("No --superposition given: using 'density' (as `ptbp optimize` does)")
+
+            with open(ptbp_args.para_file, 'w') as para:
                     para.write('#r0_w,r0_d,p,cov_radius,mu_homo,mu_lumo,mu\n')
 
-            dft_infile = p / ptbp_args.ref_dir / ptbp_args.dft_file
-            dft_bs = p / ptbp_args.ref_dir / ptbp_args.dft_band_file
+            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
+            dft_bs = path / ptbp_args.ref_dir / ptbp_args.dft_band_file
             assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
             assert dft_bs.exists(), f'Seems that the input path {dft_bs} does not exist!'
-            dft_input = ase.io.read(dft_infile)
+            dft_input = ase.io.read(dft_infile, ':')
+            # dft_band_file holds the band structure of one structure
+            assert len(dft_input) == 1, f'Band structure optimization fits one structure, but {dft_infile} has {len(dft_input)}!'
+            dft_center = dft_input
+            num_center_atoms = len(dft_center)
 
             
             if ptbp_args.multi_element is not None:
                 opt_elem = [x for x in ptbp_args.multi_element]
 
-            atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = loss.get_elements_from_dataset(dft_input, opt_elem)
+            atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = data.get_elements_from_dataset(dft_input, opt_elem)
             cov_radius = penalty_radius(dft_input, opt_elem)
 
             bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
@@ -521,6 +529,7 @@ Boltzmann factor: {bolt_f.tolist()}
             print(f"""\n#===================================Input===================================#:
 Optimization target: {ptbp_args.optimization_option}
 Input file: {dft_infile}
+Band structure file: {dft_bs}
 Number of structure: {len(dft_input)}
 Number of center atoms: {num_center_atoms}
 Atomic number: {atomic_numbers}
@@ -542,8 +551,27 @@ Boltzmann factor: {bolt_f.tolist()}
             print('Best parameter:\n', res.x,'\n', res.fun)
             r0_best, p_best = res.x
 
-            os.chdir(p)
-            save_bo_plots(res)
+            os.chdir(path)
+            if ptbp_args.optimizer == 'bo':
+                save_bo_plots(res)
+            else:
+                vals = list(res.func_vals)
+                if vals:
+                    best_so_far = []
+                    cur = float('inf')
+                    for v in vals:
+                        cur = min(cur, float(v))
+                        best_so_far.append(cur)
+                    plt.figure()
+                    plt.plot(range(1, len(vals) + 1), vals, 'o-', label='per-eval μ', alpha=0.5)
+                    plt.plot(range(1, len(vals) + 1), best_so_far, 'r-', label='best so far')
+                    plt.xlabel('evaluation')
+                    plt.ylabel('μ')
+                    plt.yscale('log')
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig('convergence.png', dpi=300)
+                    plt.clf()
 
 
             best_folder = path / ptbp_args.results_dir / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"

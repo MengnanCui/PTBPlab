@@ -12,6 +12,7 @@ does, what it produces, and how long it takes.
 | `04_reaction_b2n2_n3na/` | `--optimization_option reaction` | 2 formulas, 3 elements | ✅ |
 | `05_pso_cu/` | `--optimizer pso` (dataset mode) | Cu trajectory, particle swarm | ✅ |
 | `06_yaml_config/` | `--config FILE.yaml` (dataset+pso) | every setting in YAML, reproducible | ✅ |
+| `07_bandstructure_cu/` | `--optimization_option bandstructure` | fcc Cu + its GPAW band structure | ✅ |
 
 Run any example:
 

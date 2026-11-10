@@ -234,7 +234,7 @@ ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines py
     <section id="issues">
       <h2>已知问题</h2>
       <ul>
-        <li>PTBP 的 <code>--optimization_option bandstructure</code> 模式有多处错误，目前跑不通（与 pydftb 无关，另有任务）。</li>
+        <li><strong>已修正：</strong>PTBP 的 <code>--optimization_option bandstructure</code> 模式过去在 <code>cli/run.py</code>、<code>utils/loss.py</code> 与 <code>utils/calculator.py</code> 里有多处错误，跑不通；现在可以从头跑到尾，示例在 <code>examples/07_bandstructure_cu</code>，测试是 <code>tests/test_bandstructure.py</code>。</li>
         <li><strong>已修正（M3 之前）：</strong>PTBP 损失函数的惩罚项过去总用 0.5 Bohr 的共价半径（<code>cli/run.py</code> 算出了元素的半径，但没有传给 <code>Loss(...)</code>），Cu 的惩罚因子因此是 1.2e4 而不是 6.0。现在用被参数化元素的半径；参数表中已发表的 75 个元素的损失值都能用这个公式复现（相对差 ≤ 5e-5）。已发表的 Cu 参数下，dataset 模式的损失从 901629.83 变为 446.20，energygeometry 模式从 3837.92 变为 1.8993，两个引擎的相对差仍在 1e-8 以内。旧运行的损失值是另一个尺度：旧的 skopt 检查点在恢复时会被拒绝，可用 <code>tools/rescale_checkpoint.py</code> 精确换算。</li>
         <li>energygeometry 模式在已发表的 Cu 参数下的损失为 0.920（M4e 之前为 1.90），论文中为 0.288：μ<sub>V</sub> 已回到论文的量级（0.0129 对 0.0182），μ<sub>E</sub> 仍大 3.8 倍（0.293 对 0.0775）。M4e 查明前一半来自 hotcent 约束方式的默认值；剩下的最可能来自 hotcent 在 2021-10 修正的二中心积分 GGA 错误（PTBP 最初用的版本带着它），这部分不应恢复（M4e 报告第四节）。</li>
         <li><strong>已修正（M5b）：</strong>多元素模式（<code>--multi_element</code>）以前跑不通（命令行的元素符号与要求的原子序数不符、参数表没有 <code>r_wave</code> 键、只优化 σ<sub>rep</sub> 的分支调用错误）；现在的含义是只拟合列出的元素，其余用 PTBP 发表的参数。<code>data.get_full_dftb</code> 以前按 Hill 顺序重建结构，非 Hill 顺序的多元素结构（如 [Na, N, N, N]）写出的元素与坐标错位（能量与按下标的力不受影响），也已修正。</li>
