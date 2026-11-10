@@ -15,6 +15,7 @@ from ase import Atoms
 from ase.build import bulk, molecule
 
 from pydftb import dftbplus_calc as dc
+from pydftb import dftbplus_io as io
 from pydftb.ase_calc import PyDFTB, kpoints_of
 from pydftb.constants import BOHR, HARTREE
 from pydftb.engines import (
@@ -510,6 +511,24 @@ def test_native_drivers_and_failures(tmp_path):
     again = dc.DFTBPlus(SKF_HCOCU, scc_tol=1e-10, read_charges=str(tmp_path / "charges.bin"))
     again.get_potential_energy(plain_water())
     assert again.raw.n_scc <= 2 and "ReadInitialCharges = Yes" in again.input.hsd
+
+
+@pytest.mark.dftbplus
+def test_stopped_scc_writes_the_last_input(tmp_path):
+    """An SCC stopped at MaxSCCIterations: DFTB+ writes the input of its last iteration to
+    charges.bin, pydftb's q_in (M6f-1b; DFTB+ writes no file when MaxSCCIterations = 1)."""
+    for n in (2, 3):
+        d = dc.DFTBPlus(SKF_HCOCU, max_scc=n, scc_tol=1e-12, convergent_scc_only=False)
+        d.get_potential_energy(plain_water())
+        d.write_charges(tmp_path / f"charges_{n}.bin")
+        p = PyDFTB(SKF_HCOCU, max_scc=n, scc_tol=1e-12, warn_unconverged=False)
+        a = plain_water()
+        p.get_potential_energy(a)
+        engine, labels, _ = p._engine(a)
+        data = io.read_charges(tmp_path / f"charges_{n}.bin",
+                               engine._charge_layout(labels)[0].norb_atom)
+        assert p.raw.n_scc == n and not p.raw.converged
+        assert np.abs(engine.populations_from_file(labels, data) - p.raw.q_in).max() < 1e-12
 
 
 @pytest.mark.dftbplus

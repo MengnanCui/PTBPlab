@@ -3,14 +3,18 @@
 The Anderson and DIIS mixers are checked against line-by-line transcriptions of DFTB+'s
 ``mixer/andersonmixer.F90`` and ``mixer/diismixer.F90`` (2-D storage, 1-based index arrays,
 gesv); every mixer must reach the same SCC solution.  The SCC iterations against DFTB+ itself
-are the frozen references *_mixer_* in test_reference.py.
+are the frozen references *_mixer_* in test_reference.py.  As in DFTB+, nothing is mixed after
+the last iteration, also when the SCC stops unconverged (M6f-1b).
 """
+import itertools
+
 import numpy as np
 import pytest
 
 from pydftb.calculator import DFTB
 from pydftb.mixer import (AndersonMixer, BroydenMixer, DIISMixer, PulayMixer, SimpleMixer,
                           make_mixer, mixer_spec)
+from pydftb.validation import refgen
 
 from .test_spin import _system
 
@@ -213,6 +217,54 @@ def test_every_mixer_reaches_the_broyden_solution(mixer):
     assert r.energy == pytest.approx(ref.energy, abs=1e-10)
     assert np.allclose(r.charges, ref.charges, atol=1e-9)
     assert np.allclose(r.forces, ref.forces, atol=1e-8)
+
+
+def _stopped(name, mixer, max_scc):
+    """The case's engine with the SCC stopped after ``max_scc`` iterations (tolerance 1e-12, so
+    unconverged), its labels and positions."""
+    case, sk, labels, pos, _, kpts, opts = _system(name)
+    calc = DFTB(sk, smearing=tuple(case.filling), kpts=kpts, scc_tol=1e-12, max_scc=max_scc,
+                mixer=mixer, warn_unconverged=False, **opts, **refgen.block_options(case, labels))
+    return calc, labels, pos
+
+
+@pytest.mark.parametrize("name,mixer,first_copy", [
+    ("h2o", "broyden", False), ("h2o", "anderson", False),
+    ("oh_radical", "broyden", True),      # collinear spin: iteration 1 takes q_out unmixed
+    ("h2o_ons", "broyden", True)])        # onsite blocks (M6b): the same rule
+def test_no_mixing_after_the_last_iteration(name, mixer, first_copy):
+    """DFTB+ mixes only when the SCC goes on (main.F90 getNextInputCharges): a run stopped at
+    max_scc returns the input of its last iteration as q_in, the input that built its last
+    Hamiltonian, and the run with one iteration more starts that iteration from the mix the
+    stopped run skips.  Replaying the mixer over the runs stopped after 1, 2, ... iterations
+    gives every next run's last input bit for bit (M6f-1b; before, the stopped run returned
+    that mix as q_in)."""
+    runs = []
+    for k in range(1, 6):
+        calc, labels, pos = _stopped(name, mixer, k)
+        runs.append(calc.calculate(labels, pos, forces=False))
+    replay = make_mixer(mixer)
+    for k, (r, longer) in enumerate(itertools.pairwise(runs), start=1):
+        assert r.n_scc == k and not r.converged
+        assert np.array_equal(longer.scc_errors[:k], r.scc_errors)    # the same iterations
+        assert np.abs(r.q_out - r.q_in).max() == r.scc_errors[-1]      # the last iteration's pair
+        skipped = r.q_out if k == 1 and first_copy else replay.mix(r.q_in, r.q_out)
+        assert np.array_equal(longer.q_in, skipped)
+        assert not np.array_equal(longer.q_in, r.q_in)
+
+
+def test_restart_from_a_stopped_run_repeats_its_last_iteration():
+    """The charge file of a stopped SCC holds its last input (charge_data writes q_in, as DFTB+
+    writes qInput), so a restart from it (DFTB+'s ReadInitialCharges; PyDFTB(reuse_charges=True)
+    passes q_in the same way) repeats the stopped run's last iteration (M6f-1b)."""
+    calc, labels, pos = _stopped("h2o", "broyden", 3)
+    r = calc.calculate(labels, pos, forces=False)
+    q_file = calc.populations_from_file(labels, calc.charge_data(labels, r))
+    assert np.array_equal(q_file, r.q_in)
+    one, _, _ = _stopped("h2o", "broyden", 1)
+    again = one.calculate(labels, pos, forces=False, q_init=q_file)
+    assert np.array_equal(again.q_out, r.q_out) and np.array_equal(again.charges, r.charges)
+    assert again.scc_errors[0] == r.scc_errors[-1] and again.energy == r.energy
 
 
 def test_torch_and_autodiff_refuse():
