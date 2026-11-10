@@ -5,7 +5,8 @@ Byte-for-byte round trips of the files DFTB+ 25.1 wrote for the frozen reference
 matrix, M6h-1, and for the Gamma point the k-point folding before it, M6h-3a, for k-points the
 folding and the complex DeltaP(k) or the BvK array, M6h-3b), pydftb's own files
 read back, DFTB+'s checks on reading, and the older formats
-4-7.  Restarting from DFTB+'s files against DFTB+ itself is
+4-7.  The file of an SCC that stopped at MaxSCCIterations against pydftb's charge_data
+(*_scc3_read_charges).  Restarting from DFTB+'s files against DFTB+ itself is
 in test_reference.py.
 """
 import base64
@@ -16,19 +17,25 @@ import pytest
 
 from pydftb import dftbplus_io as io
 from pydftb.calculator import DFTB
+from pydftb.constants import BOHR
 from pydftb.validation import refgen
 
 from .test_spin import _system
 
 READ_CASES = sorted(c.name for c in refgen.CASES if c.read_charges is not None)
+# run 1 stops unconverged after a few iterations (MaxSCCIterations, ConvergentSCCOnly = No)
+STOPPED_CASES = sorted(c.name for c in refgen.CASES
+                       if c.read_charges is not None and c.fixed_scc and c.hybrid is None)
 
 
-def _engine(name):
-    """The case's DFTB engine, labels and positions (Bohr)."""
+def _engine(name, **options):
+    """The case's DFTB engine, labels and positions (Bohr); ``options`` replace the SCC
+    tolerance 1e-10 and the 500 iterations or add to the case's."""
     case, sk, labels, pos, cell, kpts, opts = _system(name)
     opts = {**opts, **refgen.pauli_options(case, labels), **refgen.block_options(case, labels),
-            **({"hybrid": case.hybrid} if case.hybrid is not None else {})}       # M6h-1
-    calc = DFTB(sk, smearing=tuple(case.filling), kpts=kpts, scc_tol=1e-10, max_scc=500, **opts)
+            **({"hybrid": case.hybrid} if case.hybrid is not None else {}),       # M6h-1
+            "scc_tol": 1e-10, "max_scc": 500, **options}
+    calc = DFTB(sk, smearing=tuple(case.filling), kpts=kpts, **opts)
     return case, calc, labels, pos, cell
 
 
@@ -73,6 +80,25 @@ def test_pydftb_reads_what_it_writes(name, text, tmp_path):
                            q_init=io.read_charges(path, calc._charge_layout(labels)[0].norb_atom))
     assert again.n_scc <= 2
     assert again.energy == pytest.approx(r.energy, abs=1e-9)
+
+
+@pytest.mark.parametrize("name", STOPPED_CASES)
+def test_dftbplus_file_of_a_stopped_scc(name):
+    """Run 1 of these references stops unconverged at MaxSCCIterations.  DFTB+ does not mix
+    after the last iteration (main.F90 getNextInputCharges), so its charges.bin holds the input
+    populations of the last Hamiltonian: pydftb's charge_data of the same iterations, not the
+    next mixed vector (0.04 and 0.10 e away in these files)."""
+    doc = refgen.load(name)
+    inp = doc["input"]
+    case, calc, labels, _, _ = _engine(name, max_scc=refgen.CASES_BY_NAME[name].fixed_scc,
+                                       warn_unconverged=False)
+    r1 = calc.calculate(labels, np.array(inp["run1_positions_angstrom"]) / BOHR, forces=False)
+    assert r1.n_scc == case.fixed_scc and not r1.converged and r1.scc_error > 1e-3
+    theirs = refgen.charge_file_data(inp, calc._charge_layout(labels)[0].norb_atom)
+    mine = calc.charge_data(labels, r1)
+    assert mine.q.shape == theirs.q.shape and mine.blocks is theirs.blocks is None
+    assert np.abs(mine.q - theirs.q).max() < 1e-13
+    assert np.abs(mine.sums() - theirs.checksum).max() < 1e-13
 
 
 def test_dftbplus_checks_on_reading(tmp_path):

@@ -128,7 +128,9 @@ class DFTBResult:
     fermi_spin: tuple | None = None      # (mu_up, mu_down); equal with relax_total_spin
     e_disp: float = 0.0                  # dispersion energy
     q_in: np.ndarray | None = None       # input populations of the last SCC iteration (the mixed
-                                         # vector; what DFTB+ writes to charges.bin)
+                                         # vector), those its Hamiltonian was built from: no
+                                         # mixing after the last iteration, also at max_scc (as
+                                         # DFTB+); what DFTB+ writes to charges.bin
     e_ls: float = 0.0                    # spin-orbit energy (DFTB+ "Energy L.S")
     orbital_moments: np.ndarray | None = None   # (n_shell, 3) <L> per shell (spin-orbit)
     e_plus_u: float = 0.0                # DFTB+U energy (DFTB+ "Energy DFTB+U", M6b)
@@ -232,8 +234,8 @@ class SCCNotConvergedError(RuntimeError):
 class SCCControl:
     """The SCC iterations of one XL-BOMD step (milestone M6e), by DFTB+'s rules: converged
     when max |q_out - q_in| < ``tol`` after at least ``min_iter`` iterations; at most
-    ``max_iter`` iterations, and no mixing after the last one, so the input populations of
-    the result built its Hamiltonian; stopping unconverged is no warning."""
+    ``max_iter`` iterations, and no mixing after the last one (as in every SCC), so the input
+    populations of the result built its Hamiltonian; stopping unconverged is no warning."""
     min_iter: int = 1
     max_iter: int = 200
     tol: float = 1e-5
@@ -354,8 +356,10 @@ class _SCCState:
     """Converged (or last) state of the SCC loop.
 
     ``q_in``/``q_out`` are the mixed vectors: site populations, or with spin, as in
-    DFTB+, [up populations per shell, down populations per shell].  With spin the
-    density matrices are stacked [up k-points, down k-points].
+    DFTB+, [up populations per shell, down populations per shell].  ``q_in`` is the input
+    of the last iteration, which ``v_orb`` and ``h`` were built from (the loop does not mix
+    after its last iteration).  With spin the density matrices are stacked [up k-points,
+    down k-points].
     """
     q_in: np.ndarray
     q_out: np.ndarray
@@ -2602,8 +2606,11 @@ class DFTB:
 
     def _scc(self, st: _Setup, q_init, forces, timings, control: SCCControl | None = None) \
             -> _SCCState:
-        """The SCC loop; ``control`` (XL-BOMD, M6e) sets the iterations and tolerance by
-        DFTB+'s rules: no mixing after the last iteration, no warning when unconverged."""
+        """The SCC loop.  As DFTB+ (main.F90 getNextInputCharges), no mixing after the last
+        iteration, whether it converged or stopped at ``max_scc``: ``q_in`` stays the input
+        populations of the last Hamiltonian, what DFTB+ writes to charges.bin and carries to
+        the next geometry.  ``control`` (XL-BOMD, M6e) sets the iterations and tolerance by
+        DFTB+'s rules, and stopping unconverged is then no warning."""
         if st.hybrid is not None:                                     # M6h-1
             return self._scc_hybrid(st, q_init, forces, timings)
         b = self.backend
@@ -2682,7 +2689,7 @@ class DFTB:
             if diff < tol and nit >= min_iter:
                 converged = True
                 break
-            if control is not None and nit == max_iter:
+            if nit == max_iter:
                 break                   # DFTB+: no mixing after the last iteration
             if nit == 1 and first_out:
                 q_in = q_out            # DFTB+: the guessed spin is not mixed in (main.F90)
