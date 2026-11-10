@@ -43,6 +43,7 @@ Supported YAML keys (all optional; correspond to `ptbp optimize` flags):
     device:         # cpu / auto / cuda / cuda:1 / mps / xpu (torch backend)
     dtype:          # float64 / float32 (torch backend)
     ncores:         # int or auto (cores of the parallel BO step)
+    seed:           # int (random seed for reproducibility)
     A series (pydftb/docs/design/A0-accuracy-programme.html, section 8; written to
     ptbp_run.yaml only when they differ from their defaults):
     energy_reduction: # sum / mean / group (dataset/reaction mu_E)
@@ -102,6 +103,7 @@ YAML_KEY_TO_ARG: Dict[str, str] = {
     'ncores':        'ncores',
     'grad_maxiter':  'grad_maxiter',
     'hotcent_fd_step': 'hotcent_fd_step',
+    'seed':          'seed',
     # A series (A0 plan, section 8)
     'energy_reduction': 'energy_reduction',
     'force_weight':  'force_weight',

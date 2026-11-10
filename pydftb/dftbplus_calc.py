@@ -8,7 +8,7 @@ options, units and results, which writes DFTB+'s input, runs DFTB+ and reads its
 or, with one set of options for either engine, :func:`pydftb.engines.make_calculator`.
 
 * The input is assembled from the blocks of :mod:`pydftb.validation.dftbplus`, the writer of
-  all the frozen DFTB+ references: every frozen input (517 single points, 34 optimisations and
+  all the frozen DFTB+ references: every frozen input (519 single points, 34 optimisations and
   MD runs, 37 band and SecondDerivatives runs) is what this calculator writes for the same
   options (``pydftb dual --inputs``).
 * Options are converted to Bohr and Hartree with pydftb's own conversions (``ase_calc``) and

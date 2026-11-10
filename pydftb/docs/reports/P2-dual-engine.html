@@ -299,7 +299,7 @@ pydftb dual --inputs                     # 588 个冻结输入，不需要 dftb+
         <li><strong>PTBP 改用 <code>pydftb.engines</code></strong>：PTBP 现在自己在 ASE 的 <code>Dftb</code> 与 <code>PyDFTB</code> 之间切换（M1）。改用新的入口可以让 PTBP 的 DFTB+ 路径也用 pydftb 的单位与默认值，但要保证它的结果逐字节不变，单独评估。</li>
         <li><strong>M7e-2</strong>：等你在 NVIDIA GPU 上运行 <code>pydftb gpu-check --dtype both --json gpu_check.json</code> 的 JSON。</li>
         <li>DFTB+ 的版本：核对只在 25.1、开发版与带 ELSI 的 24.1 上做。用户的 DFTB+ 若是别的版本，<code>pydftb dual --inputs</code>（不需要 dftb+）与 <code>--live</code> 可以在那台机器上重跑一遍。</li>
-        <li>任务 162（旧 SCC 路径最后一轮不混合）；分治的内存。</li>
+        <li>任务 162（旧 SCC 路径最后一轮不混合）：M6f-1b 已完成（<a href="M6f1b-scc-last-iteration.html">M6f-1b 报告</a>）；分治的内存。</li>
         <li>向 DFTB+ 报告 B1、B2、B3、B6、B13、B18–B26、B28、B29，以及这一块的坑 204（固定费米能级时 results.tag 的 <code>mermin_energy</code>）、207 与 208：需要你同意再提交 issue。</li>
       </ul>
     </section>

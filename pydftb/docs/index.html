@@ -234,7 +234,7 @@ ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines py
     <section id="issues">
       <h2>已知问题</h2>
       <ul>
-        <li>PTBP 的 <code>--optimization_option bandstructure</code> 模式有多处错误，目前跑不通（与 pydftb 无关，另有任务）。</li>
+        <li><strong>已修正：</strong>PTBP 的 <code>--optimization_option bandstructure</code> 模式过去在 <code>cli/run.py</code>、<code>utils/loss.py</code> 与 <code>utils/calculator.py</code> 里有多处错误，跑不通；现在可以从头跑到尾，示例在 <code>examples/07_bandstructure_cu</code>，测试是 <code>tests/test_bandstructure.py</code>。</li>
         <li><strong>已修正（M3 之前）：</strong>PTBP 损失函数的惩罚项过去总用 0.5 Bohr 的共价半径（<code>cli/run.py</code> 算出了元素的半径，但没有传给 <code>Loss(...)</code>），Cu 的惩罚因子因此是 1.2e4 而不是 6.0。现在用被参数化元素的半径；参数表中已发表的 75 个元素的损失值都能用这个公式复现（相对差 ≤ 5e-5）。已发表的 Cu 参数下，dataset 模式的损失从 901629.83 变为 446.20，energygeometry 模式从 3837.92 变为 1.8993，两个引擎的相对差仍在 1e-8 以内。旧运行的损失值是另一个尺度：旧的 skopt 检查点在恢复时会被拒绝，可用 <code>tools/rescale_checkpoint.py</code> 精确换算。</li>
         <li>energygeometry 模式在已发表的 Cu 参数下的损失为 0.920（M4e 之前为 1.90），论文中为 0.288：μ<sub>V</sub> 已回到论文的量级（0.0129 对 0.0182），μ<sub>E</sub> 仍大 3.8 倍（0.293 对 0.0775）。M4e 查明前一半来自 hotcent 约束方式的默认值；剩下的最可能来自 hotcent 在 2021-10 修正的二中心积分 GGA 错误（PTBP 最初用的版本带着它），这部分不应恢复（M4e 报告第四节）。</li>
         <li><strong>已修正（M5b）：</strong>多元素模式（<code>--multi_element</code>）以前跑不通（命令行的元素符号与要求的原子序数不符、参数表没有 <code>r_wave</code> 键、只优化 σ<sub>rep</sub> 的分支调用错误）；现在的含义是只拟合列出的元素，其余用 PTBP 发表的参数。<code>data.get_full_dftb</code> 以前按 Hill 顺序重建结构，非 Hill 顺序的多元素结构（如 [Na, N, N, N]）写出的元素与坐标错位（能量与按下标的力不受影响），也已修正。</li>
@@ -276,7 +276,7 @@ ptbp parity dft/dft.xyz --mode energygeometry --points 2.749,12.036 --engines py
         <li>分块的 Coulomb（M7d2）：只在周期体系、估计的实空间原子对超过 600 万时启用；autodiff（PTBP 的梯度）要整个 Ewald 范围的对表，遇到分块的 Coulomb 报错；力要重算一遍原子对，比存表慢（1000 个水分子 9.5 s 对 7.3 s），建立快得多；γ 本身仍是 N²（4913 个水分子 1.62 GiB），ThirdOrder 的 Γ<sub>3</sub>、LJ 与 Slater–Kirkwood 色散的参数矩阵、点电荷与 ESP 的 cos/sin 也还是 N²。分治（M7d3 之后）：工作进程仍继承 fork 时主进程的页（不改写不占内存），各自存自己子体系的本征矢（4913 个水分子每个约 0.5 GiB）；子体系少于每个进程 8 个时按“最大的先”分配，否则按连续的等代价段，大小差得多的子体系可能让一段偏重。</li>
         <li>双引擎（P2）：DFTB+ 引擎每次调用多约 20 ms（进程启动与读写文件），经 ASE 的小分子 MD 比 DFTB+ 自己的驱动慢 6 倍左右，用 <code>--native</code>。DFTB+ 用差分求 H0、S 的导数，SK 网格节点附近力与 pydftb 的解析值差到 1e-6 Ha/Bohr，有限差分的 Hessian 差得更多（<code>fd_delta=2**-13</code> 时两者一致，坑 210）；SCC 不收敛时 DFTB+ 停下（<code>CalculationFailed</code>），pydftb 只警告。XL-BOMD 与非共线的杂化泛函只能用 DFTB+ 自己的驱动（后者没有电荷文件，坑 208）。核对只在 conda 的 25.1、开发版与带 ELSI 的 24.1 上做；ELSI 版 NTPoly 的结果每次运行都不同（坑 209）。</li>
         <li>TD-LC（M6h-2）：只用 LC 型的 SK 文件，不能用窗口、onsite 修正与分数占据（与 DFTB+ 相同）；屏蔽时激发态力不是能量的导数（与 DFTB+ 相同，根源在基态的屏蔽）。稠密路径存三个跃迁数² 的矩阵（<code>"auto"</code> 只在 ≤ 500 个跃迁时用），迭代路径每个向量做一次 O(N³) 的 AO 乘积；A−B 不正定（基态不稳定）时报错。</li>
-        <li>两个原子相距不到 0.01 Bohr 时 DFTB+ 报错退出（proximity），pydftb 不报错：完全重合的原子被当作互不作用。已列为待办（<code>dftbplus_map.md</code> 第 36 条）。</li>
+        <li><strong>已修正：</strong>两个原子相距不到 0.01 Bohr 时 DFTB+ 报错退出（“Atoms 2 and 1 too close together”），pydftb 过去不报错，完全重合的原子被当作互不作用（Cu 二聚体的两个原子放在同一位置时得到两个孤立原子的能量）。现在 pydftb 按同一规则抛出 <code>AtomsTooClose</code>（原子与自己的周期镜像也算），ASE 计算器报 <code>CalculationFailed</code>，PTBP 把这一步记为失败，与 DFTB+ 相同；其他几何的结果逐位不变（<code>dftbplus_map.md</code> 第 36 条）。</li>
                 <li>用 PTBP 参数表中 Ga 的 r0、p，hotcent 2.1 算不出受限原子（“Eigensolver out of iterations”，4d 壳层几乎不束缚）。</li>
         <li><code>physrep.evaluate_pbc</code> 的超胞层数由最短的晶格矢量长度决定，晶胞很斜时会漏掉近邻（γ = 13° 的测试晶胞：22 对中只算 20 对）；Cu 数据集没有遗漏。为了结果不变，没有修。</li>
         <li><code>tools/physrep.py</code> 可能改编自 J. Margraf 的 physrep，上游许可未知；仓库整体为 MIT，需确认这个文件可以按 MIT 发布。</li>

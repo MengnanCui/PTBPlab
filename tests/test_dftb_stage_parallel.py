@@ -154,6 +154,26 @@ def test_a_failed_pydftb_run_is_a_calculation_failure(tmp_path, dataset, monkeyp
         dftb_stage.run_dataset(images[:EOS], bolt[:EOS], EOS, KDENS, grad=grad)
 
 
+@pytest.mark.parametrize("gradient", [False, True])
+def test_atoms_on_one_site_are_a_pydftb_calculation_failure(tmp_path, dataset, monkeypatch,
+                                                           gradient):
+    """As with DFTB+ (test_failed_dftbplus_task_directory_is_kept): two atoms closer than
+    0.01 Bohr stop pydftb with CalculationFailed, also in pass 1 of the gradient."""
+    from ase.calculators.calculator import CalculationFailed
+    grad = None
+    if gradient:
+        pytest.importorskip("torch")
+        from utils.hotcent_tangent import Tangent
+        grad = dftb_stage.GradPass({"r0_d": Tangent("r0_d", 0.0, zero=True)})
+    images, bolt = dataset
+    bad = [a.copy() for a in images[:EOS]]
+    bad[1].positions[1] = bad[1].positions[0]                   # two atoms on top of each other
+    eng.configure(engine="pydftb")
+    monkeypatch.chdir(_skf_dir(tmp_path))
+    with pytest.raises(CalculationFailed, match="closer than 0.01 Bohr"):
+        dftb_stage.run_dataset(bad, bolt[:EOS], EOS, KDENS, grad=grad)
+
+
 def test_remainder_that_does_not_fill_a_group_is_not_computed(tmp_path, dataset, monkeypatch):
     (dftb, _, kept), _ = _stage(tmp_path, dataset, 4, "pydftb", monkeypatch, eos=4)
     assert kept == list(range(8)) and len(dftb) == 8

@@ -8,7 +8,6 @@ import ase
 import numpy as np
 from ase import Atoms
 
-np.random.seed(66)
 import random
 from pathlib import Path
 from time import perf_counter
@@ -43,6 +42,7 @@ import utils.data as data
 from utils.hotpy import hotpy
 from utils.loss import Loss, penalty_radius
 from utils.parameters_set import get_PTBP, get_QNplusRep, get_PRIOR
+from utils.bo_plots import save_bo_plots
 hp = hotpy()
 
 # os.system('export ASE_DFTB_COMMAND="/home/mengnancui/Software/dftbplus/dftbplus-23.1.x86_64-linux/bin/dftb+" > PREFIX.out')
@@ -272,6 +272,12 @@ def _parallel_plan(dft_input, bolt, opt_elem=(), labels=None, n_calls=None):
         print(f"[plan] plan.json not written: {err}")
     return plan
 
+# --seed (default 123: the optimisers' random_state, as before).  Given explicitly, it also
+# seeds numpy and the stdlib random here; without it numpy keeps utils/loss.py's seed 66,
+# so default runs are unchanged.
+if any(a == '--seed' or a.startswith('--seed=') for a in sys.argv[1:]):
+    np.random.seed(ptbp_args.seed)
+    random.seed(ptbp_args.seed)
 
 def _band_structures():
     """--mode bands: the structures of the band references (they set the elements, the
@@ -518,15 +524,7 @@ Boltzmann factor: {bolt_f.tolist()}
             # so we draw a plain matplotlib convergence curve from
             # res.func_vals instead.
             if ptbp_args.optimizer == 'bo' and getattr(res, 'optimizer', None) != 'fixed_r0':
-                plot_convergence(res)
-                plt.savefig('convergence.png', dpi=300)
-                plt.clf()
-
-                eval = plot_evaluations(res, bins=20)
-                eval[0][0].figure.savefig('eval.png', dpi=300, bbox_inches='tight')
-
-                obje = plot_objective(res, sample_source='result')
-                obje[0][0].figure.savefig('obj.png', dpi=300, bbox_inches='tight')
+                save_bo_plots(res)
             else:
                 # Generic best-so-far convergence curve usable for any optimiser.
                 vals = list(res.func_vals)
@@ -556,8 +554,22 @@ Boltzmann factor: {bolt_f.tolist()}
             if getattr(ptbp_args, 'sigma_finish', None):     # A series: finer sigma at the best
                 _sigma_finish(loss, res, best_folder)
 
-            os.system(f"cp -r {best_folder} {backup_dir}")
-            os.system("tar -zcvf results.tgz results && rm -r results")
+            # Back up the best-evaluation folder and pack the results dir.
+            # Use shutil/tarfile instead of os.system so this works on any OS,
+            # tolerates spaces in paths, and never silently deletes results
+            # when the copy/pack step fails.
+            import shutil
+            import tarfile
+            if best_folder.exists():
+                shutil.copytree(best_folder, backup_dir, dirs_exist_ok=True)
+            else:
+                print(f"[warn] best folder {best_folder} not found; skipping backup copy")
+
+            results_dir = path / ptbp_args.results_dir
+            if results_dir.exists():
+                with tarfile.open(path / 'results.tgz', 'w:gz') as _tar:
+                    _tar.add(results_dir, arcname=results_dir.name)
+                shutil.rmtree(results_dir)
 
 
         # Optimize the Repulsion part!
@@ -632,21 +644,29 @@ Boltzmann factor: {bolt_f.tolist()}
     if ptbp_args.optimization_option.lower() == "bandstructure":
             
             # Data preparation
-            DEFAULT_DFT_BAND_FILE = ptbp_args.dft_file #= 'dft.json'
-            with open(ptbp_args.parameter_file, 'w') as para:
+            # hotcent needs the superposition; without it every SKF fails silently
+            if ptbp_args.superposition is None:
+                ptbp_args.superposition = 'density'
+                print("No --superposition given: using 'density' (as `ptbp optimize` does)")
+
+            with open(ptbp_args.para_file, 'w') as para:
                     para.write('#r0_w,r0_d,p,cov_radius,mu_homo,mu_lumo,mu\n')
 
-            dft_infile = p / ptbp_args.ref_dir / ptbp_args.dft_file
-            dft_bs = p / ptbp_args.ref_dir / ptbp_args.dft_band_file
+            dft_infile = path / ptbp_args.ref_dir / ptbp_args.dft_file
+            dft_bs = path / ptbp_args.ref_dir / ptbp_args.dft_band_file
             assert dft_infile.exists(), f'Seems that the input path {dft_infile} does not exist!'
             assert dft_bs.exists(), f'Seems that the input path {dft_bs} does not exist!'
-            dft_input = ase.io.read(dft_infile)
+            dft_input = ase.io.read(dft_infile, ':')
+            # dft_band_file holds the band structure of one structure
+            assert len(dft_input) == 1, f'Band structure optimization fits one structure, but {dft_infile} has {len(dft_input)}!'
+            dft_center = dft_input
+            num_center_atoms = len(dft_center)
 
             
             if ptbp_args.multi_element is not None:
                 opt_elem = [x for x in ptbp_args.multi_element]
 
-            atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = loss.get_elements_from_dataset(dft_input, opt_elem)
+            atomic_numbers, atomic_numbers_exclusive , atomic_symbols, atomic_symbols_exclusive = data.get_elements_from_dataset(dft_input, opt_elem)
             cov_radius = penalty_radius(dft_input, opt_elem)
 
             bolt_f, bolt_f11 = data.get_bolt_factor(dft_center, 'identical', 3000)
@@ -655,6 +675,7 @@ Boltzmann factor: {bolt_f.tolist()}
             print(f"""\n#===================================Input===================================#:
 Optimization target: {ptbp_args.optimization_option}
 Input file: {dft_infile}
+Band structure file: {dft_bs}
 Number of structure: {len(dft_input)}
 Number of center atoms: {num_center_atoms}
 Atomic number: {atomic_numbers}
@@ -676,16 +697,27 @@ Boltzmann factor: {bolt_f.tolist()}
             print('Best parameter:\n', res.x,'\n', res.fun)
             r0_best, p_best = res.x
 
-            os.chdir(p)
-            plot_convergence(res)
-            plt.savefig('convergence.png', dpi=300)
-            plt.clf()
-
-            eval = plot_evaluations(res, bins=20)
-            eval[0][0].figure.savefig('eval.png', dpi=300, bbox_inches='tight')
-
-            obje = plot_objective(res, sample_source='result')
-            obje[0][0].figure.savefig('obj.png', dpi=300, bbox_inches='tight')
+            os.chdir(path)
+            if ptbp_args.optimizer == 'bo':
+                save_bo_plots(res)
+            else:
+                vals = list(res.func_vals)
+                if vals:
+                    best_so_far = []
+                    cur = float('inf')
+                    for v in vals:
+                        cur = min(cur, float(v))
+                        best_so_far.append(cur)
+                    plt.figure()
+                    plt.plot(range(1, len(vals) + 1), vals, 'o-', label='per-eval μ', alpha=0.5)
+                    plt.plot(range(1, len(vals) + 1), best_so_far, 'r-', label='best so far')
+                    plt.xlabel('evaluation')
+                    plt.ylabel('μ')
+                    plt.yscale('log')
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig('convergence.png', dpi=300)
+                    plt.clf()
 
 
             best_folder = path / ptbp_args.results_dir / f"opt_{res.x[0]:.3f}_{res.x[1]:.3f}"
@@ -775,6 +807,9 @@ if ptbp_args.skf_generator is not None:
             # r0_list = list(ptbp_args.confinement_r0)
             # p_list = list(args.confinement_p)
             confinement_parameters = ptbp_args.confinement_parameters
+            assert confinement_parameters is not None, (
+                "--known_parameters personal requires --confinement_parameters "
+                "(r0_w r0_d p per element, i.e. 3 * N_symbols values).")
             r0_dict = {symbol: [confinement_parameters[3*i], confinement_parameters[3*i+1]] for i, symbol in enumerate(symbol_list)}
             p_dict = {symbol: confinement_parameters[3*i+2] for i, symbol in enumerate(symbol_list)}
 

@@ -129,6 +129,29 @@ PTBP 发表的 Li、O 半径，hotcent 积分网格 nr 100、ntheta 300。
 5. 前驱体溶液的 R₂b 要列出出现的全部 40 个原子对。“physrep 打底加少数对的样条修正”可以以后再加。
 6. 费用都是粗估，每批先用一个试算校准。
 
+### 8b. 与远程分支合并
+
+push 时远程分支已经多了其他会话合并进来的提交，最新是 5b03338，内容有：
+- 桌面 GUI（`ptbp gui`）与 `--seed`；
+- `bandstructure` 模式修好（cd3cbdf）；
+- scikit-optimize 0.10 的 BO 后处理修复；
+- 失败的 BO 步排在最后；
+- pydftb M6f-1b：最后一轮 SCC 之后不再混合；
+- 两原子距离小于 0.01 Bohr 时停止；
+- hotcent 参考路径不再吞掉错误。
+
+本轮把它们合并进来，没有强推。冲突只在两个文件，都是双方各加了一部分，所以两边都保留：
+- `cli/config.py`：本轮的 A 系列配置项与远程的 `seed`。
+- `cli/run.py`：BO 作图改用远程的 `save_bo_plots`，`--fixed-r0` 的结果仍不画；先做 `--sigma-finish`，再执行远程改写的备份与打包（shutil/tarfile）。
+
+前面说的“与 66a6498 逐位相同”，比较的是本轮改动前后的代码。合并之后，基准变成合并后的主线：远程的有些改动本来就会改变结果，例如 M6f-1b。本轮的改动在默认设置下仍不改变任何结果。
+
+合并后的测试：
+- **pydftb：** 23 个测试文件，269 项通过，5 项因缺 dscribe、mace、torch 跳过。
+- **PTBP `tests/`：** 331 项通过，63 项跳过，5 项失败。这 5 项在远程提交 5b03338 上单独跑也同样失败，那里是 294 项通过；多出的通过项是本轮新增的测试。5 项中：
+  - 4 项因为缺 torch；
+  - 1 项是远程新加的 `test_logging_setup.py::test_install_handler_swallows_benign_logs_real`。它单独跑也失败：错误记录打印出来了，但 caplog 没有捕获到，问题在 GUI 日志的设置，与本轮无关。
+
 ### 9. 下一步（远程）
 
 按 `README.md` 第 3 节的步骤 1–7：D1 → K1(b) → Li 网格（K2）→ Li–O Sobol（K3）→ K4/K6/K7 → 精修、导出、MD → 传回结果，然后写 G1 报告。D2–D5 等用户批准费用后再算。
@@ -238,6 +261,29 @@ PTBP 发表的 Li、O 半径，hotcent 积分网格 nr 100、ntheta 300。
 7. `TypedSKCache` 不复用 A1 缓存里相同的表。
 8. D0 的下载、D2–D5 的计算都要你批准。费用都是粗估。
 9. S5 远程需要 torch，CPU 版即可。
+
+### 8b. 与远程分支合并
+
+push 时远程分支已经多了其他会话合并进来的提交，最新是 5b03338，内容有：
+- 桌面 GUI（`ptbp gui`）与 `--seed`；
+- `bandstructure` 模式修好（cd3cbdf）；
+- scikit-optimize 0.10 的 BO 后处理修复；
+- 失败的 BO 步排在最后；
+- pydftb M6f-1b：最后一轮 SCC 之后不再混合；
+- 两原子距离小于 0.01 Bohr 时停止；
+- hotcent 参考路径不再吞掉错误。
+
+本轮把它们合并进来，没有强推。冲突只在两个文件，都是双方各加了一部分，所以两边都保留：
+- `cli/config.py`：本轮的 A 系列配置项与远程的 `seed`。
+- `cli/run.py`：BO 作图改用远程的 `save_bo_plots`，`--fixed-r0` 的结果仍不画；先做 `--sigma-finish`，再执行远程改写的备份与打包（shutil/tarfile）。
+
+前面说的“与 66a6498 逐位相同”，比较的是本轮改动前后的代码。合并之后，基准变成合并后的主线：远程的有些改动本来就会改变结果，例如 M6f-1b。本轮的改动在默认设置下仍不改变任何结果。
+
+合并后的测试：
+- **pydftb：** 23 个测试文件，269 项通过，5 项因缺 dscribe、mace、torch 跳过。
+- **PTBP `tests/`：** 331 项通过，63 项跳过，5 项失败。这 5 项在远程提交 5b03338 上单独跑也同样失败，那里是 294 项通过；多出的通过项是本轮新增的测试。5 项中：
+  - 4 项因为缺 torch；
+  - 1 项是远程新加的 `test_logging_setup.py::test_install_handler_swallows_benign_logs_real`。它单独跑也失败：错误记录打印出来了，但 caplog 没有捕获到，问题在 GUI 日志的设置，与本轮无关。
 
 ### 9. 下一步（远程）
 

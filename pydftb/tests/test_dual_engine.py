@@ -15,6 +15,7 @@ from ase import Atoms
 from ase.build import bulk, molecule
 
 from pydftb import dftbplus_calc as dc
+from pydftb import dftbplus_io as io
 from pydftb.ase_calc import PyDFTB, kpoints_of
 from pydftb.constants import BOHR, HARTREE
 from pydftb.engines import (
@@ -50,7 +51,7 @@ def hsd(atoms, tmp_path, properties=("energy",), skdir=SKF_HCOCU, **options):
 # ---- every frozen input (V1) -------------------------------------------------------------------
 def test_every_frozen_input_is_what_the_engine_writes():
     report = dual.check_inputs(verbose=False)
-    assert len(report) == 588          # 517 single points, 13 band runs, 24 Hessians, 34 drivers
+    assert len(report) == 590          # 519 single points, 13 band runs, 24 Hessians, 34 drivers
     assert {k: v for k, v in report.items() if v} == {}
 
 
@@ -446,6 +447,34 @@ def test_reused_charges_start_from_the_last_run():
 
 
 @pytest.mark.dftbplus
+@pytest.mark.filterwarnings("ignore:SCC not converged")
+def test_capped_scc_with_reused_charges_follows_dftbplus():
+    """Three SCC iterations per MD step, unconverged (ConvergentSCCOnly = No), charges reused:
+    on both engines every step starts from the input of the step before's last Hamiltonian
+    (DFTB+ writes it to charges.bin, it does not mix after the last iteration), so the
+    trajectories agree step by step.  (With the next mixed vector instead, the forces were up
+    to 6e-3 eV/A apart from the second step on.)"""
+    from ase import units
+    from ase.md.verlet import VelocityVerlet
+    steps = {}
+    for e in ("pydftb", "dftbplus"):
+        a = plain_water()
+        a.rattle(0.05, seed=3)
+        a.set_velocities(np.zeros((3, 3)))
+        a.calc = make_calculator(SKF_HCOCU, e, scc_tol=1e-10, max_scc=3, reuse_charges=True,
+                                 fd_delta=2 ** -13, convergent_scc_only=False)
+        rec = steps[e] = []
+        md = VelocityVerlet(a, timestep=0.5 * units.fs, logfile=None)
+        md.attach(lambda a=a, rec=rec: rec.append((a.get_potential_energy(),
+                                                   a.get_forces().copy(), a.calc.raw.n_scc)))
+        md.run(steps=4)
+    assert len(steps["pydftb"]) == len(steps["dftbplus"]) == 5
+    for (e1, f1, n1), (e2, f2, n2) in zip(steps["pydftb"], steps["dftbplus"]):
+        assert n1 == n2 == 3
+        assert abs(e1 - e2) < 1e-9 and np.abs(f1 - f2).max() < 1e-8
+
+
+@pytest.mark.dftbplus
 def test_states_bands_and_hessian_of_dftbplus():
     cu = copper()
     calcs = {e: make_calculator(SKF_HCOCU, e, kpts=(3, 3, 3), smearing=("fermi", 1000.0),
@@ -482,6 +511,25 @@ def test_native_drivers_and_failures(tmp_path):
     again = dc.DFTBPlus(SKF_HCOCU, scc_tol=1e-10, read_charges=str(tmp_path / "charges.bin"))
     again.get_potential_energy(plain_water())
     assert again.raw.n_scc <= 2 and "ReadInitialCharges = Yes" in again.input.hsd
+
+
+@pytest.mark.dftbplus
+def test_stopped_scc_writes_the_last_input(tmp_path):
+    """An SCC stopped at MaxSCCIterations: DFTB+ writes the input of its last iteration to
+    charges.bin, pydftb's q_in (M6f-1b; DFTB+ writes no file when MaxSCCIterations = 1)."""
+    for n in (2, 3):
+        d = dc.DFTBPlus(SKF_HCOCU, max_scc=n, scc_tol=1e-12, convergent_scc_only=False)
+        d.get_potential_energy(plain_water())
+        d.write_charges(tmp_path / f"charges_{n}.bin")
+        p = PyDFTB(SKF_HCOCU, max_scc=n, scc_tol=1e-12, convergent_scc_only=False,
+                   warn_unconverged=False)
+        a = plain_water()
+        p.get_potential_energy(a)
+        engine, labels, _ = p._engine(a)
+        data = io.read_charges(tmp_path / f"charges_{n}.bin",
+                               engine._charge_layout(labels)[0].norb_atom)
+        assert p.raw.n_scc == n and not p.raw.converged
+        assert np.abs(engine.populations_from_file(labels, data) - p.raw.q_in).max() < 1e-12
 
 
 @pytest.mark.dftbplus

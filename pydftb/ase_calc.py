@@ -27,6 +27,7 @@ from .dispersion import make_dispersion
 from .external import PointCharges
 from .hybrid import Hybrid
 from .kpoints import monkhorst_pack, reduce_time_reversal
+from .neighbors import AtomsTooClose
 from .occupations import Smearing
 from .parallel import as_kthreads
 from .params import ParamSet
@@ -155,12 +156,13 @@ def region_weights(states: States, regions) -> dict:
 
 @contextlib.contextmanager
 def _as_calculation_failed():
-    """A linear-algebra failure of the engine as ASE's ``CalculationFailed``, the error
-    ``ase.calculators.dftb.Dftb`` raises when DFTB+ stops, e.g. on a non-positive-definite
-    overlap (atoms too close); the original stays as the cause."""
+    """An engine failure where DFTB+ stops, as ASE's ``CalculationFailed`` (the error
+    ``ase.calculators.dftb.Dftb`` raises then): a linear-algebra failure, e.g. a
+    non-positive-definite overlap, or two atoms closer than 0.01 Bohr
+    (:class:`~pydftb.neighbors.AtomsTooClose`); the original stays as the cause."""
     try:
         yield
-    except np.linalg.LinAlgError as err:
+    except (np.linalg.LinAlgError, AtomsTooClose) as err:
         raise CalculationFailed(f"pydftb: {err}") from err
     except SCCNotConvergedError as err:       # DFTB+ (ConvergentSCCOnly = Yes) stops: ASE
         raise CalculationFailed(f"pydftb: {err}") from err   # reports CalculationFailed

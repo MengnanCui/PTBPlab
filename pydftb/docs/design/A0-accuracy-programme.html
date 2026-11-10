@@ -126,7 +126,7 @@
       </ul>
       <h3>调研中发现的现状</h3>
       <ul>
-        <li><strong>PTBP 的 <code>bandstructure</code> 模式跑不起来</strong>：<code>cli/run.py:505-568</code> 用了未定义的名字，<code>utils/loss.py:1405</code> 的参数个数不对。它只比较 HOMO/LUMO 两条带，而且用 DFTB+ 可执行文件。</li>
+        <li><strong>PTBP 的 <code>bandstructure</code> 模式跑不起来</strong>：<code>cli/run.py:505-568</code> 用了未定义的名字，<code>utils/loss.py:1405</code> 的参数个数不对。它只比较 HOMO/LUMO 两条带，而且用 DFTB+ 可执行文件。（2026-11-10：另一个分支已修好这个模式，提交 cd3cbdf，已合并进本分支；它仍只比较 HOMO/LUMO，A 系列的能带损失走 pydftb 的 <code>bandloss</code> 与新的 <code>--mode bands</code>。）</li>
         <li><strong>dataset/reaction 损失里的力基本不起作用</strong>：μ_E 是对结构求和，μ_F 是平均值乘 0.1（<code>utils/loss.py:641-659</code>）。68 个结构时，力只占约 0.2%。</li>
         <li><strong>pydftb 有可以复用的部分</strong>：
           <ul>
@@ -692,8 +692,11 @@
           </ul></li>
         <li><strong>测试（本机）</strong>：
           <ul>
-            <li>pydftb 新增与受影响的测试文件：228 + 7 项通过，3 项因缺可选依赖跳过。</li>
-            <li>PTBP <code>tests/</code>：271 项通过，4 项因缺 torch 失败，与 66a6498 相同。</li>
+            <li>与远程分支合并之后（远程最新提交 5b03338，含其他会话的 GUI、bandstructure 修复、M6f-1b 等）：
+              <ul>
+                <li>pydftb 23 个测试文件，269 项通过，5 项因缺可选依赖跳过；</li>
+                <li>PTBP <code>tests/</code> 331 项通过，5 项失败，与 5b03338 单独跑时相同：4 项缺 torch，1 项是那边新加的 GUI 日志测试。</li>
+              </ul></li>
             <li>A2（E1/E2/E3）、A3（R3/R4）、A4、S5 都在小数据上跑通。</li>
           </ul></li>
       </ul>

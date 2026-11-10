@@ -64,7 +64,8 @@ Periodic systems take a Monkhorst-Pack grid, e.g. `pydftb.SCC(system, params, kp
 
 ASE users can call `pydftb.ase_calc.PyDFTB` instead; it works in eV and Angstrom.  When the
 engine fails where DFTB+ would stop (a non-positive-definite overlap, e.g. very diffuse
-basis functions), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
+basis functions, or two atoms closer than 0.01 Bohr, an atom and its own periodic image
+included), it raises ASE's `CalculationFailed`, as `ase.calculators.dftb.Dftb` does.
 
 ### Two engines: pydftb or DFTB+
 
@@ -102,7 +103,7 @@ section it belongs in.  `--json` writes the same fields for both engines.
   hybrid is DFTB+'s `SupercellFolding`), and pydftb's defaults are written out (SCC tolerance
   1e-6, 200 iterations, `EwaldTolerance` 1e-12; `ewald_tolerance=None` keeps DFTB+'s 1e-9).
 - The input is assembled from the blocks that wrote every frozen DFTB+ reference:
-  `pydftb dual --inputs` checks all 588 frozen inputs (single points, band runs,
+  `pydftb dual --inputs` checks all 590 frozen inputs (single points, band runs,
   SecondDerivatives runs, DFTB+'s drivers) against what the engine writes.
 - What differs: DFTB+ differentiates H0 and S numerically (pydftb's `fd_delta=2**-13` does the
   same; its default is exact), which near an SK grid node changes forces by up to 1e-6
@@ -507,6 +508,10 @@ atoms.calc = PyDFTB(skdir, read_charges="charges.bin")      # and atoms.calc.wri
 With collinear spin, `PyDFTB` starts from the atoms' initial magnetic moments when they are
 not all zero.  NumPy engine only.  Details:
 [`docs/reports/M6f1-scc-start-mixers.html`](docs/reports/M6f1-scc-start-mixers.html).
+`r.q_in`, and so the file, `reuse_charges` and `states()`, hold the input populations of the
+last SCC iteration, which built its Hamiltonian, as DFTB+'s `charges.bin`: nothing is mixed
+after the last iteration, also when the SCC stops unconverged at `max_scc` (M6f-1b,
+[`docs/reports/M6f1b-scc-last-iteration.html`](docs/reports/M6f1b-scc-last-iteration.html)).
 
 ### Fixed Fermi levels and overrides of the Hamiltonian block
 
@@ -879,7 +884,8 @@ block into k-points.  Details: [`docs/reports/M2e-bands.html`](docs/reports/M2e-
 ### Geometry optimisation and MD
 
 `PyDFTB` works with ASE's optimisers, cell filters and integrators.  For optimisations and MD,
-`reuse_charges=True` starts each SCC from the previous step's charges, as DFTB+'s own drivers do:
+`reuse_charges=True` starts each SCC from the previous step's charges, as DFTB+'s own drivers do
+(`DFTBResult.q_in`: the input of its last Hamiltonian, also when that SCC stopped at `max_scc`):
 
 ```python
 from ase.optimize import BFGS
