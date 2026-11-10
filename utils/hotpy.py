@@ -126,7 +126,7 @@ class hotpy():
                 info, occupations, valences, orbits = [], {}, [], []
 
 
-                [info.append(i) for i in re.split('\s+', valence_shell.strip())]
+                [info.append(i) for i in re.split(r'\s+', valence_shell.strip())]
 
                 valence_electron_numbers = 0  # number of valence electrons
 

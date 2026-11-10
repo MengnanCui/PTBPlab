@@ -26,7 +26,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_RUN = REPO_ROOT / 'cli' / 'run.py'
 
-SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity', 'scan'}
+SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity', 'scan', 'gui'}
 
 
 def _build_top_parser() -> argparse.ArgumentParser:
@@ -36,7 +36,7 @@ def _build_top_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest='cmd', metavar='COMMAND', required=True)
 
-    from cli import cmd_gen, cmd_optimize, cmd_plan, cmd_postprocess, cmd_scan, cmd_setup
+    from cli import cmd_gen, cmd_gui, cmd_optimize, cmd_plan, cmd_postprocess, cmd_scan, cmd_setup
     cmd_gen.add_parser(sub)
     cmd_optimize.add_parser(sub)
     cmd_postprocess.add_parser(sub)
@@ -48,6 +48,7 @@ def _build_top_parser() -> argparse.ArgumentParser:
                             help="Loss parity of the DFTB engines at fixed parameter points "
                                  "(tools/engine_parity.py; ptbp parity --help)")
     parity.set_defaults(func=lambda args: dispatch(['parity']))
+    cmd_gui.add_parser(sub)
 
     return parser
 

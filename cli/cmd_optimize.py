@@ -155,6 +155,9 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
                    help="hotcent's confinement scheme: selfconsistent (hotcent 1.x; r0_d "
                         "confines the density) or perturbative (hotcent >= 2.0 default; r0_d "
                         "has no effect, as in runs before M4e). Default: %(default)s.")
+    p.add_argument('--seed', type=int, default=None, metavar='N',
+                   help="Random seed for reproducibility (numpy + optimiser "
+                        "random_state). Default: 123 in run.py if omitted.")
     p.add_argument('--checkpoint', default='checkpoint.pkl',
                    help="Checkpoint filename (for skopt resume). Default: %(default)s.")
     p.add_argument('--postprocess-only', action='store_true',
@@ -300,6 +303,8 @@ def run(args: argparse.Namespace) -> int:
                         '--dtype', args.dtype]
     if args.n_calls is not None:
         legacy_argv += ['--n_calls', str(args.n_calls)]
+    if getattr(args, 'seed', None) is not None:
+        legacy_argv += ['--seed', str(args.seed)]
     if args.E0s is not None:
         legacy_argv += ['--E0s', args.E0s]
     if args.multi_element:

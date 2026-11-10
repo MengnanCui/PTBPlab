@@ -28,7 +28,7 @@ import runpy
 import sys
 from pathlib import Path
 
-NEW_SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity', 'scan'}
+NEW_SUBCOMMANDS = {'gen', 'optimize', 'postprocess', 'setup', 'plan', 'parity', 'scan', 'gui'}
 
 
 def main() -> int:

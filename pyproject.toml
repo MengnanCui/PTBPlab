@@ -32,7 +32,8 @@ dependencies = [
 torch = ["pydftb[torch]"]             # torch backend: GPU / autodiff (milestone M4; tested 2.14.1)
 dispersion = ["pydftb[dispersion]"]   # D3/D4 dispersion (M2d); conda: dftd3-python, dftd4-python
 mpi = ["mpi4py"]                      # multi-node task farming (milestone M3)
-dev = ["pytest"]
+gui = ["customtkinter"]                # ptbp gui (desktop front end)
+dev = ["pytest", "pytest-asyncio"]
 
 # pylibxc, hotcent, dftbplus are NOT on PyPI — install via conda-forge
 # (see README.md "Installation & Notes").
@@ -46,11 +47,12 @@ py-modules = ["parameterize"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*", "utils*", "tools*"]
+include = ["cli*", "utils*", "tools*", "gui*"]
 exclude = ["dataset*", "test*", "results*", "dft*", "tests*", "examples*", "pydftb*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "pydftb/tests"]
+asyncio_mode = "auto"
 markers = [
     "slow: end-to-end tests that invoke ptbp / hotcent / DFTB+ (skip with `pytest -m 'not slow'`)",
 ]

@@ -1895,7 +1895,7 @@ class Loss():
 
         dims, _lo, _hi, cost_fn = self._bo_dimensions_and_cost(cov_radius)
         opt = Optimizer(dimensions=dims, base_estimator='GP', acq_func='EI',
-                        random_state=123)
+                        random_state=getattr(self.args_input, 'seed', 123))
 
         ctx = mp.get_context('fork')
 
@@ -2153,7 +2153,7 @@ class Loss():
                                 x0=x0,
                                 y0=y0,
                                 callback=[checkpoint_saver],
-                                random_state=123)
+                                random_state=getattr(self.args_input, 'seed', 123))
             finally:
                 self._end_bo_log()
 
@@ -2177,7 +2177,7 @@ class Loss():
                             x0=x0,
                             y0=y0,
                             callback=[checkpoint_saver],
-                            random_state=123)
+                            random_state=getattr(self.args_input, 'seed', 123))
 
         
         return res

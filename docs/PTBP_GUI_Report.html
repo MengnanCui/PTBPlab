@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PTBP GUI · 工作汇报</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --sidebar:#252526; --panel:#252526; --panel2:#2d2d30;
+    --border:#3c3c3c; --accent:#0e639c; --accent2:#1177bb; --active:#094771;
+    --text:#cccccc; --muted:#858585; --bright:#ffffff;
+    --ok:#4ec9b0; --warn:#ce9178; --err:#f14c4c; --blue:#569cd6; --purple:#c586c0;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",Inter,system-ui,sans-serif;
+    font-size:15px;line-height:1.7}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,pre{font-family:"JetBrains Mono","SF Mono",Consolas,monospace}
+  .layout{display:flex;min-height:100vh}
+  /* sidebar TOC */
+  nav{width:250px;background:var(--sidebar);border-right:1px solid var(--border);
+    padding:22px 14px;position:sticky;top:0;height:100vh;overflow:auto;flex-shrink:0}
+  nav .brand{font-size:18px;font-weight:700;color:var(--bright);margin-bottom:2px}
+  nav .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+  nav a{display:block;color:var(--text);padding:7px 10px;border-radius:6px;
+    font-size:13.5px;margin:2px 0}
+  nav a:hover{background:var(--panel2);text-decoration:none}
+  nav a.h2{padding-left:22px;color:var(--muted);font-size:12.5px}
+  main{flex:1;padding:34px 46px;max-width:1000px}
+  h1{color:var(--bright);font-size:27px;margin:0 0 4px}
+  h2{color:var(--bright);font-size:21px;margin:38px 0 10px;
+    padding-bottom:8px;border-bottom:1px solid var(--border)}
+  h3{color:var(--blue);font-size:16.5px;margin:22px 0 8px}
+  .lead{color:var(--muted);margin-bottom:8px}
+  .tag{display:inline-block;background:var(--active);color:#9cdcfe;border-radius:5px;
+    padding:2px 9px;font-size:12px;margin-right:6px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    padding:16px 20px;margin:14px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--bright);font-weight:600}
+  tr:nth-child(even) td{background:#232323}
+  pre{background:#181818;border:1px solid var(--border);border-radius:8px;
+    padding:14px 16px;overflow:auto;font-size:13px;color:#d4d4d4;line-height:1.55}
+  code.inline{background:#333;border-radius:4px;padding:1px 6px;font-size:13px;color:#d7ba7d}
+  .ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)}
+  .muted{color:var(--muted)}
+  .badge{display:inline-block;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:600}
+  .b-ok{background:rgba(78,201,176,.15);color:var(--ok)}
+  .b-err{background:rgba(241,76,76,.15);color:var(--err)}
+  .b-warn{background:rgba(206,145,120,.15);color:var(--warn)}
+  ul{padding-left:20px} li{margin:4px 0}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:16px 0}
+  .kpi div{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    padding:14px 18px;flex:1;min-width:150px}
+  .kpi .n{font-size:26px;font-weight:700;color:var(--bright)}
+  .kpi .l{color:var(--muted);font-size:12.5px}
+  footer{color:var(--muted);font-size:12.5px;margin-top:40px;
+    border-top:1px solid var(--border);padding-top:16px}
+  .flow{background:#181818;border:1px solid var(--border);border-radius:8px;padding:14px 18px;
+    color:#9cdcfe;font-family:"JetBrains Mono",monospace;font-size:13px;line-height:1.9}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">PTBP GUI</div>
+  <div class="sub">工作汇报 · Work Report</div>
+  <a href="#overview">概览</a>
+  <a href="#a" >A · 工作汇报</a>
+  <a href="#a1" class="h2">本会话改动</a>
+  <a href="#a2" class="h2">测试结果</a>
+  <a href="#b">B · 软件信息</a>
+  <a href="#b1" class="h2">架构</a>
+  <a href="#b2" class="h2">目录结构</a>
+  <a href="#b3" class="h2">依赖 / 入口</a>
+  <a href="#c">C · 功能指南</a>
+  <a href="#c1" class="h2">七个视图</a>
+  <a href="#c2" class="h2">优化方法与参数</a>
+  <a href="#d">D · 使用逻辑</a>
+  <a href="#e">E · 已知限制</a>
+</nav>
+<main>
+
+<h1 id="overview">PTBP DFTB 参数化 · 桌面 GUI 工作汇报</h1>
+<div class="lead">customtkinter · VSCode 深色风格 · 预览→运行 · 单一合并日志</div>
+<p>
+  <span class="tag">SKF 生成</span><span class="tag">结构/EOS 构建</span>
+  <span class="tag">BO / PSO 优化</span><span class="tag">可视化监控</span>
+  <span class="tag">依赖体检</span><span class="tag">合并日志</span>
+</p>
+
+<div class="kpi">
+  <div><div class="n">7</div><div class="l">功能视图</div></div>
+  <div><div class="n">3</div><div class="l">本会话提交</div></div>
+  <div><div class="n">90 <span class="ok" style="font-size:14px">✓</span></div><div class="l">测试通过 (60→90)</div></div>
+  <div><div class="n">30</div><div class="l">新增测试</div></div>
+  <div><div class="n">~2.5k</div><div class="l">新增代码行</div></div>
+</div>
+
+<div class="card">
+  <b>一句话：</b> 在原 CLI/TUI 工具箱之上，新增了一个模块化的桌面 GUI，把
+  SKF 生成、结构与 EOS 训练集构建、优化（贝叶斯/粒子群）配置与实时监控、
+  DFT 计算器兼容性设置全部集中到一个 VSCode 风格窗口；同时修复了工具箱的若干
+  正确性/健壮性问题，并把 GUI 日志做得干净可读。
+</div>
+
+<!-- ================= A ================= -->
+<h2 id="a">A · 工作汇报（本会话做了什么）</h2>
+
+<h3 id="a1">三次提交的演进</h3>
+<table>
+  <tr><th>#</th><th>提交</th><th>内容</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code class="inline">Fix reproducibility &amp; packaging</code></td>
+    <td>修复工具箱既有问题：接通 <code class="inline">--seed</code>（此前 <code class="inline">np.random</code>
+      写死 66、skopt <code class="inline">random_state</code> 写死 123，带隙路径还引用了不存在的
+      <code class="inline">args_input.random_state</code> 会 AttributeError）；用
+      <code class="inline">shutil</code>/<code class="inline">tarfile</code> 替换
+      <code class="inline">os.system</code> 的 cp/tar/rm（跨平台、失败不误删结果）；修复
+      <code class="inline">gen --params personal</code> 的 <code class="inline">kxc_list</code> 命名 bug；
+      正则 raw string；pytest-asyncio 配置。</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><code class="inline">Add customtkinter GUI</code></td>
+    <td>新增 <code class="inline">gui/</code> 包（无 Tk 内核 + 薄 Tk 层）、7 个视图、
+      <code class="inline">ptbp gui</code> 子命令与打包；新增结构工具（体积/EOS/微扰，工具箱原本没有）；
+      补全新版 <code class="inline">ptbp optimize</code> 的 <code class="inline">--seed</code> 贯通。</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><code class="inline">Clean logging + docs/HTML report</code></td>
+    <td>屏蔽 customtkinter 良性重绘噪音、去 ANSI 色码、合并日志信息框化并加耗时；
+      新增功能指南与本 HTML 汇报。</td>
+  </tr>
+</table>
+
+<h3>本轮（日志清理）细节</h3>
+<ul>
+  <li><b>噪音根因</b>：customtkinter 6.0.0 在 <code class="inline">&lt;Configure&gt;</code> 事件里调用
+    <code class="inline">_draw</code>，而某个 CTkFrame 子类的 <code class="inline">_canvas</code> 尚未赋值（为
+    <code class="inline">None</code>），触发 <code class="inline">None.winfo_exists()</code> 的
+    <code class="inline">AttributeError</code>——无害但会打印整段栈。</li>
+  <li><b>修法</b>：新增 <code class="inline">gui/core/logging_setup.py</code>，在 Tk 根上安装
+    <code class="inline">report_callback_exception</code> 处理器：识别并静默这条已知良性异常（记 DEBUG），
+    其它真实异常则以干净一行 + DEBUG 完整栈输出。</li>
+  <li><b>更干净</b>：子进程每行去 ANSI 色码；合并日志改为信息框头/尾 + 耗时 + 产物清单。</li>
+  <li><b>验证</b>：xvfb 下重跑并循环全部 7 个视图，<code class="inline">winfo_exists</code> /
+    “Exception in Tkinter callback” 出现次数 = <span class="ok">0</span>，stderr 全净。</li>
+</ul>
+
+<pre>┌────────────────────────────────────────────────────────────────
+│ PTBP GUI run
+│   started : 2026-07-01T08:26:58Z
+│   cwd     : /path/to/project
+│   command : ptbp optimize dft/dft.xyz --config ptbp_run.yaml --output run_...
+└────────────────────────────────────────────────────────────────
+
+... 子进程实时输出（已去色码）...
+
+┌────────────────────────────────────────────────────────────────
+│ process exited with code 0  —  ok
+│   duration : 12.3s
+│ Artifacts:
+│   - convergence.png
+│   - result.pkl
+│   - ptbp_run.yaml
+└────────────────────────────────────────────────────────────────</pre>
+
+<h3 id="a2">测试结果</h3>
+<div class="card">
+  <span class="badge b-ok">90 passed</span>
+  <span class="badge b-err">8 failed</span>
+  <span class="badge b-warn">2 skipped</span>
+  &nbsp;<span class="muted">（<code class="inline">pytest -m "not slow"</code>）</span>
+  <ul style="margin-top:10px">
+    <li><b>90 通过</b>：会话前 60 → 现在 90，新增 <b>30</b> 个测试（结构工具、状态桥接、依赖体检、
+      子进程 runner、日志）。</li>
+    <li><b>8 失败</b>：全部是 <code class="inline">pylibxc</code> / <code class="inline">hotcent</code>
+      缺失导致——这是 conda-only 包，开发容器装不了，<span class="warn">与本次改动无关</span>。</li>
+    <li><b>2 跳过</b>：GUI 组件冒烟测试（本容器无 <code class="inline">_tkinter</code>，自动跳过；已用
+      xvfb + python3.12 单独实测全部视图可构建）。</li>
+  </ul>
+</div>
+
+<!-- ================= B ================= -->
+<h2 id="b">B · 软件信息</h2>
+
+<h3 id="b1">架构：两层</h3>
+<div class="grid">
+  <div class="card">
+    <b>gui/core/</b> · 纯 Python，<b>不依赖 Tk</b>，无显示可单测
+    <ul>
+      <li><code class="inline">structure_tools.py</code> — 体积缩放/EOS 序列/位置微扰/摘要（仅 ASE）</li>
+      <li><code class="inline">gui_state.py</code> — 复用 <code class="inline">SetupState</code> 生成 YAML/命令</li>
+      <li><code class="inline">runner.py</code> — <code class="inline">JobRunner</code> 子进程 + 合并日志</li>
+      <li><code class="inline">env_doctor.py</code> — 依赖体检</li>
+      <li><code class="inline">logging_setup.py</code> — 日志 + 去色码 + 噪音屏蔽</li>
+    </ul>
+  </div>
+  <div class="card">
+    <b>Tk 层</b> · 薄皮，只做界面
+    <ul>
+      <li><code class="inline">theme.py</code> — VSCode 调色板/字体/圆角</li>
+      <li><code class="inline">widgets/</code> — sidebar / card / form / log_panel / mpl_canvas</li>
+      <li><code class="inline">app.py</code> — 主窗口 + 活动栏 + 视图切换</li>
+      <li><code class="inline">views/</code> — 7 个视图</li>
+    </ul>
+  </div>
+</div>
+<div class="card muted">
+  设计意图：所有<b>逻辑</b>放进无 Tk 的 <code class="inline">core/</code>，因此在没有显示、没有
+  DFTB+ 的环境里也能完整测试；Tk 层尽量薄。重计算通过子进程调用 <code class="inline">ptbp</code>，
+  只在装了 conda-only 依赖的机器上真正计算。
+</div>
+
+<h3 id="b2">目录结构</h3>
+<pre>gui/
+├─ app.py                主窗口：活动栏 + 视图切换 + 启动时接线日志
+├─ theme.py              VSCode 调色板 / 字体 / 圆角 / 导航项
+├─ __main__.py           python -m gui
+├─ core/                 纯 Python（可测）
+│  ├─ structure_tools.py scale_volume / make_eos_series / perturb_positions / combine_and_write
+│  ├─ gui_state.py       目标·优化器·参数映射 + optimize/gen 预览
+│  ├─ runner.py          JobRunner：子进程 + 单一 gui_run_&lt;ts&gt;.log
+│  ├─ env_doctor.py      probe_modules / probe_dftb / Readiness
+│  └─ logging_setup.py   configure_logging / strip_ansi / install_tk_exception_handler
+├─ widgets/              sidebar · card · form · log_panel · mpl_canvas
+└─ views/                home · structures · generate · optimize · monitor · calculator · logview
+cli/cmd_gui.py           `ptbp gui` 子命令（受保护导入）</pre>
+
+<h3 id="b3">依赖与入口</h3>
+<table>
+  <tr><th>项目</th><th>说明</th></tr>
+  <tr><td>入口</td><td><code class="inline">ptbp gui [--project DIR]</code> 或 <code class="inline">python -m gui</code></td></tr>
+  <tr><td>安装</td><td><code class="inline">pip install -e '.[gui]'</code>（新增 <code class="inline">[gui]</code> extra = customtkinter）</td></tr>
+  <tr><td>Linux Tk</td><td>如缺系统 Tk：<code class="inline">apt install python3-tk</code></td></tr>
+  <tr><td>复用的工具箱模块</td><td><code class="inline">cli.tui.state</code>（SetupState + assemble_*）、
+    <code class="inline">cli.dataset_inspect</code>、<code class="inline">cli.auto_mode</code>、
+    <code class="inline">cli.config</code>、<code class="inline">utils.parameters_set</code>、
+    <code class="inline">utils.data.fit_atomic_E0s</code></td></tr>
+  <tr><td>重计算依赖</td><td>DFTB+ / hotcent / pylibxc（conda-only，仅在真正运行时需要）</td></tr>
+</table>
+
+<!-- ================= C ================= -->
+<h2 id="c">C · 功能指南</h2>
+
+<h3 id="c1">七个视图</h3>
+<table>
+  <tr><th>视图</th><th>作用</th><th>关键控件 / 输出</th></tr>
+  <tr><td>🏠 Home</td><td>工作目录、快捷导航、最近运行</td><td>目录选择、进监控</td></tr>
+  <tr><td>🧬 Structures</td><td><b>输入结构 + 体积/位置调整 + EOS 训练集生成</b></td>
+      <td>加载(db/单结构)、检查、2D 预览、体积%×点数→EOS xyz、rattle 微扰→xyz</td></tr>
+  <tr><td>⚙ Generate</td><td>SKF 生成</td>
+      <td>符号、参数集、full/band/rep、Personal r0/rep、xc、输出；预览/运行</td></tr>
+  <tr><td>▶ Optimize</td><td>参数优化配置</td>
+      <td>数据集、目标、优化器+预算、参数+叠加、E0s、高级；预览 YAML/命令、运行/取消</td></tr>
+  <tr><td>📈 Monitor</td><td>进度/收敛/结果</td>
+      <td>最优参数、收敛曲线(result.pkl 重绘)、产物浏览</td></tr>
+  <tr><td>🩺 Calculator</td><td>DFT 兼容性/依赖</td>
+      <td>ASE_DFTB_COMMAND、依赖体检 ✓/✗、就绪度、默认参数</td></tr>
+  <tr><td>📄 Logs</td><td>合并日志浏览</td><td>gui_run_*.log 列表、查看、打开最新</td></tr>
+</table>
+
+<h3 id="c2">优化方法与参数</h3>
+<div class="grid">
+  <div class="card">
+    <b>优化器（外层）</b>
+    <table style="margin-top:6px">
+      <tr><th>值</th><th>说明</th></tr>
+      <tr><td class="ok">bo</td><td>顺序 GP 贝叶斯，样本效率高</td></tr>
+      <tr><td class="ok">parallel_bo</td><td>批量提议 + fork 并行</td></tr>
+      <tr><td class="ok">pso</td><td>粒子群，适合多峰/非光滑</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <b>可优化参数</b>
+    <table style="margin-top:6px">
+      <tr><th>名</th><th>含义</th></tr>
+      <tr><td>r0_w</td><td>波函数约束半径</td></tr>
+      <tr><td>r0_d</td><td>密度约束半径</td></tr>
+      <tr><td>sigma_rep</td><td>排斥势尺度（内层 brute+L-BFGS-B）</td></tr>
+      <tr><td>p</td><td>约束指数（带隙模式）</td></tr>
+    </table>
+  </div>
+</div>
+<table>
+  <tr><th>目标（损失）</th><th>损失构成</th><th>需要</th></tr>
+  <tr><td>能量+几何 energygeometry</td><td>μ_E + μ_V + μ_B（EOS 拟合）</td><td>数据集旁 <code class="inline">fit.json</code></td></tr>
+  <tr><td>能量+力 dataset</td><td>(1−c)·μ_E + c·μ_F</td><td>E0s（可自动拟合缓存）</td></tr>
+  <tr><td>反应 reaction</td><td>同 dataset + 每化学式分解 CSV</td><td>E0s</td></tr>
+  <tr><td>带隙 bandstructure</td><td>HOMO/LUMO 失配</td><td>k 路径 <code class="inline">.json</code></td></tr>
+</table>
+<div class="card muted">
+  叠加方式 <b>density</b>（PTBP/Prior 默认）/ <b>potential</b>（QNplusRep）；
+  E0s 策略 <b>auto</b>（自动拟合并缓存 <code class="inline">&lt;ref_dir&gt;/E0s_dft.json</code>）/
+  <b>cache</b> / <b>manual</b>（JSON）。种子 <code class="inline">--seed</code> 现已端到端可复现。
+</div>
+
+<!-- ================= D ================= -->
+<h2 id="d">D · 使用逻辑（端到端工作流）</h2>
+
+<h3>典型流程：从结构到优化</h3>
+<div class="flow">
+1) Structures  加载单结构 → 生成 EOS 训练集 (90–110%, 11 点) → 保存 dataset.xyz<br>
+2) Optimize    选数据集 → 目标(能量+力) → 优化器(bo/pso) → 参数(r0_w r0_d sigma_rep)<br>
+3) Preview     生成 ptbp_run.yaml + 等价命令（默认只预览）<br>
+4) Run         点“运行” → 子进程跑 ptbp optimize → 实时流式输出 + 合并日志<br>
+5) Monitor     自动接住运行文件夹 → 收敛曲线 + 最优参数 + 产物浏览<br>
+6) Logs        查看单一 gui_run_&lt;ts&gt;.log
+</div>
+
+<h3>生成 SKF（无需数据集）</h3>
+<div class="flow">
+Generate  符号 H O Cu → 参数集 PTBP → full → 预览命令 → 运行（需 hotcent/pylibxc）
+</div>
+
+<div class="card">
+  <b>核心心智模型：预览 → 运行。</b> 优化与生成默认<b>只预览</b>（生成 YAML + 命令，零依赖），
+  <b>运行</b>是显式按钮。真正计算需要 DFTB+/hotcent/pylibxc；缺依赖时“计算器”视图会告诉你差什么。
+</div>
+
+<!-- ================= E ================= -->
+<h2 id="e">E · 已知限制与非目标</h2>
+<ul>
+  <li>无 DFTB+/hotcent/pylibxc 时无法实际计算——运行按钮已接线，缺依赖只会在日志里报错，不会崩。</li>
+  <li>结构预览为 2D matplotlib 投影（轻量），非交互式 3D。</li>
+  <li><code class="inline">bandstructure</code> 优化路径在 <code class="inline">cli/run.py</code> 中有既有 bug
+    （本轮按约定未修）；界面“带隙”目标已就绪，修复该路径后即可用。</li>
+  <li>工具箱底层 <code class="inline">print</code> → <code class="inline">logging</code> 的全量重构未做（属更大改动）。</li>
+</ul>
+
+<footer>
+  PTBP DFTB 参数化工具箱 · 桌面 GUI 工作汇报 · 分支 <code class="inline">claude/new-session-x9cti2</code><br>
+  详见仓库内 <code class="inline">docs/gui_guide.md</code>（功能与使用指南）。
+</footer>
+
+</main>
+</div>
+</body>
+</html>
